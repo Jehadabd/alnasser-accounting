@@ -1,0 +1,84 @@
+Control Identifiers:
+
+Dialog - 'debt_book'    (L12, T12, R1612, B912)
+['debt_book', 'debt_bookDialog', 'Dialog']
+child_window(title="debt_book", control_type="Window")
+   | 
+   | Pane - ''    (L21, T50, R1603, B903)
+   | ['تقارير الأشخاص\nتقارير العملاء والأرباحPane', 'Pane']
+   |    | 
+   |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    | ['تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox', 'GroupBox', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox0', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox1', 'GroupBox0', 'GroupBox1']
+   |    |    | 
+   |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    | ['تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox', 'GroupBox', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox0', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox1', 'GroupBox0', 'GroupBox1']
+   |    |    |    | 
+   |    |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    |    | ['تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox', 'GroupBox', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox0', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox1', 'GroupBox0', 'GroupBox1']
+   |    |    |    |    | 
+   |    |    |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    |    |    | ['تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox', 'GroupBox', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox0', 'تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox1', 'GroupBox0', 'GroupBox1']
+   |    |    |    |    |    | 
+   |    |    |    |    |    | GroupBox - ''    (L21, T50, R1603, B120)
+   |    |    |    |    |    | ['GroupBox5']
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - ''    (L1543, T60, R1593, B110)
+   |    |    |    |    |    |    | ['Button', 'Button0', 'Button1']
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | GroupBox - 'التقارير'    (L768, T66, R856, B104)
+   |    |    |    |    |    |    | ['التقاريرGroupBox', 'التقارير', 'GroupBox6']
+   |    |    |    |    |    |    | child_window(title="التقارير", control_type="Group")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | GroupBox - ''    (L21, T120, R1603, B903)
+   |    |    |    |    |    | ['تقارير الأشخاص\nتقارير العملاء والأرباحGroupBox5', 'GroupBox7']
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'اختر نوع التقرير'    (L700, T175, R924, B225)
+   |    |    |    |    |    |    | ['Static', 'اختر نوع التقرير', 'اختر نوع التقريرStatic', 'Static0', 'Static1']
+   |    |    |    |    |    |    | child_window(title="اختر نوع التقرير", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'تقارير البضاعة\nتقارير المنتجات والمبيعات'    (L822, T262, R1573, B500)
+   |    |    |    |    |    |    | ['تقارير البضاعة\nتقارير المنتجات والمبيعاتStatic', 'Static2', 'تقارير البضاعة\nتقارير المنتجات والمبيعات']
+   |    |    |    |    |    |    | child_window(title="تقارير البضاعة\nتقارير المنتجات والمبيعات", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'تقارير الأشخاص\nتقارير العملاء والأرباح'    (L51, T262, R802, B500)
+   |    |    |    |    |    |    | ['Static3', 'تقارير الأشخاص\nتقارير العملاء والأرباح', 'تقارير الأشخاص\nتقارير العملاء والأرباحStatic']
+   |    |    |    |    |    |    | child_window(title="تقارير الأشخاص\nتقارير العملاء والأرباح", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'تقرير اليوم\nمبيعات وأرباح اليوم'    (L822, T520, R1573, B758)
+   |    |    |    |    |    |    | ['تقرير اليوم\nمبيعات وأرباح اليوم', 'Static4', 'تقرير اليوم\nمبيعات وأرباح اليومStatic']
+   |    |    |    |    |    |    | child_window(title="تقرير اليوم\nمبيعات وأرباح اليوم", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'تقرير الأسبوع\nمبيعات وأرباح الأسبوع'    (L51, T520, R802, B758)
+   |    |    |    |    |    |    | ['Static5', 'تقرير الأسبوع\nمبيعات وأرباح الأسبوعStatic', 'تقرير الأسبوع\nمبيعات وأرباح الأسبوع']
+   |    |    |    |    |    |    | child_window(title="تقرير الأسبوع\nمبيعات وأرباح الأسبوع", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'تقرير السنة\nملخص سنوي شامل'    (L822, T777, R1573, B903)
+   |    |    |    |    |    |    | ['تقرير السنة\nملخص سنوي شاملStatic', 'Static6', 'تقرير السنة\nملخص سنوي شامل']
+   |    |    |    |    |    |    | child_window(title="تقرير السنة\nملخص سنوي شامل", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'تقارير شهرية\nملخص شهري وتفاصيل'    (L51, T777, R802, B903)
+   |    |    |    |    |    |    | ['Static7', 'تقارير شهرية\nملخص شهري وتفاصيلStatic', 'تقارير شهرية\nملخص شهري وتفاصيل']
+   |    |    |    |    |    |    | child_window(title="تقارير شهرية\nملخص شهري وتفاصيل", control_type="Text")
+   | 
+   | TitleBar - ''    (L41, T15, R1603, B50)
+   | ['TitleBar']
+   |    | 
+   |    | Menu - 'System'    (L21, T21, R49, B49)
+   |    | ['System', 'Menu', 'SystemMenu', 'System0', 'System1']
+   |    | child_window(title="System", auto_id="MenuBar", control_type="MenuBar")
+   |    |    | 
+   |    |    | MenuItem - 'System'    (L21, T21, R49, B49)
+   |    |    | ['System2', 'SystemMenuItem', 'MenuItem']
+   |    |    | child_window(title="System", control_type="MenuItem")
+   |    | 
+   |    | Button - 'Minimize'    (L1425, T13, R1485, B50)
+   |    | ['MinimizeButton', 'Button2', 'Minimize']
+   |    | child_window(title="Minimize", control_type="Button")
+   |    | 
+   |    | Button - 'Maximize'    (L1485, T13, R1544, B50)
+   |    | ['Button3', 'Maximize', 'MaximizeButton']
+   |    | child_window(title="Maximize", control_type="Button")
+   |    | 
+   |    | Button - 'Close'    (L1544, T13, R1604, B50)
+   |    | ['Button4', 'Close', 'CloseButton']
+   |    | child_window(title="Close", control_type="Button")

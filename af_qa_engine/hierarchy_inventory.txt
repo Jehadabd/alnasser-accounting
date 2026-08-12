@@ -1,0 +1,110 @@
+Control Identifiers:
+
+Dialog - 'debt_book'    (L12, T12, R1612, B912)
+['Dialog', 'debt_book', 'debt_bookDialog']
+child_window(title="debt_book", control_type="Window")
+   | 
+   | Pane - ''    (L21, T50, R1603, B903)
+   | ['Pane']
+   |    | 
+   |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    | ['GroupBox', 'GroupBox0', 'GroupBox1']
+   |    |    | 
+   |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    | ['GroupBox', 'GroupBox0', 'GroupBox1']
+   |    |    |    | 
+   |    |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    |    | ['GroupBox', 'GroupBox0', 'GroupBox1']
+   |    |    |    |    | 
+   |    |    |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    |    |    | ['GroupBox', 'GroupBox0', 'GroupBox1']
+   |    |    |    |    |    | 
+   |    |    |    |    |    | GroupBox - ''    (L21, T50, R1603, B120)
+   |    |    |    |    |    | ['GroupBox5']
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'رجوع'    (L1543, T60, R1593, B110)
+   |    |    |    |    |    |    | ['رجوعButton', 'Button', 'رجوع', 'Button0', 'Button1']
+   |    |    |    |    |    |    | child_window(title="رجوع", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | GroupBox - 'دفتر ديوني'    (L744, T65, R880, B105)
+   |    |    |    |    |    |    | ['GroupBox6', 'دفتر ديوني', 'دفتر ديونيGroupBox']
+   |    |    |    |    |    |    | child_window(title="دفتر ديوني", control_type="Group")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'الفواتير المحفوظة'    (L221, T60, R271, B110)
+   |    |    |    |    |    |    | ['الفواتير المحفوظة', 'الفواتير المحفوظةButton', 'Button2']
+   |    |    |    |    |    |    | child_window(title="الفواتير المحفوظة", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'الدردشة مع الذكاء الاصطناعي'    (L171, T60, R221, B110)
+   |    |    |    |    |    |    | ['الدردشة مع الذكاء الاصطناعيButton', 'Button3', 'الدردشة مع الذكاء الاصطناعي']
+   |    |    |    |    |    |    | child_window(title="الدردشة مع الذكاء الاصطناعي", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'المتأخرون عن السداد'    (L121, T60, R171, B110)
+   |    |    |    |    |    |    | ['المتأخرون عن السدادButton', 'Button4', 'المتأخرون عن السداد']
+   |    |    |    |    |    |    | child_window(title="المتأخرون عن السداد", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'مشاركة الديون PDF'    (L71, T60, R121, B110)
+   |    |    |    |    |    |    | ['مشاركة الديون PDFButton', 'مشاركة الديون PDF', 'Button5']
+   |    |    |    |    |    |    | child_window(title="مشاركة الديون PDF", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'ترتيب العملاء'    (L21, T60, R71, B110)
+   |    |    |    |    |    |    | ['ترتيب العملاء', 'ترتيب العملاءButton', 'Button6']
+   |    |    |    |    |    |    | child_window(title="ترتيب العملاء", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Edit - 'ابحث عن عميل...'    (L51, T150, R1573, B210)
+   |    |    |    |    |    | ['Edit']
+   |    |    |    |    |    | child_window(title="ابحث عن عميل...", control_type="Edit")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'لا يوجد عملاء'    (L755, T556, R869, B587)
+   |    |    |    |    |    | ['Static', 'لا يوجد عملاءStatic', 'لا يوجد عملاء']
+   |    |    |    |    |    | child_window(title="لا يوجد عملاء", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'إضافة عميل جديد'    (L581, T813, R651, B883)
+   |    |    |    |    |    | ['إضافة عميل جديدButton', 'Button7', 'إضافة عميل جديد']
+   |    |    |    |    |    | child_window(title="إضافة عميل جديد", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'سجل الديون'    (L491, T813, R561, B883)
+   |    |    |    |    |    | ['سجل الديونButton', 'سجل الديون', 'Button8']
+   |    |    |    |    |    | child_window(title="سجل الديون", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'إدخال بضاعة'    (L401, T813, R471, B883)
+   |    |    |    |    |    | ['إدخال بضاعةButton', 'إدخال بضاعة', 'Button9']
+   |    |    |    |    |    | child_window(title="إدخال بضاعة", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'المؤسسين'    (L311, T813, R381, B883)
+   |    |    |    |    |    | ['المؤسسينButton', 'المؤسسين', 'Button10']
+   |    |    |    |    |    | child_window(title="المؤسسين", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'إنشاء قائمة'    (L221, T813, R291, B883)
+   |    |    |    |    |    | ['إنشاء قائمة', 'إنشاء قائمةButton', 'Button11']
+   |    |    |    |    |    | child_window(title="إنشاء قائمة", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'تعديل القوائم'    (L131, T813, R201, B883)
+   |    |    |    |    |    | ['تعديل القوائمButton', 'تعديل القوائم', 'Button12']
+   |    |    |    |    |    | child_window(title="تعديل القوائم", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'تعديل البضاعة'    (L41, T813, R111, B883)
+   |    |    |    |    |    | ['تعديل البضاعةButton', 'تعديل البضاعة', 'Button13']
+   |    |    |    |    |    | child_window(title="تعديل البضاعة", control_type="Button")
+   | 
+   | TitleBar - ''    (L41, T15, R1603, B50)
+   | ['TitleBar']
+   |    | 
+   |    | Menu - 'System'    (L21, T21, R49, B49)
+   |    | ['SystemMenu', 'System', 'Menu', 'System0', 'System1']
+   |    | child_window(title="System", auto_id="MenuBar", control_type="MenuBar")
+   |    |    | 
+   |    |    | MenuItem - 'System'    (L21, T21, R49, B49)
+   |    |    | ['SystemMenuItem', 'System2', 'MenuItem']
+   |    |    | child_window(title="System", control_type="MenuItem")
+   |    | 
+   |    | Button - 'Minimize'    (L1425, T13, R1485, B50)
+   |    | ['Minimize', 'MinimizeButton', 'Button14']
+   |    | child_window(title="Minimize", control_type="Button")
+   |    | 
+   |    | Button - 'Maximize'    (L1485, T13, R1544, B50)
+   |    | ['MaximizeButton', 'Button15', 'Maximize']
+   |    | child_window(title="Maximize", control_type="Button")
+   |    | 
+   |    | Button - 'Close'    (L1544, T13, R1604, B50)
+   |    | ['CloseButton', 'Close', 'Button16']
+   |    | child_window(title="Close", control_type="Button")

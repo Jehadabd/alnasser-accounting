@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ═══ كل المجموعات مسموح بها للمستخدمين المصادق عليهم فقط ═══
+    
+    match /customers/{customerId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /transactions/{transactionId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /devices/{deviceId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /invoices/{invoiceId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /invoice_snapshots/{snapshotId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /invoice_read_acks/{ackId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /sync_operations/{operationId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /transaction_acks/{ackId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /bootstrap_data/{docId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /bootstrap_requests/{docId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /snapshots/{snapshotId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /sync_groups/{groupId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /reconciliation_sessions/{sessionId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /live_match_sessions/{sessionId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // منع الوصول لأي مسار آخر
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

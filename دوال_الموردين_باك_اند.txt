@@ -1,0 +1,635 @@
+ملف الدوال والعمليات المنطقية الخاص بزر الموردين (Backend & DAOs)
+
+يحتوي هذا الملف على جميع الدوال الخاصة بالمنطق البرمجي للموردين مع شرح مفصل والكود المصدري الكامل لكل دالة.
+
+========================================================================
+أولاً: الخدمة الرئيسية لعمليات الموردين `lib/services/suppliers_service.dart`
+========================================================================
+هذه الخدمة هي حلقة الوصل بين واجهة المستخدم وقاعدة البيانات الخاصة بجميع عمليات الموردين.
+
+1. دالة تهيئة الجداول `ensureTables`
+الشرح: تقوم هذه الدالة بالتأكد من وجود كافة جداول الموردين (الموردين، الفواتير، الدفعات، المناديب، بنود الفاتورة) بشكل سليم داخل قاعدة البيانات SQLite وتضيفها وتحدث هيكلتها إن لزم الأمر.
+
+```dart
+  Future<void> ensureTables() async {
+    final db = await _db;
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS suppliers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_name TEXT NOT NULL,
+        tax_number TEXT,
+        phone_number TEXT,
+        email_address TEXT,
+        address TEXT,
+        opening_balance REAL NOT NULL DEFAULT 0.0,
+        current_balance REAL NOT NULL DEFAULT 0.0,
+        total_purchases REAL NOT NULL DEFAULT 0.0,
+        created_at TEXT NOT NULL,
+        last_modified_at TEXT NOT NULL,
+        notes TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_invoices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplier_id INTEGER NOT NULL,
+        invoice_number TEXT,
+        invoice_date TEXT NOT NULL,
+        total_amount REAL NOT NULL,
+        discount REAL NOT NULL DEFAULT 0.0,
+        amount_paid REAL NOT NULL DEFAULT 0.0,
+        currency TEXT NOT NULL DEFAULT 'IQD',
+        status TEXT NOT NULL DEFAULT 'آجل',
+        payment_type TEXT NOT NULL DEFAULT 'دين',
+        created_at TEXT NOT NULL,
+        last_modified_at TEXT NOT NULL,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+      )
+    ''');
+
+    // Ensure migration for older databases: add missing columns
+    try {
+      final cols = await db.rawQuery('PRAGMA table_info(supplier_invoices);');
+      final hasPaymentType = cols.any((c) => (c['name'] == 'payment_type'));
+      if (!hasPaymentType) {
+        await db.execute(
+            "ALTER TABLE supplier_invoices ADD COLUMN payment_type TEXT NOT NULL DEFAULT 'دين';");
+      }
+      final hasAmountPaid = cols.any((c) => (c['name'] == 'amount_paid'));
+      if (!hasAmountPaid) {
+        await db.execute(
+            'ALTER TABLE supplier_invoices ADD COLUMN amount_paid REAL NOT NULL DEFAULT 0.0;');
+      }
+    } catch (_) {}
+    // Migration for suppliers.total_purchases
+    try {
+      final colsSup = await db.rawQuery('PRAGMA table_info(suppliers);');
+      final hasTotalPurchases = colsSup.any((c) => (c['name'] == 'total_purchases'));
+      if (!hasTotalPurchases) {
+        await db.execute('ALTER TABLE suppliers ADD COLUMN total_purchases REAL NOT NULL DEFAULT 0.0;');
+      }
+    } catch (_) {}
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplier_id INTEGER NOT NULL,
+        receipt_number TEXT,
+        receipt_date TEXT NOT NULL,
+        amount REAL NOT NULL,
+        payment_method TEXT NOT NULL,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplier_id INTEGER NOT NULL,
+        delegate_id INTEGER,
+        receipt_number TEXT,
+        receipt_date TEXT NOT NULL,
+        amount REAL NOT NULL,
+        payment_method TEXT NOT NULL,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE,
+        FOREIGN KEY (delegate_id) REFERENCES supplier_delegates(id) ON DELETE SET NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_delegates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplier_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        phone TEXT,
+        email TEXT,
+        position TEXT,
+        notes TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+      )
+    ''');
+
+    // Add notes column if it doesn't exist (for existing databases)
+    try {
+      await db.execute("ALTER TABLE supplier_delegates ADD COLUMN notes TEXT;");
+    } catch (e) {}
+
+    // Migration for supplier_payments delegate_id
+    try {
+      final cols = await db.rawQuery('PRAGMA table_info(supplier_payments);');
+      if (!cols.any((c) => c['name'] == 'delegate_id')) {
+        await db.execute('ALTER TABLE supplier_payments ADD COLUMN delegate_id INTEGER REFERENCES supplier_delegates(id) ON DELETE SET NULL;');
+      }
+    } catch (_) {}
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_type TEXT NOT NULL,
+        owner_id INTEGER NOT NULL,
+        file_path TEXT NOT NULL,
+        file_type TEXT NOT NULL,
+        extracted_text TEXT,
+        extraction_confidence REAL,
+        uploaded_at TEXT NOT NULL
+      )
+    ''');
+    
+    // جدول بنود فواتير الموردين
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_invoice_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        invoice_id INTEGER NOT NULL,
+        product_id INTEGER,
+        product_name TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        unit_price REAL NOT NULL,
+        total_price REAL NOT NULL,
+        unit TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (invoice_id) REFERENCES supplier_invoices(id) ON DELETE CASCADE,
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
+      )
+    ''');
+  }
+```
+
+2. قسم سجل الموردين `getAllSuppliers` و `insertSupplier`
+الشرح: جلب كل الموردين للواجهة أو حفظ مورد جديد وإعطائه طابع وقت الإنشاء.
+
+```dart
+  Future<List<Supplier>> getAllSuppliers() async {
+    await ensureTables();
+    final db = await _db;
+    final rows = await db.query('suppliers', orderBy: 'company_name COLLATE NOCASE');
+    return rows.map((e) => Supplier.fromMap(e)).toList();
+  }
+
+  Future<int> insertSupplier(Supplier supplier) async {
+    await ensureTables();
+    final db = await _db;
+    final map = supplier.toMap();
+    map['last_modified_at'] = DateTime.now().toIso8601String();
+    return await db.insert('suppliers', map);
+  }
+```
+
+3. دالة فواتير المورد `insertSupplierInvoice`
+الشرح: تسجل فاتورة المشتريات الجديدة، وتحّدث بشكل ذكي إجمالي مشتريات ورصيد المورد (دينه)، وتسجل العملية في ملفات التدقيق المالي.
+
+```dart
+  Future<int> insertSupplierInvoice(SupplierInvoice invoice) async {
+    await ensureTables();
+    final db = await _db;
+    
+    int invoiceId = await db.transaction((txn) async {
+      final id = await txn.insert('supplier_invoices', invoice.toMap());
+      final double remaining = MoneyCalculator.subtract(invoice.totalAmount, invoice.paidAmount);
+      
+      // Update supplier balance and total purchases
+      final supplierRows = await txn.query('suppliers', where: 'id = ?', whereArgs: [invoice.supplierId]);
+      if (supplierRows.isNotEmpty) {
+         final s = Supplier.fromMap(supplierRows.first);
+         final newTotalPurchases = s.totalPurchases + invoice.totalAmount;
+         // If remaining > 0, debt increases (currentBalance increases)
+         final double balanceChange = remaining > 0 ? remaining : 0.0;
+         final newBalance = s.currentBalance + balanceChange;
+         
+         await txn.update('suppliers', {
+           'total_purchases': newTotalPurchases,
+           'current_balance': newBalance,
+           'last_modified_at': DateTime.now().toIso8601String(),
+         }, where: 'id = ?', whereArgs: [invoice.supplierId]);
+      }
+      return id;
+    });
+    
+    // Audit log
+    try {
+      final auditService = FinancialAuditService();
+      await auditService.logOperation(
+        operationType: 'supplier_invoice_create',
+        entityType: 'supplier',
+        entityId: invoice.supplierId,
+        newValues: {
+          'invoice_id': invoiceId,
+          'total_amount': invoice.totalAmount,
+          'amount_paid': invoice.paidAmount,
+          'status': invoice.status,
+        },
+        notes: 'فاتورة مورد جديدة بقيمة \${invoice.totalAmount}',
+      );
+    } catch (e) {
+      print('خطأ في تسجيل التدقيق: \$e');
+    }
+    
+    return invoiceId;
+  }
+```
+
+4. دالة المدفوعات والإيصالات `insertSupplierReceipt`
+الشرح: تسجل دفعة مالية للمورد في قاعدة البيانات وتطرح الدفعة من دين (رصيد) المورد. وتسجل العملية في سجل المحاسبة المالي كتدقيق.
+
+```dart
+  Future<int> insertSupplierReceipt(SupplierReceipt receipt) async {
+    await ensureTables();
+    final db = await _db;
+    
+    int receiptId = await db.transaction((txn) async {
+      final id = await txn.insert('supplier_payments', receipt.toMap());
+      
+      // Update supplier balance (payment reduces debt)
+      final supplierRows = await txn.query('suppliers', where: 'id = ?', whereArgs: [receipt.supplierId]);
+      if (supplierRows.isNotEmpty) {
+        final s = Supplier.fromMap(supplierRows.first);
+        final newBalance = s.currentBalance - receipt.amount;
+        
+        await txn.update('suppliers', {
+          'current_balance': newBalance,
+          'last_modified_at': DateTime.now().toIso8601String(),
+        }, where: 'id = ?', whereArgs: [receipt.supplierId]);
+      }
+      return id;
+    });
+    
+    // Audit log
+    try {
+      final auditService = FinancialAuditService();
+      await auditService.logOperation(
+        operationType: 'supplier_payment_create',
+        entityType: 'supplier',
+        entityId: receipt.supplierId,
+        newValues: {
+          'receipt_id': receiptId,
+          'amount': receipt.amount,
+        },
+        notes: 'سند دفع مورد بقيمة \${receipt.amount}',
+      );
+    } catch (e) {
+      print('خطأ في تسجيل التدقيق: \$e');
+    }
+    
+    return receiptId;
+  }
+```
+
+5. دالة تحديث مخزون وتكلفة المنتجات `updateProductStatsFromInvoice`
+الشرح: تأخذ الفاتورة المضافة وتحدث كمية المخزون لكل منتج بداخلها، وتحسب السعر الجديد لتكلفة المنتج بناءً على التسعيرة الجديدة من المورد.
+
+```dart
+  Future<List<String>> updateProductStatsFromInvoice(int invoiceId) async {
+    print('\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    print('🔄 Starting updateProductStatsFromInvoice for invoice: \$invoiceId');
+    
+    final items = await getInvoiceItems(invoiceId);
+    final db = await _db;
+    final List<String> updatedProducts = [];
+    
+    final Map<int, List<SupplierInvoiceItem>> itemsByProduct = {};
+    for (var item in items) {
+      if (item.productId != null) {
+        itemsByProduct.putIfAbsent(item.productId!, () => []).add(item);
+      }
+    }
+    
+    for (var entry in itemsByProduct.entries) {
+      final productId = entry.key;
+      final productItems = entry.value;
+      
+      try {
+        final productMaps = await db.query('products', where: 'id = ?', whereArgs: [productId], limit: 1);
+        if (productMaps.isEmpty) continue;
+        
+        final productMap = productMaps.first;
+        final unitHierarchyJson = productMap['unit_hierarchy'] as String?;
+        final oldCost = (productMap['cost_price'] as num?)?.toDouble() ?? 0.0;
+        final productName = productMap['name'] as String;
+
+        // 1. Calculate Stock Increase (handling units)
+        double totalStockIncrease = 0.0;
+        
+        for (var item in productItems) {
+           double multiplier = 1.0;
+           // If unit is not 'قطعة' (Base Unit), look for multiplier in hierarchy
+           if (item.unit != 'قطعة' && item.unit != null && unitHierarchyJson != null) {
+              try {
+                final List<dynamic> hierarchy = json.decode(unitHierarchyJson);
+                int currentCumulative = 1;
+                for (var level in hierarchy) {
+                   final uName = level['unit_name'];
+                   final uQty = level['quantity'] as int? ?? 1;
+                   currentCumulative *= uQty;
+                   if (uName == item.unit) {
+                      multiplier = currentCumulative.toDouble();
+                      break;
+                   }
+                }
+              } catch (e) {
+                print('Error parsing hierarchy for stock: \$e');
+              }
+           }
+           totalStockIncrease += (item.quantity * multiplier);
+        }
+        
+        // 2. Update Stock
+        if (totalStockIncrease > 0) {
+           await db.rawUpdate(
+             'UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?',
+             [totalStockIncrease, productId],
+           );
+           print('  📈 \$productName: Stock increased by \$totalStockIncrease items');
+        }
+
+        // 3. Update Cost 
+        SupplierInvoiceItem? bestItem;
+        for (var item in productItems) {
+          if (item.unit == 'قطعة') {
+            bestItem = item;
+            break;
+          }
+        }
+        bestItem ??= productItems.first;
+        
+        double newCostPerPiece = bestItem.unitPrice; 
+        if (bestItem.unit != 'قطعة' && bestItem.unit != null && unitHierarchyJson != null) {
+            try {
+                final List<dynamic> hierarchy = json.decode(unitHierarchyJson);
+                int currentCumulative = 1;
+                double conversion = 1.0;
+                 for (var level in hierarchy) {
+                   final uName = level['unit_name'];
+                   final uQty = level['quantity'] as int? ?? 1;
+                   currentCumulative *= uQty;
+                   if (uName == bestItem!.unit) {
+                      conversion = currentCumulative.toDouble();
+                      break;
+                   }
+                }
+                if (conversion > 0) {
+                  newCostPerPiece = bestItem.unitPrice / conversion;
+                }
+            } catch(e) {
+               print('Error converting cost: \$e');
+            }
+        }
+        
+        // Only update if cost changed significantly
+        if ((oldCost - newCostPerPiece).abs() > 0.01) {
+          String? newUnitCosts;
+          final unit = productMap['unit'] as String?;
+          
+          if (unit == 'piece' && unitHierarchyJson != null && unitHierarchyJson.isNotEmpty) {
+            try {
+              final List<dynamic> hierarchy = json.decode(unitHierarchyJson);
+              final Map<String, double> unitCosts = {};
+              double currentCost = newCostPerPiece;
+              unitCosts['قطعة'] = currentCost;
+              
+              for (var level in hierarchy) {
+                final unitName = level['unit_name'] as String?;
+                final qty = level['quantity'] as int?;
+                if (unitName != null && qty != null && qty > 0) {
+                  currentCost = currentCost * qty;
+                  unitCosts[unitName] = currentCost;
+                }
+              }
+              newUnitCosts = json.encode(unitCosts);
+            } catch (e) {
+              print('Error calculating unit costs: \$e');
+            }
+          } else if (unit == 'meter') {
+             final lengthPerUnit = (productMap['length_per_unit'] as num?)?.toDouble() ?? 0.0;
+             if (lengthPerUnit > 0) {
+               newUnitCosts = json.encode({
+                 'متر': newCostPerPiece,
+                 'لفة': newCostPerPiece * lengthPerUnit,
+               });
+             }
+          }
+          
+          if (newUnitCosts != null) {
+            await db.rawUpdate(
+              'UPDATE products SET cost_price = ?, unit_costs = ?, last_modified_at = ? WHERE id = ?',
+              [newCostPerPiece, newUnitCosts, DateTime.now().toIso8601String(), productId],
+            );
+          } else {
+            await db.rawUpdate(
+              'UPDATE products SET cost_price = ?, last_modified_at = ? WHERE id = ?',
+              [newCostPerPiece, DateTime.now().toIso8601String(), productId],
+            );
+          }
+          updatedProducts.add('\$productName: \${oldCost.toStringAsFixed(2)} -> \${newCostPerPiece.toStringAsFixed(2)}');
+        }
+      } catch (e) {
+        print('Error updating product \$productId: \$e');
+      }
+    }
+    return updatedProducts;
+  }
+```
+
+6. دوال المناديب `Delegates` و المرفقات `Attachments` واسترجاع الفواتير 
+الشرح: هذه الدوال تقوم بجلب والإضافة على كائنات المندوبين، بنود الفواتير المضافة، وجلب سجل الفواتير والمرفقات للمورد.
+
+```dart
+  Future<List<SupplierDelegate>> getDelegates(int supplierId) async {
+    await ensureTables();
+    return await _delegateDao.getBySupplierId(supplierId);
+  }
+
+  Future<int> addDelegate(SupplierDelegate delegate) async {
+    await ensureTables();
+    return await _delegateDao.insert(delegate);
+  }
+
+  Future<int> updateDelegate(SupplierDelegate delegate) async {
+    await ensureTables();
+    return await _delegateDao.update(delegate);
+  }
+
+  Future<void> deleteDelegate(int id) async {
+    await ensureTables();
+    await _delegateDao.delete(id);
+  }
+
+  Future<List<SupplierInvoice>> getSupplierInvoices(int supplierId) async {
+    await ensureTables();
+    final db = await _db;
+    final rows = await db.query(
+      'supplier_invoices',
+      where: 'supplier_id = ?',
+      whereArgs: [supplierId],
+      orderBy: 'date DESC',
+    );
+    return rows.map((e) => SupplierInvoice.fromMap(e)).toList();
+  }
+
+  Future<List<SupplierReceipt>> getSupplierReceipts(int supplierId) async {
+    await ensureTables();
+    final db = await _db;
+    final rows = await db.query(
+      'supplier_payments',
+      where: 'supplier_id = ?',
+      whereArgs: [supplierId],
+      orderBy: 'date DESC',
+    );
+    return rows.map((e) => SupplierReceipt.fromMap(e)).toList();
+  }
+
+  Future<int> insertInvoiceItem(SupplierInvoiceItem item) async {
+    await ensureTables();
+    final db = await _db;
+    return await db.insert('supplier_invoice_items', item.toMap());
+  }
+
+  Future<List<SupplierInvoiceItem>> getInvoiceItems(int invoiceId) async {
+    await ensureTables();
+    final db = await _db;
+    final rows = await db.query(
+      'supplier_invoice_items',
+      where: 'invoice_id = ?',
+      whereArgs: [invoiceId],
+      orderBy: 'created_at ASC',
+    );
+    return rows.map((e) => SupplierInvoiceItem.fromMap(e)).toList();
+  }
+```
+
+========================================================================
+ثانياً: ملف الاستعلامات لبيانات الموردين `lib/services/database/dao/supplier_dao.dart`
+========================================================================
+الشرح: دوال جاهزة تستخدم أوامر SQL مباشرة لبطاقات الموردين في قاعدة البيانات.
+
+```dart
+class SupplierDao {
+  final Future<Database> Function() getDatabase;
+
+  SupplierDao({required this.getDatabase});
+
+  /// إدراج مورد
+  Future<int> insertSupplier(Map<String, dynamic> supplierMap) async {
+    final db = await getDatabase();
+    try {
+      supplierMap['created_at'] = DateTime.now().toIso8601String();
+      supplierMap['updated_at'] = DateTime.now().toIso8601String();
+      return await db.insert('suppliers', supplierMap);
+    } catch (e) {
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
+  /// جلب جميع الموردين
+  Future<List<Map<String, dynamic>>> getAllSuppliers() async {
+    final db = await getDatabase();
+    try {
+      return await db.query('suppliers', orderBy: 'name ASC');
+    } catch (e) {
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
+  /// تحديث مورد
+  Future<int> updateSupplier(int id, Map<String, dynamic> supplierMap) async {
+    final db = await getDatabase();
+    try {
+      supplierMap['updated_at'] = DateTime.now().toIso8601String();
+      return await db.update(
+        'suppliers',
+        supplierMap,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    } catch (e) {
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
+  /// حذف مورد
+  Future<int> deleteSupplier(int id) async {
+    final db = await getDatabase();
+    try {
+      return await db.delete('suppliers', where: 'id = ?', whereArgs: [id]);
+    } catch (e) {
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
+  /// البحث عن الموردين
+  Future<List<Map<String, dynamic>>> searchSuppliers(String query) async {
+    final db = await getDatabase();
+    try {
+      return await db.query(
+        'suppliers',
+        where: 'name LIKE ? OR phone LIKE ?',
+        whereArgs: ['%\$query%', '%\$query%'],
+        limit: 50,
+      );
+    } catch (e) {
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+}
+```
+
+========================================================================
+ثالثاً: ملف استعلامات مناديب الموردين `lib/services/database/dao/supplier_delegate_dao.dart`
+========================================================================
+الشرح: دوال جاهزة للتأثير المباشر على جدول مناديب المورد في قاعدة البيانات.
+
+```dart
+class SupplierDelegateDao {
+  final Future<Database> Function() getDatabase;
+
+  SupplierDelegateDao({required this.getDatabase});
+
+  /// إضافة مندوب جديد
+  Future<int> insert(SupplierDelegate delegate) async {
+    final _db = await getDatabase();
+    return await _db.insert(
+      'supplier_delegates',
+      delegate.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// الحصول على قائمة المندوبين لمورد معين
+  Future<List<SupplierDelegate>> getBySupplierId(int supplierId) async {
+    final _db = await getDatabase();
+    final List<Map<String, dynamic>> maps = await _db.query(
+      'supplier_delegates',
+      where: 'supplier_id = ? AND is_active = 1',
+      whereArgs: [supplierId],
+    );
+
+    return List.generate(maps.length, (i) => SupplierDelegate.fromMap(maps[i]));
+  }
+
+  /// تحديث بيانات مندوب
+  Future<int> update(SupplierDelegate delegate) async {
+    final _db = await getDatabase();
+    return await _db.update(
+      'supplier_delegates',
+      delegate.toMap(),
+      where: 'id = ?',
+      whereArgs: [delegate.id],
+    );
+  }
+
+  /// حذف (أو تعطيل) مندوب
+  Future<int> delete(int id) async {
+    final _db = await getDatabase();
+    // نفضل التعطيل بدلاً من الحذف للحفاظ على التكامل المرجعي
+    return await _db.update(
+      'supplier_delegates',
+      {'is_active': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+}
+```

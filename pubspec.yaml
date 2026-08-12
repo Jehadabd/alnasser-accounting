@@ -1,0 +1,104 @@
+name: alnaser
+description: A debt management application for businesses.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  sqflite: ^2.4.2
+  sqflite_common_ffi: ^2.3.0
+  sqlite3_flutter_libs: ^0.5.21  # تضمين SQLite حديث مع دعم FTS5 لأندرويد
+  path: ^1.8.3
+  path_provider: ^2.0.11
+  url_launcher: ^6.2.1
+
+  file_picker: ^10.3.8
+  permission_handler: ^12.0.0+1
+  flutter_dotenv: ^5.1.0
+  pdf: ^3.10.4
+  printing: ^5.11.1
+  intl: ^0.20.2
+  provider: ^6.1.1
+  http: ^1.1.0
+  font_awesome_flutter: ^11.0.0
+  workmanager: ^0.10.7  # مُرقّى من 0.5.1 لدعم Flutter 3.x و Built-in Kotlin على أندرويد
+  flutter_secure_storage: ^9.0.0
+  share_plus: ^7.2.1
+  shared_preferences: ^2.2.2
+  image: ^4.1.4
+  image_picker: ^1.0.7
+  esc_pos_utils_plus: ^2.0.4
+  flutter_esc_pos_network: ^1.0.3
+  print_bluetooth_thermal: ^1.1.6
+  win32: ^5.14.0
+  ffi: ^2.1.2
+  flutter_nsd: ^1.6.0
+  get_storage: ^2.1.1
+  process: ^4.2.4
+
+  network_info_plus: ^5.0.3
+  archive: ^3.6.1
+  lzma: ^1.0.1  # LZMA2 compression for better backup size
+  flutter_colorpicker: ^1.1.0
+  decimal: ^3.2.4
+  crypto: ^3.0.3
+  connectivity_plus: ^6.0.0 # 🔐 License
+
+  # 🔥 Firebase — نظام المزامنة بين الأجهزة
+  firebase_core: ^3.6.0
+  cloud_firestore: ^5.4.0
+  firebase_auth: ^5.3.0
+
+  uuid: ^4.5.2
+  window_manager: ^0.4.3  # التحكم في نافذة Windows (إغلاق، تصغير، إلخ)
+
+
+  pdfrx: ^1.0.40  # Better Windows support for PDF rendering
+  onnxruntime: ^1.4.1
+  fixnum: ^1.1.1
+  # google_mlkit_text_recognition: ^0.13.1  # OCR محلي - لا يدعم Windows Desktop
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/tessdata_config.json
+    - assets/tessdata/
+    - assets/fonts/Amiri-Regular.ttf
+    - assets/fonts/Cairo-Regular.ttf
+    - assets/fonts/ALGER.TTF
+    - assets/fonts/PTBLDHAD.TTF
+    - .env
+    - assets/fonts/andlso.ttf
+    - assets/fonts/Old Antic Outline Shaded.ttf
+    - assets/icon/AL_NASSER_logo_transparent_medium.png
+    - assets/icon/photo_2025-07-07_12-12-56.jpg
+    - assets/icon/alnasser.jpg
+    # 🔥 assets/models/ أُزيل — نموذج ONNX (481 ميجا) محذوف لتقليل حجم التطبيق.
+    # أعد إضافته فقط إن أردت تفعيل طبقة فهم بنية الفاتورة (VisionService).
+
+flutter_dotenv:
+  file: .env
+  merge_with: flutter_config
+
+flutter_icons:
+  android: true
+  ios: true
+  windows:
+    generate: true
+    image_path: "assets/icon/photo_2025-06-13_19-07-33.jpg"
+  image_path: "assets/icon/photo_2025-06-13_19-07-33.jpg"
+
+  # ... rest of the file remains unchanged ... 

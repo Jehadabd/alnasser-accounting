@@ -1,0 +1,237 @@
+Control Identifiers:
+
+Dialog - 'debt_book'    (L12, T12, R1612, B912)
+['Dialog', 'debt_book', 'debt_bookDialog']
+child_window(title="debt_book", control_type="Window")
+   | 
+   | Pane - ''    (L21, T50, R1603, B903)
+   | ['Pane', '0 د.عPane']
+   |    | 
+   |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    | ['GroupBox', '0 د.عGroupBox', 'GroupBox0', 'GroupBox1', '0 د.عGroupBox0', '0 د.عGroupBox1']
+   |    |    | 
+   |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    | ['GroupBox', '0 د.عGroupBox', 'GroupBox0', 'GroupBox1', '0 د.عGroupBox0', '0 د.عGroupBox1']
+   |    |    |    | 
+   |    |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    |    | ['GroupBox', '0 د.عGroupBox', 'GroupBox0', 'GroupBox1', '0 د.عGroupBox0', '0 د.عGroupBox1']
+   |    |    |    |    | 
+   |    |    |    |    | GroupBox - ''    (L21, T50, R1603, B903)
+   |    |    |    |    | ['GroupBox', '0 د.عGroupBox', 'GroupBox0', 'GroupBox1', '0 د.عGroupBox0', '0 د.عGroupBox1']
+   |    |    |    |    |    | 
+   |    |    |    |    |    | GroupBox - ''    (L21, T50, R1603, B125)
+   |    |    |    |    |    | ['2026-01-17GroupBox', 'GroupBox5']
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'رجوع'    (L1543, T62, R1593, B113)
+   |    |    |    |    |    |    | ['Button', 'رجوع', 'رجوعButton', 'Button0', 'Button1']
+   |    |    |    |    |    |    | child_window(title="رجوع", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | GroupBox - 'غير معروف\nنوع الفاتورة'    (L241, T61, R1513, B114)
+   |    |    |    |    |    |    | ['غير معروف\nنوع الفاتورة', 'غير معروف\nنوع الفاتورةGroupBox', 'GroupBox6']
+   |    |    |    |    |    |    | child_window(title="غير معروف\nنوع الفاتورة", control_type="Group")
+   |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    | Edit - 'اسم العميل'    (L1249, T61, R1513, B114)
+   |    |    |    |    |    |    |    | ['Edit', '2026-01-17Edit', 'Edit0', 'Edit1', '2026-01-17Edit0', '2026-01-17Edit1']
+   |    |    |    |    |    |    |    | child_window(title="اسم العميل", control_type="Edit")
+   |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    | Edit - 'الجوال'    (L1014, T61, R1240, B114)
+   |    |    |    |    |    |    |    | ['Edit2', '2026-01-17Edit2']
+   |    |    |    |    |    |    |    | child_window(title="الجوال", control_type="Edit")
+   |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    | Edit - 'العنوان'    (L741, T61, R1005, B114)
+   |    |    |    |    |    |    |    | ['Edit3', '2026-01-17Edit3']
+   |    |    |    |    |    |    |    | child_window(title="العنوان", control_type="Edit")
+   |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    | Static - '2026-01-17'    (L457, T61, R595, B114)
+   |    |    |    |    |    |    |    | ['2026-01-17Static', 'Static', '2026-01-17', 'Static0', 'Static1']
+   |    |    |    |    |    |    |    | child_window(title="2026-01-17", control_type="Text")
+   |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    | Button - 'مفرد'    (L256, T61, R352, B114)
+   |    |    |    |    |    |    |    | ['Button2', 'مفردButton', 'مفرد']
+   |    |    |    |    |    |    |    | child_window(title="مفرد", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'فاتورة جديدة'    (L171, T62, R221, B113)
+   |    |    |    |    |    |    | ['Button3', 'فاتورة جديدةButton', 'فاتورة جديدة']
+   |    |    |    |    |    |    | child_window(title="فاتورة جديدة", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'طباعة الفاتورة'    (L121, T62, R171, B113)
+   |    |    |    |    |    |    | ['Button4', 'طباعة الفاتورةButton', 'طباعة الفاتورة']
+   |    |    |    |    |    |    | child_window(title="طباعة الفاتورة", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'طباعة تجهيز (بدون أسعار)'    (L71, T62, R121, B113)
+   |    |    |    |    |    |    | ['Button5', 'طباعة تجهيز (بدون أسعار)', 'طباعة تجهيز (بدون أسعار)Button']
+   |    |    |    |    |    |    | child_window(title="طباعة تجهيز (بدون أسعار)", control_type="Button")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Button - 'مشاركة الفاتورة PDF'    (L21, T62, R71, B113)
+   |    |    |    |    |    |    | ['Button6', 'مشاركة الفاتورة PDF', 'مشاركة الفاتورة PDFButton']
+   |    |    |    |    |    |    | child_window(title="مشاركة الفاتورة PDF", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'البحث عن صنف'    (L1480, T140, R1583, B162)
+   |    |    |    |    |    | ['البحث عن صنف', 'Static2', 'البحث عن صنفStatic']
+   |    |    |    |    |    | child_window(title="البحث عن صنف", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Edit - 'أدخل اسم المنتج أو الرمز...'    (L955, T166, R1583, B227)
+   |    |    |    |    |    | ['Edit4', 'الكميةEdit', 'البحث عن صنفEdit', 'الكميةEdit0', 'الكميةEdit1']
+   |    |    |    |    |    | child_window(title="أدخل اسم المنتج أو الرمز...", control_type="Edit")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'الكمية'    (L853, T140, R893, B162)
+   |    |    |    |    |    | ['Static3', 'الكمية', 'الكميةStatic']
+   |    |    |    |    |    | child_window(title="الكمية", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Edit - ''    (L810, T166, R936, B227)
+   |    |    |    |    |    | ['Edit5', 'الكميةEdit2']
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'الوحدة'    (L721, T140, R764, B162)
+   |    |    |    |    |    | ['الوحدةStatic', 'Static4', 'الوحدة']
+   |    |    |    |    |    | child_window(title="الوحدة", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'قطعة'    (L706, T167, R780, B225)
+   |    |    |    |    |    | ['Button7', 'قطعة', 'قطعةButton']
+   |    |    |    |    |    | child_window(title="قطعة", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'السعر'    (L574, T140, R613, B162)
+   |    |    |    |    |    | ['Static5', 'السعرStatic', 'السعر', 'السعرStatic0', 'السعرStatic1', 'السعر0', 'السعر1']
+   |    |    |    |    |    | child_window(title="السعر", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Edit - ''    (L512, T166, R675, B227)
+   |    |    |    |    |    | ['السعرEdit', 'Edit6', 'السعرEdit0', 'السعرEdit1']
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'الإجمالي قبل الخصم'    (L246, T146, R397, B172)
+   |    |    |    |    |    | ['الإجمالي قبل الخصم', 'Static6', 'الإجمالي قبل الخصمStatic']
+   |    |    |    |    |    | child_window(title="الإجمالي قبل الخصم", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'الإجمالي بعد الخصم'    (L248, T195, R397, B221)
+   |    |    |    |    |    | ['Static7', 'الإجمالي بعد الخصم', 'الإجمالي بعد الخصمStatic']
+   |    |    |    |    |    | child_window(title="الإجمالي بعد الخصم", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - '0 د.ع'    (L41, T145, R86, B174)
+   |    |    |    |    |    | ['0 د.ع', 'Static8', '0 د.عStatic', '0 د.ع0', '0 د.ع1', '0 د.عStatic0', '0 د.عStatic1']
+   |    |    |    |    |    | child_window(title="0 د.ع", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - '0 د.ع'    (L41, T193, R86, B223)
+   |    |    |    |    |    | ['0 د.ع2', 'Static9', '0 د.عStatic2']
+   |    |    |    |    |    | child_window(title="0 د.ع", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'ت'    (L1536, T255, R1593, B280)
+   |    |    |    |    |    | ['Static10', 'ت', 'تStatic']
+   |    |    |    |    |    | child_window(title="ت", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'التفاصيل'    (L1141, T255, R1537, B280)
+   |    |    |    |    |    | ['Static11', 'التفاصيل', 'التفاصيلStatic']
+   |    |    |    |    |    | child_window(title="التفاصيل", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'العدد'    (L1028, T255, R1142, B280)
+   |    |    |    |    |    | ['Static12', 'العددStatic', 'العدد']
+   |    |    |    |    |    | child_window(title="العدد", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'نوع'    (L915, T255, R1029, B280)
+   |    |    |    |    |    | ['Static13', 'نوع', 'نوعStatic']
+   |    |    |    |    |    | child_window(title="نوع", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'السعر'    (L803, T255, R916, B280)
+   |    |    |    |    |    | ['Static14', 'السعرStatic2', 'السعر2']
+   |    |    |    |    |    | child_window(title="السعر", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'وحدة'    (L690, T257, R804, B278)
+   |    |    |    |    |    | ['Static15', 'وحدة', 'وحدةStatic']
+   |    |    |    |    |    | child_window(title="وحدة", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'الإجمالي'    (L577, T255, R691, B280)
+   |    |    |    |    |    | ['الإجمالي', 'Static16', 'الإجماليStatic']
+   |    |    |    |    |    | child_window(title="الإجمالي", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'المبلغ المسدد'    (L292, T244, R397, B270)
+   |    |    |    |    |    | ['المبلغ المسددStatic', 'Static17', 'المبلغ المسدد']
+   |    |    |    |    |    | child_window(title="المبلغ المسدد", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - '0 د.ع'    (L41, T242, R86, B272)
+   |    |    |    |    |    | ['0 د.ع3', 'Static18', '0 د.عStatic3']
+   |    |    |    |    |    | child_window(title="0 د.ع", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | GroupBox - ''    (L417, T292, R1603, B903)
+   |    |    |    |    |    | ['0 د.عGroupBox5', 'المبلغ المتبقيGroupBox', 'GroupBox7', 'المبلغ المتبقيGroupBox0', 'المبلغ المتبقيGroupBox1']
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | GroupBox - ''    (L417, T292, R1603, B903)
+   |    |    |    |    |    |    | ['0 د.عGroupBox5', 'المبلغ المتبقيGroupBox', 'GroupBox7', 'المبلغ المتبقيGroupBox0', 'المبلغ المتبقيGroupBox1']
+   |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    | GroupBox - '1\n0.00'    (L417, T292, R1603, B350)
+   |    |    |    |    |    |    |    | ['1\n0.00', 'GroupBox9', '1\n0.00GroupBox']
+   |    |    |    |    |    |    |    | child_window(title="1\n0.00", control_type="Group")
+   |    |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    |    | Edit - ''    (L1147, T303, R1539, B339)
+   |    |    |    |    |    |    |    |    | ['Edit7', 'التفاصيلEdit']
+   |    |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    |    | Edit - ''    (L1032, T303, R1137, B339)
+   |    |    |    |    |    |    |    |    | ['Edit8', 'العددEdit']
+   |    |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    |    | Button - ''    (L921, T295, R1018, B348)
+   |    |    |    |    |    |    |    |    | ['Button8', 'نوعButton']
+   |    |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    |    | Edit - ''    (L803, T303, R907, B339)
+   |    |    |    |    |    |    |    |    | ['السعرEdit2', 'Edit9']
+   |    |    |    |    |    |    |    |    | 
+   |    |    |    |    |    |    |    |    | Button - 'حذف الصنف'    (L418, T296, R469, B347)
+   |    |    |    |    |    |    |    |    | ['Button9', 'حذف الصنف', 'حذف الصنفButton']
+   |    |    |    |    |    |    |    |    | child_window(title="حذف الصنف", control_type="Button")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - 'المبلغ المتبقي'    (L289, T293, R397, B319)
+   |    |    |    |    |    | ['المبلغ المتبقي', 'Static19', 'المبلغ المتبقيStatic']
+   |    |    |    |    |    | child_window(title="المبلغ المتبقي", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Static - '0 د.ع'    (L41, T291, R86, B320)
+   |    |    |    |    |    | ['0 د.ع4', 'Static20', '0 د.عStatic4']
+   |    |    |    |    |    | child_window(title="0 د.ع", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | GroupBox - ''    (L21, T340, R417, B796)
+   |    |    |    |    |    | ['GroupBox10', '0 د.عGroupBox6']
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'أجور التحميل والنقل'    (L260, T360, R397, B384)
+   |    |    |    |    |    |    | ['أجور التحميل والنقل', 'Static21', 'أجور التحميل والنقلStatic']
+   |    |    |    |    |    |    | child_window(title="أجور التحميل والنقل", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Edit - '0'    (L41, T391, R342, B452)
+   |    |    |    |    |    |    | ['أجور التحميل والنقلEdit', '0 د.عEdit', 'Edit10', '0 د.عEdit0', '0 د.عEdit1']
+   |    |    |    |    |    |    | child_window(title="0", control_type="Edit")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'الخصم المسموح'    (L281, T466, R397, B490)
+   |    |    |    |    |    |    | ['Static22', 'الخصم المسموح', 'الخصم المسموحStatic']
+   |    |    |    |    |    |    | child_window(title="الخصم المسموح", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Edit - '0'    (L41, T497, R342, B558)
+   |    |    |    |    |    |    | ['0 د.عEdit2', 'Edit11', 'الخصم المسموحEdit']
+   |    |    |    |    |    |    | child_window(title="0", control_type="Edit")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'نقد'    (L218, T582, R397, B647)
+   |    |    |    |    |    |    | ['Static23', 'نقد', 'نقدStatic']
+   |    |    |    |    |    |    | child_window(title="نقد", control_type="Text")
+   |    |    |    |    |    |    | 
+   |    |    |    |    |    |    | Static - 'دين'    (L41, T584, R219, B645)
+   |    |    |    |    |    |    | ['دين', 'Static24', 'دينStatic']
+   |    |    |    |    |    |    | child_window(title="دين", control_type="Text")
+   |    |    |    |    |    | 
+   |    |    |    |    |    | Button - 'حفظ الفاتورة'    (L41, T815, R397, B883)
+   |    |    |    |    |    | ['Button10', 'حفظ الفاتورة', 'حفظ الفاتورةButton']
+   |    |    |    |    |    | child_window(title="حفظ الفاتورة", control_type="Button")
+   | 
+   | TitleBar - ''    (L41, T15, R1603, B50)
+   | ['TitleBar']
+   |    | 
+   |    | Menu - 'System'    (L21, T21, R49, B49)
+   |    | ['Menu', 'System', 'SystemMenu', 'System0', 'System1']
+   |    | child_window(title="System", auto_id="MenuBar", control_type="MenuBar")
+   |    |    | 
+   |    |    | MenuItem - 'System'    (L21, T21, R49, B49)
+   |    |    | ['SystemMenuItem', 'System2', 'MenuItem']
+   |    |    | child_window(title="System", control_type="MenuItem")
+   |    | 
+   |    | Button - 'Minimize'    (L1425, T13, R1485, B50)
+   |    | ['Button11', 'MinimizeButton', 'Minimize']
+   |    | child_window(title="Minimize", control_type="Button")
+   |    | 
+   |    | Button - 'Maximize'    (L1485, T13, R1544, B50)
+   |    | ['Button12', 'Maximize', 'MaximizeButton']
+   |    | child_window(title="Maximize", control_type="Button")
+   |    | 
+   |    | Button - 'Close'    (L1544, T13, R1604, B50)
+   |    | ['Button13', 'Close', 'CloseButton']
+   |    | child_window(title="Close", control_type="Button")

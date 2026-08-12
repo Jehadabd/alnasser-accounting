@@ -1,0 +1,26 @@
+# af_qa_engine/config.yaml
+# إعدادات محرك الاختبار الذاتي
+# تأكد من تعديل المسارات لتناسب جهازك
+
+app:
+  # مسار ملف التطبيق التنفيذي (.exe)
+  exe_path: "C:/Users/jihad/Desktop/shop-maniger-MBmain/build/windows/x64/runner/Debug/debt_book.exe"
+  # اسم النافذة الرئيسية كما يظهر في Task Manager
+  window_title: "debt_book"
+  # مسار قاعدة البيانات (SQLite)
+  db_path: "C:/Users/jihad/Documents/debt_book.db"
+  timeout: 10
+  log_level: "DEBUG"
+
+testing:
+  # هل تريد تشغيل الاختبار بملء الشاشة؟
+  headless: false
+  # سرعة التنفيذ (ثانية بين كل ضغطة)
+  action_delay: 0.5
+  # لقطات الشاشة عند الخطأ
+  screenshot_on_fail: true
+  screenshot_dir: "screenshots/"
+
+thresholds:
+  # الدقة المالية المسموح بها (عادة 0.01 دينار)
+  financial_tolerance: 0.01 

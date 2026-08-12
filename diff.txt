@@ -1,0 +1,144 @@
+diff --git a/lib/screens/create_invoice_screen.dart b/lib/screens/create_invoice_screen.dart
+index 2eba28e..4e7abd1 100644
+--- a/lib/screens/create_invoice_screen.dart
++++ b/lib/screens/create_invoice_screen.dart
+@@ -160,6 +160,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+   
+   // متغير لمنع الحفظ المزدوج
+   bool isSaving = false;
++  
++  // 🔒 mutex لمنع تداخل _syncLiveDebt مع الحفظ
++  bool _isSyncingDebt = false;
+ 
+   // Profit Display State
+   bool _isProfitVisible = false;
+@@ -2847,7 +2850,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+   }
+ 
+   void _recalculateTotals() {
+-    double itemsTotal = invoiceItems.fold(0, (sum, item) => sum + item.itemTotal);
++    // 🔒 إصلاح: جمع فقط العناصر المكتملة لتطابق منطق الحفظ
++    double itemsTotal = invoiceItems
++        .where((item) => _isInvoiceItemComplete(item))
++        .fold(0.0, (sum, item) => sum + item.itemTotal);
+     // إضافة رسوم التحميل إلى الإجمالي المعروض
+     final double loadingFee = double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0.0;
+     double total = itemsTotal + loadingFee;
+@@ -2861,13 +2867,24 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+ 
+   Future<void> _syncLiveDebt() async {
+     try {
++      // 🔒 Guard 1: لا تعمل أثناء الحفظ لمنع race condition
++      if (isSaving) return;
++      
++      // 🔒 Guard 2: mutex لمنع تداخل عمليات المزامنة
++      if (_isSyncingDebt) return;
++      _isSyncingDebt = true;
++      
+       // متاح فقط للفواتير الموجودة ولها عميل
+-      if (invoiceToManage == null || invoiceToManage!.id == null) return;
++      if (invoiceToManage == null || invoiceToManage!.id == null) {
++        _isSyncingDebt = false;
++        return;
++      }
+       
+       // 🔧 إصلاح: لا تنشئ معاملات invoice_live_update للفواتير المحفوظة
+       // المعاملات يجب أن تُنشأ فقط عند الحفظ الفعلي في saveInvoice
+       // هذا يمنع إنشاء معاملات زائدة عند فتح الفاتورة للتعديل
+       if (invoiceToManage!.status == 'محفوظة') {
++        _isSyncingDebt = false;
+         return;
+       }
+       
+@@ -2918,6 +2935,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+     } catch (e) {
+       // لا تُظهر خطأ للمستخدم أثناء التعديل الحي؛ فقط سجّل
+       print('live debt sync error: $e');
++    } finally {
++      _isSyncingDebt = false;
+     }
+   }
+ 
+@@ -3449,18 +3468,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+                                                     return await SmartSearchService.instance.smartSearch(query);
+                                                 }
+                                             },
+-                                            displayStringForOption: (Product p) => p.name,
+-                                            optionsViewBuilder: (context, onSelected, options) {
+-                                                return Align(
+-                                                    alignment: Alignment.topRight,
+-                                                    child: Material(
+-                                                        elevation: 8,
+-                                                        borderRadius: BorderRadius.circular(12),
+-                                                        child: Container(
+-                                                            width: constraints.maxWidth,
+-                                                            constraints: const BoxConstraints(maxHeight: 300),
+-                                                            decoration: BoxDecoration(
+-                                                                color: Colors.white,
+                                                                 borderRadius: BorderRadius.circular(12),
+                                                             ),
+                                                             child: ListView.builder(
+@@ -4100,13 +4107,14 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+           toolbarHeight: 60, // 🔺 Increased height for better visibility
+           title: LayoutBuilder(
+             builder: (context, constraints) {
+-              return Row(
+-                children: [
+-                   // 1. Customer Name (Autocomplete)
+-                  Expanded(
+-                    flex: 1, // 🔻 Reduced to smaller size per user request
+-                    child: SizedBox(
+-                      height: 42, // 🔺 Increased Height for better visibility
++              return SingleChildScrollView(
++                scrollDirection: Axis.horizontal,
++                child: Row(
++                  children: [
++                     // 1. Customer Name (Autocomplete)
++                    SizedBox(
++                      width: 250, // Fixed width for scrollable layout
++                      height: 42,
+                       child: Autocomplete<String>(
+                         optionsBuilder: (TextEditingValue textEditingValue) async {
+                           if (textEditingValue.text == '') {
+@@ -4245,7 +4253,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+ 
+                   // 2. Phone
+                   SizedBox(
+-                    width: 180, // 🔺 Increased further per user request
++                    width: 150, // Adjusted width
+                     height: 42, // 🔺 Increased Height
+                     child: TextFormField(
+                       controller: customerPhoneController,
+@@ -4270,10 +4278,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+                   const SizedBox(width: 8),
+ 
+                   // 3. Address
+-                   Expanded(
+-                    flex: 1, // 🔻 Reduced from 2 to 1 per user request
+-                    child: SizedBox(
+-                      height: 42, // 🔺 Increased Height for better visibility
++                  SizedBox(
++                    width: 200, // Fixed width for scrollable layout
++                    height: 42,
+                       child: TextFormField(
+                         controller: customerAddressController,
+                          style: const TextStyle(color: Colors.white, fontSize: 12.5),
+@@ -4387,8 +4394,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+                     ),
+                   ], // close Row children
+                 ), // close Row
+-                ],
+-              );
++              ); // close SingleChildScrollView
+             }
+           ),
+           centerTitle: true,
+@@ -4445,7 +4451,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
+                   );
+                 },
+               ),
+-            if (invoiceToManage != null && isViewOnly) ...[
++            if (invoiceToManage != null && isViewOnly && invoiceToManage!.isCreatedByMe) ...[
+               IconButton(
+                 icon: const Icon(Icons.edit),
+                 tooltip: 'تعديل الفاتورة',
