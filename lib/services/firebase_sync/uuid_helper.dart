@@ -34,6 +34,20 @@ class UuidHelper {
     return 'inv_${micros.toRadixString(36)}_${_devicePrefix}_${_randomBase36(14)}';
   }
 
+  /// معرّف معاملة مالية جديد (يُستخدم كمفتاح وثيقة في Firestore ومعرّف مزامنة).
+  /// يُستدعى عند إنشاء المعاملة لضمان رفعها فوراً مع الفاتورة (مزامنة ذرية).
+  static String newTransactionUuid() {
+    final micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return 'tx_${micros.toRadixString(36)}_${_devicePrefix}_${_randomBase36(14)}';
+  }
+
+  /// معرّف منتج جديد (يُستخدم كمفتاح وثيقة في Firestore ومعرّف مزامنة).
+  /// يُستدعى عند إنشاء المنتج لضمان رفعه للكتالوج الموحد.
+  static String newProductUuid() {
+    final micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return 'prod_${micros.toRadixString(36)}_${_devicePrefix}_${_randomBase36(14)}';
+  }
+
   /// هل المعرّف صالح كمفتاح وثيقة في Firestore؟
   static bool isValidId(String? id) {
     if (id == null || id.isEmpty) return false;

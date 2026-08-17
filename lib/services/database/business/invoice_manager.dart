@@ -136,29 +136,38 @@ class InvoiceManager {
           final itemMap = item.toMap();
           itemMap['invoice_id'] = invoiceId;
           itemMap.remove('id');
-          
-          // 🛡️ التحقق من وجود التكلفة، إذا كانت 0 أو null نجلبها من المنتج
-          if ((item.actualCostPrice == null || item.actualCostPrice == 0) && item.productId != null) {
-             final productRes = await txn.query('products', 
-                columns: ['cost_price', 'unit_costs', 'unit_hierarchy'], 
-                where: 'id = ?', 
+
+          // 🛡️ التحقق من وجود التكلفة، و🔄 جلب sync_uuid من المنتج إن لزم
+          if (item.productId != null) {
+             final productRes = await txn.query('products',
+                columns: ['cost_price', 'unit_costs', 'unit_hierarchy', 'sync_uuid'],
+                where: 'id = ?',
                 whereArgs: [item.productId]
              );
-             
+
              if (productRes.isNotEmpty) {
                final product = productRes.first;
-               // محاولة حساب التكلفة الدقيقة بناءً على الوحدة
-               double baseCost = (product['cost_price'] as num?)?.toDouble() ?? 0.0;
-               
-               // إذا لم تحدد تكلفة، نستخدم التكلفة الأساسية (للقطعة الواحدة)
-               // ملاحظة: actual_cost_price في InvoiceItem يجب أن يكون للوحدة الواحدة المباعة
-               itemMap['actual_cost_price'] = baseCost;
-               itemMap['cost_price'] = baseCost;
+
+               // 🔄 تعبئة product_sync_uuid لربط الصنف بالمنتج عبر المزامنة
+               if ((item.productSyncUuid == null || item.productSyncUuid!.isEmpty)) {
+                 final pSyncUuid = product['sync_uuid'] as String?;
+                 if (pSyncUuid != null && pSyncUuid.isNotEmpty) {
+                   itemMap['product_sync_uuid'] = pSyncUuid;
+                   item.productSyncUuid = pSyncUuid; // لتمريره لخصم المخزون
+                 }
+               }
+
+               // 🛡️ معالجة التكلفة
+               if ((item.actualCostPrice == null || item.actualCostPrice == 0)) {
+                 double baseCost = (product['cost_price'] as num?)?.toDouble() ?? 0.0;
+                 itemMap['actual_cost_price'] = baseCost;
+                 itemMap['cost_price'] = baseCost;
+               }
              }
           }
-          
+
           await txn.insert('invoice_items', itemMap);
-          
+
         }
         
         // تحديث الكمية في المخزن (إنقاص)
@@ -179,18 +188,21 @@ class InvoiceManager {
               
               // 2. إنشاء المعاملة
               final newDebt = currentDebt + remainingAmount;
-              
+              // نفس المعرّف لـ transaction_uuid و sync_uuid حتى ترفع المطابقة الحية المعاملة.
+              final txUuid = UuidHelper.newTransactionUuid();
               final transaction = DebtTransaction(
                 customerId: invoice.customerId!,
                 transactionDate: invoice.invoiceDate,
                 amountChanged: remainingAmount,
                 transactionType: 'فاتورة',
-                // ✅ الوصف يعرض الرقم التجاري (المرئي للمستخدم) لا الـ id الداخلي
                 description: 'فاتورة رقم $invoiceNumberStr',
                 balanceBeforeTransaction: currentDebt,
                 newBalanceAfterTransaction: newDebt,
-                invoiceId: invoiceId, // الربط الداخلي بالـ id يبقى كما هو
+                invoiceId: invoiceId,
                 isCreatedByMe: true,
+                transactionUuid: txUuid,
+                syncUuid: txUuid,
+                invoiceSyncUuid: finalInvoiceUuid,
               );
               
               final txMap = transaction.toMap();

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' as intl;
 import '../models/product.dart';
+import '../widgets/camera_barcode_scanner_dialog.dart';
 import '../models/category.dart';
 import '../services/database_service.dart';
 import '../services/password_service.dart'; // Import PasswordService
@@ -1038,6 +1039,18 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                           controller: _barcodeController,
                           label: 'الباركود',
                           hint: 'scan...',
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.camera_alt_rounded, color: Color(0xFF4F46E5)),
+                            tooltip: 'مسح الباركود بالكاميرا',
+                            onPressed: () async {
+                              final code = await CameraBarcodeScannerDialog.scan(context);
+                              if (code != null && code.isNotEmpty) {
+                                setState(() {
+                                  _barcodeController.text = code;
+                                });
+                              }
+                            },
+                          ),
                         ),
                       ),
                       const SizedBox(width: 16),
@@ -1640,6 +1653,7 @@ class ModernTextField extends StatelessWidget {
   final bool isRequired;
   final List<TextInputFormatter>? inputFormatters;
   final Function(String)? onChanged;
+  final Widget? suffixIcon;
 
   const ModernTextField({
     super.key,
@@ -1649,6 +1663,7 @@ class ModernTextField extends StatelessWidget {
     this.isRequired = false,
     this.inputFormatters,
     this.onChanged,
+    this.suffixIcon,
   });
 
   @override
@@ -1675,6 +1690,7 @@ class ModernTextField extends StatelessWidget {
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               hintText: hint,
               hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
+              suffixIcon: suffixIcon,
               isDense: true,
             ),
             validator: isRequired ? (val) => val == null || val.isEmpty ? 'مطلوب' : null : null,

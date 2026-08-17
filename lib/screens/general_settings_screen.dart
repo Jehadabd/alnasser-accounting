@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 
 import 'package:alnaser/models/app_settings.dart';
 import 'package:alnaser/services/settings_manager.dart';
+import 'package:alnaser/widgets/app_side_nav.dart';
 import 'package:alnaser/models/printer_device.dart';
 import 'package:alnaser/services/printing_service.dart';
 import 'package:alnaser/services/printing_service_platform_io.dart';
+import 'package:alnaser/services/usb_printer_service.dart';
 import 'package:alnaser/services/thermal_receipt_service.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:intl/intl.dart';
@@ -24,6 +26,7 @@ import 'discord_settings_screen.dart'; // 💬 إعدادات Discord
 import 'dropbox_backup_screen.dart'; // ☁️ النسخ الاحتياطي السحابي
 import 'firebase_sync_settings_screen.dart';
 import 'firebase_custom_setup_screen.dart';
+import '../services/license_service.dart';
 
 import '../models/account_statement_item.dart';
 import '../models/verification_result.dart'; // ✅ Added
@@ -91,9 +94,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   
   // 🖨️ إعدادات الطابعات
   List<PrinterDevice> _availablePrinters = [];
+  List<PrinterDevice> _usbPrinters = [];
   PrinterDevice? _posThermalPrinter;
   PrinterDevice? _invoicePrinter;
   bool _loadingPrinters = false;
+  bool _scanningUsb = false;
+  bool _showSideNav = false;
 
 
   @override
@@ -136,6 +142,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     _costingMethod = _appSettings.costingMethod;
     _pricingMode = _appSettings.pricingMode;
     _wholesaleCustomerLimitController.text = _appSettings.wholesaleCustomerLimit.toString();
+    _showSideNav = _appSettings.showSideNav;
     
     // تحميل رقم الجهاز للفواتير
     _invoiceDeviceId = await InvoiceSettingsService.getInvoiceDeviceId();
@@ -159,17 +166,94 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     }
     
     // 🖨️ تحميل إعدادات الطابعات
+    _posThermalPrinter = await SettingsManager.getPosThermalPrinter();
+    _invoicePrinter = await SettingsManager.getInvoicePrinter();
+    final printingService = getPlatformPrintingService();
+    final systemPrinters = await printingService.findSystemPrinters();
+    final manualPrinters = await SettingsManager.getManualPrinters();
+    
+    _availablePrinters = [...manualPrinters, ...systemPrinters];
+    
+    if (_posThermalPrinter != null && 
+        !_availablePrinters.any((p) => p.name == _posThermalPrinter!.name && p.address == _posThermalPrinter!.address)) {
+      _availablePrinters.add(_posThermalPrinter!);
+    }
     _loadPrinters();
     
     setState(() {});
   }
   
+  Future<void> _showAddManualPrinterDialog() async {
+    String name = '';
+    String address = '';
+    String connectionType = 'wifi';
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('إضافة طابعة يدوياً'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                decoration: const InputDecoration(labelText: 'اسم الطابعة'),
+                onChanged: (v) => name = v,
+              ),
+              DropdownButtonFormField<String>(
+                value: connectionType,
+                items: const [
+                  DropdownMenuItem(value: 'wifi', child: Text('Wi-Fi / الشبكة')),
+                  DropdownMenuItem(value: 'bluetooth', child: Text('Bluetooth')),
+                ],
+                onChanged: (v) => setDialogState(() => connectionType = v!),
+                decoration: const InputDecoration(labelText: 'نوع الاتصال'),
+              ),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: connectionType == 'wifi' ? 'IP Address' : 'MAC Address',
+                  hintText: connectionType == 'wifi' ? '192.168.1.100' : '00:11:22:33:44:55',
+                ),
+                onChanged: (v) => address = v,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('إلغاء'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (name.isNotEmpty && address.isNotEmpty) {
+                  final printer = PrinterDevice(
+                    name: name,
+                    address: address,
+                    connectionType: connectionType == 'wifi' ? PrinterConnectionType.wifi : PrinterConnectionType.bluetooth,
+                    port: connectionType == 'wifi' ? 9100 : null,
+                  );
+                  await SettingsManager.addManualPrinter(printer);
+                  Navigator.pop(context);
+                  _loadPrinters(); // إعادة التحميل لإظهارها
+                }
+              },
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// تحميل الطابعات المتاحة من النظام
   Future<void> _loadPrinters() async {
     setState(() => _loadingPrinters = true);
     try {
       final printingService = getPlatformPrintingService();
-      _availablePrinters = await printingService.findSystemPrinters();
+      final systemPrinters = await printingService.findSystemPrinters();
+      final manualPrinters = await SettingsManager.getManualPrinters();
+      _availablePrinters = [...manualPrinters, ...systemPrinters];
+      
       _posThermalPrinter = await SettingsManager.getPosThermalPrinter();
       _invoicePrinter = await SettingsManager.getInvoicePrinter();
     } catch (e) {
@@ -178,6 +262,41 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     if (mounted) {
       setState(() => _loadingPrinters = false);
     }
+  }
+
+  /// البحث عن الطابعات عبر USB OTG
+  Future<void> _scanUsbPrinters() async {
+    setState(() => _scanningUsb = true);
+    try {
+      final printingService = getPlatformPrintingService();
+      final usbPrinters = await printingService.findUsbPrinters();
+      setState(() {
+        _usbPrinters = usbPrinters;
+        // دمج الطابعات USB مع القائمة الكاملة
+        _availablePrinters = [
+          ..._availablePrinters.where((p) => p.connectionType != PrinterConnectionType.usb),
+          ...usbPrinters,
+        ];
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(usbPrinters.isEmpty
+                ? '⚠️ لم يتم اكتشاف أي طابعة USB. تحقق من توصيل كابل OTG.'
+                : '✅ تم اكتشاف ${usbPrinters.length} طابعة USB'),
+            backgroundColor: usbPrinters.isEmpty ? Colors.orange : Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      print('خطأ في البحث عن طابعات USB: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('خطأ في البحث: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+    if (mounted) setState(() => _scanningUsb = false);
   }
   
   /// اختيار طابعة الكاشير الحرارية
@@ -264,6 +383,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
       storeSection: _storeSection,
       branchName: _branchName,
+      showSideNav: _showSideNav,
     );
     await SettingsManager.saveAppSettings(_appSettings);
     
@@ -712,6 +832,175 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     );
   }
 
+  Future<void> _showSelfUnbindDialog() async {
+    final licenseService = LicenseService();
+    final storedLicense = licenseService.getStoredLicense();
+
+    if (storedLicense == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('الترخيص غير مفعّل على هذا الجهاز'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final usernameController = TextEditingController(
+      text: storedLicense.subUsername ?? storedLicense.username,
+    );
+    final passwordController = TextEditingController();
+    bool isLoading = false;
+    String? errorMessage;
+    bool obscurePassword = true;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Row(
+                children: [
+                  Icon(Icons.phonelink_erase, color: Colors.orange, size: 28),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'تصفير ونقل الترخيص للجهاز',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: const Text(
+                        '⚠️ عند تأكيد التصفير، سيتم فك ارتباط هذا الجهاز بالسيرفر وتسجيل الخروج فوراً لتستطيع استخدام نفس الحساب على جهاز جديد.',
+                        style: TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: usernameController,
+                      decoration: const InputDecoration(
+                        labelText: 'اسم المستخدم (اليوزر)',
+                        prefixIcon: Icon(Icons.person),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: passwordController,
+                      obscureText: obscurePassword,
+                      decoration: InputDecoration(
+                        labelText: 'كلمة المرور الرئيسية',
+                        prefixIcon: const Icon(Icons.lock),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscurePassword ? Icons.visibility : Icons.visibility_off,
+                          ),
+                          onPressed: () {
+                            setDialogState(() {
+                              obscurePassword = !obscurePassword;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    if (errorMessage != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        errorMessage!,
+                        style: const TextStyle(color: Colors.red, fontSize: 13),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading ? null : () => Navigator.pop(context),
+                  child: const Text('إلغاء'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange.shade800,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                          final pwd = passwordController.text.trim();
+                          if (pwd.isEmpty) {
+                            setDialogState(() {
+                              errorMessage = 'يرجى إدخال كلمة المرور لتأكيد الملكية';
+                            });
+                            return;
+                          }
+
+                          setDialogState(() {
+                            isLoading = true;
+                            errorMessage = null;
+                          });
+
+                          try {
+                            final result = await licenseService.selfUnbindDevice(pwd);
+                            if (result.success) {
+                              if (context.mounted) {
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(result.message ?? 'تم تصفير الترخيص بنجاح'),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                                Navigator.of(context).pushNamedAndRemoveUntil(
+                                  '/license',
+                                  (route) => false,
+                                );
+                              }
+                            } else {
+                              setDialogState(() {
+                                isLoading = false;
+                                errorMessage = result.message ?? 'فشل تصفير الجهاز';
+                              });
+                            }
+                          } catch (e) {
+                            setDialogState(() {
+                              isLoading = false;
+                              errorMessage = 'حدث خطأ: $e';
+                            });
+                          }
+                        },
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        )
+                      : const Text('تأكيد التصفير ونقل الترخيص'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -729,10 +1018,53 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16.0),
+      body: Row(
         children: [
-          
+          if (AppSideNav.shouldShow(context, _appSettings))
+            const AppSideNav(currentRoute: '/general_settings'),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16.0),
+              children: [
+          // 🔐 قسم إدارة الترخيص ونقل الجهاز
+          _buildSettingsCard(
+            icon: Icons.vpn_key_rounded,
+            iconColor: Colors.amber.shade800,
+            title: 'إدارة الترخيص ونقل الجهاز',
+            child: Column(
+              children: [
+                _buildActionTile(
+                  icon: Icons.phonelink_erase_rounded,
+                  iconColor: Colors.orange.shade800,
+                  title: 'تصفير الترخيص ونقل الحساب إلى جهاز آخر',
+                  subtitle: 'فك ارتباط هذا الجهاز لتمكينك من تسجيل الدخول بنفس الحساب من كمبيوتر/هاتف جديد',
+                  onTap: _showSelfUnbindDialog,
+                ),
+              ],
+            ),
+          ),
+
+          // 🧭 قسم إعدادات الواجهة والشريط الجانبي
+          _buildSettingsCard(
+            icon: Icons.view_sidebar_rounded,
+            iconColor: const Color(0xFF1E1E2E),
+            title: 'شريط التنقل الجانبي',
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('إظهار شريط التنقل الجانبي دائماً', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  subtitle: const Text('يظهر تلقائياً على الشاشات الكبيرة (تابلت/ديسكتوب). يمكنك تفعيله هنا للهواتف أيضاً.', style: TextStyle(fontSize: 12)),
+                  value: _showSideNav,
+                  activeColor: const Color(0xFF1E1E2E),
+                  onChanged: (val) {
+                    setState(() => _showSideNav = val);
+                    _saveSettings();
+                  },
+                ),
+              ],
+            ),
+          ),
+
           // 👤 قسم إدارة المستخدمين
           _buildSettingsCard(
             icon: Icons.admin_panel_settings,
@@ -823,10 +1155,137 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   ),
                 ],
                 const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: _loadPrinters,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('تحديث القائمة'),
+
+                // ── أزرار الإجراءات ──
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _loadPrinters,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('تحديث القائمة'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: _showAddManualPrinterDialog,
+                      icon: const Icon(Icons.add),
+                      label: const Text('إضافة Wi-Fi/BT'),
+                    ),
+                  ],
+                ),
+
+                // ── قسم USB OTG ──
+                const Divider(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A237E).withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.usb, color: Color(0xFF1A237E), size: 20),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'طباعة عبر USB (Type-C / OTG)',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1A237E),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'وصّل الطابعة بالهاتف عبر كابل OTG ثم اضغط بحث',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // زر البحث عن طابعات USB
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: ElevatedButton.icon(
+                          onPressed: _scanningUsb ? null : _scanUsbPrinters,
+                          icon: _scanningUsb
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Icon(Icons.search_rounded),
+                          label: Text(_scanningUsb ? 'جاري البحث...' : '🔍 بحث عن طابعة USB'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1A237E),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ),
+
+                      // عرض الطابعات المكتشفة عبر USB
+                      if (_usbPrinters.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        const Text('الطابعات المكتشفة عبر USB:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                        const SizedBox(height: 8),
+                        ..._usbPrinters.map((printer) => Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.print, color: Color(0xFF1A237E), size: 20),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(printer.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                                    if (printer.manufacturerName != null && printer.manufacturerName!.isNotEmpty)
+                                      Text(printer.manufacturerName!, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                                    Text(
+                                      'VID: ${printer.vendorId?.toRadixString(16).toUpperCase()} • PID: ${printer.productId?.toRadixString(16).toUpperCase()}',
+                                      style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Column(
+                                children: [
+                                  TextButton(
+                                    onPressed: () => _selectInvoicePrinter(printer),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: const Color(0xFF1A237E),
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    ),
+                                    child: const Text('فواتير', style: TextStyle(fontSize: 11)),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => _selectPosThermalPrinter(printer),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.teal,
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    ),
+                                    child: const Text('كاشير', style: TextStyle(fontSize: 11)),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        )),
+                      ],
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -1305,6 +1764,9 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
           ),
         ],
       ),

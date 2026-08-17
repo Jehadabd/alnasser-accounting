@@ -24,6 +24,7 @@ import 'screens/ai_chat_screen.dart';
 import 'screens/pos/pos_screen.dart';
 import 'services/password_service.dart';
 import 'services/database_service.dart';
+import 'services/firebase_sync/firebase_sync_service.dart';
 import 'screens/password_setup_screen.dart';
 import 'screens/general_settings_screen.dart';
 import 'screens/login_screen.dart'; // 👤
@@ -230,6 +231,21 @@ void main() async {
   ReconciliationPrompt.start();
 
   runApp(MyApp(initialRoute: initialRoute));
+
+  // 🔄 بدء المزامنة تلقائياً عند تشغيل التطبيق (بدون الحاجة للدخول لإعدادات المزامنة).
+  //    fire-and-forget: لا نُعلّق الإقلاع؛ التهيئة تحدث في الخلفية.
+  //    تتم فقط لو الرخصة مفعّلة (لا داعي للمزامنة على شاشة التفعيل).
+  if (isLicenseActivated) {
+    FirebaseSyncService().initialize().then((ok) {
+      if (ok) {
+        print('✅ [main.dart] بدأت المزامنة تلقائياً عند الإقلاع');
+      } else {
+        print('⚠️ [main.dart] تعذّر بدء المزامنة التلقائية (ستُحاول لاحقاً)');
+      }
+    }).catchError((e) {
+      print('⚠️ [main.dart] خطأ في بدء المزامنة التلقائية: $e');
+    });
+  }
 }
 
 class MyApp extends StatelessWidget {

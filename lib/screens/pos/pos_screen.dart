@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/pos_provider.dart';
+import '../../widgets/camera_barcode_scanner_dialog.dart';
 import 'widgets/categories_sidebar.dart';
 import 'widgets/products_grid.dart';
 import 'widgets/cart_panel.dart';
+import '../../models/app_settings.dart';
+import '../../services/settings_manager.dart';
+import '../../widgets/app_side_nav.dart';
 
 class POSScreen extends StatefulWidget {
   const POSScreen({super.key});
@@ -21,15 +25,23 @@ class _POSScreenState extends State<POSScreen> {
   // الفاصل الزمني الأقصى بين ضغطات المفاتيح من قارئ الباركود
   static const _barcodeTimeout = Duration(milliseconds: 100);
   
+  AppSettings? _appSettings;
+
   @override
   void initState() {
     super.initState();
+    _loadSettings();
     // Load data after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<POSProvider>().loadInitialData();
       // طلب التركيز لاستقبال مدخلات الباركود
       _focusNode.requestFocus();
     });
+  }
+
+  Future<void> _loadSettings() async {
+    final settings = await SettingsManager.getAppSettings();
+    if (mounted) setState(() => _appSettings = settings);
   }
   
   @override
@@ -103,9 +115,24 @@ class _POSScreenState extends State<POSScreen> {
           backgroundColor: Colors.white,
           elevation: 0,
           foregroundColor: Colors.black,
+          actions: [
+            IconButton(
+              tooltip: 'مسح باركود للكاميرا',
+              icon: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF4F46E5)),
+              onPressed: () async {
+                final scanned = await CameraBarcodeScannerDialog.scan(context);
+                if (scanned != null && scanned.isNotEmpty) {
+                  _processBarcode(scanned);
+                }
+              },
+            ),
+            const SizedBox(width: 8),
+          ],
         ),
         body: Row(
           children: [
+            if (_appSettings != null && AppSideNav.shouldShow(context, _appSettings!))
+              const AppSideNav(currentRoute: '/pos'),
             // Categories - Right (RTL) or Left
             const Expanded(
               flex: 2, 

@@ -22,6 +22,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/models/app_settings.dart';
+import '../widgets/app_side_nav.dart';
 import 'package:path_provider/path_provider.dart' as pp;
 import '../services/invoice_pdf_service.dart';
 import '../widgets/formatters.dart';
@@ -81,6 +82,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   final customerAddressController = TextEditingController();
   final installerNameController = TextEditingController();
 
+  AppSettings? _appSettings;
+
   
   final _productSearchController = TextEditingController();
   final _quantityController = TextEditingController();
@@ -122,6 +125,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       final settings = await SettingsManager.getAppSettings();
       if (mounted) {
         setState(() {
+          _appSettings = settings;
           _adHocProfitPercentage = settings.defaultAdHocProfitPercentage;
           _allowNegativeStock = settings.allowNegativeStock;
         });
@@ -3008,52 +3012,47 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     
     return Container(
       color: bgColor,
-      child: Column(
-        children: [
-          // ═══════════════════════════════════════════════════════════════
-          // 1. تفاصيل الإجماليات (بدلاً من الـ Header الكبير)
-          // ═══════════════════════════════════════════════════════════════
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // الإجمالي قبل الخصم
-                _buildTotalRow('الإجمالي قبل الخصم', formatNumber(totalBeforeDiscount), Colors.grey[700]!),
-                const Divider(height: 16),
-                // الإجمالي بعد الخصم
-                _buildTotalRow('الإجمالي بعد الخصم', formatNumber(total), Colors.blue[700]!),
-                const Divider(height: 16),
-                // المبلغ المسدد
-                _buildTotalRow('المبلغ المسدد', formatNumber(displayedPaidAmount), Colors.green[700]!),
-                const Divider(height: 16),
-                // المبلغ المتبقي
-                _buildTotalRow('المبلغ المتبقي', formatNumber(displayedRemainingAmount), 
-                    displayedRemainingAmount > 0 ? Colors.red[700]! : Colors.green[700]!),
-              ],
-            ),
-          ),
-          
-          // ═══════════════════════════════════════════════════════════════
-          // 2. المحتوى الرئيسي
-          // ═══════════════════════════════════════════════════════════════
-          Expanded(
-            child: SingleChildScrollView(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ═══════════════════════════════════════════════════════════════
+            // 1. تفاصيل الإجماليات (داخل الـ ScrollView لتصعد للأعلى عند السحب)
+            // ═══════════════════════════════════════════════════════════════
+            Container(
+              width: double.infinity,
               padding: const EdgeInsets.all(16),
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // الإجمالي قبل الخصم
+                  _buildTotalRow('الإجمالي قبل الخصم', formatNumber(totalBeforeDiscount), Colors.grey[700]!),
+                  const Divider(height: 16),
+                  // الإجمالي بعد الخصم
+                  _buildTotalRow('الإجمالي بعد الخصم', formatNumber(total), Colors.blue[700]!),
+                  const Divider(height: 16),
+                  // المبلغ المسدد
+                  _buildTotalRow('المبلغ المسدد', formatNumber(displayedPaidAmount), Colors.green[700]!),
+                  const Divider(height: 16),
+                  // المبلغ المتبقي
+                  _buildTotalRow('المبلغ المتبقي', formatNumber(displayedRemainingAmount), 
+                      displayedRemainingAmount > 0 ? Colors.red[700]! : Colors.green[700]!),
+                ],
+              ),
+            ),
     
                   
                   // أجور التحميل (إذا كانت مفعّلة)
@@ -3298,38 +3297,31 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                         ],
                       ),
                     ),
+                  // 3. زر الحفظ في الأسفل
+                  if (!isViewOnly) ...[
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 54,
+                      child: ElevatedButton.icon(
+                        onPressed: isSaving ? null : saveInvoice,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF48BB78), // Green
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        icon: const Icon(Icons.save_alt, size: 22),
+                        label: const Text('حفظ الفاتورة', 
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-          ),
-          
-          // ═══════════════════════════════════════════════════════════════
-          // 3. زر الحفظ في الأسفل
-          // ═══════════════════════════════════════════════════════════════
-          if (!isViewOnly)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: ElevatedButton.icon(
-                  onPressed: isSaving ? null : saveInvoice,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF48BB78), // Green
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  icon: const Icon(Icons.save_alt, size: 22),
-                  label: const Text('حفظ الفاتورة', 
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
   
@@ -4480,15 +4472,24 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           ],
         ),
         body: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ═══════════════════════════════════════════════════════════════════════════
-            // 1. القسم الرئيسي (جدول المواد + شريط الإدخال) - يأخذ المساحة الأكبر
-            // ═══════════════════════════════════════════════════════════════════════════
+            if (_appSettings != null && AppSideNav.shouldShow(context, _appSettings!))
+              const AppSideNav(currentRoute: '/create_invoice'),
             Expanded(
-              flex: 3,
-              child: Column(
-                children: [
+              child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isDesktop = constraints.maxWidth >= 800;
+            return Flex(
+              direction: isDesktop ? Axis.horizontal : Axis.vertical,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ═══════════════════════════════════════════════════════════════════════════
+                // 1. القسم الرئيسي (جدول المواد + شريط الإدخال) - يأخذ المساحة الأكبر
+                // ═══════════════════════════════════════════════════════════════════════════
+                Expanded(
+                  flex: 3,
+                  child: Column(
+                    children: [
                   // شريط إدخال المواد (أفقي) - يظهر فقط إذا لم يكن للعرض
                   _buildProductEntryBar(context),
                   
@@ -4634,15 +4635,23 @@ const SizedBox(width: 120),
               ),
             ),
             
+            
             // الفاصل العمودي
-            VerticalDivider(width: 1, color: Colors.grey.shade300),
+            isDesktop
+                ? VerticalDivider(width: 1, color: Colors.grey.shade300)
+                : Divider(height: 1, color: Colors.grey.shade300),
 
             // ═══════════════════════════════════════════════════════════════════════════
             // 2. الشريط الجانبي (Totals & Actions) - يأخذ المساحة الأقل
             // ═══════════════════════════════════════════════════════════════════════════
             Expanded(
-              flex: 1,
+              flex: isDesktop ? 1 : 2,
               child: _buildSidebar(context),
+            ),
+          ],
+        );
+      },
+    ),
             ),
           ],
         ),

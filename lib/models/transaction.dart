@@ -18,6 +18,7 @@ class DebtTransaction {
   final bool isReadByOthers;
   final String? syncUuid; // 🔄 معرف المزامنة الفريد
   final String? audioNotePath; // 🎙️ مسار ملاحظة صوتية مرفقة
+  final String? invoiceSyncUuid; // 🔒 ربط المعاملة بالفاتورة عبر UUID (مزامنة ذرية)
 
   DebtTransaction({
     this.id,
@@ -38,6 +39,7 @@ class DebtTransaction {
     this.isReadByOthers = false,
     this.syncUuid,
     this.audioNotePath,
+    this.invoiceSyncUuid,
   })  : transactionDate = transactionDate ?? DateTime.now(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -61,6 +63,7 @@ class DebtTransaction {
       'is_read_by_others': isReadByOthers ? 1 : 0,
       'sync_uuid': syncUuid,
       'audio_note_path': audioNotePath,
+      'invoice_sync_uuid': invoiceSyncUuid,
     };
   }
 
@@ -86,6 +89,7 @@ class DebtTransaction {
       isReadByOthers: ((map['is_read_by_others'] as int?) ?? 0) == 1,
       syncUuid: map['sync_uuid'] as String?,
       audioNotePath: map['audio_note_path'] as String?,
+      invoiceSyncUuid: map['invoice_sync_uuid'] as String?,
     );
   }
 
@@ -108,6 +112,7 @@ class DebtTransaction {
     bool? isReadByOthers,
     String? syncUuid,
     String? audioNotePath,
+    String? invoiceSyncUuid,
   }) {
     return DebtTransaction(
       id: id ?? this.id,
@@ -129,6 +134,7 @@ class DebtTransaction {
       isReadByOthers: isReadByOthers ?? this.isReadByOthers,
       syncUuid: syncUuid ?? this.syncUuid,
       audioNotePath: audioNotePath ?? this.audioNotePath,
+      invoiceSyncUuid: invoiceSyncUuid ?? this.invoiceSyncUuid,
     );
   }
 }

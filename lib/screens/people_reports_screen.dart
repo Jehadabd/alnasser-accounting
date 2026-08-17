@@ -18,88 +18,116 @@ class _PeopleReportsScreenState extends State<PeopleReportsScreen> {
   List<PersonReportData> _people = [];
   List<PersonReportData> _filteredPeople = [];
   bool _isLoading = true;
+  // reportSource: 'all' = الكل, 'this_device' = هذا الجهاز فقط, 'sync' = المزامنة فقط
+  String _reportSource = 'all';
   final TextEditingController _searchController = TextEditingController();
   late final NumberFormat _nf = NumberFormat('#,##0', 'en_US');
   String _fmt(num v) => _nf.format(v);
+
+  final ScrollController _scrollController = ScrollController();
+  int _offset = 0;
+  final int _limit = 20;
+  bool _hasMore = true;
+  bool _isLoadingMore = false;
 
   @override
   void initState() {
     super.initState();
     _loadPeopleReports();
-    _searchController.addListener(_filterPeople);
+    _searchController.addListener(_onSearchChanged);
+    _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
+    _searchController.removeListener(_onSearchChanged);
+    _scrollController.removeListener(_onScroll);
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
-
-  void _filterPeople() {
-    final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) {
-      setState(() {
-        _filteredPeople = _people;
-      });
-    } else {
-      setState(() {
-        _filteredPeople = _people.where((person) {
-          return person.customer.name.toLowerCase().contains(query) ||
-                 person.customer.phone?.toLowerCase().contains(query) == true ||
-                 person.customer.address?.toLowerCase().contains(query) == true;
-        }).toList();
-      });
+  
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      if (!_isLoadingMore && _hasMore) {
+        _loadPeopleReports(isLoadMore: true);
+      }
     }
   }
 
-  Future<void> _loadPeopleReports() async {
-    setState(() {
-      _isLoading = true;
-    });
+  void _onSearchChanged() {
+    // إمكانية إضافة Debouncer هنا لتأخير البحث
+    _loadPeopleReports();
+  }
+
+  void _filterPeople() {
+    // تم إلغاء فلترة الذاكرة العشوائية واستبدالها بالبحث المباشر في قاعدة البيانات
+  }
+
+  Future<void> _loadPeopleReports({bool isLoadMore = false}) async {
+    if (isLoadMore) {
+      setState(() { _isLoadingMore = true; });
+    } else {
+      setState(() { 
+        _isLoading = true; 
+        _offset = 0;
+        _hasMore = true;
+      });
+    }
 
     try {
-      // تحديث الفواتير القديمة وربطها بالعملاء (بدون طباعات تشخيصية)
-      try { await _databaseService.updateOldInvoicesWithCustomerIds(); } catch (_) {}
-
-      final customers = await _databaseService.getAllCustomers();
-      final List<PersonReportData> peopleReports = [];
+      if (!isLoadMore) {
+        // تحديث الفواتير القديمة فقط عند التحميل الأول
+        try { await _databaseService.updateOldInvoicesWithCustomerIds(); } catch (_) {}
+      }
+      
+      _databaseService.reportsService.reportSourceFilter = _reportSource;
+      final customers = await _databaseService.getPaginatedCustomersForReports(
+        limit: _limit,
+        offset: _offset,
+        searchQuery: _searchController.text.trim(),
+        reportSource: _reportSource,
+      );
+      
+      if (customers.length < _limit) {
+        _hasMore = false;
+      }
+      
+      final List<PersonReportData> newReports = [];
 
       for (final customer in customers) {
-        final profitData =
-            await _databaseService.getCustomerProfitData(customer.id!);
+        final profitData = await _databaseService.getCustomerProfitData(customer.id!);
 
-        peopleReports.add(PersonReportData(
+        newReports.add(PersonReportData(
           customer: customer,
           totalProfit: (profitData['totalProfit'] as num?)?.toDouble() ?? 0.0,
           totalSales: (profitData['totalSales'] as num?)?.toDouble() ?? 0.0,
           totalInvoices: (profitData['totalInvoices'] as num?)?.toInt() ?? 0,
+          totalInvoicesGlobal: (profitData['totalInvoicesGlobal'] as num?)?.toInt() ?? 0,
           totalTransactions: (profitData['totalTransactions'] as num?)?.toInt() ?? 0,
         ));
       }
 
-      // إخفاء الأشخاص الذين ليس لديهم أي معاملات ديون ولا يوجد عليهم دين حالي
-      // السماح بظهور من لديه فواتير حتى لو لم تظهر له معاملات دين أو دين حالي
-      final visiblePeople = peopleReports
-          .where((p) => p.totalTransactions > 0 || p.customer.currentTotalDebt > 0 || p.totalInvoices > 0)
-          .toList();
-
-      // ترتيب الأشخاص من الأكثر سحباً (أعلى قيمة مبيعات)
-      visiblePeople.sort((a, b) => b.totalSales.compareTo(a.totalSales));
-
+      // نعرض الجميع بناءً على طلب المستخدم، حتى لو كانت إحصائياتهم 0 في المصدر الحالي
       setState(() {
-        _people = visiblePeople;
-        _filteredPeople = visiblePeople; // Initialize filtered list
+        if (isLoadMore) {
+          _people.addAll(newReports);
+        } else {
+          _people = newReports;
+        }
+        _filteredPeople = _people; // لأن البحث يتم الآن في الداتابيز
+        _offset += _limit;
         _isLoading = false;
+        _isLoadingMore = false;
       });
     } catch (e) {
       setState(() {
         _isLoading = false;
+        _isLoadingMore = false;
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('حدث خطأ في تحميل البيانات: $e'),
-          ),
+          SnackBar(content: Text('حدث خطأ في تحميل البيانات: $e')),
         );
       }
     }
@@ -110,15 +138,70 @@ class _PeopleReportsScreenState extends State<PeopleReportsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
-        title: const Text('تقارير الأشخاص', style: TextStyle(fontSize: 24)),
+        title: const Text('تقرير الأشخاص', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         centerTitle: true,
-        backgroundColor: const Color(0xFF2196F3),
+        backgroundColor: const Color(0xFF673AB7),
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
+          // زر اختيار نوع التقرير
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.filter_list, color: Colors.white),
+            onSelected: (value) {
+              setState(() {
+                _reportSource = value;
+                _loadPeopleReports();
+              });
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'all',
+                child: Row(
+                  children: [
+                    Icon(Icons.all_inclusive, color: _reportSource == 'all' ? const Color(0xFF673AB7) : Colors.grey),
+                    const SizedBox(width: 8),
+                    const Text('تقارير شاملة'),
+                    if (_reportSource == 'all') const Icon(Icons.check, color: Color(0xFF673AB7), size: 18),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'this_device',
+                child: Row(
+                  children: [
+                    Icon(Icons.phone_android, color: _reportSource == 'this_device' ? const Color(0xFF673AB7) : Colors.grey),
+                    const SizedBox(width: 8),
+                    const Text('هذا الجهاز فقط'),
+                    if (_reportSource == 'this_device') const Icon(Icons.check, color: Color(0xFF673AB7), size: 18),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'sync',
+                child: Row(
+                  children: [
+                    Icon(Icons.sync, color: _reportSource == 'sync' ? const Color(0xFF673AB7) : Colors.grey),
+                    const SizedBox(width: 8),
+                    const Text('المزامنة فقط'),
+                    if (_reportSource == 'sync') const Icon(Icons.check, color: Color(0xFF673AB7), size: 18),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          // عرض النص التوضيحي
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Center(
+              child: Text(
+                _reportSource == 'all' ? 'شامل' : (_reportSource == 'this_device' ? 'الجهاز' : 'المزامنة'),
+                style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadPeopleReports,
@@ -185,11 +268,20 @@ class _PeopleReportsScreenState extends State<PeopleReportsScreen> {
                       : RefreshIndicator(
                           onRefresh: _loadPeopleReports,
                           child: ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: _filteredPeople.length,
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            itemCount: _filteredPeople.length + (_isLoadingMore ? 1 : 0),
                             itemBuilder: (context, index) {
-                              final personData = _filteredPeople[index];
-                              return _buildPersonCard(personData);
+                              if (index == _filteredPeople.length) {
+                                return const Padding(
+                                  padding: EdgeInsets.all(16.0),
+                                  child: Center(
+                                    child: CircularProgressIndicator(color: Color(0xFF673AB7)),
+                                  ),
+                                );
+                              }
+                              final person = _filteredPeople[index];
+                              return _buildPersonCard(person);
                             },
                           ),
                         ),

@@ -150,4 +150,16 @@ class PrintingServiceWindows implements PrintingService {
   Future<void> printWithWifiPrinter(String ipAddress, List<int> commands, {int port = 9100}) async {
     print('Wi-Fi printing not supported on Windows for this implementation.');
   }
+
+  @override
+  Future<List<PrinterDevice>> findUsbPrinters() async {
+    // USB OTG not applicable on Windows desktop
+    return [];
+  }
+
+  @override
+  Future<bool> printWithUsbPrinter(int deviceId, Uint8List pdfBytes) async {
+    print('USB OTG printing not supported on Windows.');
+    return false;
+  }
 } 

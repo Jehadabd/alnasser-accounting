@@ -39,6 +39,13 @@ class Product {
   final double? alertQuantity; // الكمية التي يبدأ عندها التنبيه (للوحدة المختارة)
   final String? alertUnit; // الوحدة المستخدمة للتنبيه (مثلاً "كرتون")
 
+  // 🔄 حقول مزامنة المنتجات (كتالوج موحد مركزياً عبر Firebase)
+  final String? syncUuid; // معرّف المزامنة الفريد للمنتج
+  final String? createdByDeviceId; // الجهاز الذي أنشأ المنتج
+  final String? lastModifiedByDeviceId; // آخر جهاز عدّل المنتج
+  final DateTime? lastSyncedAt; // آخر مزامنة ناجحة
+  final bool isDeleted; // حذف ناعم (يُزامَن بدل الحذف الفعلي)
+
   String get translatedUnit => unit == 'piece' ? 'قطعة' : (unit == 'meter' ? 'متر' : unit);
 
   Product({
@@ -72,6 +79,11 @@ class Product {
     this.sku,
     this.productType = 'storable',
     this.invoicePolicy = 'ordered',
+    this.syncUuid,
+    this.createdByDeviceId,
+    this.lastModifiedByDeviceId,
+    this.lastSyncedAt,
+    this.isDeleted = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -106,6 +118,11 @@ class Product {
       'sku': sku,
       'product_type': productType,
       'invoice_policy': invoicePolicy,
+      'sync_uuid': syncUuid,
+      'created_by_device_id': createdByDeviceId,
+      'last_modified_by_device_id': lastModifiedByDeviceId,
+      'last_synced_at': lastSyncedAt?.toIso8601String(),
+      'is_deleted': isDeleted ? 1 : 0,
     };
   }
 
@@ -141,6 +158,13 @@ class Product {
       sku: map['sku'],
       productType: map['product_type'] ?? 'storable',
       invoicePolicy: map['invoice_policy'] ?? 'ordered',
+      syncUuid: map['sync_uuid'] as String?,
+      createdByDeviceId: map['created_by_device_id'] as String?,
+      lastModifiedByDeviceId: map['last_modified_by_device_id'] as String?,
+      lastSyncedAt: map['last_synced_at'] != null
+          ? DateTime.parse(map['last_synced_at'] as String)
+          : null,
+      isDeleted: ((map['is_deleted'] as int?) ?? 0) == 1,
     );
   }
 
@@ -175,6 +199,11 @@ class Product {
     String? sku,
     String? productType,
     String? invoicePolicy,
+    String? syncUuid,
+    String? createdByDeviceId,
+    String? lastModifiedByDeviceId,
+    DateTime? lastSyncedAt,
+    bool? isDeleted,
   }) {
     return Product(
       id: id ?? this.id,
@@ -207,6 +236,11 @@ class Product {
       sku: sku ?? this.sku,
       productType: productType ?? this.productType,
       invoicePolicy: invoicePolicy ?? this.invoicePolicy,
+      syncUuid: syncUuid ?? this.syncUuid,
+      createdByDeviceId: createdByDeviceId ?? this.createdByDeviceId,
+      lastModifiedByDeviceId: lastModifiedByDeviceId ?? this.lastModifiedByDeviceId,
+      lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
+      isDeleted: isDeleted ?? this.isDeleted,
     );
   }
 

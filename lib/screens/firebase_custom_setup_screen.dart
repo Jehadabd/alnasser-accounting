@@ -230,90 +230,97 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
 
   void _copyRules() {
     const rules = '''rules_version = '2';
+ 
 service cloud.firestore {
   match /databases/{database}/documents {
+ 
     
-    // ═══════════════════════════════════════════════════════════════════════
-    // قواعد الأمان للمشروع الشخصي
-    // جميع المجموعات مسموح بها للمستخدمين المصادق عليهم فقط (دخول مجهول مفعّل).
-    // ⚠️ أي مجموعة جديدة يضيفها التطبيق يجب إضافتها هنا، وإلا سترفضها
-    //    قاعدة "المنع الافتراضي" في الأسفل بـ PERMISSION_DENIED.
-    // ═══════════════════════════════════════════════════════════════════════
-
-    // العملاء
+    // ═══ كل المجموعات مسموح بها للمستخدمين المصادق عليهم فقط ═══
+    // جميع الأجهزة تنتمي لنفس مشروع Firebase (نفس المالك)، لذا نكتفي
+    // بالتحقق من المصادقة (request.auth != null) دون قيود إضافية.
+ 
+    
     match /customers/{customerId} {
       allow read, write: if request.auth != null;
     }
-
-    // المعاملات
+ 
+    
     match /transactions/{transactionId} {
       allow read, write: if request.auth != null;
     }
-
-    // الأجهزة
+ 
+    
     match /devices/{deviceId} {
       allow read, write: if request.auth != null;
     }
-
-    // الفواتير
+ 
+    
     match /invoices/{invoiceId} {
       allow read, write: if request.auth != null;
     }
-
-    // لقطات الفواتير
+ 
+    
     match /invoice_snapshots/{snapshotId} {
       allow read, write: if request.auth != null;
     }
-
-    // تأكيدات قراءة الفواتير
+ 
+    
     match /invoice_read_acks/{ackId} {
       allow read, write: if request.auth != null;
     }
-
-    // عمليات المزامنة (سجل تتبع العمليات)
+ 
+    
     match /sync_operations/{operationId} {
       allow read, write: if request.auth != null;
     }
-
-    // تأكيدات استلام المعاملات
+ 
+    
     match /transaction_acks/{ackId} {
       allow read, write: if request.auth != null;
     }
-
-    // بيانات الإقلاع (bootstrap) لمزامنة الجهاز الجديد
+ 
+    
     match /bootstrap_data/{docId} {
       allow read, write: if request.auth != null;
     }
-
-    // طلبات الإقلاع
+ 
+    
     match /bootstrap_requests/{docId} {
       allow read, write: if request.auth != null;
     }
-
-    // اللقطات العامة
+ 
+    
     match /snapshots/{snapshotId} {
       allow read, write: if request.auth != null;
     }
-
-    // مجموعات المزامنة - مسموح للمستخدمين المصادق عليهم
+ 
+    
     match /sync_groups/{groupId} {
       allow read, write: if request.auth != null;
-
-      // العملاء داخل المجموعة
-      match /customers/{customerId} {
-        allow read, write: if request.auth != null;
-      }
-
-      // المعاملات داخل المجموعة
-      match /transactions/{transactionId} {
-        allow read, write: if request.auth != null;
-      }
     }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // منع الوصول لأي مسار آخر (يجب أن يكون الأخير دائماً)
-    // ═══════════════════════════════════════════════════════════════════════
+ 
+    // ═══ مجموعات المطابقة وحل التعارضات ═══
+ 
+    match /reconciliation_sessions/{sessionId} {
+      allow read, write: if request.auth != null;
+    }
+ 
+    match /live_match_sessions/{sessionId} {
+      allow read, write: if request.auth != null;
+    }
+ 
+    match /live_peer_state/{stateId} {
+      allow read, write: if request.auth != null;
+    }
+ 
+    // ═══ قاعدة شاملة احتياطية ═══
+    // أي مجموعة أخرى (مستقبلية) مسموحة للمستخدمين المصادق عليهم.
+    // هذا يمنع أخطاء permission-denied عند إضافة مجموعات جديدة.
+    // ملاحظة: هذا آمن لأن كل الأجهزة تحت نفس مشروع Firebase المُدار من المالك.
+    
+    // منع الوصول لأي مسار آخر
     match /{document=**} {
+      allow read, write: if request.auth != null;
       allow read, write: if false;
     }
   }

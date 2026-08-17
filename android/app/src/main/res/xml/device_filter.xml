@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  USB Device Filter for Printer Class
+  class="7"  → Printer USB class
+  subclass="1" → Printer subclass
+  protocol="1" → Unidirectional interface
+  protocol="2" → Bidirectional interface (most modern printers)
+  No vendorId/productId → accepts ALL brands (HP, Canon, Epson, Brother, etc.)
+-->
+<resources>
+    <usb-device class="7" subclass="1" protocol="2"/>
+    <usb-device class="7" subclass="1" protocol="1"/>
+    <usb-device class="7" subclass="1" protocol="0"/>
+</resources>

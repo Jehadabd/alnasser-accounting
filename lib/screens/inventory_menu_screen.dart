@@ -6,6 +6,10 @@ import '../services/password_service.dart';
 import 'material_inventory_screen.dart';
 import 'stock_adjustment_screen.dart';
 
+import '../services/settings_manager.dart';
+import '../models/app_settings.dart';
+import '../widgets/app_side_nav.dart';
+
 class InventoryMenuScreen extends StatelessWidget {
   const InventoryMenuScreen({super.key});
 
@@ -64,80 +68,93 @@ class InventoryMenuScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('المخزون'),
-        centerTitle: true,
-        backgroundColor: const Color(0xFF4CAF50),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            Expanded(
-              child: GridView.count(
-                crossAxisCount: 2,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
-                childAspectRatio: 1.1,
-                children: [
-                  _buildMenuButton(
-                    context,
-                    title: 'إدخال بضاعة',
-                    icon: Icons.add_box,
-                    color: Colors.blue,
-                    onTap: () async {
-                      if (await _checkPermission(context, AppPermissions.productEntry)) {
-                        Navigator.pushNamed(context, '/product_entry');
-                      }
-                    },
+    return FutureBuilder<AppSettings>(
+      future: SettingsManager.getAppSettings(),
+      builder: (context, snapshot) {
+        final settings = snapshot.data;
+        final showSideNav = settings != null && AppSideNav.shouldShow(context, settings);
+        final screenWidth = MediaQuery.of(context).size.width;
+        final isDesktop = screenWidth >= 600;
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('المخزون'),
+            centerTitle: true,
+            backgroundColor: const Color(0xFF4CAF50),
+          ),
+          body: Row(
+            children: [
+              if (showSideNav)
+                const AppSideNav(currentRoute: '/inventory_menu'),
+              Expanded(
+                child: Center(
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 900),
+                    padding: const EdgeInsets.all(24.0),
+                    child: GridView.count(
+                      shrinkWrap: true,
+                      crossAxisCount: isDesktop ? 4 : 2,
+                      mainAxisSpacing: 20,
+                      crossAxisSpacing: 20,
+                      childAspectRatio: isDesktop ? 1.0 : 1.1,
+                      children: [
+                        _buildMenuButton(
+                          context,
+                          title: 'إدخال بضاعة',
+                          icon: Icons.add_box,
+                          color: Colors.blue,
+                          onTap: () async {
+                            if (await _checkPermission(context, AppPermissions.productEntry)) {
+                              Navigator.pushNamed(context, '/product_entry');
+                            }
+                          },
+                        ),
+                        _buildMenuButton(
+                          context,
+                          title: 'تعديل بضاعة',
+                          icon: Icons.edit,
+                          color: Colors.orange,
+                          onTap: () async {
+                            if (await _checkPermission(context, AppPermissions.editProducts)) {
+                               Navigator.pushNamed(context, '/edit_products');
+                            }
+                          },
+                        ),
+                        _buildMenuButton(
+                          context,
+                          title: 'تعديل المخزن',
+                          icon: Icons.warehouse,
+                          color: Colors.purple,
+                          onTap: () async {
+                               if (await _checkPermission(context, AppPermissions.editProducts)) {
+                                  Navigator.push(
+                                    context, 
+                                    MaterialPageRoute(builder: (context) => const StockAdjustmentScreen())
+                                  );
+                               }
+                          },
+                        ),
+                        _buildMenuButton(
+                          context,
+                          title: 'جرد المواد',
+                          icon: Icons.inventory_2,
+                          color: Colors.teal,
+                          onTap: () async {
+                               Navigator.push(
+                                 context, 
+                                 MaterialPageRoute(builder: (context) => const MaterialInventoryScreen())
+                               );
+                          },
+                        ),
+                      ],
+                    ),
                   ),
-                  _buildMenuButton(
-                    context,
-                    title: 'تعديل بضاعة',
-                    icon: Icons.edit,
-                    color: Colors.orange,
-                    onTap: () async {
-                      if (await _checkPermission(context, AppPermissions.editProducts)) {
-                         Navigator.pushNamed(context, '/edit_products');
-                      }
-                    },
-                  ),
-                  _buildMenuButton(
-                    context,
-                    title: 'تعديل المخزن',
-                    icon: Icons.warehouse,
-                    color: Colors.purple,
-                    onTap: () async {
-                         if (await _checkPermission(context, AppPermissions.editProducts)) {
-                            Navigator.push(
-                              context, 
-                              MaterialPageRoute(builder: (context) => const StockAdjustmentScreen())
-                            );
-                         }
-                    },
-                  ),
-                  _buildMenuButton(
-                    context,
-                    title: 'جرد المواد',
-                    icon: Icons.inventory_2,
-                    color: Colors.teal,
-                    onTap: () async {
-                      // نقلنا التحقق من الباسوورد من الزر القديم
-                      // عادة جرد المواد لا يطلب باسوورد في الزر القديم (كان داخل الجرد الشهري الذي يطلب باسوورد)
-                      // لذا سأطلب الباسوورد هنا للأمان
-                         Navigator.push(
-                           context, 
-                           MaterialPageRoute(builder: (context) => const MaterialInventoryScreen())
-                         );
-                    },
-                  ),
-                ],
+                ),
               ),
-            ),
-          ],
-        ),
-      ),
+            ],
+          ),
+        );
+      },
     );
   }
 

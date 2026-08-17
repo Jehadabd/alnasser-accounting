@@ -8,11 +8,10 @@ class InvoiceSyncCoordinator {
 
   final DatabaseService _dbService = DatabaseService();
 
-  /// 📥 قراءة الفواتير غير المرفوعة للفايربيس
+  /// 📥 قراءة الفواتير غير المرفوعة للفايربيس (مع أصنافها ومعاملاتها المالية والعميل)
   Future<List<Map<String, dynamic>>> getPendingInvoices() async {
     final db = await _dbService.database;
-    
-    // جلب الفواتير التي فيها is_synced = 0
+
     final pendingInvoices = await db.query(
       'invoices',
       where: 'is_synced = 0 AND invoice_uuid IS NOT NULL',
@@ -22,20 +21,85 @@ class InvoiceSyncCoordinator {
 
     for (var inv in pendingInvoices) {
       final invoiceMap = Map<String, dynamic>.from(inv);
-      final invoiceId = inv['id'] as int;
-
-      // جلب بنود الفاتورة المرفقة معها
-      final items = await db.query(
-        'invoice_items',
-        where: 'invoice_id = ?',
-        whereArgs: [invoiceId],
-      );
-
-      invoiceMap['items'] = items;
+      await _attachInvoiceRelations(invoiceMap);
       fullInvoices.add(invoiceMap);
     }
 
     return fullInvoices;
+  }
+
+  /// 📥 قراءة فاتورة واحدة كاملة (للرفع الفوري بعد الحفظ)
+  /// تشمل: بيانات الفاتورة + items + transactions + لقطة العميل
+  Future<Map<String, dynamic>?> getFullInvoiceByUuid(String invoiceUuid) async {
+    final db = await _dbService.database;
+
+    final invoiceRows = await db.query(
+      'invoices',
+      where: 'invoice_uuid = ?',
+      whereArgs: [invoiceUuid],
+      limit: 1,
+    );
+    if (invoiceRows.isEmpty) return null;
+
+    final invoiceMap = Map<String, dynamic>.from(invoiceRows.first);
+    await _attachInvoiceRelations(invoiceMap);
+    return invoiceMap;
+  }
+
+  /// يرفق البنود والمعاملات ولقطة العميل حتى تصل حزمة الدين كاملة للجهاز الآخر.
+  Future<void> _attachInvoiceRelations(Map<String, dynamic> invoiceMap) async {
+    final db = await _dbService.database;
+    final invoiceId = invoiceMap['id'] as int;
+    final invoiceUuid = invoiceMap['invoice_uuid'] as String?;
+
+    invoiceMap['items'] = await db.query(
+      'invoice_items',
+      where: 'invoice_id = ?',
+      whereArgs: [invoiceId],
+    );
+
+    List<Map<String, Object?>> transactions = const [];
+    if (invoiceUuid != null && invoiceUuid.isNotEmpty) {
+      transactions = await db.query(
+        'transactions',
+        where: 'invoice_sync_uuid = ?',
+        whereArgs: [invoiceUuid],
+      );
+    }
+    // احتياط: معاملات رُبطت بـ invoice_id فقط (إصدارات قديمة بلا invoice_sync_uuid)
+    if (transactions.isEmpty) {
+      transactions = await db.query(
+        'transactions',
+        where: 'invoice_id = ?',
+        whereArgs: [invoiceId],
+      );
+    }
+    invoiceMap['transactions'] = transactions;
+
+    final customerId = invoiceMap['customer_id'] as int?;
+    if (customerId != null && customerId != 0) {
+      final customers = await db.query(
+        'customers',
+        columns: ['name', 'phone', 'address', 'sync_uuid'],
+        where: 'id = ?',
+        whereArgs: [customerId],
+        limit: 1,
+      );
+      if (customers.isNotEmpty) {
+        invoiceMap['customer'] = Map<String, dynamic>.from(customers.first);
+      }
+    }
+  }
+
+  /// ✅ التأشير على أن المعاملة المالية رُفعت بنجاح (جزء من حزمة الفاتورة)
+  Future<void> markTransactionAsSynced(String transactionUuid) async {
+    final db = await _dbService.database;
+    await db.update(
+      'transactions',
+      {'is_uploaded': 1},
+      where: 'transaction_uuid = ? OR sync_uuid = ?',
+      whereArgs: [transactionUuid, transactionUuid],
+    );
   }
 
   /// ✅ التأشير على أن الفاتورة تم رفعها بنجاح

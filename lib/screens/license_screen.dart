@@ -77,11 +77,11 @@ class _LicenseScreenState extends State<LicenseScreen> {
       case 'WRONG_PASSWORD':
         return 'كلمة المرور خاطئة';
       case 'DEVICE_MISMATCH':
-        return 'هذا الحساب مُفعّل على جهاز آخر\n\nتواصل مع المطور لنقل الترخيص';
+        return 'هذا الحساب مُفعّل على جهاز آخر\n\nتواصل مع المطور (واتساب / اتصال: 07705252905)';
       case 'SUSPENDED':
-        return 'الحساب معلّق\n\nتواصل مع المطور';
+        return 'الحساب معلّق\n\nتواصل مع المطور (واتساب / اتصال: 07705252905)';
       case 'EXPIRED':
-        return 'انتهت صلاحية الاشتراك\n\nتواصل مع المطور للتجديد';
+        return 'انتهت صلاحية الاشتراك\n\nتواصل مع المطور (واتساب / اتصال: 07705252905)';
       case 'NETWORK_ERROR':
         return 'فشل الاتصال بالسيرفر\n\nتأكد من اتصالك بالإنترنت';
       default:
@@ -290,10 +290,11 @@ class _LicenseScreenState extends State<LicenseScreen> {
                         
                         // معلومات التواصل
                         Text(
-                          'للحصول على ترخيص، تواصل مع المطور',
+                          'للحصول على ترخيص، تواصل مع المطور (واتساب / اتصال: 07705252905)',
                           style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade600,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey.shade700,
                           ),
                         ),
                       ],

@@ -18,6 +18,7 @@ class DebtReportService {
     final rawData = await db.database.then((d) => d.rawQuery('''
       SELECT * FROM customers 
       WHERE current_total_debt > 0 
+        AND EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = customers.id LIMIT 1)
       ORDER BY name ASC
     '''));
     

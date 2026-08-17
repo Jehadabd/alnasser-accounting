@@ -19,54 +19,81 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
   List<ProductReportData> _products = [];
   List<ProductReportData> _filteredProducts = [];
   bool _isLoading = true;
+  bool _onlyThisDevice = false;
   final TextEditingController _searchController = TextEditingController();
 
   late final NumberFormat _nf = NumberFormat('#,##0', 'en_US');
   String _fmt(num v) => _nf.format(v);
 
+  final ScrollController _scrollController = ScrollController();
+  int _offset = 0;
+  final int _limit = 20;
+  bool _hasMore = true;
+  bool _isLoadingMore = false;
+
   @override
   void initState() {
     super.initState();
     _loadProductReports();
-    _searchController.addListener(_filterProducts);
+    _searchController.addListener(_onSearchChanged);
+    _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
+    _searchController.removeListener(_onSearchChanged);
+    _scrollController.removeListener(_onScroll);
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  void _filterProducts() {
-    final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) {
-      setState(() {
-        _filteredProducts = _products;
-      });
-    } else {
-      setState(() {
-        _filteredProducts = _products.where((product) {
-          return product.product.name.toLowerCase().contains(query) ||
-                 product.product.unit.toLowerCase().contains(query);
-        }).toList();
-      });
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      if (!_isLoadingMore && _hasMore) {
+        _loadProductReports(isLoadMore: true);
+      }
     }
   }
 
-  Future<void> _loadProductReports() async {
-    setState(() {
-      _isLoading = true;
-    });
+  void _onSearchChanged() {
+    _loadProductReports();
+  }
+
+  void _filterProducts() {
+    // تم إلغاء فلترة الذاكرة العشوائية واستبدالها بالبحث المباشر في قاعدة البيانات
+  }
+
+  Future<void> _loadProductReports({bool isLoadMore = false}) async {
+    if (isLoadMore) {
+      setState(() { _isLoadingMore = true; });
+    } else {
+      setState(() { 
+        _isLoading = true; 
+        _offset = 0;
+        _hasMore = true;
+      });
+    }
 
     try {
-      final products = await _databaseService.getAllProducts();
-      final List<ProductReportData> productReports = [];
+      _databaseService.reportsService.filterOnlyThisDevice = _onlyThisDevice;
+      final products = await _databaseService.getPaginatedProductsForReports(
+        limit: _limit,
+        offset: _offset,
+        searchQuery: _searchController.text.trim(),
+        onlyThisDevice: _onlyThisDevice,
+      );
+      
+      if (products.length < _limit) {
+        _hasMore = false;
+      }
+      
+      final List<ProductReportData> newReports = [];
 
       for (final product in products) {
-        final salesData =
-            await _databaseService.getProductSalesData(product.id!);
+        final salesData = await _databaseService.getProductSalesData(product.id!);
 
-        productReports.add(ProductReportData(
+        newReports.add(ProductReportData(
           product: product,
           totalQuantitySold: salesData['totalQuantity'] ?? 0.0,
           totalProfit: salesData['totalProfit'] ?? 0.0,
@@ -77,24 +104,25 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
         ));
       }
 
-      // ترتيب المنتجات من الأكثر مبيعاً
-      productReports
-          .sort((a, b) => b.totalQuantitySold.compareTo(a.totalQuantitySold));
-
       setState(() {
-        _products = productReports;
-        _filteredProducts = productReports; // Initialize filtered products
+        if (isLoadMore) {
+          _products.addAll(newReports);
+        } else {
+          _products = newReports;
+        }
+        _filteredProducts = _products; // لأن البحث يتم الآن في الداتابيز
+        _offset += _limit;
         _isLoading = false;
+        _isLoadingMore = false;
       });
     } catch (e) {
       setState(() {
         _isLoading = false;
+        _isLoadingMore = false;
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('حدث خطأ في تحميل البيانات: $e'),
-          ),
+          SnackBar(content: Text('حدث خطأ في تحميل البيانات: $e')),
         );
       }
     }
@@ -105,15 +133,31 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
-        title: const Text('تقارير البضاعة', style: TextStyle(fontSize: 24)),
+        title: const Text('تقرير البضاعة', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         centerTitle: true,
-        backgroundColor: const Color(0xFF4CAF50),
+        backgroundColor: const Color(0xFF673AB7),
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
+          Row(
+            children: [
+              Text(_onlyThisDevice ? 'فقط هذا الجهاز' : 'تقارير شاملة', style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+              Switch(
+                value: _onlyThisDevice,
+                onChanged: (val) {
+                  setState(() {
+                    _onlyThisDevice = val;
+                    _loadProductReports();
+                  });
+                },
+                activeColor: Colors.white,
+                inactiveTrackColor: Colors.white30,
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadProductReports,
@@ -180,9 +224,18 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
                       : RefreshIndicator(
                           onRefresh: _loadProductReports,
                           child: ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: _filteredProducts.length,
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            itemCount: _filteredProducts.length + (_isLoadingMore ? 1 : 0),
                             itemBuilder: (context, index) {
+                              if (index == _filteredProducts.length) {
+                                return const Padding(
+                                  padding: EdgeInsets.all(16.0),
+                                  child: Center(
+                                    child: CircularProgressIndicator(color: Color(0xFF673AB7)),
+                                  ),
+                                );
+                              }
                               final productData = _filteredProducts[index];
                               return _buildProductCard(productData);
                             },

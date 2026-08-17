@@ -27,6 +27,9 @@ class InvoiceItem {
   // --- أضف هذا الحقل ---
   final String uniqueId;
 
+  // 🔄 ربط ذري للمنتج عبر sync_uuid (لمزامنة المخزون بين الأجهزة)
+  String? productSyncUuid;
+
   // Controllers for UI binding
   late TextEditingController productNameController;
   late TextEditingController quantityIndividualController;
@@ -51,6 +54,7 @@ class InvoiceItem {
     this.saleType, // أضف هذا
     this.unitsInLargeUnit,
     String? uniqueId, // أضف هذا
+    this.productSyncUuid, // 🔄 ربط ذري للمنتج عبر sync_uuid
   }) : this.uniqueId =
             uniqueId ?? 'item_${DateTime.now().microsecondsSinceEpoch}' {
     // Initialize controllers with initial values - مع تنسيق الأرقام بفواصل
@@ -101,6 +105,7 @@ class InvoiceItem {
       'sale_type': saleType, // أضف هذا
       'units_in_large_unit': unitsInLargeUnit,
       'unique_id': uniqueId, // أضف هذا
+      'product_sync_uuid': productSyncUuid, // 🔄 ربط ذري للمنتج عبر sync_uuid
     };
   }
 
@@ -145,6 +150,7 @@ class InvoiceItem {
       saleType: saleType,
       unitsInLargeUnit: (map['units_in_large_unit'] as num?)?.toDouble(),
       uniqueId: map['unique_id'] ?? 'item_${DateTime.now().microsecondsSinceEpoch}',
+      productSyncUuid: map['product_sync_uuid'] as String?,
     );
   }
 
@@ -169,6 +175,7 @@ class InvoiceItem {
     String? saleType,
     double? unitsInLargeUnit,
     String? uniqueId,
+    String? productSyncUuid,
   }) {
     return InvoiceItem(
       id: id ?? this.id,
@@ -191,6 +198,7 @@ class InvoiceItem {
       saleType: saleType ?? this.saleType,
       unitsInLargeUnit: unitsInLargeUnit ?? this.unitsInLargeUnit,
       uniqueId: uniqueId ?? this.uniqueId,
+      productSyncUuid: productSyncUuid ?? this.productSyncUuid,
     );
   }
 }

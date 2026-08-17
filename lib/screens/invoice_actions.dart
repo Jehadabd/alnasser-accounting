@@ -34,6 +34,8 @@ import '../services/auth_service.dart'; // 👤 User authentication
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import 'create_invoice_screen.dart';
 import '../controllers/invoice_controller.dart';
+import '../services/firebase_sync/invoice_sync_service.dart'; // ⚡ رفع فوري بعد الحفظ
+import '../services/firebase_sync/firebase_sync_helper.dart';
 
 /// واجهة تحدد المتغيرات المطلوبة للتعامل مع الفواتير
 abstract class InvoiceActionsInterface {
@@ -576,6 +578,33 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
 
       savedOrSuspended = true;
       hasUnsavedChanges = false;
+
+      // ⚡ رفع فوري لحزمة الفاتورة (فاتورة + عميل + معاملات) ثم رفع وثيقة العميل.
+      //    fire-and-forget: لا نُعلّق تجربة المستخدم على نتيجة الشبكة.
+      if (savedInvoice != null) {
+        final invoiceUuid = savedInvoice.invoiceUuid;
+        final customerId = savedInvoice.customerId;
+        () async {
+          try {
+            if (invoiceUuid != null && invoiceUuid.isNotEmpty) {
+              final ok = await InvoiceSyncService().syncInvoiceBundleNow(invoiceUuid);
+              if (!ok) {
+                print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت الدوري لاحقاً)');
+              }
+            }
+            if (customerId != null && customerId != 0) {
+              final customer = await db.getCustomerById(customerId);
+              if (customer != null &&
+                  customer.syncUuid != null &&
+                  customer.syncUuid!.isNotEmpty) {
+                await FirebaseSyncHelper().syncCustomer(customer.toMap());
+              }
+            }
+          } catch (e) {
+            print('⚠️ الرفع الفوري تأجّل: $e');
+          }
+        }();
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

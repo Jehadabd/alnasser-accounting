@@ -774,7 +774,9 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             final customer = provider.selectedCustomer ?? widget.customer;
             final transactions = provider.customerTransactions;
 
-            return Column(
+            return SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 24.0),
+              child: Column(
               children: [
                 // التحقق من تطابق الرصيد وعرض تنبيه
                 Builder(
@@ -1167,21 +1169,25 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     ],
                   ),
                 ),
-                Expanded(
-                  child: _useGroupedView
-                      // 📊 العرض المجمع الجديد
-                      ? _groupedTransactions.isEmpty
-                          ? Center(
+                _useGroupedView
+                    // 📊 العرض المجمع الجديد
+                    ? _groupedTransactions.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 40),
+                            child: Center(
                               child: Text('لا توجد معاملات',
                                   style: Theme.of(context)
                                       .textTheme
                                       .bodyLarge
                                       ?.copyWith(color: Colors.grey[600])),
-                            )
-                          : ListView.builder(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 24.0,
-                                  vertical: 12.0),
+                            ),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 24.0,
+                                vertical: 12.0),
                               itemCount: _groupedTransactions.length,
                               itemBuilder: (context, index) {
                                 final item = _groupedTransactions[index];
@@ -1202,14 +1208,19 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                             )
                       // العرض التفصيلي القديم
                       : transactions.isEmpty
-                          ? Center(
-                              child: Text('لا توجد معاملات',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodyLarge
-                                      ?.copyWith(color: Colors.grey[600])),
+                          ? Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 40),
+                              child: Center(
+                                child: Text('لا توجد معاملات',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyLarge
+                                        ?.copyWith(color: Colors.grey[600])),
+                              ),
                             )
                           : ListView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 24.0,
                                   vertical: 12.0), // Padding for the list
@@ -1306,9 +1317,9 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                             );
                           },
                         ),
-                ),
               ],
-            );
+            ),
+          );
           },
         ),
       ),

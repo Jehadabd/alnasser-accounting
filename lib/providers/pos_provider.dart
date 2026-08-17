@@ -5,6 +5,7 @@ import '../models/customer.dart';
 import '../services/database_service.dart';
 import '../services/settings_manager.dart';
 import '../services/thermal_receipt_service.dart';
+import '../services/firebase_sync/invoice_sync_service.dart';
 
 class CartItem {
   final String id;
@@ -314,6 +315,20 @@ class POSProvider extends ChangeNotifier {
         final savedInvoice = await DatabaseService().getInvoiceById(invoiceId);
         final invoiceDisplayNumber = savedInvoice?.formattedInvoiceNumber ?? invoiceId.toString();
         _lastInvoiceDisplayNumber = invoiceDisplayNumber;
+
+        // ⚡ رفع فوري للحزمة المدمجة (فاتورة + معاملاتها + items) عبر Firebase.
+        //    fire-and-forget: لا نُعلّق تجربة المستخدم على نتيجة الشبكة؛
+        //    عند الفشل يلتقطها المؤقت الدوري لاحقاً (ضمان عدم الفقدان).
+        final invoiceUuid = savedInvoice?.invoiceUuid;
+        if (invoiceUuid != null && invoiceUuid.isNotEmpty) {
+          InvoiceSyncService().syncInvoiceBundleNow(invoiceUuid).then((ok) {
+            if (!ok) {
+              print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت الدوري لاحقاً)');
+            }
+          }).catchError((e) {
+            print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت): $e');
+          });
+        }
         
         // 🖨️ طباعة إيصال حراري تلقائياً
         try {

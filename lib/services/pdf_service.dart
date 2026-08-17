@@ -641,10 +641,8 @@ class PdfService {
       // جلب معاملات العميل
       final transactions = await getCustomerTransactions(customer.id!);
       
-      // تخطي العملاء الذين رصيدهم صفر وليس لديهم معاملات
-      final hasBalance = (customer.currentTotalDebt ?? 0) != 0;
-      final hasTransactions = transactions.isNotEmpty;
-      if (!hasBalance && !hasTransactions) {
+      // كشف الحساب يكون فقط للأشخاص الذين لديهم ديون أكبر من 0
+      if ((customer.currentTotalDebt ?? 0) <= 0) {
         continue; // تخطي هذا العميل
       }
       

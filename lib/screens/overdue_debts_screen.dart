@@ -22,6 +22,7 @@ class _OverdueDebtsScreenState extends State<OverdueDebtsScreen> {
   bool _isLoading = true;
   late int _selectedMonths; // الفترة الافتراضية
   double _minimumDebt = 0; // الحد الأدنى للدين
+  bool _onlyThisDevice = false;
   
   final NumberFormat _nf = NumberFormat('#,##0', 'en_US');
   String _fmt(num v) => _nf.format(v);
@@ -37,6 +38,7 @@ class _OverdueDebtsScreenState extends State<OverdueDebtsScreen> {
     setState(() => _isLoading = true);
     
     try {
+      _reportsService.filterOnlyThisDevice = _onlyThisDevice;
       final debts = await _reportsService.getOverdueDebtsInMonths(
         monthsInactivity: _selectedMonths,
         minimumDebt: _minimumDebt,
@@ -71,6 +73,22 @@ class _OverdueDebtsScreenState extends State<OverdueDebtsScreen> {
         backgroundColor: const Color(0xFFE91E63),
         elevation: 0,
         actions: [
+          Row(
+            children: [
+              Text(_onlyThisDevice ? 'فقط هذا الجهاز' : 'تقارير شاملة', style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+              Switch(
+                value: _onlyThisDevice,
+                onChanged: (val) {
+                  setState(() {
+                    _onlyThisDevice = val;
+                    _loadData();
+                  });
+                },
+                activeColor: Colors.white,
+                inactiveTrackColor: Colors.white30,
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.filter_list),
             onPressed: _showFilterDialog,

@@ -6,6 +6,7 @@ class PersonReportData {
   final double totalProfit;
   final double totalSales;
   final int totalInvoices;
+  final int totalInvoicesGlobal;
   final int totalTransactions;
 
   PersonReportData({
@@ -13,6 +14,7 @@ class PersonReportData {
     required this.totalProfit,
     required this.totalSales,
     required this.totalInvoices,
+    this.totalInvoicesGlobal = 0,
     required this.totalTransactions,
   });
 }

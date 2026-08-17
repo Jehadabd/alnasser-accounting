@@ -14,6 +14,8 @@ import 'overdue_debts_screen.dart'; // ✅ Added
 import '../services/debt_report_service.dart'; // ✅ Added
 import '../services/alert_service.dart'; // ✅ Added
 import 'package:intl/intl.dart';
+import '../models/app_settings.dart';
+import '../widgets/app_side_nav.dart';
 
 // أسماء أنواع الترتيب بالعربية
 String getSortTypeName(CustomerSortType type) {
@@ -41,6 +43,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _showScrollToTop = false; // 🔼 للتحكم بظهور زر العودة للأعلى
+  AppSettings? _appSettings;
 
   
   @override
@@ -48,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     // مراقبة موضع التمرير لإظهار/إخفاء زر العودة للأعلى
     _scrollController.addListener(_onScroll);
+    _loadSettings();
     // Use Future.microtask or addPostFrameCallback to ensure context is available
     // and to avoid issues with calling methods on providers too early.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -60,11 +64,21 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _loadSettings() async {
+    final settings = await SettingsManager.getAppSettings();
+    if (mounted) setState(() => _appSettings = settings);
+  }
+
   void _onScroll() {
     // إظهار زر العودة للأعلى عند التمرير أكثر من 300 بكسل
     final shouldShow = _scrollController.offset > 300;
     if (shouldShow != _showScrollToTop) {
       setState(() => _showScrollToTop = shouldShow);
+    }
+    
+    // تحميل المزيد من العملاء عند الوصول للنهاية
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      context.read<AppProvider>().loadMoreCustomers();
     }
   }
 
@@ -436,7 +450,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ],
                 ),
-        body: Consumer<AppProvider>(
+        body: Row(
+          children: [
+            if (_appSettings != null && AppSideNav.shouldShow(context, _appSettings!))
+              const AppSideNav(currentRoute: '/debt_register'),
+            Expanded(
+              child: Consumer<AppProvider>(
           builder: (context, provider, child) {
             if (provider.isLoading) {
               return const Center(
@@ -483,8 +502,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 24.0,
                               vertical: 12.0), // Padding for the list itself
-                          itemCount: provider.customers.length,
+                          itemCount: provider.customers.length + (provider.isFetchingMore ? 1 : 0),
                           itemBuilder: (context, index) {
+                            if (index == provider.customers.length) {
+                              return const Padding(
+                                padding: EdgeInsets.all(16.0),
+                                child: Center(child: CircularProgressIndicator()),
+                              );
+                            }
                             final customer = provider.customers[index];
                             return CustomerListTile(
                               customer: customer,
@@ -495,6 +520,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             );
           },
+        ),
+            ),
+          ],
         ),
         floatingActionButton: Column(
           mainAxisAlignment: MainAxisAlignment.end,
@@ -521,79 +549,79 @@ class _HomeScreenState extends State<HomeScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-            FloatingActionButton(
-              heroTag: 'add_customer',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const AddCustomerScreen(),
-                  ),
-                );
-              },
-              tooltip: 'إضافة عميل جديد',
-              child: const Icon(Icons.person_add_alt_1), // Modern icon
-            ),
-            const SizedBox(width: 16), // Increased spacing between FABs
-            FloatingActionButton(
-              heroTag: 'main_debt',
-              onPressed: () {
-                // Already on main screen, maybe refresh or show a message
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                      content:
-                          Text('أنت بالفعل في الشاشة الرئيسية (سجل الديون).'),
-                      backgroundColor: Theme.of(context).colorScheme.secondary),
-                );
-              },
-              tooltip: 'سجل الديون',
-              child: const Icon(Icons.book_outlined), // Modern icon
-            ),
-            const SizedBox(width: 16),
-            FloatingActionButton(
-              heroTag: 'add_product',
-              onPressed: () {
-                Navigator.pushNamed(context, '/add_product');
-              },
-              tooltip: 'إدخال بضاعة',
-              child: const Icon(Icons.inventory_2_outlined), // Modern icon
-            ),
-            const SizedBox(width: 16),
-            FloatingActionButton(
-              heroTag: 'installers',
-              onPressed: () {
-                Navigator.pushNamed(context, '/installers');
-              },
-              tooltip: 'المؤسسين',
-              child: const Icon(Icons.engineering_outlined), // Modern icon
-            ),
-            const SizedBox(width: 16),
-            FloatingActionButton(
-              heroTag: 'create_invoice',
-              onPressed: () {
-                Navigator.pushNamed(context, '/create_invoice');
-              },
-              tooltip: 'إنشاء قائمة',
-              child: const Icon(Icons.playlist_add_check), // Modern icon
-            ),
-            const SizedBox(width: 16),
-            FloatingActionButton(
-              heroTag: 'edit_invoices',
-              onPressed: () {
-                Navigator.pushNamed(context, '/edit_invoices');
-              },
-              tooltip: 'تعديل القوائم',
-              child: const Icon(Icons.receipt_long), // Modern icon
-            ),
-            const SizedBox(width: 16),
-            FloatingActionButton(
-              heroTag: 'edit_products',
-              onPressed: () {
-                Navigator.pushNamed(context, '/edit_products');
-              },
-              tooltip: 'تعديل البضاعة',
-              child: const Icon(Icons.edit_note), // Modern icon
-            ),
+                FloatingActionButton(
+                  heroTag: 'add_customer',
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const AddCustomerScreen(),
+                      ),
+                    );
+                  },
+                  tooltip: 'إضافة عميل جديد',
+                  child: const Icon(Icons.person_add_alt_1), // Modern icon
+                ),
+                const SizedBox(width: 16), // Increased spacing between FABs
+                FloatingActionButton(
+                  heroTag: 'main_debt',
+                  onPressed: () {
+                    // Already on main screen, maybe refresh or show a message
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content:
+                              Text('أنت بالفعل في الشاشة الرئيسية (سجل الديون).'),
+                          backgroundColor: Theme.of(context).colorScheme.secondary),
+                    );
+                  },
+                  tooltip: 'سجل الديون',
+                  child: const Icon(Icons.book_outlined), // Modern icon
+                ),
+                const SizedBox(width: 16),
+                FloatingActionButton(
+                  heroTag: 'add_product',
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/add_product');
+                  },
+                  tooltip: 'إدخال بضاعة',
+                  child: const Icon(Icons.inventory_2_outlined), // Modern icon
+                ),
+                const SizedBox(width: 16),
+                FloatingActionButton(
+                  heroTag: 'installers',
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/installers');
+                  },
+                  tooltip: 'المؤسسين',
+                  child: const Icon(Icons.engineering_outlined), // Modern icon
+                ),
+                const SizedBox(width: 16),
+                FloatingActionButton(
+                  heroTag: 'create_invoice',
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/create_invoice');
+                  },
+                  tooltip: 'إنشاء قائمة',
+                  child: const Icon(Icons.playlist_add_check), // Modern icon
+                ),
+                const SizedBox(width: 16),
+                FloatingActionButton(
+                  heroTag: 'edit_invoices',
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/edit_invoices');
+                  },
+                  tooltip: 'تعديل القوائم',
+                  child: const Icon(Icons.receipt_long), // Modern icon
+                ),
+                const SizedBox(width: 16),
+                FloatingActionButton(
+                  heroTag: 'edit_products',
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/edit_products');
+                  },
+                  tooltip: 'تعديل البضاعة',
+                  child: const Icon(Icons.edit_note), // Modern icon
+                ),
               ],
             ),
           ],

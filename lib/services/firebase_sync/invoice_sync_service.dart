@@ -2,10 +2,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:sqflite/sqflite.dart';
+// نخفي Transaction من sqflite لأن الملف يستخدم Transaction بمعنى Firestore
+// (دالة db.transaction تستقبل DatabaseTransaction الذي هو نفسه Transaction هنا).
+// لإزالة الالتباس نستخدم alias.
+import 'package:sqflite/sqflite.dart' hide Transaction;
+import 'package:sqflite/sqflite.dart' as sqflite show Transaction;
+import 'package:uuid/uuid.dart';
 import 'firebase_sync_config.dart';
 import 'invoice_sync_coordinator.dart';
+import 'sync_event_bus.dart';
 import '../database_service.dart';
+import '../../utils/inventory_helpers.dart';
 
 /// مزامنة الفواتير عبر Firestore.
 ///
@@ -48,12 +55,23 @@ class InvoiceSyncService {
     'invoice_year', 'invoice_month', // أعمدة السنة/الشهر للقيد الفريد المركّب
   };
 
+  /// أعمدة المعاملات المسموح بكتابتها محلياً. أي حقل إضافي من السحابة
+  /// (Timestamp، معرّفات المرسل، إلخ) يُتجاهل حتى لا يفشل الإدراج بالكامل.
+  static const _txColumns = {
+    'transaction_date', 'amount_changed', 'balance_before_transaction',
+    'new_balance_after_transaction', 'transaction_note', 'transaction_type',
+    'description', 'created_at', 'transaction_uuid', 'sync_uuid',
+    'invoice_sync_uuid', 'audio_note_path', 'is_deleted',
+  };
+
   /// `product_id` مستثنى: رقم منتج محلي على جهاز المرسل قد يشير لمنتج مختلف
-  /// عندنا. اسم المنتج كافٍ للعرض للقراءة فقط.
+  /// عندنا. بدلاً منه نستخدم `product_sync_uuid` لمطابقة المنتج عبر الأجهزة
+  /// (مما يُمكّن خصم المخزون بشكل صحيح على الجهاز المستقبِل).
   static const _itemColumns = {
     'product_name', 'unit', 'unit_price', 'cost_price', 'actual_cost_price',
     'quantity_individual', 'quantity_large_unit', 'applied_price', 'item_total',
     'sale_type', 'units_in_large_unit', 'unique_id',
+    'product_sync_uuid', // 🔄 ربط ذري بالمنتج عبر sync_uuid (لخصم المخزون)
   };
 
   /// 🚀 بدء مزامنة الفواتير: رفع المعلّق، ثم الاستماع الدائم للوارد.
@@ -76,6 +94,12 @@ class InvoiceSyncService {
       await syncPendingInvoices();
     } catch (e) {
       print('⚠️ تعذّر رفع الفواتير المعلقة أولية: $e');
+    }
+
+    try {
+      await _repairCreditInvoicesMissingCustomers();
+    } catch (e) {
+      print('⚠️ تعذّر إصلاح فواتير الدين الناقصة: $e');
     }
 
     // 🔒 الاستماع هو الأهم: يجب أن يبدأ حتى لو فشل رفع المعلّق.
@@ -116,6 +140,10 @@ class InvoiceSyncService {
   ///
   /// تُرجع عدد الفواتير التي وصلت فعلاً. كل فاتورة تُرفع وتُؤشَّر على حدة، فلا
   /// يؤدي فشل واحدة إلى إسقاط البقية ولا إلى تأشير فواتير لم تصل.
+  ///
+  /// 🔒 المزامنة الذرية: كل فاتورة تُرفع مع معاملاتها المالية المدمجة في
+  ///    وثيقة واحدة (`payload['transactions']`)، بحيث يصل أثرها المالي على
+  ///    العميل على الأجهزة الأخرى مع الفاتورة نفسها — لا حالة وسطية.
   Future<int> syncPendingInvoices() async {
     if (!await FirebaseSyncConfig.isEnabled()) return 0;
 
@@ -131,30 +159,15 @@ class InvoiceSyncService {
       if (uuid == null || uuid.isEmpty) continue;
 
       try {
-        final payload = Map<String, dynamic>.from(invMap);
+        final payload = await _buildInvoiceBundlePayload(invMap, collection);
+        if (payload == null) continue;
 
-        // ✅ نرفع invoice_number (رقم الفاتورة التجاري) صراحةً
-        payload['invoice_number'] = invMap['invoice_number'];
-        payload.remove('id');
-        payload.remove('is_synced');
-
-        // ربط الفاتورة بالعميل عبر معرّف المزامنة لا عبر الرقم المحلي.
-        payload['customer_sync_uuid'] =
-            await _customerSyncUuidFor(invMap['customer_id'] as int?);
-        payload.remove('customer_id');
-
-        final items = (invMap['items'] as List?) ?? const [];
-        payload['items'] = items
-            .map((it) => Map<String, dynamic>.from(it as Map)
-              ..remove('id')
-              ..remove('invoice_id'))
-            .toList();
-
-        payload['_uploaded_at'] = DateTime.now().toIso8601String();
-        payload['uploadedAt'] = FieldValue.serverTimestamp(); // ⏰ للحذف التلقائي (TTL)
-
+        // 🔒 رفع ذري: الفاتورة + معاملاتها + items في وثيقة واحدة
         await collection.doc(uuid).set(payload, SetOptions(merge: true));
+
         await _coordinator.markAsSynced(uuid);
+        // تأشير معاملات الفاتورة كمرفوعة أيضاً (لمنع إعادة رفعها مستقلة)
+        await _markInvoiceTransactionsAsSynced(invMap);
         uploaded++;
       } catch (e) {
         // تبقى is_synced = 0 فتُعاد محاولتها تلقائياً في الدورة التالية.
@@ -166,28 +179,151 @@ class InvoiceSyncService {
     return uploaded;
   }
 
+  /// 🚀 رفع فوري لحزمة فاتورة واحدة بعد حفظها مباشرة.
+  ///
+  /// يستهدف تقليل زمن الوصول (latency) إلى ثوانٍ بدل انتظار المؤقت الدوري.
+  /// آمنة للاستدعاء المتزامن: تتجاهل الفاتورة إن كانت مرفوعة بالفعل.
+  /// عند الفشل تبقى is_synced = 0 فيلتقطها المؤقت الدوري لاحقاً (ضمان عدم الفقدان).
+  Future<bool> syncInvoiceBundleNow(String invoiceUuid) async {
+    if (!await FirebaseSyncConfig.isEnabled()) return false;
+    if (invoiceUuid.isEmpty) return false;
+
+    try {
+      final fullInvoice = await _coordinator.getFullInvoiceByUuid(invoiceUuid);
+      if (fullInvoice == null) {
+        print('⚠️ الفاتورة $invoiceUuid غير موجودة محلياً للرفع');
+        return false;
+      }
+      // تخطّي إن كانت مرفوعة بالفعل
+      if ((fullInvoice['is_synced'] as int?) == 1) return true;
+
+      final collection = _firestore.collection('invoices');
+      final payload = await _buildInvoiceBundlePayload(fullInvoice, collection);
+      if (payload == null) return false;
+
+      await collection.doc(invoiceUuid).set(payload, SetOptions(merge: true));
+      await _coordinator.markAsSynced(invoiceUuid);
+      await _markInvoiceTransactionsAsSynced(fullInvoice);
+
+      print('⚡ رفع فوري ناجح لحزمة الفاتورة $invoiceUuid');
+      return true;
+    } catch (e) {
+      print('❌ فشل الرفع الفوري للفاتورة $invoiceUuid: $e');
+      return false;
+    }
+  }
+
+  /// يبني حمولة (payload) وثيقة الفاتورة الكاملة المدمجة مع items و transactions.
+  /// يُرجع null لو فشل جلب معرّف العميل للمزامنة (فاتورة بدون عميل معروف).
+  Future<Map<String, dynamic>?> _buildInvoiceBundlePayload(
+    Map<String, dynamic> invMap,
+    CollectionReference collection,
+  ) async {
+    final uuid = invMap['invoice_uuid'] as String?;
+    if (uuid == null || uuid.isEmpty) return null;
+
+    final payload = Map<String, dynamic>.from(invMap);
+
+    // ✅ نرفع invoice_number (رقم الفاتورة التجاري) صراحةً
+    payload['invoice_number'] = invMap['invoice_number'];
+    payload.remove('id');
+    payload.remove('is_synced');
+
+    // ربط الفاتورة بالعميل عبر معرّف المزامنة لا عبر الرقم المحلي.
+    // إن لم يكن للعميل sync_uuid نولّده ونحفظه حتى لا تصل الفاتورة بلا هوية عميل.
+    payload['customer_sync_uuid'] =
+        await _customerSyncUuidFor(invMap['customer_id'] as int?);
+    payload.remove('customer_id');
+
+    // لقطة العميل داخل الحزمة: الجهاز المستقبِل ينشئ سجل الديون حتى لو
+    // وثيقة العميل المستقلة لم تصل بعد (أو كانت من إصدار قديم بلا UUID).
+    final embeddedCustomer = invMap['customer'];
+    if (embeddedCustomer is Map) {
+      final customerSnap = Map<String, dynamic>.from(embeddedCustomer);
+      customerSnap.remove('id');
+      customerSnap.remove('current_total_debt');
+      if ((customerSnap['sync_uuid'] as String?) == null ||
+          (customerSnap['sync_uuid'] as String).isEmpty) {
+        customerSnap['sync_uuid'] = payload['customer_sync_uuid'];
+      }
+      payload['customer'] = customerSnap;
+    }
+
+    // items مدمجة
+    final items = (invMap['items'] as List?) ?? const [];
+    payload['items'] = items
+        .map((it) => Map<String, dynamic>.from(it as Map)
+          ..remove('id')
+          ..remove('invoice_id'))
+        .toList();
+
+    // 🔒 معاملات الفاتورة المالية مدمجة (مزامنة ذرية)
+    final transactions = (invMap['transactions'] as List?) ?? const [];
+    payload['transactions'] = transactions
+        .map((tx) {
+          final txMap = Map<String, dynamic>.from(tx as Map);
+          // إزالة المعرّفات المحلية قبل الرفع
+          txMap.remove('id');
+          txMap.remove('invoice_id');
+          txMap.remove('customer_id');
+          txMap.remove('is_uploaded');
+          txMap.remove('is_read_by_others');
+          // ضمان وجود sync_uuid حتى تلتقطها المطابقة الحية لاحقاً
+          final txUuid = (txMap['transaction_uuid'] as String?) ??
+              (txMap['sync_uuid'] as String?);
+          if (txUuid != null && txUuid.isNotEmpty) {
+            txMap['transaction_uuid'] = txUuid;
+            txMap['sync_uuid'] = txUuid;
+          }
+          return txMap;
+        })
+        .toList();
+
+    payload['_uploaded_at'] = DateTime.now().toIso8601String();
+    payload['uploadedAt'] = FieldValue.serverTimestamp(); // ⏰ للحذف التلقائي (TTL)
+
+    return payload;
+  }
+
+  /// يؤشّر معاملات الفاتورة كمرفوعة بعد نجاح رفع الحزمة المدمجة.
+  Future<void> _markInvoiceTransactionsAsSynced(Map<String, dynamic> invMap) async {
+    final transactions = (invMap['transactions'] as List?) ?? const [];
+    for (final tx in transactions) {
+      final txUuid = (tx as Map)['transaction_uuid'] as String?;
+      if (txUuid != null && txUuid.isNotEmpty) {
+        try {
+          await _coordinator.markTransactionAsSynced(txUuid);
+        } catch (_) {}
+      }
+    }
+  }
+
   Future<String?> _customerSyncUuidFor(int? customerId) async {
-    if (customerId == null) return null;
+    if (customerId == null || customerId == 0) return null;
     final db = await _db.database;
     final rows = await db.query('customers',
         columns: ['sync_uuid'], where: 'id = ?', whereArgs: [customerId], limit: 1);
-    return rows.isEmpty ? null : rows.first['sync_uuid'] as String?;
+    if (rows.isEmpty) return null;
+    var uuid = rows.first['sync_uuid'] as String?;
+    // عميل قديم بلا معرّف مزامنة: نولّده الآن وإلا تصل الفاتورة للجهاز الآخر بلا عميل.
+    if (uuid == null || uuid.isEmpty) {
+      uuid = const Uuid().v4();
+      await db.update('customers', {'sync_uuid': uuid},
+          where: 'id = ?', whereArgs: [customerId]);
+    }
+    return uuid;
   }
 
   /// 👂 الاستماع للفواتير القادمة من السحابة
   Future<void> _startListening() async {
-    // استخراج آخر عملية مزامنة لجلب الجديد فقط (الاستماع الذكي)
-    final db = await _db.database;
-    final syncState = await db.query('sync_state', limit: 1);
-    final lastSyncAt = syncState.isNotEmpty ? syncState.first['last_sync_at'] as String? : null;
-    
+    // 🔒 استماع شامل بدون فلتر زمني:
+    // الفلتر الزمني السابق كان يعتمد على `_uploaded_at` (وقت جهاز المُرسِل)،
+    // ما يسبب فقدان الفواتير عند اختلاف ساعات الأجهزة. عوضاً عن ذلك، نعتمد
+    // كلياً على الإدمبوتنت: كل وثيقة تُفلتر عبر (invoice_uuid + version) داخل
+    // _processIncomingInvoice، فالوثائق المكررة/القديمة تُرفض محلياً بلا أثر.
+    // هذا يضمن عدم ضياع أي فاتورة مهما كان فرق التوقيت بين الأجهزة.
     Query<Map<String, dynamic>> query = _firestore.collection('invoices');
-    
-    if (lastSyncAt != null) {
-      print('🧠 تفعيل الاستماع الذكي للفواتير بدءاً من: $lastSyncAt');
-      query = query.where('_uploaded_at', isGreaterThan: lastSyncAt);
-    }
-    
+
     _invoicesListener = query
         .snapshots()
         .listen((snapshot) async {
@@ -205,24 +341,12 @@ class InvoiceSyncService {
               await _processIncomingInvoice(change.doc.id, data);
             }
           }
-          
-          // تحديث وقت آخر مزامنة بعد معالجة أي تغييرات (للاستماع الذكي)
-          if (changes.isNotEmpty) {
-            final db = await _db.database;
-            final nowStr = DateTime.now().toIso8601String();
-            final syncStateUpdate = await db.query('sync_state', limit: 1);
-            if (syncStateUpdate.isNotEmpty) {
-              await db.update('sync_state', {'last_sync_at': nowStr}, where: 'id = 1');
-            } else {
-              await db.insert('sync_state', {'id': 1, 'last_sync_at': nowStr});
-            }
-          }
         }, onError: (e) {
           print('❌ خطأ في استماع الفواتير: $e');
         });
 
     _isListening = true;
-    print('👂 الاستماع لفواتير الأجهزة الأخرى فعّال');
+    print('👂 الاستماع الشامل لفواتير الأجهزة الأخرى فعّال (إدمبوتنت بلا فلتر زمني)');
   }
 
   /// 📥 معالجة فاتورة واردة
@@ -285,21 +409,39 @@ class InvoiceSyncService {
       }
     }
 
-    // ربط العميل عبر معرّف المزامنة، لا عبر الرقم المحلي للمرسل.
-    final customerSyncUuid = data['customer_sync_uuid'] as String?;
-    if (customerSyncUuid != null && customerSyncUuid.isNotEmpty) {
-      final rows = await db.query('customers',
-          columns: ['id'], where: 'sync_uuid = ?', whereArgs: [customerSyncUuid], limit: 1);
-      if (rows.isEmpty) {
-        // 👻 العميل لم يصل بعد: نحفظ الفاتورة في جدول الأيتام لإعادة
-        // معالجتها تلقائياً عند وصول العميل، بدل أن تضيع نهائياً.
-        await _addToInvoiceOrphans(uuid, data);
-        return;
-      }
-      invoiceData['customer_id'] = rows.first['id'] as int;
+    // ربط العميل: عبر معرّف المزامنة، أو لقطة العميل المدمجة، أو الاسم.
+    // فاتورة الدين يجب أن تُنشئ سجل العميل حتى لو وصل المستند من إصدار قديم
+    // بلا customer_sync_uuid وبلا مصفوفة transactions.
+    Map<String, dynamic>? embeddedCustomer;
+    final rawCustomer = data['customer'];
+    if (rawCustomer is Map) {
+      embeddedCustomer = Map<String, dynamic>.from(rawCustomer);
+    }
+    var customerSyncUuid = data['customer_sync_uuid'] as String?;
+    if (customerSyncUuid == null || customerSyncUuid.isEmpty) {
+      customerSyncUuid = embeddedCustomer?['sync_uuid'] as String?;
     }
 
+    final isCreditInvoice = (invoiceData['payment_type'] as String?) == 'دين';
+    int? resolvedCustomerId;
+    if (isCreditInvoice ||
+        (customerSyncUuid != null && customerSyncUuid.isNotEmpty) ||
+        embeddedCustomer != null) {
+      resolvedCustomerId = await _resolveOrCreateLocalCustomer(
+        db: db,
+        customerSyncUuid: customerSyncUuid,
+        customerName: invoiceData['customer_name'] as String?,
+        customerPhone: invoiceData['customer_phone'] as String?,
+        customerAddress: invoiceData['customer_address'] as String?,
+        embedded: embeddedCustomer,
+      );
+    }
+    invoiceData['customer_id'] = resolvedCustomerId;
+
     final itemsList = (data['items'] as List<dynamic>?) ?? const [];
+    // 🔒 معاملات الفاتورة المالية المدمجة (مزامنة ذرية)
+    final transactionsList = (data['transactions'] as List<dynamic>?) ?? const [];
+    final localCustomerId = resolvedCustomerId;
 
     try {
       await db.transaction((txn) async {
@@ -310,6 +452,7 @@ class InvoiceSyncService {
             where: 'invoice_uuid = ?', whereArgs: [uuid], limit: 1);
 
         int invoiceId;
+        final bool isUpdate;
         if (rows.isNotEmpty) {
           final currentVersion = (rows.first['version'] as num?)?.toInt() ?? 0;
           if (currentVersion >= incomingVersion) {
@@ -321,9 +464,11 @@ class InvoiceSyncService {
               where: 'invoice_uuid = ?', whereArgs: [uuid]);
           await txn.delete('invoice_items',
               where: 'invoice_id = ?', whereArgs: [invoiceId]);
+          isUpdate = true;
         } else {
           // ✅ id يُولَّد تلقائياً (AUTOINCREMENT) - invoice_number محفوظ في invoiceData
           invoiceId = await txn.insert('invoices', invoiceData);
+          isUpdate = false;
         }
 
         for (final item in itemsList) {
@@ -332,7 +477,7 @@ class InvoiceSyncService {
           raw.forEach((key, value) {
             if (_itemColumns.contains(key)) itemMap[key] = value;
           });
-          
+
           // تأمين القيم الافتراضية للحقول الإلزامية (NOT NULL) في قاعدة البيانات
           itemMap['cost_price'] = itemMap['cost_price'] ?? 0.0;
           itemMap['quantity_large_unit'] = itemMap['quantity_large_unit'] ?? 0.0;
@@ -342,15 +487,141 @@ class InvoiceSyncService {
           itemMap['item_total'] = itemMap['item_total'] ?? 0.0;
           itemMap['product_name'] = itemMap['product_name'] ?? 'منتج غير معروف';
           itemMap['unit'] = itemMap['unit'] ?? '';
-          
+
           itemMap['invoice_id'] = invoiceId;
           await txn.insert('invoice_items', itemMap);
+
+          // 🔄 خصم المخزون عند استقبال فاتورة مستوردة (إدراج جديد فقط).
+          //    الفاتورة المُنشئة محلياً خُصمت بالفعل عند البيع (في invoice_manager)،
+          //    لذا لا نخصمها هنا. فقط المستوردة (is_created_by_me = 0) الجديدة.
+          //    منع الخصم المزدوج: isUpdate=false يعني فاتورة جديدة كلياً محلياً.
+          if (!isUpdate) {
+            final productName = itemMap['product_name'] as String? ?? '';
+            final productSyncUuid = itemMap['product_sync_uuid'] as String?;
+            final saleType = itemMap['sale_type'] as String? ?? '';
+            final double saleUnitsCount =
+                (itemMap['quantity_large_unit'] as num?)?.toDouble() != null &&
+                        (itemMap['quantity_large_unit'] as num).toDouble() > 0
+                    ? (itemMap['quantity_large_unit'] as num).toDouble()
+                    : (itemMap['quantity_individual'] as num?)?.toDouble() ?? 0.0;
+            if (productName.isNotEmpty && saleUnitsCount > 0.0001) {
+              try {
+                await InventoryHelpers.adjustProductStock(
+                  txn,
+                  productName,
+                  saleType,
+                  saleUnitsCount,
+                  productSyncUuid: productSyncUuid,
+                  isAddition: false, // خصم
+                );
+              } catch (stockErr) {
+                print('⚠️ تعذّر خصم مخزون المنتج "$productName": $stockErr');
+              }
+            }
+          }
+        }
+
+        // 🔒 معالجة المعاملات المالية المدمجة (مزامنة ذرية)
+        //    تُحفظ بنفس الـ invoice_id المحلي و invoice_sync_uuid = uuid الفاتورة.
+        //    عند التحديث: نحذف المعاملات القديمة المرتبطة بالفاتورة ثم نُدرج الجديدة
+        //    لضمان الاتساق الكامل مع نسخة المرسل.
+        if (isUpdate) {
+          await txn.delete('transactions',
+              where: 'invoice_sync_uuid = ?', whereArgs: [uuid]);
+        }
+        for (final txRaw in transactionsList) {
+          if (txRaw is! Map) continue;
+          final raw = Map<String, dynamic>.from(txRaw);
+          final txMap = <String, dynamic>{};
+          raw.forEach((key, value) {
+            if (_txColumns.contains(key)) {
+              txMap[key] = _sqliteValue(value);
+            }
+          });
+          if (localCustomerId != null) {
+            txMap['customer_id'] = localCustomerId;
+          } else {
+            // معاملة بلا عميل محلي لا يمكن إدراجها (customer_id NOT NULL)
+            print('⚠️ تخطّي معاملة فاتورة $uuid: لا يوجد عميل محلي');
+            continue;
+          }
+          txMap['invoice_id'] = invoiceId;
+          txMap['invoice_sync_uuid'] = uuid;
+          txMap['is_created_by_me'] = 0;
+          txMap['is_uploaded'] = 1;
+          txMap['created_at'] = txMap['created_at'] ?? DateTime.now().toIso8601String();
+          txMap['transaction_date'] =
+              txMap['transaction_date'] ?? txMap['created_at'];
+          txMap['amount_changed'] = txMap['amount_changed'] ?? 0.0;
+          txMap['transaction_type'] = txMap['transaction_type'] ?? 'invoice_debt';
+          final txUuid = (txMap['transaction_uuid'] as String?) ??
+              (txMap['sync_uuid'] as String?);
+          if (txUuid != null && txUuid.isNotEmpty) {
+            txMap['transaction_uuid'] = txUuid;
+            txMap['sync_uuid'] = txUuid;
+          }
+
+          if (txUuid != null && txUuid.isNotEmpty) {
+            final existingTx = await txn.query('transactions',
+                columns: ['id'],
+                where: 'transaction_uuid = ? OR sync_uuid = ?',
+                whereArgs: [txUuid, txUuid],
+                limit: 1);
+            if (existingTx.isNotEmpty) {
+              await txn.update('transactions', txMap,
+                  where: 'id = ?', whereArgs: [existingTx.first['id']]);
+              continue;
+            }
+          }
+          await txn.insert('transactions', txMap,
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+
+        // إن وصلت فاتورة دين بلا معاملات (إصدار قديم أو رفع ناقص)، نُنشئ
+        // أثر الدين محلياً حتى يظهر العميل في سجل الديون فوراً.
+        if (localCustomerId != null && localCustomerId != 0) {
+          await _ensureCreditTransaction(
+            txn: txn,
+            invoiceId: invoiceId,
+            invoiceUuid: uuid,
+            customerId: localCustomerId,
+            invoiceData: invoiceData,
+          );
+          await _recalculateCustomerBalanceInsideTxn(txn, localCustomerId);
         }
       });
 
-      print('📥 استُلمت فاتورة من جهاز $creatorId: $uuid (نسخة $incomingVersion)');
+      print('📥 استُلمت فاتورة من جهاز $creatorId: $uuid (نسخة $incomingVersion، '
+          '${transactionsList.length} معاملة، عميل=${localCustomerId ?? "بدون"})');
+      if (localCustomerId != null) {
+        syncBus.success(
+          SyncPhase.applyRemote,
+          'فاتورة دين وصلت وأُنشئ/حُدّث سجل العميل',
+          entityType: 'invoice',
+          entityUuid: uuid,
+        );
+      }
     } catch (e) {
       print('❌ فشل حفظ الفاتورة $uuid: $e');
+    }
+  }
+
+  /// 🔁 إعادة حساب رصيد العميل من مجموع معاملاته (شباك أمان محاسبي).
+  /// يستخدم داخل transaction نشطة لضمان الاتساق.
+  Future<void> _recalculateCustomerBalanceInsideTxn(
+      sqflite.Transaction txn, int customerId) async {
+    try {
+      final result = await txn.rawQuery('''
+        SELECT COALESCE(SUM(amount_changed), 0) as total
+        FROM transactions
+        WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
+      ''', [customerId]);
+      final total = (result.first['total'] as num?)?.toDouble() ?? 0.0;
+      await txn.update('customers',
+          {'current_total_debt': total, 'last_modified_at': DateTime.now().toIso8601String()},
+          where: 'id = ?', whereArgs: [customerId]);
+    } catch (e) {
+      print('⚠️ تعذّر إعادة حساب رصيد العميل $customerId: $e');
     }
   }
 
@@ -384,6 +655,209 @@ class InvoiceSyncService {
       print('❌ downloadAllInvoices فشلت: $e');
       return 0;
     }
+  }
+
+  /// إصلاح فواتير الدين التي وصلت سابقاً بلا عميل أو بلا معاملة
+  /// (إصدارات قديمة كانت ترفع الفاتورة فقط).
+  Future<void> _repairCreditInvoicesMissingCustomers() async {
+    final db = await _db.database;
+    final rows = await db.rawQuery('''
+      SELECT * FROM invoices
+      WHERE payment_type = 'دين'
+        AND (is_deleted IS NULL OR is_deleted = 0)
+        AND (is_created_by_me IS NULL OR is_created_by_me = 0)
+    ''');
+    if (rows.isEmpty) return;
+
+    var repaired = 0;
+    for (final row in rows) {
+      final invoiceId = row['id'] as int;
+      final uuid = row['invoice_uuid'] as String?;
+      var customerId = row['customer_id'] as int?;
+
+      if (customerId == null || customerId == 0) {
+        customerId = await _resolveOrCreateLocalCustomer(
+          db: db,
+          customerName: row['customer_name'] as String?,
+          customerPhone: row['customer_phone'] as String?,
+          customerAddress: row['customer_address'] as String?,
+        );
+        if (customerId != null) {
+          await db.update('invoices', {'customer_id': customerId},
+              where: 'id = ?', whereArgs: [invoiceId]);
+        }
+      }
+      if (customerId == null || customerId == 0) continue;
+      final cid = customerId;
+
+      await db.transaction((txn) async {
+        await _ensureCreditTransaction(
+          txn: txn,
+          invoiceId: invoiceId,
+          invoiceUuid: uuid ?? 'inv_local_$invoiceId',
+          customerId: cid,
+          invoiceData: Map<String, dynamic>.from(row),
+        );
+        await _recalculateCustomerBalanceInsideTxn(txn, cid);
+      });
+      repaired++;
+    }
+    if (repaired > 0) {
+      print('🔧 أُصلحت $repaired فاتورة دين واردة (عميل + معاملة)');
+      syncBus.success(
+        SyncPhase.applyRemote,
+        'أُصلحت $repaired فاتورة دين واردة في سجل الديون',
+        entityType: 'invoice',
+      );
+    }
+  }
+
+  /// تحويل قيم Firestore (Timestamp/bool) إلى أنواع يقبلها SQLite.
+  dynamic _sqliteValue(dynamic value) {
+    if (value is Timestamp) return value.toDate().toIso8601String();
+    if (value is DateTime) return value.toIso8601String();
+    if (value is bool) return value ? 1 : 0;
+    return value;
+  }
+
+  /// إيجاد العميل محلياً أو إنشاؤه من بيانات الفاتورة حتى يظهر في سجل الديون.
+  Future<int?> _resolveOrCreateLocalCustomer({
+    required Database db,
+    String? customerSyncUuid,
+    String? customerName,
+    String? customerPhone,
+    String? customerAddress,
+    Map<String, dynamic>? embedded,
+  }) async {
+    final name = (customerName ?? embedded?['name'] as String?)?.trim();
+    final phone = (customerPhone ?? embedded?['phone'] as String?)?.trim();
+    final address = customerAddress ?? embedded?['address'] as String?;
+    var uuid = customerSyncUuid;
+    if (uuid != null && uuid.isEmpty) uuid = null;
+    uuid ??= (embedded?['sync_uuid'] as String?)?.trim();
+    if (uuid != null && uuid.isEmpty) uuid = null;
+
+    if (uuid != null) {
+      final byUuid = await db.query('customers',
+          columns: ['id'], where: 'sync_uuid = ?', whereArgs: [uuid], limit: 1);
+      if (byUuid.isNotEmpty) return byUuid.first['id'] as int;
+    }
+
+    if (name != null && name.isNotEmpty) {
+      final normalized = name.replaceAll(' ', '');
+      List<Map<String, dynamic>> byName;
+      if (phone != null && phone.isNotEmpty) {
+        byName = await db.rawQuery(
+          "SELECT id, sync_uuid FROM customers WHERE REPLACE(name, ' ', '') = ? "
+          "AND (phone = ? OR phone IS NULL OR phone = '') LIMIT 1",
+          [normalized, phone],
+        );
+      } else {
+        byName = await db.rawQuery(
+          "SELECT id, sync_uuid FROM customers WHERE REPLACE(name, ' ', '') = ? LIMIT 1",
+          [normalized],
+        );
+      }
+      if (byName.isNotEmpty) {
+        final id = byName.first['id'] as int;
+        final existingUuid = byName.first['sync_uuid'] as String?;
+        if ((existingUuid == null || existingUuid.isEmpty) && uuid != null) {
+          await db.update('customers', {'sync_uuid': uuid},
+              where: 'id = ?', whereArgs: [id]);
+        }
+        return id;
+      }
+    }
+
+    if (name == null || name.isEmpty) return null;
+
+    uuid ??= const Uuid().v4();
+    final now = DateTime.now().toIso8601String();
+    try {
+      final newId = await db.insert('customers', {
+        'name': name,
+        'phone': (phone == null || phone.isEmpty) ? null : phone,
+        'address': address,
+        'current_total_debt': 0.0,
+        'sync_uuid': uuid,
+        'is_created_by_me': 0,
+        'is_deleted': 0,
+        'created_at': now,
+        'last_modified_at': now,
+        'synced_at': now,
+      });
+      print('👤 أُنشئ عميل من فاتورة واردة: $name (id=$newId)');
+      return newId;
+    } catch (e) {
+      // UNIQUE(name, phone) — نستخدم السجل الموجود بدل تعليق الفاتورة.
+      final fallback = await db.rawQuery(
+        "SELECT id FROM customers WHERE REPLACE(name, ' ', '') = ? LIMIT 1",
+        [name.replaceAll(' ', '')],
+      );
+      if (fallback.isNotEmpty) return fallback.first['id'] as int;
+      print('⚠️ تعذّر إنشاء العميل من الفاتورة: $e');
+      return null;
+    }
+  }
+
+  /// إن وصلت فاتورة دين بلا معاملات مدمجة، نُنشئ معاملة الدين محلياً
+  /// حتى يظهر العميل في سجل الديون (الذي يشترط وجود معاملة).
+  Future<void> _ensureCreditTransaction({
+    required sqflite.Transaction txn,
+    required int invoiceId,
+    required String invoiceUuid,
+    required int customerId,
+    required Map<String, dynamic> invoiceData,
+  }) async {
+    final paymentType = invoiceData['payment_type'] as String? ?? 'نقد';
+    if (paymentType != 'دين') return;
+
+    final total = (invoiceData['total_amount'] as num?)?.toDouble() ?? 0.0;
+    final paid =
+        (invoiceData['amount_paid_on_invoice'] as num?)?.toDouble() ?? 0.0;
+    final remaining = total - paid;
+    if (remaining <= 0.001) return;
+
+    final already = await txn.query(
+      'transactions',
+      columns: ['id'],
+      where: 'invoice_sync_uuid = ? OR invoice_id = ?',
+      whereArgs: [invoiceUuid, invoiceId],
+      limit: 1,
+    );
+    if (already.isNotEmpty) return;
+
+    final custRows = await txn.query('customers',
+        columns: ['current_total_debt'],
+        where: 'id = ?',
+        whereArgs: [customerId],
+        limit: 1);
+    final before = custRows.isEmpty
+        ? 0.0
+        : (custRows.first['current_total_debt'] as num?)?.toDouble() ?? 0.0;
+    final after = before + remaining;
+    final now = DateTime.now().toIso8601String();
+    final txUuid = 'tx_debt_${invoiceUuid.replaceAll('/', '_')}';
+    final invoiceNumber = invoiceData['invoice_number'] as String?;
+
+    await txn.insert('transactions', {
+      'customer_id': customerId,
+      'transaction_date': invoiceData['invoice_date'] ?? now,
+      'amount_changed': remaining,
+      'balance_before_transaction': before,
+      'new_balance_after_transaction': after,
+      'transaction_type': 'invoice_debt',
+      'description': 'دين فاتورة ${invoiceNumber ?? invoiceUuid}',
+      'invoice_id': invoiceId,
+      'transaction_uuid': txUuid,
+      'sync_uuid': txUuid,
+      'invoice_sync_uuid': invoiceUuid,
+      'is_created_by_me': 0,
+      'is_uploaded': 1,
+      'created_at': now,
+    });
+    print('💳 أُنشئت معاملة دين محلية لفاتورة واردة بلا معاملات: $invoiceUuid '
+        '(المتبقي=$remaining)');
   }
 
   /// ═══════════════════════════════════════════════════════════════════════

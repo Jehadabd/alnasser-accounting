@@ -19,6 +19,7 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> with SingleTi
   DateTime _startDate = DateTime.now();
   DateTime _endDate = DateTime.now();
   String _currentPeriodLabel = '';
+  bool _onlyThisDevice = false;
 
   // لتعريف الفترة الحالية بناءً على التبويب
   int _selectedTabIndex = 0;
@@ -77,6 +78,7 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> with SingleTi
     });
 
     try {
+      _reportsService.filterOnlyThisDevice = _onlyThisDevice;
       final data = await _reportsService.getCashReturnsInPeriod(
         startDate: _startDate,
         endDate: _endDate,
@@ -110,10 +112,15 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> with SingleTi
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تقارير المرتجعات (Box Match)'),
-        backgroundColor: Colors.red[700],
+        title: const Text('تقرير المرتجعات', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: const Color(0xFF673AB7),
+        elevation: 0,
         bottom: TabBar(
           controller: _tabController,
+          indicatorColor: Colors.white,
+          indicatorWeight: 3,
+          labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
           tabs: const [
             Tab(text: 'يومي'),
             Tab(text: 'أسبوعي'),
@@ -121,6 +128,28 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> with SingleTi
             Tab(text: 'سنوي'),
           ],
         ),
+        actions: [
+          Row(
+            children: [
+              Text(_onlyThisDevice ? 'فقط هذا الجهاز' : 'تقارير شاملة', style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+              Switch(
+                value: _onlyThisDevice,
+                onChanged: (val) {
+                  setState(() {
+                    _onlyThisDevice = val;
+                    _loadData();
+                  });
+                },
+                activeColor: Colors.white,
+                inactiveTrackColor: Colors.white30,
+              ),
+            ],
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadData,
+          ),
+        ],
       ),
       body: Column(
         children: [

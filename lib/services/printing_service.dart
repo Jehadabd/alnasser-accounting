@@ -22,6 +22,10 @@ abstract class PrintingService {
   Future<List<PrinterDevice>> findBluetoothPrinters();
   Future<void> printWithBluetoothPrinter(String macAddress, List<int> commands);
 
+  // --- USB OTG Printers ---
+  Future<List<PrinterDevice>> findUsbPrinters();
+  Future<bool> printWithUsbPrinter(int deviceId, Uint8List pdfBytes);
+
   // Abstract method for general printing (platform-specific implementation)
   Future<void> printData(Uint8List dataToPrint, {List<int>? escPosCommands, PrinterDevice? printerDevice});
 

@@ -3,6 +3,7 @@
 
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
+import '../../../services/firebase_sync/uuid_helper.dart';
 import '../../../models/product.dart';
 import '../core/database_helpers.dart';
 
@@ -19,6 +20,13 @@ class ProductDao {
       // تطبيع اسم المنتج وحفظه في العمود المطبع
       final productMap = product.toMap();
       productMap['name_norm'] = DatabaseHelpers.normalizeArabic(product.name);
+
+      // 🔄 توليد sync_uuid للمنتج الجديد إن لم يوجد (لمزامنة الكتالوج)
+      if (product.syncUuid == null || product.syncUuid!.isEmpty) {
+        productMap['sync_uuid'] = UuidHelper.newProductUuid();
+      }
+      // last_synced_at = null ليُلتقط من قبل مزامنة المنتجات
+      productMap['last_synced_at'] = null;
       
       // بناء unit_costs تلقائياً عند وجود تكلفة أساس أو طول/هرمية
       try {
@@ -70,6 +78,51 @@ class ProductDao {
           await db.query('products', orderBy: orderBy);
       return List.generate(maps.length, (i) => Product.fromMap(maps[i]));
     } catch (e) {
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
+  /// جلب المنتجات لتقارير البضاعة مع التحميل التدريجي (Pagination)
+  Future<List<Product>> getPaginatedProductsForReports({
+    required int limit,
+    required int offset,
+    String searchQuery = '',
+    bool onlyThisDevice = false,
+  }) async {
+    final db = await getDatabase();
+    try {
+      final String searchCondition = searchQuery.isNotEmpty 
+          ? " AND (p.name LIKE ? OR p.name_norm LIKE ? OR p.barcode LIKE ?) " 
+          : "";
+      
+      final String deviceFilter = onlyThisDevice ? " AND i.is_created_by_me = 1 " : "";
+
+      final List<dynamic> args = [];
+      if (searchQuery.isNotEmpty) {
+        final likeQuery = '%$searchQuery%';
+        final normalizedQuery = '%${DatabaseHelpers.normalizeArabic(searchQuery)}%';
+        args.addAll([likeQuery, normalizedQuery, likeQuery]);
+      }
+      args.addAll([limit, offset]);
+
+      // ترتيب المنتجات حسب إجمالي الكمية المباعة باستخدام COALESCE و LEFT JOIN
+      final List<Map<String, dynamic>> maps = await db.rawQuery('''
+        SELECT p.*, 
+          COALESCE((
+            SELECT SUM(ii.quantity_individual + (ii.quantity_large_unit * ii.units_in_large_unit))
+            FROM invoice_items ii
+            JOIN invoices i ON i.id = ii.invoice_id
+            WHERE ii.product_name = p.name AND i.status = 'محفوظة' $deviceFilter
+          ), 0) as total_quantity_for_sort
+        FROM products p
+        WHERE 1=1 $searchCondition
+        ORDER BY total_quantity_for_sort DESC, p.name ASC
+        LIMIT ? OFFSET ?
+      ''', args);
+      
+      return List.generate(maps.length, (i) => Product.fromMap(maps[i]));
+    } catch (e) {
+      print('Error getting paginated products: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }

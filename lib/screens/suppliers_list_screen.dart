@@ -3,6 +3,9 @@ import 'package:provider/provider.dart';
 import '../models/supplier.dart';
 import '../services/purchase_service.dart';
 import 'supplier_details_screen.dart';
+import '../models/app_settings.dart';
+import '../services/settings_manager.dart';
+import '../widgets/app_side_nav.dart';
 
 /// شاشة قائمة الموردين (Odoo-Style Kanban View)
 class SuppliersListScreen extends StatefulWidget {
@@ -19,6 +22,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
   bool _isLoading = true;
   bool _isFirstLoad = true; // 🚀 لتمييز أول تحميل
   String _filterType = 'all'; // all, with_debt, no_debt
+  AppSettings? _appSettings;
 
   @override
   void initState() {
@@ -28,6 +32,8 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
 
   /// 🚀 تحميل الموردين مع Cache ذكي
   Future<void> _loadSuppliers({bool forceRefresh = false}) async {
+    final settings = await SettingsManager.getAppSettings();
+    if (mounted) setState(() => _appSettings = settings);
     // إذا لم يكن هناك طلب للتحديث القسري، نستخدم Cache
     if (!forceRefresh && !_isFirstLoad) {
       // Cache موجود بالفعل في SuppliersService
@@ -94,7 +100,12 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Row(
+        children: [
+          if (_appSettings != null && AppSideNav.shouldShow(context, _appSettings!))
+            const AppSideNav(currentRoute: '/suppliers'),
+          Expanded(
+            child: Column(
         children: [
           // Header Stats
           _buildStatsHeader(),
@@ -141,6 +152,9 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
                           },
                         ),
                       ),
+          ),
+        ],
+      ),
           ),
         ],
       ),

@@ -462,6 +462,38 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
   }
 
   Widget _buildBody(LiveMatchSnapshot snap) {
+    final waitingForPeer = snap.sessionStatus == 'requesting' ||
+        (snap.sessionActive && !snap.peerStreamReady) ||
+        _busy;
+
+    if (waitingForPeer) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 20),
+              Text(
+                snap.sessionStatus == 'requesting'
+                    ? 'جاري انتظار موافقة الأجهزة وبدء المطابقة...'
+                    : (snap.statusMessage ?? 'جاري تحميل المطابقة...'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'تتم مقارنة الديون وعدد المعاملات مع الجهاز الآخر مباشرة.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     if (!snap.sessionActive || !snap.peerStreamReady) {
       final devices = snap.onlineDevices;
       return ListView(

@@ -22,6 +22,8 @@ import '../services/settings_manager.dart'; // ✅ Added
 import '../screens/suppliers/suppliers_dashboard_screen.dart'; // ✅ Added
 import 'inventory_menu_screen.dart'; // ✅ Added
 import '../services/alert_service.dart'; // 🔔 Added
+import '../models/app_settings.dart';
+import '../widgets/app_side_nav.dart';
 // ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
 // تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
 class MainScreen extends StatefulWidget {
@@ -39,15 +41,23 @@ class _MainScreenState extends State<MainScreen> {
   final Color _accentColor = const Color(0xFFFFD54F);
   final Color _backgroundColor = const Color(0xFFF5F7FB);
 
+  AppSettings? _appSettings;
+
   @override
   void initState() {
     super.initState();
     _updateCurrentMonthYear();
+    _loadSettings();
     // تأكد من تهيئة مزود التطبيق لتفعيل دعم Google Drive
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AppProvider>().initialize();
       // 🔔 تم نقل فحص التنبيهات إلى main.dart بناءً على طلب المستخدم
     });
+  }
+
+  Future<void> _loadSettings() async {
+    final settings = await SettingsManager.getAppSettings();
+    if (mounted) setState(() => _appSettings = settings);
   }
 
   @override
@@ -398,9 +408,14 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: GridView.count(
+      body: Row(
+        children: [
+          if (_appSettings != null && AppSideNav.shouldShow(context, _appSettings!))
+            const AppSideNav(currentRoute: '/main'),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: GridView.count(
           crossAxisCount: crossAxisCount,
           mainAxisSpacing: gridSpacing,
           crossAxisSpacing: gridSpacing,
@@ -762,6 +777,9 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ],
         ),
+      ),
+          ),
+        ],
       ),
       ),
     );

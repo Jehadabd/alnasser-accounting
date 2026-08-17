@@ -11,10 +11,12 @@ import 'package:flutter/material.dart';
 import '../main.dart' show globalNavigatorKey;
 import '../services/firebase_sync/live_match_service.dart';
 import '../services/firebase_sync/reconciliation_service.dart';
+import 'reconciliation_screen.dart';
 
 class ReconciliationPrompt {
   static StreamSubscription? _subAudit;
   static StreamSubscription? _subLive;
+  static StreamSubscription? _subNavigate;
   static bool _showing = false;
 
   static void start() {
@@ -50,13 +52,29 @@ class ReconciliationPrompt {
             LiveMatchService().respond(req.sessionId, accept: accepted),
       );
     });
+
+    // الاستماع لانتقال الشاشة عند بدء المطابقة
+    _subNavigate?.cancel();
+    _subNavigate = LiveMatchService().onMatchScreenRequested.listen((_) {
+      final nav = globalNavigatorKey.currentState;
+      final context = globalNavigatorKey.currentContext;
+      if (nav == null || context == null) return;
+      final currentName = ModalRoute.of(context)?.settings.name;
+      if (currentName == '/live_match') return;
+      nav.push(MaterialPageRoute(
+        settings: const RouteSettings(name: '/live_match'),
+        builder: (_) => const ReconciliationScreen(),
+      ));
+    });
   }
 
   static void stop() {
     _subAudit?.cancel();
     _subLive?.cancel();
+    _subNavigate?.cancel();
     _subAudit = null;
     _subLive = null;
+    _subNavigate = null;
   }
 
   static Future<void> _show({

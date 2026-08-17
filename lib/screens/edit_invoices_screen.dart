@@ -19,6 +19,7 @@ import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/models/app_settings.dart';
 import '../services/smart_search/smart_search.dart'; // 🧠 البحث الذكي
 import 'dart:async'; // Added for Timer
+import '../widgets/app_side_nav.dart';
 
 class EditInvoicesScreen extends StatefulWidget {
   const EditInvoicesScreen({super.key});
@@ -42,14 +43,21 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
   Timer? _debounce;
   Map<int, List<InvoiceAdjustment>> _invoiceAdjustments = {};
   Map<int, double> _settlementTotals = {}; // إجمالي التسويات لكل فاتورة
+  AppSettings? _appSettings;
 
   @override
   void initState() {
     super.initState();
     _fetchInvoices(refresh: true);
+    _loadSettings();
     _nameController.addListener(_onSearchChanged);
     _idController.addListener(_onSearchChanged);
     _scrollController.addListener(_onScroll);
+  }
+
+  Future<void> _loadSettings() async {
+    final settings = await SettingsManager.getAppSettings();
+    if (mounted) setState(() => _appSettings = settings);
   }
 
   void _onSearchChanged() {
@@ -303,7 +311,12 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
             title: const Text('تعديل القوائم (الفواتير)'),
             // The title style is now managed by appBarTheme.titleTextStyle
           ),
-        body: Padding(
+        body: Row(
+          children: [
+            if (_appSettings != null && AppSideNav.shouldShow(context, _appSettings!))
+              const AppSideNav(currentRoute: '/edit_invoices'),
+            Expanded(
+              child: Padding(
                 padding:
                     const EdgeInsets.all(24.0), // Increased overall padding
                 child: Column(
@@ -570,6 +583,9 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
                   ],
                 ),
               ),
+          ),
+        ],
+      ),
         ),
       ),
     );

@@ -8,6 +8,9 @@ import 'monthly_report_screen.dart';
 import 'yearly_report_screen.dart';
 import 'overdue_debts_screen.dart';
 import 'returns_report_screen.dart';
+import '../services/settings_manager.dart';
+import '../models/app_settings.dart';
+import '../widgets/app_side_nav.dart';
 
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
@@ -17,21 +20,32 @@ class ReportsScreen extends StatelessWidget {
     final Color primaryColor = const Color(0xFF6C63FF);
     final Color backgroundColor = const Color(0xFFF5F7FB);
 
-    return Scaffold(
-      backgroundColor: backgroundColor,
-      appBar: AppBar(
-        title: const Text('التقارير', style: TextStyle(fontSize: 24)),
-        centerTitle: true,
-        backgroundColor: primaryColor,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
+    return FutureBuilder<AppSettings>(
+      future: SettingsManager.getAppSettings(),
+      builder: (context, snapshot) {
+        final settings = snapshot.data;
+        final showSideNav = settings != null && AppSideNav.shouldShow(context, settings);
+
+        return Scaffold(
+          backgroundColor: backgroundColor,
+          appBar: AppBar(
+            title: const Text('التقارير', style: TextStyle(fontSize: 24)),
+            centerTitle: true,
+            backgroundColor: primaryColor,
+            elevation: 0,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+          body: Row(
+            children: [
+              if (showSideNav)
+                const AppSideNav(currentRoute: '/reports'),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
           children: [
             const SizedBox(height: 20),
             const Text(
@@ -169,10 +183,14 @@ class ReportsScreen extends StatelessWidget {
             const SizedBox(height: 16),
             
             // تم حذف زر الديون المتأخرة وزر تقرير الشهر بناءً على الطلب
-            const SizedBox(height: 20),
           ],
         ),
       ),
+          ),
+        ],
+      ),
+        );
+      },
     );
   }
 

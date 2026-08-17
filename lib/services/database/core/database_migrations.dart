@@ -695,6 +695,18 @@ class DatabaseMigrations {
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'is_created_by_me', 'INTEGER DEFAULT 1');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'is_deleted', 'INTEGER DEFAULT 0');
 
+    // 22.أ. 🔒 الربط الذري بين المعاملة والفاتورة عبر UUID (مزامنة ذرية)
+    // ضروري لنقل "حزمة الفاتورة" (فاتورة + معاملاتها) كوحدة واحدة غير قابلة للتجزئة،
+    // بحيث يصل أثرها المالي للعميل على كل الأجهزة مع الفاتورة نفسها.
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'invoice_sync_uuid', 'TEXT');
+    // فهرس لتسرييع البحث عن معاملات الفاتورة أثناء الاستقبال
+    try {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_transactions_invoice_sync_uuid
+        ON transactions(invoice_sync_uuid) WHERE invoice_sync_uuid IS NOT NULL
+      ''');
+    } catch (_) {}
+
     // 23. إضافة رقم الفاتورة التجاري المركّب (Surrogate Key + Natural Key pattern)
     //     يبقى id تسلسلياً تقنياً، invoice_number هو الرقم المرئي للمستخدم
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'invoice_number', 'TEXT');
@@ -728,6 +740,78 @@ class DatabaseMigrations {
 
     // تشغيل هجرة أرقام الفواتير دائماً للتأكد من عدم وجود فواتير بدون أرقام
     await _migrateInvoiceNumbers(db);
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 24. نظام مزامنة المنتجات + سجل تعديلات المنتجات (كتالوج موحد مركزياً)
+    // ════════════════════════════════════════════════════════════════════════
+
+    // 24.أ. أعمدة المزامنة لجدول products
+    await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'sync_uuid', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'created_by_device_id', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'last_modified_by_device_id', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'last_synced_at', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'is_deleted', 'INTEGER DEFAULT 0');
+
+    // فهرس فريد على sync_uuid (جزئي - فقط للقيم غير الفارغة)
+    try {
+      await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_products_sync_uuid
+        ON products(sync_uuid) WHERE sync_uuid IS NOT NULL
+      ''');
+    } catch (_) {}
+    // فهرس لتسريع البحث عن المنتجات غير المُزامَنة
+    try {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_products_not_synced
+        ON products(last_synced_at) WHERE last_synced_at IS NULL
+      ''');
+    } catch (_) {}
+
+    // 24.ب. ربط ذري لأصناف الفاتورة بالمنتجات عبر sync_uuid (بدل product_id المحلي)
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoice_items', 'product_sync_uuid', 'TEXT');
+    try {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_invoice_items_product_sync_uuid
+        ON invoice_items(product_sync_uuid) WHERE product_sync_uuid IS NOT NULL
+      ''');
+    } catch (_) {}
+
+    // 24.ج. جدول سجل تعديلات المنتجات (تتبع كامل: من، متى، ماذا تغير)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS product_edit_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        product_sync_uuid TEXT,
+        field_changed TEXT NOT NULL,
+        old_value TEXT,
+        new_value TEXT,
+        edit_type TEXT NOT NULL,
+        device_id TEXT,
+        user_id INTEGER,
+        username TEXT,
+        invoice_uuid TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE
+      )
+    ''');
+    try {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_product_edit_history_product
+        ON product_edit_history(product_id)
+      ''');
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_product_edit_history_device
+        ON product_edit_history(device_id)
+      ''');
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_product_edit_history_type
+        ON product_edit_history(edit_type)
+      ''');
+    } catch (_) {}
+
+    // 24.د. هجرة المنتجات الموجودة: توليد sync_uuid لكل منتج محلي بلا UUID
+    await _migrateProductSyncUuids(db);
   }
 
   /// ترقية قاعدة البيانات
@@ -844,5 +928,54 @@ class DatabaseMigrations {
     } catch (e) {
       print('⚠️ تعذّر إنشاء القيد الفريد المركّب (يوجد تكرار في البيانات): $e');
     }
+  }
+
+  /// يولّد sync_uuid لكل منتج محلي بلا UUID، ويعيّن created_by_device_id.
+  /// هذا ضروري لتمكين مزامنة المنتجات (كتالوج موحد) بين الأجهزة.
+  static Future<void> _migrateProductSyncUuids(Database db) async {
+    // جلب رقم هذا الجهاز للمزامنة (نستخدمه كـ created_by_device_id للمنتجات المحلية)
+    String deviceId = 'local';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final firebaseDeviceId = prefs.getString('firebase_sync_device_id');
+      if (firebaseDeviceId != null && firebaseDeviceId.isNotEmpty) {
+        deviceId = firebaseDeviceId;
+      } else {
+        // نسقط لرقم الفاتورة المحلي كاحتياط
+        final invoiceDeviceId = prefs.getInt('invoice_device_id') ?? 1;
+        deviceId = invoiceDeviceId.toString();
+      }
+    } catch (_) {}
+
+    // جلب المنتجات بلا sync_uuid
+    final List<Map<String, dynamic>> products = await db.rawQuery(
+        "SELECT id FROM products WHERE sync_uuid IS NULL OR sync_uuid = '' ORDER BY id ASC");
+
+    if (products.isEmpty) return;
+
+    final batch = db.batch();
+    final now = DateTime.now().toUtc().toIso8601String();
+    int migrated = 0;
+
+    for (final row in products) {
+      final int id = row['id'] as int;
+      // توليد UUID حتمي (مبني على id المحلي) لضمان ثباته عبر إعادة التشغيل
+      // الصيغة: prod_local_<id> — هذا يضمن عدم تكرار التوليد في كل مرة
+      final String syncUuid = 'prod_local_$id';
+      batch.update(
+        'products',
+        {
+          'sync_uuid': syncUuid,
+          'created_by_device_id': deviceId,
+          'last_modified_by_device_id': deviceId,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      migrated++;
+    }
+
+    await batch.commit(noResult: true);
+    print('✅ تمت هجرة $migrated منتج وتم توليد sync_uuid لها (device=$deviceId).');
   }
 }

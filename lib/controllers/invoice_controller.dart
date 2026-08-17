@@ -14,6 +14,7 @@ import '../models/product.dart';
 import '../services/database_service.dart';
 import '../services/smart_search/smart_search.dart';
 import '../services/auth_service.dart';
+import '../services/invoice_settings_service.dart';
 import '../utils/inventory_helpers.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -419,6 +420,7 @@ class InvoiceController {
               createdAt: DateTime.now(),
               lastModifiedAt: DateTime.now(),
               currentTotalDebt: 0.0,
+              syncUuid: const Uuid().v4(),
             );
             final insertedId = await txn.insert('customers', customer.toMap());
             customer = customer.copyWith(id: insertedId);
@@ -458,6 +460,35 @@ class InvoiceController {
 
         final currentUser = AuthService().currentUser;
         
+        int? nextSeq = data.invoiceToManage?.monthlySequenceNumber;
+        String? invoiceNumberStr = data.invoiceToManage?.invoiceNumber;
+        int? invoiceYear = data.invoiceToManage?.invoiceYear;
+        int? invoiceMonth = data.invoiceToManage?.invoiceMonth;
+        String? creatorDeviceIdStr = data.invoiceToManage?.creatorDeviceId;
+
+        if (data.isNewInvoice) {
+          final deviceIdNum = await InvoiceSettingsService.getInvoiceDeviceId();
+          creatorDeviceIdStr = deviceIdNum.toString();
+          invoiceYear = data.selectedDate.year;
+          invoiceMonth = data.selectedDate.month;
+          
+          final seqResult = await txn.rawQuery('''
+            SELECT MAX(monthly_sequence_number) as max_seq
+            FROM invoices
+            WHERE creator_device_id = ?
+              AND invoice_year = ?
+              AND invoice_month = ?
+              AND is_created_by_me = 1
+          ''', [creatorDeviceIdStr, invoiceYear, invoiceMonth]);
+          
+          nextSeq = 1;
+          if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {
+            nextSeq = (seqResult.first['max_seq'] as int) + 1;
+          }
+          
+          invoiceNumberStr = '$deviceIdNum$invoiceYear$invoiceMonth$nextSeq';
+        }
+
         Invoice invoice = Invoice(
           id: data.invoiceToManage?.id,
           customerName: data.customerName,
@@ -480,16 +511,34 @@ class InvoiceController {
           pointsRate: 0.0,
           createdByUserId: data.invoiceToManage?.createdByUserId ?? currentUser?.id,
           createdByUsername: data.invoiceToManage?.createdByUsername ?? currentUser?.username,
+          invoiceUuid: data.invoiceToManage?.invoiceUuid,
+          creatorDeviceId: creatorDeviceIdStr,
+          version: data.invoiceToManage?.version ?? 1,
+          monthlySequenceNumber: nextSeq,
+          invoiceNumber: invoiceNumberStr,
+          invoiceYear: invoiceYear,
+          invoiceMonth: invoiceMonth,
+          isCreatedByMe: data.invoiceToManage?.isCreatedByMe ?? true,
         );
 
         int invoiceId;
+        final invoiceMap = invoice.toMap();
+        await DatabaseService.stampInvoiceForSync(
+          invoiceMap,
+          isNew: data.isNewInvoice,
+          currentVersion: data.invoiceToManage?.version,
+        );
+        // نحتفظ بـ UUID بعد الختم لربطه بالمعاملة دون إعادة استعلام (قد يرجع null على بعض الأجهزة).
+        final stampedInvoiceUuid = invoiceMap['invoice_uuid'] as String?;
+
         if (data.isNewInvoice) {
-          invoiceId = await txn.insert('invoices', invoice.toMap());
-          invoice = invoice.copyWith(id: invoiceId);
+          invoiceId = await txn.insert('invoices', invoiceMap);
+          invoice = Invoice.fromMap(invoiceMap).copyWith(id: invoiceId);
         } else {
           invoiceId = data.invoiceToManage!.id!;
-          await txn.update('invoices', invoice.toMap(),
+          await txn.update('invoices', invoiceMap,
               where: 'id = ?', whereArgs: [invoiceId]);
+          invoice = Invoice.fromMap(invoiceMap).copyWith(id: invoiceId);
         }
 
         // ═══════════════════════════════════════════════════════════════════════════
@@ -531,6 +580,7 @@ class InvoiceController {
             final invoiceItem = item.copyWith(
               invoiceId: invoiceId,
               actualCostPrice: actualCostPrice,
+              productSyncUuid: matchedProduct.syncUuid, // 🔥 الربط الذري
             );
 
             var itemMap = invoiceItem.toMap();
@@ -673,6 +723,10 @@ class InvoiceController {
                   'description': 'إلغاء دين فاتورة رقم $invoiceId (تحويل لنقد)',
                   'invoice_id': invoiceId,
                   'transaction_uuid': txUuid,
+                  'sync_uuid': txUuid,
+                  'invoice_sync_uuid': stampedInvoiceUuid,
+                  'is_created_by_me': 1,
+                  'is_uploaded': 0,
                   'created_at': DateTime.now().toIso8601String(),
                 });
               }
@@ -706,6 +760,10 @@ class InvoiceController {
                 'description': 'إضافة دين فاتورة رقم $invoiceId (تحويل من نقد)',
                 'invoice_id': invoiceId,
                 'transaction_uuid': txUuid,
+                'sync_uuid': txUuid,
+                'invoice_sync_uuid': stampedInvoiceUuid,
+                'is_created_by_me': 1,
+                'is_uploaded': 0,
                 'created_at': DateTime.now().toIso8601String(),
               });
             }
@@ -716,6 +774,8 @@ class InvoiceController {
                    oldCustomerId != null && newCustomerId != null && 
                    oldCustomerId != newCustomerId) {
             
+            final invSyncUuid3 = stampedInvoiceUuid;
+                
             // 3.1 Deduct form old
             if (currentDebtFromTx.abs() > 0.001) {
               final oldCustomerMaps = await txn.query('customers', where: 'id = ?', whereArgs: [oldCustomerId]);
@@ -740,6 +800,10 @@ class InvoiceController {
                   'description': 'نقل دين فاتورة رقم $invoiceId إلى عميل آخر',
                   'invoice_id': invoiceId,
                   'transaction_uuid': txUuid1,
+                  'sync_uuid': txUuid1,
+                  'invoice_sync_uuid': invSyncUuid3,
+                  'is_created_by_me': 1,
+                  'is_uploaded': 0,
                   'created_at': DateTime.now().toIso8601String(),
                 });
               }
@@ -769,6 +833,10 @@ class InvoiceController {
                   'description': 'استلام دين فاتورة رقم $invoiceId من عميل آخر',
                   'invoice_id': invoiceId,
                   'transaction_uuid': txUuid2,
+                  'sync_uuid': txUuid2,
+                  'invoice_sync_uuid': invSyncUuid3,
+                  'is_created_by_me': 1,
+                  'is_uploaded': 0,
                   'created_at': DateTime.now().toIso8601String(),
                 });
               }
@@ -802,6 +870,10 @@ class InvoiceController {
                 'description': 'تعديل فاتورة دين رقم $invoiceId',
                 'invoice_id': invoiceId,
                 'transaction_uuid': txUuid,
+                'sync_uuid': txUuid,
+                'invoice_sync_uuid': stampedInvoiceUuid,
+                'is_created_by_me': 1,
+                'is_uploaded': 0,
                 'created_at': DateTime.now().toIso8601String(),
               });
             }
@@ -837,6 +909,10 @@ class InvoiceController {
               'description': 'دين فاتورة جديدة رقم $invoiceId',
               'invoice_id': invoiceId,
               'transaction_uuid': txUuid,
+              'sync_uuid': txUuid,
+              'invoice_sync_uuid': stampedInvoiceUuid,
+              'is_created_by_me': 1,
+              'is_uploaded': 0,
               'created_at': DateTime.now().toIso8601String(),
             });
           }

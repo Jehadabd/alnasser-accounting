@@ -9,6 +9,7 @@ import 'package:alnaser/services/settings_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_esc_pos_network/flutter_esc_pos_network.dart';
 import 'package:alnaser/services/printing_service.dart';
+import 'package:alnaser/services/usb_printer_service.dart';
 
 class PrintingServiceAndroid implements PrintingService {
   @override
@@ -110,17 +111,39 @@ class PrintingServiceAndroid implements PrintingService {
           print('ESC/POS commands are required for Bluetooth printer.');
         }
         break;
+      case PrinterConnectionType.usb:
+        // USB OTG printing — إرسال PDF bytes مباشرةً
+        final deviceId = defaultPrinter.usbDeviceId ?? int.tryParse(defaultPrinter.address);
+        if (deviceId != null) {
+          await printWithUsbPrinter(deviceId, dataToPrint);
+        } else {
+          print('USB device ID not found for printer: ${defaultPrinter.name}');
+        }
+        break;
       default:
         print('Unsupported printer type for Android.');
         break;
     }
   }
 
+
+
+  @override
+  Future<List<PrinterDevice>> findUsbPrinters() async {
+    return await UsbPrinterService.findUsbPrinters();
+  }
+
+  @override
+  Future<bool> printWithUsbPrinter(int deviceId, Uint8List pdfBytes) async {
+    return await UsbPrinterService.printBytes(
+      deviceId: deviceId,
+      bytes: pdfBytes,
+    );
+  }
+
   @override
   Future<List<PrinterDevice>> findSystemPrinters() {
     // Android does not have system printers in the same way Windows does.
-    // Return an empty list or throw an UnsupportedError if this functionality is strictly not applicable.
-    // For now, returning empty list.
     return Future.value([]);
   }
 } 

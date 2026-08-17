@@ -15,6 +15,32 @@ class ReportsService {
   ReportsService({DatabaseService? db}) : _db = db ?? DatabaseService();
   final DatabaseService _db;
   
+  /// فلتر: عرض التقارير بناءً على مصدر البيانات
+  /// 'all' = الكل, 'this_device' = هذا الجهاز فقط, 'sync' = المزامنة فقط
+  String reportSourceFilter = 'all';
+  
+  /// فلتر: عرض التقارير بناءً على البيانات التي تم إنشاؤها في هذا الجهاز فقط (للتوافق مع الكود القديم)
+  bool get filterOnlyThisDevice => reportSourceFilter == 'this_device';
+  set filterOnlyThisDevice(bool value) => reportSourceFilter = value ? 'this_device' : 'all';
+  
+  String get _deviceFilter {
+    if (reportSourceFilter == 'this_device') {
+      return " AND is_created_by_me = 1 ";
+    } else if (reportSourceFilter == 'sync') {
+      return " AND is_created_by_me = 0 ";
+    }
+    return "";
+  }
+  
+  String _deviceFilterFor(String alias) {
+    if (reportSourceFilter == 'this_device') {
+      return " AND ${alias}is_created_by_me = 1 ";
+    } else if (reportSourceFilter == 'sync') {
+      return " AND ${alias}is_created_by_me = 0 ";
+    }
+    return "";
+  }
+  
   /// 🔍 تشخيص مشكلة التكلفة - طباعة تفاصيل حساب التكلفة لكل بند
   /// يُستخدم لتحديد سبب التكلفة العالية
   double _calculateItemCostWithDebug(Map<String, dynamic> row, {bool enableDebug = false, String? productName, double? adHocProfitPercentage}) {
@@ -249,7 +275,7 @@ class ReportsService {
       FROM invoice_items ii
       INNER JOIN invoices i ON ii.invoice_id = i.id
       WHERE DATE(i.invoice_date) >= ? AND DATE(i.invoice_date) <= ?
-        AND i.status = 'محفوظة'
+        AND i.status = 'محفوظة' ${_deviceFilterFor('i.')}
       GROUP BY ii.product_name
       ORDER BY total_sales DESC
       LIMIT ?
@@ -289,7 +315,7 @@ class ReportsService {
       INNER JOIN invoices i ON ii.invoice_id = i.id
       LEFT JOIN products p ON p.name = ii.product_name
       WHERE DATE(i.invoice_date) >= ? AND DATE(i.invoice_date) <= ?
-        AND i.status = 'محفوظة'
+        AND i.status = 'محفوظة' ${_deviceFilterFor('i.')}
     ''', [startStr, endStr]);
     
     // حساب الربح لكل منتج بنفس منطق getMonthlySalesSummary
@@ -358,7 +384,7 @@ class ReportsService {
       FROM invoices i
       LEFT JOIN customers c ON i.customer_id = c.id
       WHERE DATE(i.invoice_date) >= ? AND DATE(i.invoice_date) <= ?
-        AND i.status = 'محفوظة'
+        AND i.status = 'محفوظة' ${_deviceFilterFor('i.')}
       GROUP BY i.customer_name
       ORDER BY total_purchases DESC
       LIMIT ?
@@ -396,7 +422,7 @@ class ReportsService {
         COALESCE(SUM(CASE WHEN payment_type = 'دين' THEN total_amount ELSE 0 END), 0) as credit_sales
       FROM invoices
       WHERE DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?
-        AND status = 'محفوظة'
+        AND status = 'محفوظة' $_deviceFilter
     ''', [startStr, endStr]);
     
     // جلب الفواتير المحفوظة لحساب التكلفة والربح لكل فاتورة
@@ -404,7 +430,7 @@ class ReportsService {
       SELECT id, total_amount, return_amount
       FROM invoices
       WHERE DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?
-        AND status = 'محفوظة'
+        AND status = 'محفوظة' $_deviceFilter
     ''', [startStr, endStr]);
     
     // حساب التكلفة والربح لكل فاتورة بنفس منطق getMonthlySalesSummary
@@ -597,12 +623,12 @@ class ReportsService {
         (
           SELECT MAX(transaction_date)
           FROM transactions t
-          WHERE t.customer_id = c.id AND t.transaction_type = 'manual_payment'
+          WHERE t.customer_id = c.id AND t.transaction_type = 'manual_payment' ${_deviceFilterFor('t.')}
         ) as last_payment_date,
         (
           SELECT MAX(transaction_date)
           FROM transactions t
-          WHERE t.customer_id = c.id
+          WHERE t.customer_id = c.id ${_deviceFilterFor('t.')}
         ) as last_transaction_date
       FROM customers c
       WHERE c.current_total_debt > ?
@@ -657,15 +683,25 @@ class ReportsService {
     
     final results = await db.rawQuery('''
       SELECT 
-        DATE(invoice_date) as date,
-        COUNT(*) as invoice_count,
-        COALESCE(SUM(total_amount), 0) as total_sales,
-        COALESCE(SUM(CASE WHEN payment_type = 'نقد' THEN total_amount ELSE 0 END), 0) as cash_sales,
-        COALESCE(SUM(CASE WHEN payment_type = 'دين' THEN total_amount ELSE 0 END), 0) as credit_sales
-      FROM invoices
-      WHERE DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?
-        AND status = 'محفوظة'
-      GROUP BY DATE(invoice_date)
+        DATE(i.invoice_date) as date,
+        COUNT(DISTINCT i.id) as invoice_count,
+        COALESCE(SUM(ii.item_total), 0) as total_sales,
+        COALESCE(SUM(
+          COALESCE(
+            NULLIF(ii.actual_cost_price, 0),
+            NULLIF(p.cost_price, 0),
+            ii.applied_price * 0.9
+          ) * (COALESCE(ii.quantity_individual, 0) + COALESCE(ii.quantity_large_unit, 0) * CASE WHEN COALESCE(ii.units_in_large_unit, 0) > 0 THEN ii.units_in_large_unit ELSE 1 END)
+        ), 0) as total_cost,
+        COALESCE(SUM(CASE WHEN i.payment_type = 'نقد' THEN ii.item_total ELSE 0 END), 0) as cash_sales,
+        COALESCE(SUM(CASE WHEN i.payment_type = 'دين' THEN ii.item_total ELSE 0 END), 0) as credit_sales
+      FROM invoices i
+      LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+      LEFT JOIN products p ON p.name = ii.product_name
+      WHERE DATE(i.invoice_date) >= ? AND DATE(i.invoice_date) <= ?
+        AND i.status = 'محفوظة'
+        ${_deviceFilterFor('i.')}
+      GROUP BY DATE(i.invoice_date)
       ORDER BY date ASC
     ''', [startStr, endStr]);
     
@@ -788,8 +824,57 @@ class ReportsService {
     final topCustomers = await getTopCustomersInPeriod(startDate: startDate, endDate: endDate, limit: 10);
     final newCustomers = await getNewCustomersInPeriod(startDate: startDate, endDate: endDate);
     final trend = await analyzeSalesTrend(startDate: startDate, endDate: endDate);
-    final dailySales = await getDailySalesInPeriod(startDate: startDate, endDate: endDate);
+    final rawDailySales = await getDailySalesInPeriod(startDate: startDate, endDate: endDate);
     final profitPercent = await getProfitPercentage(startDate: startDate, endDate: endDate);
+
+    // تحويل البيانات اليومية المسترجعة إلى خريطة للبحث باليوم
+    final Map<int, Map<String, dynamic>> salesByDay = {};
+    for (final dayData in rawDailySales) {
+      final dateStr = dayData['date'] as String?;
+      if (dateStr != null) {
+        final parsedDate = DateTime.tryParse(dateStr);
+        if (parsedDate != null) {
+          salesByDay[parsedDate.day] = dayData;
+        }
+      }
+    }
+
+    // بناء قائمة كاملة تحتوي على كافة أيام الشهر (من 1 إلى 28/29/30/31)
+    final daysInMonth = endDate.day;
+    final List<Map<String, dynamic>> fullMonthDailySales = [];
+
+    for (int day = 1; day <= daysInMonth; day++) {
+      final dayDate = DateTime(year, month, day);
+      final formattedDate = '$day/$month/$year';
+
+      if (salesByDay.containsKey(day)) {
+        final item = Map<String, dynamic>.from(salesByDay[day]!);
+        item['dateFormatted'] = formattedDate;
+        item['dayNumber'] = day;
+        final totalSales = (item['total_sales'] as num?)?.toDouble() ?? (item['totalSales'] as num?)?.toDouble() ?? 0.0;
+        final totalCost = (item['total_cost'] as num?)?.toDouble() ?? (item['totalCost'] as num?)?.toDouble() ?? 0.0;
+        item['totalSales'] = totalSales;
+        item['totalCost'] = totalCost;
+        item['netProfit'] = totalSales - totalCost;
+        item['invoiceCount'] = (item['invoice_count'] as num?)?.toInt() ?? (item['invoiceCount'] as num?)?.toInt() ?? 0;
+        fullMonthDailySales.add(item);
+      } else {
+        fullMonthDailySales.add({
+          'date': dayDate.toIso8601String().split('T')[0],
+          'dateFormatted': formattedDate,
+          'dayNumber': day,
+          'total_sales': 0.0,
+          'total_cost': 0.0,
+          'totalSales': 0.0,
+          'totalCost': 0.0,
+          'netProfit': 0.0,
+          'invoice_count': 0,
+          'invoiceCount': 0,
+          'cash_sales': 0.0,
+          'credit_sales': 0.0,
+        });
+      }
+    }
     
     // 🆕 حساب المرتجعات الإضافية (من التعديلات) مع استثناء فواتير هذا الشهر
     final snapshotReturns = await _getSnapshotReturns(startDate, endDate, exclusionStartDate: startDate);
@@ -805,7 +890,7 @@ class ReportsService {
       'newCustomers': newCustomers,
       'newCustomersCount': newCustomers.length,
       'trend': trend,
-      'dailySales': dailySales,
+      'dailySales': fullMonthDailySales,
       'profitPercent': profitPercent,
     };
   }
@@ -850,9 +935,89 @@ class ReportsService {
         ...mSummary,
       });
     }
-    
+
+    // المبيعات الأسبوعية للسنة (52 أسبوع)
+    final weeklySales = <Map<String, dynamic>>[];
+    for (int w = 1; w <= 52; w++) {
+      final wStart = DateTime(year, 1, 1).add(Duration(days: (w - 1) * 7));
+      final wEnd = wStart.add(const Duration(days: 6));
+      final wSummary = await getPeriodSummary(startDate: wStart, endDate: wEnd);
+      weeklySales.add({
+        'week': w,
+        'weekName': 'أسبوع $w',
+        ...wSummary,
+      });
+    }
+
+    // المبيعات اليومية للسنة كاملة (365 يوم)
+    final db = await _db.database;
+    final yearStr = year.toString();
+    final rawDailyData = await db.rawQuery('''
+      SELECT 
+        DATE(i.invoice_date) as day_date,
+        COALESCE(SUM(ii.item_total), 0) as total_sales,
+        COALESCE(SUM(
+          COALESCE(
+            NULLIF(ii.actual_cost_price, 0),
+            NULLIF(p.cost_price, 0),
+            ii.applied_price * 0.9
+          ) * (COALESCE(ii.quantity_individual, 0) + COALESCE(ii.quantity_large_unit, 0) * CASE WHEN COALESCE(ii.units_in_large_unit, 0) > 0 THEN ii.units_in_large_unit ELSE 1 END)
+        ), 0) as total_cost,
+        COUNT(DISTINCT i.id) as invoice_count
+      FROM invoices i
+      LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+      LEFT JOIN products p ON p.name = ii.product_name
+      WHERE strftime('%Y', i.invoice_date) = ? AND i.status = 'محفوظة'
+        ${_deviceFilterFor('i.')}
+      GROUP BY DATE(i.invoice_date)
+    ''', [yearStr]);
+
+    final Map<String, Map<String, dynamic>> dailyMap = {};
+    for (var r in rawDailyData) {
+      final dStr = r['day_date'] as String?;
+      if (dStr != null) {
+        final s = (r['total_sales'] as num?)?.toDouble() ?? 0.0;
+        final c = (r['total_cost'] as num?)?.toDouble() ?? 0.0;
+        final p = s - c;
+        dailyMap[dStr] = {
+          'totalSales': s,
+          'totalCost': c,
+          'netProfit': p,
+          'invoiceCount': (r['invoice_count'] as num?)?.toInt() ?? 0,
+        };
+      }
+    }
+
+    final dailyFullYear = <Map<String, dynamic>>[];
+    final isLeapYear = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    final totalDays = isLeapYear ? 366 : 365;
+
+    DateTime curDate = DateTime(year, 1, 1);
+    for (int d = 0; d < totalDays; d++) {
+      final dateKey = '${curDate.year}-${curDate.month.toString().padLeft(2, '0')}-${curDate.day.toString().padLeft(2, '0')}';
+      final existing = dailyMap[dateKey];
+
+      dailyFullYear.add({
+        'dayIndex': d,
+        'dateStr': dateKey,
+        'dayNum': curDate.day,
+        'monthNum': curDate.month,
+        'dateFormatted': '${curDate.day}/${curDate.month}/${curDate.year}',
+        'monthName': _getArabicMonthName(curDate.month),
+        'totalSales': existing?['totalSales'] ?? 0.0,
+        'totalCost': existing?['totalCost'] ?? 0.0,
+        'netProfit': existing?['netProfit'] ?? 0.0,
+        'invoiceCount': existing?['invoiceCount'] ?? 0,
+      });
+
+      curDate = curDate.add(const Duration(days: 1));
+    }
+
+    final categoryBreakdown = await _getCategoryBreakdownInPeriod(startDate: startDate, endDate: endDate);
+    final paymentBreakdown = await _getPaymentBreakdownInPeriod(startDate: startDate, endDate: endDate);
+
     return {
-      'totalReturns': snapshotReturns, // إضافة المرتجعات للنتيجة
+      'totalReturns': snapshotReturns,
       'year': year,
       'summary': summary,
       'comparison': comparison,
@@ -861,7 +1026,95 @@ class ReportsService {
       'newCustomersCount': newCustomers.length,
       'profitPercent': profitPercent,
       'monthlySales': monthlySales,
+      'weeklySales': weeklySales,
+      'dailySales': dailyFullYear,
+      'categoryBreakdown': categoryBreakdown,
+      'paymentBreakdown': paymentBreakdown,
     };
+  }
+
+  /// المبيعات اليومية لشهر معين في السنة
+  Future<List<Map<String, dynamic>>> getDailySalesForMonth({required int year, required int month}) async {
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    final dailySales = <Map<String, dynamic>>[];
+    for (int d = 1; d <= daysInMonth; d++) {
+      final dStart = DateTime(year, month, d, 0, 0, 0);
+      final dEnd = DateTime(year, month, d, 23, 59, 59);
+      final dSummary = await getPeriodSummary(startDate: dStart, endDate: dEnd);
+      dailySales.add({
+        'day': d,
+        'dayName': 'يوم $d',
+        'dateStr': '$year-${month.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}',
+        ...dSummary,
+      });
+    }
+    return dailySales;
+  }
+
+  Future<List<Map<String, dynamic>>> _getCategoryBreakdownInPeriod({
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    try {
+      final db = await _db.database;
+      final startStr = startDate.toIso8601String().split('T')[0];
+      final endStr = endDate.toIso8601String().split('T')[0];
+
+      final sql = '''
+        SELECT 
+          COALESCE(NULLIF(TRIM(cat.name), ''), 'عام / غير تصنيف') as category_name,
+          COUNT(DISTINCT ii.invoice_id) as invoice_count,
+          COALESCE(SUM(ii.item_total), 0) as total_sales,
+          COALESCE(SUM(ii.quantity_large_unit + ii.quantity_individual), 0) as total_quantity
+        FROM invoice_items ii
+        JOIN invoices i ON ii.invoice_id = i.id
+        LEFT JOIN products p ON p.name = ii.product_name
+        LEFT JOIN categories cat ON cat.id = p.category_id
+        WHERE DATE(i.invoice_date) >= ? AND DATE(i.invoice_date) <= ?
+          AND i.status = 'محفوظة'
+          ${_deviceFilterFor('i.')}
+        GROUP BY COALESCE(NULLIF(TRIM(cat.name), ''), 'عام / غير تصنيف')
+        ORDER BY total_sales DESC
+        LIMIT 10
+      ''';
+      return await db.rawQuery(sql, [startStr, endStr]);
+    } catch (e) {
+      print('Error getting category breakdown: $e');
+      return [];
+    }
+  }
+
+  Future<Map<String, double>> _getPaymentBreakdownInPeriod({
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    try {
+      final db = await _db.database;
+      final startStr = startDate.toIso8601String().split('T')[0];
+      final endStr = endDate.toIso8601String().split('T')[0];
+
+      final sql = '''
+        SELECT 
+          payment_type,
+          COALESCE(SUM(final_total), 0) as total
+        FROM invoices
+        WHERE DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?
+          AND status = 'محفوظة'
+          $_deviceFilter
+        GROUP BY payment_type
+      ''';
+      final rows = await db.rawQuery(sql, [startStr, endStr]);
+      final map = <String, double>{};
+      for (var r in rows) {
+        final pType = (r['payment_type'] as String?) ?? 'غير محدد';
+        final total = (r['total'] as num?)?.toDouble() ?? 0.0;
+        map[pType] = total;
+      }
+      return map;
+    } catch (e) {
+      print('Error getting payment breakdown: $e');
+      return {};
+    }
   }
 
   String _getArabicMonthName(int month) {
@@ -1472,7 +1725,7 @@ class ReportsService {
       FROM invoice_items ii
       INNER JOIN invoices i ON ii.invoice_id = i.id
       JOIN products p ON (ii.product_id = p.id OR ii.product_name = p.name)
-      WHERE p.id = ? AND i.status = 'محفوظة'
+      WHERE p.id = ? AND i.status = 'محفوظة' $_deviceFilter
     ''', [productId]);
     
     double totalSales = 0.0;
@@ -1985,23 +2238,27 @@ class ReportsService {
   Future<Map<String, dynamic>> getCustomerProfitData(int customerId) async {
     final db = await _db.database;
     try {
+      final settings = await SettingsManager.getAppSettings();
+      final double adHocProfit = settings.defaultAdHocProfitPercentage / 100.0;
+
       // جلب بيانات الفواتير (المحفوظة فقط) - تشمل الفواتير القديمة والجديدة
       final List<Map<String, dynamic>> invoiceMaps = await db.rawQuery('''
         SELECT 
           SUM(total_amount) as total_sales,
-          COUNT(*) as total_invoices
+          COUNT(*) as total_invoices,
+          (SELECT COUNT(*) FROM invoices WHERE (customer_id = ? OR ((customer_id IS NULL OR customer_id = 0) AND customer_name = (SELECT name FROM customers WHERE id = ?))) AND status = 'محفوظة') as total_invoices_global
         FROM invoices
-        WHERE (customer_id = ? OR (customer_id IS NULL AND customer_name = (
+        WHERE (customer_id = ? OR ((customer_id IS NULL OR customer_id = 0) AND customer_name = (
           SELECT name FROM customers WHERE id = ?
-        ))) AND status = 'محفوظة'
-      ''', [customerId, customerId]);
+        ))) AND status = 'محفوظة' $_deviceFilter
+      ''', [customerId, customerId, customerId, customerId]);
  
       // جلب بيانات المعاملات المالية
       final List<Map<String, dynamic>> transactionMaps = await db.rawQuery('''
         SELECT 
           COUNT(*) as total_transactions
         FROM transactions
-        WHERE customer_id = ?
+        WHERE customer_id = ? $_deviceFilter
       ''', [customerId]);
  
       // جلب جميع البنود مع بيانات المنتج (مع unit_costs و unit_hierarchy)
@@ -2022,10 +2279,10 @@ class ReportsService {
           p.unit_hierarchy
         FROM invoices i
         JOIN invoice_items ii ON i.id = ii.invoice_id
-        JOIN products p ON ii.product_name = p.name
-        WHERE (i.customer_id = ? OR (i.customer_id IS NULL AND i.customer_name = (
+        LEFT JOIN products p ON ii.product_name = p.name
+        WHERE (i.customer_id = ? OR ((i.customer_id IS NULL OR i.customer_id = 0) AND i.customer_name = (
           SELECT name FROM customers WHERE id = ?
-        ))) AND i.status = 'محفوظة'
+        ))) AND i.status = 'محفوظة' $_deviceFilter
       ''', [customerId, customerId]);
       
       double totalProfit = 0.0;
@@ -2082,7 +2339,7 @@ class ReportsService {
         }
         
         if (costPerSoldUnit <= 0 && sellingPrice > 0) {
-          costPerSoldUnit = MoneyCalculator.getEffectiveCost(0, sellingPrice);
+          costPerSoldUnit = MoneyCalculator.getEffectiveCost(0, sellingPrice, profitMargin: adHocProfit);
         }
         
         final double itemProfit = (sellingPrice - costPerSoldUnit) * soldUnitsCount;
@@ -2860,11 +3117,13 @@ class ReportsService {
     // جلب كل اللقطات في الفترة المحددة
     // نحتاج اللقطات من نوع before_edit و after_edit
     final snapshots = await db.rawQuery('''
-      SELECT *
-      FROM invoice_snapshots
-      WHERE created_at >= ? AND created_at <= ?
-        AND snapshot_type IN ('before_edit', 'after_edit')
-      ORDER BY invoice_id ASC, created_at ASC
+      SELECT s.*
+      FROM invoice_snapshots s
+      JOIN invoices i ON s.invoice_id = i.id
+      WHERE s.created_at >= ? AND s.created_at <= ?
+        AND s.snapshot_type IN ('before_edit', 'after_edit')
+        $_deviceFilter
+      ORDER BY s.invoice_id ASC, s.created_at ASC
     ''', [startStr, endStr]);
 
     Map<int, List<Map<String, dynamic>>> snapshotsByInvoice = {};

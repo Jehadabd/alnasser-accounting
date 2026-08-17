@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 class LicenseService {
-  static const String _apiUrl = 'https://script.google.com/macros/s/AKfycbyPK24NGM6EWQLLLMZVe_Y4hzrtoAGuvhWWsR9Wc6EKSeCJ4dnj3FMFZFm2UybG2Zi9JA/exec';
+  static const String _apiUrl = 'https://script.google.com/macros/s/AKfycby96_DzLGyvw1LGyj9K8irCyPWOIb3o5rde7RMaxj_rhjAXt-fPHbPxPKniHloLGg0JYw/exec';
   
   // مفاتيح التخزين المحلي
   static const String _keyLicense = 'license_data';
@@ -245,7 +245,10 @@ class LicenseService {
 
       // حفظ بيانات الترخيص محلياً
       final licenseData = {
-        'username': username,
+        'username': response['subUsername'] ?? username,
+        'mainUsername': response['mainUsername'] ?? username,
+        'subUsername': response['subUsername'] ?? username,
+        'appMode': response['appMode'] ?? 'full',
         'deviceId': deviceId,
         'type': response['type'],
         'expires': expiresDate.toIso8601String(),
@@ -269,6 +272,9 @@ class LicenseService {
       return LicenseResult(
         success: true,
         type: response['type'],
+        appMode: response['appMode'] ?? 'full',
+        mainUsername: response['mainUsername'],
+        subUsername: response['subUsername'],
         expires: expiresDate.toIso8601String(),
         daysLeft: expiresDate.difference(DateTime.now()).inDays,
         warning: response['warning'],
@@ -375,7 +381,7 @@ class LicenseService {
       return ExpiryResult(
         status: ExpiryStatus.expired,
         daysLeft: daysLeft,
-        message: '⛔ انتهت صلاحية الترخيص\n\nيرجى التواصل مع المطور لتجديد الاشتراك.',
+        message: '⛔ انتهت صلاحية الترخيص\n\nيرجى التواصل مع المطور لتجديد الاشتراك (واتساب / اتصال: 07705252905).',
       );
     }
     
@@ -385,7 +391,7 @@ class LicenseService {
       return ExpiryResult(
         status: ExpiryStatus.gracePeriod,
         daysLeft: graceDaysLeft,
-        message: '⚠️ انتهى اشتراكك!\n\nأنت في آخر مهلة ($graceDaysLeft ${graceDaysLeft == 1 ? "يوم" : "أيام"} متبقية)\n\nيجب تجديد الاشتراك للاستمرار.',
+        message: '⚠️ انتهى اشتراكك!\n\nأنت في آخر مهلة ($graceDaysLeft ${graceDaysLeft == 1 ? "يوم" : "أيام"} متبقية)\n\nيجب تجديد الاشتراك للاستمرار (تواصل معنا: 07705252905).',
       );
     }
     
@@ -397,7 +403,7 @@ class LicenseService {
       return ExpiryResult(
         status: ExpiryStatus.warning,
         daysLeft: daysLeft,
-        message: '⚠️ تنبيه: سينتهي اشتراكك بعد $dayWord\n\nيرجى التواصل مع المطور لتجديد الاشتراك.',
+        message: '⚠️ تنبيه: سينتهي اشتراكك بعد $dayWord\n\nيرجى التواصل مع المطور لتجديد الاشتراك (واتساب / اتصال: 07705252905).',
       );
     }
     
@@ -616,6 +622,37 @@ class LicenseService {
     });
   }
   
+  /// التصفير الذاتي للجهاز وتسجيل الخروج
+  Future<LicenseResult> selfUnbindDevice(String password) async {
+    final license = getStoredLicense();
+    if (license == null) {
+      return LicenseResult(success: false, error: 'NOT_ACTIVATED', message: 'الترخيص غير مفعّل');
+    }
+
+    if (!await hasInternetConnection()) {
+      return LicenseResult(success: false, error: 'NETWORK_ERROR', message: 'يلزم توفر اتصال بالإنترنت لتصفير الجهاز');
+    }
+
+    final deviceId = await generateDeviceId();
+    final response = await _callApi({
+      'action': 'self_unbind_device',
+      'username': license.subUsername ?? license.username,
+      'password': password,
+      'deviceId': deviceId,
+    });
+
+    if (response['success'] == true) {
+      await clearLicense();
+      return LicenseResult(success: true, message: response['message'] ?? 'تم تصفير الجهاز بنجاح');
+    } else {
+      return LicenseResult(
+        success: false,
+        error: response['error'] ?? 'UNBIND_FAILED',
+        message: response['message'] ?? 'فشل تصفير الجهاز',
+      );
+    }
+  }
+
   /// مسح بيانات الترخيص (للاختبار أو إعادة التفعيل)
   Future<void> clearLicense() async {
     await _storage.remove(_keyLicense);
@@ -630,6 +667,9 @@ class LicenseService {
 
 class LicenseData {
   final String username;
+  final String? mainUsername;
+  final String? subUsername;
+  final String appMode; // 'full' or 'debts_only'
   final String deviceId;
   final String type;
   final String expires;
@@ -637,6 +677,9 @@ class LicenseData {
   
   LicenseData({
     required this.username,
+    this.mainUsername,
+    this.subUsername,
+    this.appMode = 'full',
     required this.deviceId,
     required this.type,
     required this.expires,
@@ -645,10 +688,13 @@ class LicenseData {
   
   factory LicenseData.fromJson(Map<String, dynamic> json) {
     return LicenseData(
-      username: json['username'],
-      deviceId: json['deviceId'],
-      type: json['type'],
-      expires: json['expires'].toString(), // Ensure string
+      username: json['username'] ?? json['subUsername'] ?? '',
+      mainUsername: json['mainUsername'],
+      subUsername: json['subUsername'],
+      appMode: json['appMode'] ?? 'full',
+      deviceId: json['deviceId'] ?? '',
+      type: json['type'] ?? 'trial',
+      expires: (json['expires'] ?? '').toString(),
       daysLeft: json['daysLeft'],
     );
   }
@@ -657,6 +703,9 @@ class LicenseData {
 class LicenseResult {
   final bool success;
   final String? type;
+  final String appMode;
+  final String? mainUsername;
+  final String? subUsername;
   final String? expires;
   final int? daysLeft;
   final String? warning;
@@ -668,6 +717,9 @@ class LicenseResult {
   LicenseResult({
     required this.success,
     this.type,
+    this.appMode = 'full',
+    this.mainUsername,
+    this.subUsername,
     this.expires,
     this.daysLeft,
     this.warning,

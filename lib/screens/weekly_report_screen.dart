@@ -22,6 +22,7 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
   Map<String, dynamic>? _comparison; // مقارنة مع الأسبوع الماضي
   Map<String, dynamic>? _trend; // تحليل الاتجاه
   bool _isLoading = true;
+  bool _onlyThisDevice = false;
   late final NumberFormat _nf = NumberFormat('#,##0', 'en_US');
   String _fmt(num v) => _nf.format(v);
 
@@ -39,6 +40,7 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
     });
 
     try {
+      _reportsService.filterOnlyThisDevice = _onlyThisDevice;
       final today = DateTime.now();
       final startOfWeek = today.subtract(Duration(days: today.weekday - 1));
       final startOfWeekDay = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
@@ -48,7 +50,10 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
       final prevWeekStart = startOfWeekDay.subtract(const Duration(days: 7));
       final prevWeekEnd = startOfWeekDay.subtract(const Duration(seconds: 1));
       
-      final data = await _aiChatService.getWeeklyReport();
+      final data = await _reportsService.getPeriodSummary(
+        startDate: startOfWeekDay,
+        endDate: endOfWeek,
+      );
       final topProducts = await _reportsService.getTopProductsInPeriod(
         startDate: startOfWeekDay,
         endDate: endOfWeek,
@@ -112,6 +117,22 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
+          Row(
+            children: [
+              Text(_onlyThisDevice ? 'فقط هذا الجهاز' : 'تقارير شاملة', style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+              Switch(
+                value: _onlyThisDevice,
+                onChanged: (val) {
+                  setState(() {
+                    _onlyThisDevice = val;
+                    _loadReport();
+                  });
+                },
+                activeColor: Colors.white,
+                inactiveTrackColor: Colors.white30,
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadReport,

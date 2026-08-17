@@ -57,6 +57,56 @@ class CustomerDao {
     }
   }
 
+  /// جلب العملاء لتقارير الأشخاص مع دعم التحميل التدريجي (Pagination) والبحث والترتيب حسب المبيعات
+  /// reportSource: 'all' = الكل, 'this_device' = هذا الجهاز فقط, 'sync' = المزامنة فقط
+  Future<List<Customer>> getPaginatedCustomersForReports({
+    required int limit,
+    required int offset,
+    String searchQuery = '',
+    String reportSource = 'all',
+  }) async {
+    final db = await getDatabase();
+    try {
+      final String searchCondition = searchQuery.isNotEmpty 
+          ? " AND (c.name LIKE ? OR c.phone LIKE ? OR c.address LIKE ?) " 
+          : "";
+      
+      // تحديد فلتر الجهاز بناءً على المصدر
+      String deviceFilter = "";
+      if (reportSource == 'this_device') {
+        deviceFilter = " AND i.is_created_by_me = 1 ";
+      } else if (reportSource == 'sync') {
+        deviceFilter = " AND i.is_created_by_me = 0 ";
+      }
+
+      final List<dynamic> args = [];
+      if (searchQuery.isNotEmpty) {
+        final likeQuery = '%$searchQuery%';
+        args.addAll([likeQuery, likeQuery, likeQuery]);
+      }
+      args.addAll([limit, offset]);
+
+      // نقوم بجلب العملاء وترتيبهم حسب إجمالي المبيعات باستخدام COALESCE و LEFT JOIN
+      final List<Map<String, dynamic>> maps = await db.rawQuery('''
+        SELECT c.*, 
+          COALESCE((
+            SELECT SUM(i.total_amount) 
+            FROM invoices i 
+            WHERE (i.customer_id = c.id OR ((i.customer_id IS NULL OR i.customer_id = 0) AND i.customer_name = c.name)) AND i.status = 'محفوظة' $deviceFilter
+          ), 0) as total_sales_for_sort
+        FROM customers c
+        WHERE 1=1 $searchCondition
+        ORDER BY total_sales_for_sort DESC, c.name ASC
+        LIMIT ? OFFSET ?
+      ''', args);
+      
+      return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
+    } catch (e) {
+      print('Error getting paginated customers: $e');
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
   /// جلب العملاء لسجل الديون
   Future<List<Customer>> getCustomersForDebtRegister({String orderBy = 'name ASC'}) async {
     final db = await getDatabase();
@@ -64,13 +114,55 @@ class CustomerDao {
       final List<Map<String, dynamic>> maps = await db.rawQuery('''
         SELECT c.*
         FROM customers c
-        WHERE c.current_total_debt > 0
-           OR EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id LIMIT 1)
+        WHERE EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id LIMIT 1)
         ORDER BY ${orderBy.replaceAll("'", "")}
       ''');
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
       print('Error getting customers for debt register: $e');
+      throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
+  /// 📄 جلب العملاء لسجل الديون بشكل صفحات (Pagination) مع بحث في SQL.
+  /// هذا يحل مشكلة بطء التحميل عند وجود آلاف العملاء (بدل تحميل الكل دفعة واحدة).
+  ///
+  /// [limit] حجم الصفحة، [offset] موضع البداية، [searchQuery] بحث في الاسم والهاتف.
+  Future<List<Customer>> getCustomersForDebtRegisterPaginated({
+    required int limit,
+    required int offset,
+    String searchQuery = '',
+    String orderBy = 'name ASC',
+  }) async {
+    final db = await getDatabase();
+    try {
+      final List<dynamic> args = [];
+      String whereClause = '''
+        EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id LIMIT 1)
+      ''';
+
+      // بحث في SQL على الاسم والهاتف (بدل فلترة الذاكرة)
+      if (searchQuery.isNotEmpty) {
+        whereClause += ' AND (c.name LIKE ? OR COALESCE(c.phone, "") LIKE ?)';
+        final sq = '%$searchQuery%';
+        args.add(sq);
+        args.add(sq);
+      }
+
+      final safeOrderBy = orderBy.replaceAll("'", "");
+      args.add(limit);
+      args.add(offset);
+
+      final List<Map<String, dynamic>> maps = await db.rawQuery('''
+        SELECT c.*
+        FROM customers c
+        WHERE $whereClause
+        ORDER BY $safeOrderBy
+        LIMIT ? OFFSET ?
+      ''', args);
+      return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
+    } catch (e) {
+      print('Error getting paginated customers for debt register: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }

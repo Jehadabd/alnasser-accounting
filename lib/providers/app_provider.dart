@@ -1,4 +1,5 @@
 // providers/app_provider.dart
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/customer.dart';
 import '../models/transaction.dart';
@@ -12,6 +13,7 @@ import '../services/financial_audit_service.dart';
 import '../services/telegram_backup_service.dart';
 import '../services/settings_manager.dart';
 import '../services/debt_report_service.dart'; // ✅ Added import
+import '../services/firebase_sync/sync_event_bus.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
@@ -42,6 +44,16 @@ class AppProvider with ChangeNotifier {
   bool _autoCreateCustomerOnSync = true; // إنشاء العميل تلقائياً عند المزامنة إذا لم يكن موجوداً
   CustomerSortType _currentSortType = CustomerSortType.alphabetical; // نوع الترتيب الحالي
 
+  // 📄 Pagination لسجل الديون (تحمل آلاف العملاء بكفاءة)
+  static const int _pageSize = 50;
+  int _currentPage = 0;
+  bool _hasMoreData = true;
+  bool _isFetchingMore = false;
+  bool _isLoadingMore = false; // for UI indicator
+  Timer? _searchDebounce;
+  Timer? _syncRefreshDebounce;
+  StreamSubscription<SyncEvent>? _syncEventsSub;
+
   // Temporary invoice state for preserving unsaved invoice data
   String _tempCustomerName = '';
   String _tempCustomerPhone = '';
@@ -59,6 +71,8 @@ class AppProvider with ChangeNotifier {
   Customer? get selectedCustomer => _selectedCustomer;
   List<DebtTransaction> get customerTransactions => _customerTransactions;
   bool get isLoading => _isLoading;
+  bool get isFetchingMore => _isFetchingMore;
+  bool get hasMoreData => _hasMoreData;
   String get searchQuery => _searchQuery;
   // Drive related getters removed
   bool get autoCreateCustomerOnSync => _autoCreateCustomerOnSync;
@@ -81,12 +95,27 @@ class AppProvider with ChangeNotifier {
   Future<void> initialize() async {
     _setLoading(true);
     try {
-      // Drive initialization removed
       await _loadCustomers();
       await ensureAudioNotesDirectory();
+      _listenToIncomingSync();
     } finally {
       _setLoading(false);
     }
+  }
+
+  /// عند وصول فاتورة/عميل/معاملة من جهاز آخر نحدّث سجل الديون فوراً.
+  void _listenToIncomingSync() {
+    _syncEventsSub?.cancel();
+    _syncEventsSub = SyncEventBus.instance.stream.listen((event) {
+      final type = event.entityType;
+      if (type != 'invoice' && type != 'customer' && type != 'transaction') {
+        return;
+      }
+      _syncRefreshDebounce?.cancel();
+      _syncRefreshDebounce = Timer(const Duration(milliseconds: 400), () {
+        refreshCustomers();
+      });
+    });
   }
 
   void _setLoading(bool value) {
@@ -96,21 +125,76 @@ class AppProvider with ChangeNotifier {
 
   // Customer operations
   Future<void> _loadCustomers() async {
-    // استخدم قائمة سجل الديون: تظهر من لديهم دين أو لديهم معاملات
-    _customers = await _db.getCustomersForDebtRegister();
-    await _applySorting();
-    _applySearchFilter();
+    // 📄 تحميل أول صفحة فقط (50 عميل) بدل تحميل الكل دفعة واحدة
+    await _loadCustomersPage(refresh: true);
+  }
+
+  /// 📄 تحميل صفحة عملاء (Pagination) مع بحث في SQL.
+  Future<void> _loadCustomersPage({bool refresh = false}) async {
+    if (refresh) {
+      _currentPage = 0;
+      _hasMoreData = true;
+      _customers.clear();
+      _filteredCustomers.clear();
+    }
+    if (_isFetchingMore || !_hasMoreData) return;
+    _isFetchingMore = true;
+
+    try {
+      final orderBy = _sortTypeToSqlOrderBy(_currentSortType);
+      final newCustomers = await _db.getCustomersForDebtRegisterPaginated(
+        limit: _pageSize,
+        offset: _currentPage * _pageSize,
+        searchQuery: _searchQuery,
+        orderBy: orderBy,
+      );
+      if (newCustomers.length < _pageSize) {
+        _hasMoreData = false;
+      }
+      _customers.addAll(newCustomers);
+      _filteredCustomers = List.from(_customers);
+      _currentPage++;
+    } catch (e) {
+      print('Error loading customers page: $e');
+    } finally {
+      _isFetchingMore = false;
+    }
+  }
+
+  /// 📄 تحميل المزيد من العملاء (يُستدعى من الـ ScrollController)
+  Future<void> loadMoreCustomers() async {
+    if (_isFetchingMore || !_hasMoreData) return;
+    _isLoadingMore = true;
+    notifyListeners();
+    await _loadCustomersPage();
+    _isLoadingMore = false;
+    notifyListeners();
   }
 
   /// 🔼 تحديث بيانات العملاء بصمت (بدون إظهار مؤشر التحميل)
   /// يُستخدم عند العودة من شاشة تفاصيل العميل لتحديث البيانات
   /// مع الحفاظ على موضع التمرير في القائمة
   Future<void> refreshCustomers() async {
-    _customers = await _db.getCustomersForDebtRegister();
-    await _applySorting();
-    _applySearchFilter();
+    await _loadCustomersPage(refresh: true);
     notifyListeners();
   }
+
+  /// يحول نوع الترتيب إلى جملة SQL ORDER BY
+  String _sortTypeToSqlOrderBy(CustomerSortType type) {
+    switch (type) {
+      case CustomerSortType.alphabetical:
+        return 'name ASC';
+      case CustomerSortType.highestDebt:
+        return 'current_total_debt DESC';
+      // للأنواع المعقدة (المعتمدة على JOIN معاملات) نستخدم الافتراضي محلياً
+      case CustomerSortType.lastDebtAdded:
+      case CustomerSortType.lastPayment:
+      case CustomerSortType.lastTransaction:
+        return 'last_modified_at DESC';
+    }
+  }
+
+  bool get isLoadingMore => _isLoadingMore;
 
   // تطبيق الترتيب على قائمة العملاء
   Future<void> _applySorting() async {
@@ -276,10 +360,16 @@ class AppProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // Search functionality
+  // Search functionality - مع debounce لتفادي إثقال قاعدة البيانات
   void setSearchQuery(String query) {
     _searchQuery = query;
-    _applySearchFilter();
+    // 📄 debounce 500ms ثم إعادة تحميل من SQL (بدل فلترة الذاكرة)
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 500), () async {
+      await _loadCustomersPage(refresh: true);
+      notifyListeners();
+    });
+    notifyListeners();
   }
 
   void _applySearchFilter() {

@@ -228,9 +228,11 @@ class LiveMatchService {
 
   final _snapshotController = StreamController<LiveMatchSnapshot>.broadcast();
   final _requestController = StreamController<LiveMatchRequest>.broadcast();
+  final _showMatchScreenController = StreamController<String>.broadcast();
 
   Stream<LiveMatchSnapshot> get snapshots => _snapshotController.stream;
   Stream<LiveMatchRequest> get onRequest => _requestController.stream;
+  Stream<String> get onMatchScreenRequested => _showMatchScreenController.stream;
 
   LiveMatchSnapshot? _last;
   LiveMatchSnapshot? get last => _last;
@@ -352,6 +354,7 @@ class LiveMatchService {
     _activeSessionId = sessionId;
     _sessionStatus = 'requesting';
     _handledSessions.add('req_$sessionId');
+    _handledSessions.add('accepted_$sessionId');
     await recompute();
     return sessionId;
   }
@@ -369,7 +372,13 @@ class LiveMatchService {
 
     if (accept) {
       _activeSessionId = sessionId;
+      _sessionStatus = 'requesting';
       _handledSessions.add('req_$sessionId');
+      _handledSessions.add('accepted_$sessionId');
+      _showMatchScreenController.add(sessionId);
+      await recompute();
+      // تفعيل الجلسة فوراً إن وافق الجميع، دون انتظار مؤقت الجهاز البادئ.
+      await evaluateSession(sessionId);
     }
   }
 
@@ -462,6 +471,7 @@ class LiveMatchService {
           invitedCount: invited.length,
         ));
       } else if (status == 'active') {
+        if (DateTime.now().isAfter(expiresAt)) continue;
         if (_activeSessionId == sessionId && _sessionStatus == 'active') {
           continue;
         }
@@ -508,6 +518,11 @@ class LiveMatchService {
         .doc(_selectedPeerId)
         .snapshots()
         .listen(_onPeerState, onError: (e) => print('❌ بث النظير: $e'));
+
+    // إظهار شاشة المطابقة فقط إذا تم بدء الجلسة أو قبولها محلياً في هذا التطبيق
+    if (_handledSessions.contains('accepted_$sessionId') && !_showMatchScreenController.isClosed) {
+      _showMatchScreenController.add(sessionId);
+    }
 
     await recompute();
   }
@@ -745,7 +760,8 @@ class LiveMatchService {
     ''');
     final ownedByCustomer = <String, List<Map<String, dynamic>>>{};
     for (final row in ownedRows) {
-      final cu = row['customer_uuid'] as String;
+      final cu = row['customer_uuid'] as String?;
+      if (cu == null || cu.isEmpty) continue; // تخطي الصفوف بدون customer_uuid
       ownedByCustomer.putIfAbsent(cu, () => []).add(row);
     }
 

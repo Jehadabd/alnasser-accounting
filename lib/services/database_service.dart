@@ -15,6 +15,9 @@ import '../models/product.dart';
 import '../models/transaction.dart';
 import '../utils/inventory_helpers.dart';
 import '../models/invoice.dart';
+import '../models/app_settings.dart';
+import '../models/invoice_design_settings.dart';
+import 'firebase_sync/product_sync_service.dart';
 import '../models/invoice_item.dart';
 import '../models/invoice_adjustment.dart';
 import '../models/installer.dart';
@@ -446,6 +449,22 @@ class DatabaseService {
   }
 
   /// 🚀 جلب جميع الزبائن مع Cache ذكي
+  /// reportSource: 'all' = الكل, 'this_device' = هذا الجهاز فقط, 'sync' = المزامنة فقط
+  Future<List<Customer>> getPaginatedCustomersForReports({
+    required int limit,
+    required int offset,
+    String searchQuery = '',
+    String reportSource = 'all',
+  }) async {
+    return _customerDao.getPaginatedCustomersForReports(
+      limit: limit,
+      offset: offset,
+      searchQuery: searchQuery,
+      reportSource: reportSource,
+    );
+  }
+
+  /// 🚀 جلب جميع الزبائن مع Cache ذكي
   Future<List<Customer>> getAllCustomers({String orderBy = 'name ASC'}) async {
     // 🚀 تحقق من Cache أولاً
     if (_isCustomersCacheValid && _customersCache != null) {
@@ -504,12 +523,28 @@ class DatabaseService {
      await database;
      return _customerDao.getCustomersForDebtRegister();
   }
-  
+
+  /// 📄 نسخة بـ Pagination لسجل الديون (لتحمل آلاف العملاء).
+  Future<List<Customer>> getCustomersForDebtRegisterPaginated({
+    required int limit,
+    required int offset,
+    String searchQuery = '',
+    String orderBy = 'name ASC',
+  }) async {
+     await database;
+     return _customerDao.getCustomersForDebtRegisterPaginated(
+       limit: limit,
+       offset: offset,
+       searchQuery: searchQuery,
+       orderBy: orderBy,
+     );
+  }
+
   Future<List<int>> getCustomerIdsSortedByLastDebtAdded() async {
     await database;
     return _customerDao.getCustomerIdsSortedByLastDebtAdded();
   }
-  
+
   Future<List<int>> getCustomerIdsSortedByLastPayment() async {
     await database;
     return _customerDao.getCustomerIdsSortedByLastPayment();
@@ -738,23 +773,32 @@ class DatabaseService {
     // 🚀 إبطال Cache بعد الكتابة
     invalidateProductsCache();
     
+    // 🔄 رفع المنتج المضاف فوراً للمزامنة
+    final addedProduct = await getProductById(result);
+    if (addedProduct != null && addedProduct.syncUuid != null) {
+      ProductSyncService().uploadProductNow(addedProduct.syncUuid!, productData: addedProduct.toMap());
+    }
+    
     return result;
   }
 
   /// 🚀 جلب جميع المنتجات مع Cache ذكي
-  Future<List<Product>> getAllProducts() async {
-    // 🚀 تحقق من Cache أولاً
-    if (_isProductsCacheValid && _productsCache != null) {
+  /// supports optional orderBy parameter
+  Future<List<Product>> getAllProducts({String orderBy = 'name ASC'}) async {
+    // 🚀 تحقق من Cache أولاً (فقط للترتيب الافتراضي)
+    if (orderBy == 'name ASC' && _isProductsCacheValid && _productsCache != null) {
       return List.from(_productsCache!);  // نسخة آمنة
     }
 
     // جلب من قاعدة البيانات (الهارد)
     await database;
-    final products = await _productDao.getAllProducts();
+    final products = await _productDao.getAllProducts(orderBy: orderBy);
 
-    // 🚀 تحديث Cache
-    _productsCache = products;
-    _productsCacheTime = DateTime.now();
+    // 🚀 تحديث Cache (فقط للترتيب الافتراضي)
+    if (orderBy == 'name ASC') {
+      _productsCache = products;
+      _productsCacheTime = DateTime.now();
+    }
 
     return products;
   }
@@ -777,6 +821,16 @@ class DatabaseService {
     // 🚀 إبطال Cache بعد الكتابة
     invalidateProductsCache();
     
+    // 🔄 رفع المنتج المعدل فوراً للمزامنة
+    if (product.syncUuid != null) {
+      ProductSyncService().uploadProductNow(product.syncUuid!, productData: product.toMap());
+    } else if (product.id != null) {
+      final updatedProduct = await getProductById(product.id!);
+      if (updatedProduct != null && updatedProduct.syncUuid != null) {
+        ProductSyncService().uploadProductNow(updatedProduct.syncUuid!, productData: updatedProduct.toMap());
+      }
+    }
+    
     return result;
   }
 
@@ -794,6 +848,20 @@ class DatabaseService {
   Future<List<Product>> searchProducts(String query) async {
     await database;
     return _productDao.searchProducts(query);
+  }
+
+  Future<List<Product>> getPaginatedProductsForReports({
+    required int limit,
+    required int offset,
+    String searchQuery = '',
+    bool onlyThisDevice = false,
+  }) async {
+    return _productDao.getPaginatedProductsForReports(
+      limit: limit,
+      offset: offset,
+      searchQuery: searchQuery,
+      onlyThisDevice: onlyThisDevice,
+    );
   }
   
   Future<List<Product>> searchProductsSmart(String query) async {
@@ -1452,7 +1520,57 @@ class DatabaseService {
   }
   
   Future<void> updateOldInvoicesWithCustomerIds() async {
-      // Stub for legacy support or one-off migration
+    final db = await database;
+    try {
+      // 1. Find all distinct customer names in invoices that have no customer_id OR have an invalid customer_id
+      final List<Map<String, dynamic>> orphanedNames = await db.rawQuery('''
+        SELECT DISTINCT i.customer_name
+        FROM invoices i
+        LEFT JOIN customers c ON i.customer_id = c.id
+        WHERE (i.customer_id IS NULL OR i.customer_id = 0 OR c.id IS NULL)
+          AND i.customer_name IS NOT NULL 
+          AND TRIM(i.customer_name) != ''
+      ''');
+
+      for (var row in orphanedNames) {
+        final String name = row['customer_name'] as String;
+        
+        // 2. Check if a customer with this name exists
+        final List<Map<String, dynamic>> existing = await db.query(
+          'customers',
+          columns: ['id'],
+          where: 'name = ?',
+          whereArgs: [name],
+          limit: 1,
+        );
+
+        int customerId;
+        if (existing.isNotEmpty) {
+          customerId = existing.first['id'] as int;
+        } else {
+          // 3. Create a new customer
+          customerId = await db.insert('customers', {
+            'name': name,
+            'current_total_debt': 0.0,
+            'is_deleted': 0,
+            'last_modified_at': DateTime.now().toIso8601String(),
+          });
+        }
+
+        // 4. Update the invoices with the correct customer_id
+        await db.rawUpdate('''
+          UPDATE invoices
+          SET customer_id = ?
+          WHERE customer_name = ? AND (customer_id IS NULL OR customer_id = 0 OR customer_id != ?)
+        ''', [customerId, name, customerId]);
+        
+        // 5. Update transactions if they exist without customer_id? 
+        // Note: transactions already enforce customer_id NOT NULL in schema, 
+        // but if there are any orphaned, we can't update them directly.
+      }
+    } catch (e) {
+      print('Error in updateOldInvoicesWithCustomerIds: $e');
+    }
   }
 
   Future<Invoice?> getInvoiceById(int id) async {

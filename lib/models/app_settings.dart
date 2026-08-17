@@ -68,6 +68,9 @@ class AppSettings {
   final bool backupDebtRecordsPdf;
   final bool backupAccountStatementsPdf;
 
+  // 🧭 شريط التنقل الجانبي
+  final bool showSideNav;
+
   AppSettings({
     this.phoneNumbers = const [],
     int? remainingAmountColor,
@@ -113,6 +116,7 @@ class AppSettings {
     String? costingMethod,
     bool? backupDebtRecordsPdf,
     bool? backupAccountStatementsPdf,
+    bool? showSideNav,
   }) : remainingAmountColor = remainingAmountColor ?? Colors.black.value,
        discountColor = discountColor ?? Colors.black.value,
        loadingFeesColor = loadingFeesColor ?? Colors.black.value,
@@ -152,7 +156,8 @@ class AppSettings {
        wholesaleCustomerLimit = wholesaleCustomerLimit ?? 5000000.0,
        costingMethod = costingMethod ?? 'last_purchase',
        backupDebtRecordsPdf = backupDebtRecordsPdf ?? false,
-       backupAccountStatementsPdf = backupAccountStatementsPdf ?? false;
+       backupAccountStatementsPdf = backupAccountStatementsPdf ?? false,
+       showSideNav = showSideNav ?? false;
 
   Map<String, dynamic> toJson() => {
         'phoneNumbers': phoneNumbers,
@@ -199,6 +204,7 @@ class AppSettings {
         'costingMethod': costingMethod,
         'backupDebtRecordsPdf': backupDebtRecordsPdf,
         'backupAccountStatementsPdf': backupAccountStatementsPdf,
+        'showSideNav': showSideNav,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -248,6 +254,7 @@ class AppSettings {
         costingMethod: json['costingMethod'] ?? 'last_purchase',
         backupDebtRecordsPdf: json['backupDebtRecordsPdf'] ?? false,
         backupAccountStatementsPdf: json['backupAccountStatementsPdf'] ?? false,
+        showSideNav: json['showSideNav'] ?? false,
       );
 
   AppSettings copyWith({
@@ -295,6 +302,7 @@ class AppSettings {
     String? costingMethod,
     bool? backupDebtRecordsPdf,
     bool? backupAccountStatementsPdf,
+    bool? showSideNav,
   }) {
     return AppSettings(
       phoneNumbers: phoneNumbers ?? this.phoneNumbers,
@@ -341,6 +349,7 @@ class AppSettings {
       costingMethod: costingMethod ?? this.costingMethod,
       backupDebtRecordsPdf: backupDebtRecordsPdf ?? this.backupDebtRecordsPdf,
       backupAccountStatementsPdf: backupAccountStatementsPdf ?? this.backupAccountStatementsPdf,
+      showSideNav: showSideNav ?? this.showSideNav,
     );
   }
 }

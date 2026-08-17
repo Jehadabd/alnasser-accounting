@@ -19,8 +19,10 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
   final _channelIdController = TextEditingController();
   
   // Backup flags state
-  bool _backupDebtRecordsPdf = false;
-  bool _backupAccountStatementsPdf = false;
+  bool _backupDebtRecordsPdf = true;
+  bool _backupAccountStatementsPdf = true;
+  bool _reportOnlyLocalInvoices = false;
+  bool _reportDetailedDivided = false;
 
   bool _isLoading = false;
   String? _channelName;
@@ -38,11 +40,16 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
 
   Future<void> _loadSavedSettings() async {
     final settings = await SettingsManager.getAppSettings();
+    final onlyLocal = await SettingsManager.isReportOnlyLocalInvoices();
+    final detailed = await SettingsManager.isReportDetailedDivided();
+    
     setState(() {
       _botTokenController.text = settings.telegramBotToken ?? '';
       _channelIdController.text = settings.telegramChannelId ?? '';
       _backupDebtRecordsPdf = settings.backupDebtRecordsPdf;
       _backupAccountStatementsPdf = settings.backupAccountStatementsPdf;
+      _reportOnlyLocalInvoices = onlyLocal;
+      _reportDetailedDivided = detailed;
     });
     // إذا كانت البيانات موجودة، حاول جلب الأسماء بشكل صامت
     if (_botTokenController.text.isNotEmpty) {
@@ -155,6 +162,9 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
         backupAccountStatementsPdf: _backupAccountStatementsPdf,
       );
       await SettingsManager.saveAppSettings(updatedSettings);
+      
+      await SettingsManager.setReportOnlyLocalInvoices(_reportOnlyLocalInvoices);
+      await SettingsManager.setReportDetailedDivided(_reportDetailedDivided);
 
       _showSnackBar('✅ تم حفظ الإعدادات بنجاح!');
       // فحص الاتصال كجزء من الحفظ
@@ -415,6 +425,22 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                     value: _backupAccountStatementsPdf,
                     activeColor: Colors.blue, // Assuming kPrimaryColor is Colors.blue
                     onChanged: (val) => setState(() => _backupAccountStatementsPdf = val),
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text('إحصائيات فواتير هذا الجهاز فقط'),
+                    subtitle: const Text('استثناء الفواتير التي تمت مزامنتها من حواسيب أخرى من التقارير'),
+                    value: _reportOnlyLocalInvoices,
+                    activeColor: Colors.blue, 
+                    onChanged: (val) => setState(() => _reportOnlyLocalInvoices = val),
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text('تقرير مفصل ومقسم'),
+                    subtitle: const Text('إرسال التقارير بشكل مفصل لكل قسم بدلاً من إجمالي واحد'),
+                    value: _reportDetailedDivided,
+                    activeColor: Colors.blue, 
+                    onChanged: (val) => setState(() => _reportDetailedDivided = val),
                   ),
                 ],
               ),

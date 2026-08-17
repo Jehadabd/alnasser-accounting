@@ -7,16 +7,18 @@ class InventoryHelpers {
   /// Adjusts stock for a single product based on its name and sale type.
   /// Handles hierarchical unit conversions.
   static Future<void> adjustProductStock(
-    dynamic txn, 
-    String productName, 
-    String saleType, 
+    dynamic txn,
+    String productName,
+    String saleType,
     double saleUnitsCount, {
     int? productId, // أضفنا هذا لدقة المطابقة
+    String? productSyncUuid, // 🔄 مطابقة عبر sync_uuid (لمزامنة المخزون بين الأجهزة)
     required bool isAddition,
   }) async {
     print('STOCK_DEBUG: ---------------- START ADJUSTMENT ----------------');
     print('STOCK_DEBUG: Product: $productName');
     print('STOCK_DEBUG: ID passed: $productId');
+    print('STOCK_DEBUG: sync_uuid passed: $productSyncUuid');
     print('STOCK_DEBUG: SaleType: $saleType');
     print('STOCK_DEBUG: Units: $saleUnitsCount');
     print('STOCK_DEBUG: Operation: ${isAddition ? "ADD (+)" : "DEDUCT (-)"}');
@@ -26,10 +28,15 @@ class InventoryHelpers {
       return;
     }
 
-    // تحديد شرط البحث: المعرف أفضل من الاسم
+    // 🔄 ترتيب أولوية المطابقة: sync_uuid > productId > name
+    //    sync_uuid يضمن مطابقة نفس المنتج عبر الأجهزة المختلفة.
     String whereClause = 'name = ?';
     List<dynamic> whereArgs = [productName];
-    if (productId != null) {
+    if (productSyncUuid != null && productSyncUuid.isNotEmpty) {
+      whereClause = 'sync_uuid = ?';
+      whereArgs = [productSyncUuid];
+      print('STOCK_DEBUG: Using sync_uuid match ($productSyncUuid)');
+    } else if (productId != null) {
       whereClause = 'id = ?';
       whereArgs = [productId];
       print('STOCK_DEBUG: Using strict ID match (id=$productId)');
@@ -154,11 +161,12 @@ class InventoryHelpers {
       if (saleUnitsCount <= 0.0001) continue;
 
       await adjustProductStock(
-        txn, 
-        item.productName, 
-        item.saleType ?? '', 
-        saleUnitsCount, 
+        txn,
+        item.productName,
+        item.saleType ?? '',
+        saleUnitsCount,
         productId: item.productId, // تمرير المعرف
+        productSyncUuid: item.productSyncUuid, // 🔄 مطابقة عبر sync_uuid
         isAddition: isAddition
       );
     }

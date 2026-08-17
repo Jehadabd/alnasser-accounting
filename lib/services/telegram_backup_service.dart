@@ -584,6 +584,10 @@ class TelegramBackupService {
       final database = await db.database;
       final nf = NumberFormat('#,##0', 'en_US');
       
+      // 🚀 التحقق من إعدادات التقارير المتقدمة
+      final onlyLocal = await SettingsManager.isReportOnlyLocalInvoices();
+      final localFilter = onlyLocal ? "AND is_created_by_me = 1" : "";
+
       // جلب جميع الفواتير المحفوظة في الفترة
       final invoices = await database.rawQuery('''
         SELECT 
@@ -591,6 +595,7 @@ class TelegramBackupService {
         FROM invoices
         WHERE DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?
           AND status = 'محفوظة'
+          $localFilter
       ''', [startStr, endStr]);
       
       // تصنيف الفواتير
@@ -663,7 +668,8 @@ class TelegramBackupService {
         FROM transactions
         WHERE DATE(transaction_date) >= ? AND DATE(transaction_date) <= ?
           AND transaction_type IN ('manual_debt', 'opening_balance')
-          AND is_created_by_me = 1 AND invoice_id IS NULL
+          AND invoice_id IS NULL
+          $localFilter
       ''', [startStr, endStr]);
       
       final manualDebtCount = manualDebtData.first['count'] as int? ?? 0;
@@ -674,7 +680,8 @@ class TelegramBackupService {
         FROM transactions
         WHERE DATE(transaction_date) >= ? AND DATE(transaction_date) <= ?
           AND transaction_type IN ('manual_debt', 'opening_balance')
-          AND is_created_by_me = 1 AND invoice_id IS NULL
+          AND invoice_id IS NULL
+          $localFilter
       ''', [startStr, endStr]);
       
       final manualDebtOnlyTotal = (manualDebtProfitData.first['total'] as num?)?.toDouble() ?? 0.0;
@@ -691,13 +698,43 @@ class TelegramBackupService {
         FROM transactions
         WHERE DATE(transaction_date) >= ? AND DATE(transaction_date) <= ?
           AND transaction_type = 'manual_payment'
-          AND is_created_by_me = 1 AND invoice_id IS NULL
+          AND invoice_id IS NULL
+          $localFilter
       ''', [startStr, endStr]);
       
       final manualPaymentCount = manualPaymentData.first['count'] as int? ?? 0;
       final manualPaymentTotal = (manualPaymentData.first['total'] as num?)?.toDouble() ?? 0.0;
       
+      // إجمالي الأرباح الكلي
       final grandTotalProfit = invoiceTotalProfit + manualDebtProfit;
+      
+      // 🚀 التحقق من إعداد التقرير المفصل
+      final isDetailed = await SettingsManager.isReportDetailedDivided();
+      String detailedStats = '';
+      
+      if (isDetailed) {
+        final categoryData = await database.rawQuery('''
+          SELECT p.category_name, SUM(ii.quantity * ii.unit_price) as total_sales
+          FROM invoice_items ii
+          JOIN invoices i ON ii.invoice_id = i.id
+          JOIN products p ON ii.product_id = p.id
+          WHERE DATE(i.invoice_date) >= ? AND DATE(i.invoice_date) <= ?
+            AND i.status = 'محفوظة' $localFilter
+          GROUP BY p.category_name
+          ORDER BY total_sales DESC
+        ''', [startStr, endStr]);
+        
+        if (categoryData.isNotEmpty) {
+          detailedStats += '\n══════════════════\n';
+          detailedStats += '📊 <b>مبيعات الأقسام (تفصيلي):</b>\n';
+          detailedStats += '══════════════════\n';
+          for (final row in categoryData) {
+            final cat = row['category_name']?.toString() ?? 'بدون قسم';
+            final total = (row['total_sales'] as num?)?.toDouble() ?? 0.0;
+            detailedStats += '📦 $cat: ${nf.format(total)} د.ع\n';
+          }
+        }
+      }
       
       final monthNames = [
         'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
@@ -742,11 +779,14 @@ class TelegramBackupService {
 ═════════════════
    • العدد: $manualPaymentCount معاملة
    • المبلغ: ${nf.format(manualPaymentTotal)} د.ع
-
+$detailedStats
 ════════════════
 🏆 <b>إجمالي الأرباح الكلي:</b> ${nf.format(grandTotalProfit)} د.ع
 ═══════════════
 ''';
+      
+      // إرسال عبر Discord أولاً إذا كان متوفراً
+      _sendMessageToDiscordInBackground(message);
       
       final summarySendResult = await sendMessageWithDetails(message);
       
@@ -866,34 +906,38 @@ class TelegramBackupService {
 
   // 🆕 إرسال إلى Discord في الخلفية (بدون انتظار)
   void _sendToDiscordInBackground(File file, String? caption) {
-    final discordService = DiscordBackupService()..loadSettings();
-    if (discordService.isEnabled) {
-      discordService.sendBackupFile(file, caption: caption).then((success) {
-        if (success) {
-          print('✅ Discord: تم إرسال الملف بنجاح');
-        } else {
-          print('⚠️ Discord: فشل إرسال الملف');
-        }
-      }).catchError((e) {
-        print('❌ Discord: خطأ في الإرسال - $e');
-      });
-    }
+    Future.microtask(() async {
+      final discordService = DiscordBackupService();
+      if (await discordService.isConfigured) {
+        discordService.sendDocument(file: file, caption: caption).then((success) {
+          if (success) {
+            print('✅ Discord: تم إرسال الملف بنجاح');
+          } else {
+            print('⚠️ Discord: فشل إرسال الملف');
+          }
+        }).catchError((e) {
+          print('❌ Discord: خطأ في الإرسال - $e');
+        });
+      }
+    });
   }
 
   // 🆕 إرسال رسالة إلى Discord في الخلفية (بدون انتظار)
   void _sendMessageToDiscordInBackground(String text) {
-    final discordService = DiscordBackupService()..loadSettings();
-    if (discordService.isEnabled) {
-      discordService.sendMessage(text).then((success) {
-        if (success) {
-          print('✅ Discord: تم إرسال الرسالة بنجاح');
-        } else {
-          print('⚠️ Discord: فشل إرسال الرسالة');
-        }
-      }).catchError((e) {
-        print('❌ Discord: خطأ في الإرسال - $e');
-      });
-    }
+    Future.microtask(() async {
+      final discordService = DiscordBackupService();
+      if (await discordService.isConfigured) {
+        discordService.sendMessage(text).then((success) {
+          if (success) {
+            print('✅ Discord: تم إرسال الرسالة بنجاح');
+          } else {
+            print('⚠️ Discord: فشل إرسال الرسالة');
+          }
+        }).catchError((e) {
+          print('❌ Discord: خطأ في الإرسال - $e');
+        });
+      }
+    });
   }
 
   /// 📄 نسخ احتياطي: تقرير الديون (PDF)
@@ -977,3 +1021,4 @@ class TelegramBackupService {
     }
   }
 }
+

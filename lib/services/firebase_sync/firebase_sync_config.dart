@@ -51,12 +51,38 @@ class FirebaseSyncSecuritySettings {
     await prefs.setBool(_enablePostSyncVerificationKey, enabled);
   }
 
+  static const String _enableAutoCleanupKey = 'firebase_sync_enable_auto_cleanup';
   static const String _autoDeleteDaysKey = 'firebase_sync_auto_delete_days';
+  static const String _enableDirectStockSyncKey = 'firebase_sync_enable_direct_stock_sync';
+
+  /// هل تفعيل التنظيف التلقائي للبيانات القديمة؟
+  static Future<bool> isAutoCleanupEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_enableAutoCleanupKey) ?? false; // معطل افتراضياً
+  }
+
+  /// تفعيل/تعطيل التنظيف التلقائي
+  static Future<void> setAutoCleanupEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_enableAutoCleanupKey, enabled);
+  }
+
+  /// هل تفعيل المزامنة المباشرة للمخزون من صفحة المنتجات؟ (خطر للاستخدام المتعدد)
+  static Future<bool> isDirectStockSyncEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_enableDirectStockSyncKey) ?? false; // معطل افتراضياً
+  }
+
+  /// تفعيل/تعطيل المزامنة المباشرة للمخزون
+  static Future<void> setDirectStockSyncEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_enableDirectStockSyncKey, enabled);
+  }
 
   /// الحصول على مدة الاحتفاظ بالبيانات في Firebase (بالأيام)
   static Future<int> getAutoDeleteDays() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_autoDeleteDaysKey) ?? 90; // 90 يوم افتراضياً
+    return prefs.getInt(_autoDeleteDaysKey) ?? 30; // 30 يوم افتراضياً
   }
 
   /// تعيين مدة الاحتفاظ بالبيانات في Firebase (بالأيام)

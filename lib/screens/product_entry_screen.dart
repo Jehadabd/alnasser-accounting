@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:intl/intl.dart';
 
 import '../models/product.dart';
+import '../widgets/camera_barcode_scanner_dialog.dart';
 import '../models/category.dart';
 import '../services/database_service.dart';
 import '../widgets/formatters.dart';
@@ -1082,8 +1083,19 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
                     ModernTextField(
                       controller: _barcodeController, 
                       label: 'الباركود الأساسي', 
-                      hint: 'امسح الباركود...',
-                      suffixIcon: const Icon(Icons.qr_code_scanner, color: Colors.grey),
+                      hint: 'امسح الباركود ميديا أو بالكاميرا...',
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.camera_alt_rounded, color: Color(0xFF4F46E5)),
+                        tooltip: 'مسح الباركود بالكاميرا',
+                        onPressed: () async {
+                          final code = await CameraBarcodeScannerDialog.scan(context);
+                          if (code != null && code.isNotEmpty) {
+                            setState(() {
+                              _barcodeController.text = code;
+                            });
+                          }
+                        },
+                      ),
                     ),
                  ],
                ),

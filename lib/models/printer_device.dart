@@ -1,10 +1,15 @@
 // models/printer_device.dart
 class PrinterDevice {
   final String name;
-  final String address;
+  final String address; // IP for WiFi, MAC for BT, deviceId string for USB
   final PrinterConnectionType connectionType;
   final bool isDefault;
   final int? port;
+  // USB-specific fields
+  final int? vendorId;
+  final int? productId;
+  final int? usbDeviceId;
+  final String? manufacturerName;
 
   PrinterDevice({
     required this.name,
@@ -12,6 +17,10 @@ class PrinterDevice {
     required this.connectionType,
     this.isDefault = false,
     this.port,
+    this.vendorId,
+    this.productId,
+    this.usbDeviceId,
+    this.manufacturerName,
   });
 
   Map<String, dynamic> toJson() => {
@@ -20,6 +29,10 @@ class PrinterDevice {
         'connectionType': connectionType.toString(),
         'isDefault': isDefault,
         'port': port,
+        'vendorId': vendorId,
+        'productId': productId,
+        'usbDeviceId': usbDeviceId,
+        'manufacturerName': manufacturerName,
       };
 
   factory PrinterDevice.fromJson(Map<String, dynamic> json) => PrinterDevice(
@@ -31,6 +44,10 @@ class PrinterDevice {
         ),
         isDefault: json['isDefault'] ?? false,
         port: json['port'],
+        vendorId: json['vendorId'],
+        productId: json['productId'],
+        usbDeviceId: json['usbDeviceId'],
+        manufacturerName: json['manufacturerName'],
       );
 }
 

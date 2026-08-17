@@ -7,6 +7,7 @@ import '../database_service.dart';
 import 'firebase_sync_helper.dart';
 import 'firebase_sync_coordinator.dart';
 import 'firebase_sync_service.dart'; // 🛡️ للتحقق من حالة الإصلاح
+import 'firebase_cleanup_service.dart';
 
 /// 🛡️ SyncWatchdog - نظام المراقبة الاحتياطي
 /// 
@@ -132,6 +133,9 @@ class SyncWatchdog {
       
       // 2. مزامنة المعاملات غير المرفوعة
       await _syncPendingTransactions();
+      
+      // 3. تشغيل التنظيف التلقائي القديم (سيعمل مرة واحدة يومياً)
+      await FirebaseCleanupService().runDailyCleanup();
       
       _lastRunTime = DateTime.now();
       

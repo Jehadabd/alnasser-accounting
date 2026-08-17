@@ -55,6 +55,41 @@ class SettingsManager {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // 🖨️ إعدادات الطابعات اليدوية (Wi-Fi / Bluetooth)
+  // ═══════════════════════════════════════════════════════════════
+  static const _keyManualPrinters = 'manual_printers';
+
+  static Future<List<PrinterDevice>> getManualPrinters() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonList = prefs.getStringList(_keyManualPrinters) ?? [];
+    return jsonList.map((str) => PrinterDevice.fromJson(jsonDecode(str))).toList();
+  }
+
+  static Future<void> addManualPrinter(PrinterDevice printer) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = await getManualPrinters();
+    
+    // تجنب التكرار
+    if (current.any((p) => p.address == printer.address && p.connectionType == printer.connectionType)) {
+      return;
+    }
+    
+    current.add(printer);
+    final jsonList = current.map((p) => jsonEncode(p.toJson())).toList();
+    await prefs.setStringList(_keyManualPrinters, jsonList);
+  }
+
+  static Future<void> removeManualPrinter(String address) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = await getManualPrinters();
+    
+    current.removeWhere((p) => p.address == address);
+    
+    final jsonList = current.map((p) => jsonEncode(p.toJson())).toList();
+    await prefs.setStringList(_keyManualPrinters, jsonList);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // 🖨️ إعدادات الطابعات المتعددة
   // ═══════════════════════════════════════════════════════════════
 
@@ -92,17 +127,60 @@ class SettingsManager {
     return null;
   }
 
-  /// 📤 حفظ إعدادات تيليجرام (Bot Token و Channel ID)
+  // 📤 حفظ إعدادات تيليجرام (Bot Token و Channel ID)
   static Future<void> setTelegramSettings({
     required String botToken,
     required String channelId,
   }) async {
     final currentSettings = await getAppSettings();
-    final updatedSettings = currentSettings.copyWith(
+    final updated = currentSettings.copyWith(
       telegramBotToken: botToken,
       telegramChannelId: channelId,
     );
-    await saveAppSettings(updatedSettings);
+    await saveAppSettings(updated);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 📤 خيارات التقارير المتقدمة (تيليجرام / ديسكورد)
+  // ═══════════════════════════════════════════════════════════════
+  static const _keyReportOnlyLocalInvoices = 'report_only_local_invoices';
+  static const _keyReportDetailedDivided = 'report_detailed_divided';
+
+  /// هل يجب فلترة الإحصائيات لتشمل فقط فواتير "هذا الكمبيوتر"؟
+  static Future<bool> isReportOnlyLocalInvoices() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyReportOnlyLocalInvoices) ?? false; // الافتراضي: إرسال جميع الفواتير
+  }
+
+  static Future<void> setReportOnlyLocalInvoices(bool onlyLocal) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyReportOnlyLocalInvoices, onlyLocal);
+  }
+
+  /// هل يجب إرسال التقرير مفصلاً (مقسم) أم إجمالي مدمج؟
+  static Future<bool> isReportDetailedDivided() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyReportDetailedDivided) ?? false; // الافتراضي: إجمالي
+  }
+
+  static Future<void> setReportDetailedDivided(bool detailed) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyReportDetailedDivided, detailed);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🎮 إعدادات Discord
+  // ═══════════════════════════════════════════════════════════════
+  static const _keyDiscordWebhookUrl = 'discord_webhook_url';
+
+  static Future<String?> getDiscordWebhookUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyDiscordWebhookUrl);
+  }
+
+  static Future<void> setDiscordWebhookUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyDiscordWebhookUrl, url);
   }
 
   static List<dynamic> parseHierarchy(String? jsonString) {

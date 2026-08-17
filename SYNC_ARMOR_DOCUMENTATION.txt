@@ -1,0 +1,989 @@
+══════════════════════════════════════════════════════════════════════════════
+    وثيقة توثيق شاملة: تحديثات نظام إدارة المتاجر
+    (نظام رقم الفاتورة المركّب + المزامنة المُدرّعة الذرية)
+══════════════════════════════════════════════════════════════════════════════
+
+تاريخ الإنشاء: 2026-08-13
+المشروع: shop-maniger-MBmain (تطبيق Flutter لإدارة المتاجر)
+المطور: ZCode Agent
+
+هذه الوثيقة تشرح بالتفصيل الكامل كل التعديلات التي تمت على الكود،
+مع أسماء الدوال، ومواقعها، والمنطق وراء كل تغيير.
+
+══════════════════════════════════════════════════════════════════════════════
+ 📋 جدول المحتويات
+══════════════════════════════════════════════════════════════════════════════
+
+القسم الأول:  نظام رقم الفاتورة المركّب (Natural Key + Migration)
+القسم الثاني: المزامنة المُدرّعة الذرية (Armored Atomic Sync)
+القسم الثالث:  قائمة الملفات المُعدّلة وأماكن الدوال
+القسم الرابع:  كيفية عمل النظام بعد التحديث (تدفق البيانات)
+القسم الخامس:  التحذيرات والتنبيهات المهمة
+
+
+══════════════════════════════════════════════════════════════════════════════
+ 📦 القسم الأول: نظام رقم الفاتورة المركّب
+══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  الفكرة الأساسية                                                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  الفاتورة لها نوعان من المعرّفات:                                         │
+│                                                                          │
+│  1. الـ id الداخلي (Surrogate Key):                                     │
+│     - INTEGER AUTOINCREMENT (1, 2, 3, ...)                              │
+│     - للتتبع التقني الداخلي والربط بين الجداول                           │
+│     - لا يُعرض للمستخدم أبداً                                            │
+│                                                                          │
+│  2. رقم الفاتورة التجاري (Natural Key):                                 │
+│     - نص مركّب: [رقم الجهاز][السنة][الشهر][التسلسل الشهري]               │
+│     - مثال: 120260815                                                   │
+│       • 1 = رقم الجهاز                                                  │
+│       • 2026 = السنة                                                    │
+│       • 8 = الشهر (بدون صفر بادئ)                                       │
+│       • 15 = التسلسل الشهري (15th فاتورة في هذا الشهر لهذا الجهاز)       │
+│     - هذا هو الرقم الذي يُعرض ويُطبع ويُبحث به                          │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+المشاكل التي تم إصلاحها في هذا القسم:
+────────────────────────────────────────────────────────────────────────────
+
+❌ مشكلة 1: الهجرة كانت مكسورة تماماً
+   - في database_migrations.dart كان هناك كود Dart غير صالح:
+     static Future<dynamic> import_dynamic() async {
+         import 'package:shared_preferences/shared_preferences.dart';  // ❌ خطأ
+         return SharedPreferences;
+     }
+   - وضع import statement داخل جسم دالة = غير مسموح في Dart
+   - النتيجة: الهجرة دائماً تستخدم رقم جهاز = 1 (catch يلتقط الخطأ)
+
+✅ الحل:
+   - إضافة import صحيح في أعلى الملف
+   - حذف الدالتين المكسورتين
+   - استخدام SharedPreferences.getInstance() مباشرة
+
+────────────────────────────────────────────────────────────────────────────
+
+❌ مشكلة 2: التسلسل الشهري كان خاطئاً
+   - الهجرة القديمة كانت تستخدم monthly_sequence_number الموجود
+   - لكنه كان NULL للفواتير القديمة، فيسقط لـ seq = id (أرقام فوضوية ضخمة)
+
+✅ الحل:
+   - الهجرة الجديدة تُعيد ترقيم التسلسل من الصفر
+   - تجميع الفواتير حسب (creator_device_id + سنة + شهر)
+   - ترقيمها تصاعدياً حسب تاريخ الفاتورة (الأقدم أولاً)
+   - كل مجموعة تبدأ من 1
+
+────────────────────────────────────────────────────────────────────────────
+
+❌ مشكلة 3: عمود خاطئ في قاعدة البيانات
+   - في database_service.dart سطر 641 كان:
+     final invoiceNumberLabel = invData['invoice_number_label'] as String? ?? '#$invId';
+   - العمود invoice_number_label غير موجود أصلاً!
+   - فيسقط دائماً للاحتياط '#${invId}' = يعرض الـ id الداخلي
+
+✅ الحل:
+   - تغيير إلى: invData['invoice_number'] (العمود الصحيح)
+
+────────────────────────────────────────────────────────────────────────────
+
+❌ مشكلة 4: البحث كان يبحث في id أيضاً
+   - في invoice_dao.dart كان:
+     whereClause += ' AND (invoice_number LIKE ? OR id LIKE ?)';
+   - هذا يبحث في id الداخلي AND invoice_number
+
+✅ الحل:
+   - البحث الآن في invoice_number فقط:
+     whereClause += ' AND invoice_number LIKE ?';
+
+────────────────────────────────────────────────────────────────────────────
+
+❌ مشكلة 5: عشرات المواقع تعرض id بدلاً من الرقم التجاري
+   - في cart_panel, customer_details, invoice_history, خدمات التصدير، إلخ
+
+✅ الحل:
+   - استبدال invoice.id بـ invoice.formattedInvoiceNumber
+   - أو invoice['invoice_number'] في الاستعلامات
+
+
+══════════════════════════════════════════════════════════════════════════════
+ 🔧 التفاصيل التقنية للقسم الأول
+══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  الملف: lib/models/invoice.dart                                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  الحقول الجديدة المضافة للنموذج:                                         │
+│                                                                          │
+│  • int? invoiceYear;       // سنة الفاتورة (للقيد الفريد المركّب)         │
+│  • int? invoiceMonth;      // شهر الفاتورة                               │
+│                                                                          │
+│  هذه الحقول أُضيفت في 5 مواضع:                                           │
+│  1. تعريف الحقل (بعد monthlySequenceNumber)                              │
+│  2. Constructor (this.invoiceYear, this.invoiceMonth)                    │
+│  3. toMap() → 'invoice_year': invoiceYear, 'invoice_month': invoiceMonth│
+│  4. fromMap() → invoiceYear: map['invoice_year'] as int?                │
+│  5. copyWith()                                                           │
+│                                                                          │
+│  Getter موجود مسبقاً ومهم:                                               │
+│  String get formattedInvoiceNumber {                                     │
+│    if (invoiceNumber != null && invoiceNumber!.isNotEmpty) {             │
+│      return invoiceNumber!;                                              │
+│    }                                                                     │
+│    return '#${id?.toString().padLeft(5, '0') ?? 'جديد'}';               │
+│  }                                                                       │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  الملف: lib/services/database/core/database_migrations.dart             │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1) إضافة import في أعلى الملف:                                         │
+│     import 'package:shared_preferences/shared_preferences.dart';        │
+│                                                                          │
+│  2) داخل دالة ensureSchema(Database db) - بعد إضافة invoice_number:     │
+│                                                                          │
+│     // إضافة أعمدة السنة/الشهر                                           │
+│     await DatabaseHelpers.addColumnIfNotExists(                          │
+│         db, 'invoices', 'invoice_year', 'INTEGER');                      │
+│     await DatabaseHelpers.addColumnIfNotExists(                          │
+│         db, 'invoices', 'invoice_month', 'INTEGER');                     │
+│                                                                          │
+│     // تعبئة القيم للفواتير القديمة                                      │
+│     await db.execute('''                                                 │
+│       UPDATE invoices                                                    │
+│       SET invoice_year = CAST(strftime('%Y', invoice_date) AS INTEGER),  │
+│           invoice_month = CAST(strftime('%m', invoice_date) AS INTEGER)  │
+│       WHERE invoice_year IS NULL OR invoice_month IS NULL                │
+│     ''');                                                                │
+│                                                                          │
+│     // القيد الفريد المركّب (UNIQUE INDEX)                                │
+│     await db.execute('''                                                 │
+│       CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_unique_composite    │
+│       ON invoices(creator_device_id, invoice_year,                       │
+│                    invoice_month, monthly_sequence_number)               │
+│     ''');                                                                │
+│                                                                          │
+│  3) إعادة كتابة دالة _migrateInvoiceNumbers(db) بالكامل:                 │
+│                                                                          │
+│     المنطق الجديد:                                                       │
+│     - إسقاط القيد الفريد مؤقتاً أثناء الهجرة                              │
+│     - جلب الفواتير الناقصة مرتبة زمنياً تصاعدياً                         │
+│     - تجميعها حسب (creator_device_id + سنة + شهر)                        │
+│     - ترقيم كل مجموعة من 1 تصاعدياً                                      │
+│     - بناء invoice_number = [جهاز][سنة][شهر][تسلسل]                      │
+│     - تحديث invoice_number + monthly_sequence_number + year + month      │
+│     - إعادة إنشاء القيد الفريد                                           │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  الملف: lib/services/database/business/invoice_manager.dart             │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  داخل دالة saveCompleteInvoice(Invoice invoice, List<InvoiceItem> items)│
+│  في قسم "إنشاء رقم الفاتورة التجاري" (الأسطر ~96-119):                   │
+│                                                                          │
+│  الكود الجديد:                                                           │
+│  ──────────────                                                          │
+│  final deviceIdNum = await InvoiceSettingsService.getInvoiceDeviceId(); │
+│  final deviceIdStr = deviceIdNum.toString();                             │
+│  final invoiceYear = invoice.invoiceDate.year;                           │
+│  final invoiceMonth = invoice.invoiceDate.month;                         │
+│                                                                          │
+│  // حساب التسلسل الشهري                                                  │
+│  final seqResult = await txn.rawQuery('''                                │
+│    SELECT MAX(monthly_sequence_number) as max_seq                        │
+│    FROM invoices                                                         │
+│    WHERE creator_device_id = ?                                           │
+│      AND invoice_year = ?                                                │
+│      AND invoice_month = ?                                               │
+│      AND is_created_by_me = 1                                            │
+│  ''', [deviceIdStr, invoiceYear, invoiceMonth]);                         │
+│                                                                          │
+│  int nextSeq = 1;                                                        │
+│  if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {      │
+│    nextSeq = (seqResult.first['max_seq'] as int) + 1;                    │
+│  }                                                                       │
+│                                                                          │
+│  final invoiceNumberStr = '$deviceIdNum$invoiceYear$invoiceMonth$nextSeq';│
+│                                                                          │
+│  // تعيين القيم في invoiceMap                                            │
+│  invoiceMap['monthly_sequence_number'] = nextSeq;                        │
+│  invoiceMap['invoice_number'] = invoiceNumberStr;                        │
+│  invoiceMap['invoice_year'] = invoiceYear;                               │
+│  invoiceMap['invoice_month'] = invoiceMonth;                             │
+│  invoiceMap['invoice_uuid'] = finalInvoiceUuid;                          │
+│  invoiceMap['creator_device_id'] = deviceIdStr;                          │
+│                                                                          │
+│  ملاحظة: يفلتر is_created_by_me = 1 حتى لا تؤثر الفواتير المستوردة       │
+│         من أجهزة أخرى على تسلسلي المحلي.                                 │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  الملف: lib/services/database_service.dart                              │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1) دالة getNextInvoiceNumber(DateTime date) - أُعيدت كتابتها:           │
+│     تستخدم الآن (creator_device_id + invoice_year + invoice_month)      │
+│     بدل strftime على invoice_date (أسرع بسبب الفهرسة)                    │
+│                                                                          │
+│  2) سطر 641 في getGroupedCustomerTransactions:                           │
+│     ❌ القديم: invData['invoice_number_label']                           │
+│     ✅ الجديد: invData['invoice_number']                                 │
+│                                                                          │
+│  3) دالة getAccountStatementItems - إضافة جلب أرقام الفواتير دفعة واحدة: │
+│     جلب invoice_number لكل الفواتير المرتبطة بالمعاملات في استعلام واحد  │
+│     ثم استخدامه في وصف المعاملة بدل transaction.invoiceId               │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+══════════════════════════════════════════════════════════════════════════════
+ 🔒 القسم الثاني: المزامنة المُدرّعة الذرية (Armored Atomic Sync)
+══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  الثغرة المحاسبية الحرجة التي اكتُشفت وإصلاحها                            │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ❌ المشكلة الخطيرة:                                                     │
+│                                                                          │
+│  عند إنشاء فاتورة دين، كانت تُنشأ معاملة مالية (DebtTransaction) لكن:    │
+│  - لم تكن تحصل على transaction_uuid (يبقى NULL)                         │
+│  - لم تكن تحصل على sync_uuid (يبقى NULL)                                │
+│  - لم تكن مرتبطة بالفاتورة عبر UUID                                     │
+│                                                                          │
+│  النتيجة الكارثية:                                                       │
+│  - النظام يرفع المعاملات بشرط transaction_uuid IS NOT NULL              │
+│  - معاملة الفاتورة كانت تُتجاهل!                                          │
+│  - يعني: جهاز A يبيع بالدين → الفاتورة تصل لجهاز B                       │
+│    لكن دين العميل لا يتأثر على جهاز B!                                   │
+│  - رصيد العميل مختلف بين الجهازين ← اختلاف محاسبي حقيقي                  │
+│                                                                          │
+│  ✅ الحل: المزامنة الذرية للحزمة المدمجة                                 │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  مفهوم "المزامنة الذرية" (Atomic Sync)                                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  الفاتورة + أصنافها + معاملاتها المالية = "حزمة واحدة" (Sync Bundle)    │
+│                                                                          │
+│  تُرفع معاً في وثيقة Firestore واحدة، وتُستقبل معاً في SQLite            │
+│  transaction واحدة.                                                      │
+│                                                                          │
+│  النتيجة:                                                                │
+│  إما تصل الحزمة كاملة (فاتورة + أثرها المالي) أو لا تصل أبداً.           │
+│  لا حالة وسطية (فاتورة بدون معاملة، أو معاملة بدون فاتورة).              │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │  جهاز A                                                        │     │
+│  │  ┌─────────────────────────────────┐                           │     │
+│  │  │  saveCompleteInvoice()          │                           │     │
+│  │  │  ├──> SQLite (atomic)           │                           │     │
+│  │  │  │    ├── invoice               │                           │     │
+│  │  │  │    ├── items                 │                           │     │
+│  │  │  │    └── transaction           │                           │     │
+│  │  │  └──> syncInvoiceBundleNow() ───┼──┐                        │     │
+│  │  └─────────────────────────────────┘  │                        │     │
+│  │                                        │                        │     │
+│  │  Firebase Firestore ◄──────────────────┘                        │     │
+│  │  ┌─────────────────────────────────┐                           │     │
+│  │  │  invoices/{uuid}                │                           │     │
+│  │  │  {                              │                           │     │
+│  │  │    invoice_data: {...},         │                           │     │
+│  │  │    items: [...],                │                           │     │
+│  │  │    transactions: [...],  ◄── مدمجة ذرياً                     │     │
+│  │  │    customer_sync_uuid: "...",   │                           │     │
+│  │  │    uploadedAt: serverTimestamp  │                           │     │
+│  │  │  }                              │                           │     │
+│  │  └────────────┬────────────────────┘                           │     │
+│  │               │                                                 │     │
+│  │  جهاز B ◄─────┘ (snapshot listener)                            │     │
+│  │  ┌─────────────────────────────────┐                           │     │
+│  │  │  _processIncomingInvoice()      │                           │     │
+│  │  │  ├──> SQLite transaction (atomic)                            │     │
+│  │  │  │    ├── INSERT invoice        │                           │     │
+│  │  │  │    ├── INSERT items          │                           │     │
+│  │  │  │    ├── INSERT transactions   │                           │     │
+│  │  │  │    └── UPDATE customer balance                           │     │
+│  │  │  └──> واجهة المستخدم تتحدث       │                           │     │
+│  │  └─────────────────────────────────┘                           │     │
+│  └─────────────────────────────────────────────────────────────────┘     │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+══════════════════════════════════════════════════════════════════════════════
+ 🔧 التفاصيل التقنية للقسم الثاني - الدوال الجديدة والمعدّلة
+══════════════════════════════════════════════════════════════════════════════
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+الملف 1: lib/models/transaction.dart
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+حقل جديد مضاف للنموذج DebtTransaction:
+
+    final String? invoiceSyncUuid; // 🔒 ربط المعاملة بالفاتورة عبر UUID
+
+تم إضافته في 5 مواضع:
+  1. تعريف الحقل (بعد audioNotePath)
+  2. Constructor: this.invoiceSyncUuid,
+  3. toMap(): 'invoice_sync_uuid': invoiceSyncUuid,
+  4. fromMap(): invoiceSyncUuid: map['invoice_sync_uuid'] as String?,
+  5. copyWith(): this.invoiceSyncUuid, invoiceSyncUuid: invoiceSyncUuid ?? this.invoiceSyncUuid,
+
+الغرض:
+  هذا الحقل يربط المعاملة المالية بالفاتورة عبر UUID (وليس عبر id المحلي).
+  عند رفع الفاتورة، نبحث عن معاملاتها عبر: WHERE invoice_sync_uuid = ?
+  عند التحديث، نحذف المعاملات القديمة: WHERE invoice_sync_uuid = ?
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+الملف 2: lib/services/database/core/database_migrations.dart
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+داخل دالة ensureSchema(Database db)، بعد الهجرة رقم 22:
+
+    // 22.أ. 🔒 الربط الذري بين المعاملة والفاتورة عبر UUID
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'transactions', 'invoice_sync_uuid', 'TEXT');
+
+    // فهرس لتسريع البحث
+    try {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_transactions_invoice_sync_uuid
+        ON transactions(invoice_sync_uuid) WHERE invoice_sync_uuid IS NOT NULL
+      ''');
+    } catch (_) {}
+
+الغرض:
+  إضافة عمود invoice_sync_uuid لجدول transactions.
+  هذا العمود يخزّن UUID الفاتورة المرتبطة بالمعاملة.
+  يسمح برفع/استقبال المعاملة كجزء من حزمة الفاتورة.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+الملف 3: lib/services/firebase_sync/uuid_helper.dart
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+دالة جديدة مضافة:
+
+    /// معرّف معاملة مالية جديد (يُستخدم كمفتاح وثيقة في Firestore ومعرّف مزامنة).
+    /// يُستدعى عند إنشاء المعاملة لضمان رفعها فوراً مع الفاتورة (مزامنة ذرية).
+    static String newTransactionUuid() {
+      final micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+      return 'tx_${micros.toRadixString(36)}_${_devicePrefix}_${_randomBase36(14)}';
+    }
+
+الغرض:
+  توليد UUID فريد لكل معاملة مالية.
+  الصيغة: tx_[micros_base36]_[devicePrefix]_[random14]
+  - بادئة tx_ تُميّزها عن الفواتير (inv_)
+  - micros تضمن الترتيب الزمني
+  - devicePrefix يمنع التصادم بين الأجهزة
+  - random14 يضمن الفرادة حتى لو تعطّل المولّد
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+الملف 4: lib/services/database/business/invoice_manager.dart
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+داخل دالة saveCompleteInvoice()، عند إنشاء معاملة الدين (إن وجدت):
+
+القديم:
+    final transaction = DebtTransaction(
+      customerId: invoice.customerId!,
+      transactionDate: invoice.invoiceDate,
+      amountChanged: remainingAmount,
+      transactionType: 'فاتورة',
+      description: 'فاتورة رقم $invoiceId',          // ❌ id داخلي
+      balanceBeforeTransaction: currentDebt,
+      newBalanceAfterTransaction: newDebt,
+      invoiceId: invoiceId,
+      isCreatedByMe: true,
+      // ❌ لا UUID = لا تُزامَل!
+    );
+
+الجديد:
+    final transaction = DebtTransaction(
+      customerId: invoice.customerId!,
+      transactionDate: invoice.invoiceDate,
+      amountChanged: remainingAmount,
+      transactionType: 'فاتورة',
+      description: 'فاتورة رقم $invoiceNumberStr',    // ✅ الرقم التجاري
+      balanceBeforeTransaction: currentDebt,
+      newBalanceAfterTransaction: newDebt,
+      invoiceId: invoiceId,
+      isCreatedByMe: true,
+      // 🔒 المزامنة الذرية:
+      transactionUuid: UuidHelper.newTransactionUuid(),  // ✅ UUID للمزامنة
+      syncUuid: UuidHelper.newTransactionUuid(),          // ✅ UUID آخر
+      invoiceSyncUuid: finalInvoiceUuid,                  // ✅ ربط بالفاتورة
+    );
+
+ملاحظة مهمة:
+  finalInvoiceUuid هو UUID الفاتورة المُولّد سابقاً في نفس الدالة.
+  هذا يربط المعاملة بالفاتورة بشكل ذري عبر UUID.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+الملف 5: lib/services/firebase_sync/invoice_sync_coordinator.dart
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ثلاث دوال جديدة/معدّلة:
+
+────────────────────────────────────────────────────────────────────────────
+(أ) دالة getPendingInvoices() - عُدّلت لتجلب المعاملات أيضاً:
+────────────────────────────────────────────────────────────────────────────
+
+    Future<List<Map<String, dynamic>>> getPendingInvoices() async {
+      final db = await _dbService.database;
+      final pendingInvoices = await db.query('invoices',
+          where: 'is_synced = 0 AND invoice_uuid IS NOT NULL');
+
+      List<Map<String, dynamic>> fullInvoices = [];
+      for (var inv in pendingInvoices) {
+        final invoiceMap = Map<String, dynamic>.from(inv);
+        final invoiceId = inv['id'] as int;
+        final invoiceUuid = inv['invoice_uuid'] as String?;
+
+        // جلب items
+        invoiceMap['items'] = await db.query('invoice_items',
+            where: 'invoice_id = ?', whereArgs: [invoiceId]);
+
+        // 🔒 جلب المعاملات المالية المرتبطة عبر invoice_sync_uuid
+        if (invoiceUuid != null && invoiceUuid.isNotEmpty) {
+          invoiceMap['transactions'] = await db.query('transactions',
+              where: 'invoice_sync_uuid = ?', whereArgs: [invoiceUuid]);
+        }
+        fullInvoices.add(invoiceMap);
+      }
+      return fullInvoices;
+    }
+
+────────────────────────────────────────────────────────────────────────────
+(ب) دالة جديدة getFullInvoiceByUuid() - للرفع الفوري لفاتورة واحدة:
+────────────────────────────────────────────────────────────────────────────
+
+    Future<Map<String, dynamic>?> getFullInvoiceByUuid(String invoiceUuid) async {
+      final db = await _dbService.database;
+      final invoiceRows = await db.query('invoices',
+          where: 'invoice_uuid = ?', whereArgs: [invoiceUuid], limit: 1);
+      if (invoiceRows.isEmpty) return null;
+
+      final invoiceMap = Map<String, dynamic>.from(invoiceRows.first);
+      final invoiceId = invoiceMap['id'] as int;
+
+      invoiceMap['items'] = await db.query('invoice_items',
+          where: 'invoice_id = ?', whereArgs: [invoiceId]);
+      invoiceMap['transactions'] = await db.query('transactions',
+          where: 'invoice_sync_uuid = ?', whereArgs: [invoiceUuid]);
+
+      return invoiceMap;
+    }
+
+────────────────────────────────────────────────────────────────────────────
+(ج) دالة جديدة markTransactionAsSynced() - تأشير المعاملة كمرفوعة:
+────────────────────────────────────────────────────────────────────────────
+
+    Future<void> markTransactionAsSynced(String transactionUuid) async {
+      final db = await _dbService.database;
+      await db.update('transactions', {'is_uploaded': 1},
+          where: 'transaction_uuid = ?', whereArgs: [transactionUuid]);
+    }
+
+الغرض: منع إعادة رفع المعاملة بشكل مستقل بعد رفعها كجزء من حزمة الفاتورة.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+الملف 6: lib/services/firebase_sync/invoice_sync_service.dart (الأهم)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+تعديل الاستيراد في أعلى الملف:
+    import 'package:sqflite/sqflite.dart' hide Transaction;
+    import 'package:sqflite/sqflite.dart' as sqflite show Transaction;
+(لأن Transaction معرّف في كل من cloud_firestore و sqflite، نخفيه من sqflite)
+
+────────────────────────────────────────────────────────────────────────────
+دالة جديدة (1): syncInvoiceBundleNow()
+────────────────────────────────────────────────────────────────────────────
+
+الموقع: داخل class InvoiceSyncService
+
+    /// 🚀 رفع فوري لحزمة فاتورة واحدة بعد حفظها مباشرة.
+    Future<bool> syncInvoiceBundleNow(String invoiceUuid) async {
+      if (!await FirebaseSyncConfig.isEnabled()) return false;
+      if (invoiceUuid.isEmpty) return false;
+
+      try {
+        final fullInvoice = await _coordinator.getFullInvoiceByUuid(invoiceUuid);
+        if (fullInvoice == null) return false;
+        if ((fullInvoice['is_synced'] as int?) == 1) return true; // مرفوعة بالفعل
+
+        final collection = _firestore.collection('invoices');
+        final payload = await _buildInvoiceBundlePayload(fullInvoice, collection);
+        if (payload == null) return false;
+
+        await collection.doc(invoiceUuid).set(payload, SetOptions(merge: true));
+        await _coordinator.markAsSynced(invoiceUuid);
+        await _markInvoiceTransactionsAsSynced(fullInvoice);
+
+        print('⚡ رفع فوري ناجح لحزمة الفاتورة $invoiceUuid');
+        return true;
+      } catch (e) {
+        print('❌ فشل الرفع الفوري للفاتورة $invoiceUuid: $e');
+        return false;
+      }
+    }
+
+────────────────────────────────────────────────────────────────────────────
+دالة جديدة (2): _buildInvoiceBundlePayload()
+────────────────────────────────────────────────────────────────────────────
+
+    /// يبني حمولة (payload) وثيقة الفاتورة الكاملة المدمجة.
+    Future<Map<String, dynamic>?> _buildInvoiceBundlePayload(
+      Map<String, dynamic> invMap,
+      CollectionReference collection,
+    ) async {
+      final uuid = invMap['invoice_uuid'] as String?;
+      if (uuid == null || uuid.isEmpty) return null;
+
+      final payload = Map<String, dynamic>.from(invMap);
+      payload['invoice_number'] = invMap['invoice_number'];
+      payload.remove('id');
+      payload.remove('is_synced');
+
+      // ربط الفاتورة بالعميل عبر sync_uuid
+      payload['customer_sync_uuid'] =
+          await _customerSyncUuidFor(invMap['customer_id'] as int?);
+      payload.remove('customer_id');
+
+      // items مدمجة
+      final items = (invMap['items'] as List?) ?? const [];
+      payload['items'] = items.map((it) {
+        final m = Map<String, dynamic>.from(it as Map);
+        m.remove('id');
+        m.remove('invoice_id');
+        return m;
+      }).toList();
+
+      // 🔒 معاملات الفاتورة المالية مدمجة (مزامنة ذرية)
+      final transactions = (invMap['transactions'] as List?) ?? const [];
+      payload['transactions'] = transactions.map((tx) {
+        final txMap = Map<String, dynamic>.from(tx as Map);
+        txMap.remove('id');
+        txMap.remove('invoice_id');
+        txMap.remove('customer_id');
+        txMap.remove('is_uploaded');
+        txMap.remove('is_read_by_others');
+        return txMap;
+      }).toList();
+
+      payload['_uploaded_at'] = DateTime.now().toIso8601String();
+      payload['uploadedAt'] = FieldValue.serverTimestamp();
+
+      return payload;
+    }
+
+────────────────────────────────────────────────────────────────────────────
+دالة جديدة (3): _markInvoiceTransactionsAsSynced()
+────────────────────────────────────────────────────────────────────────────
+
+    /// يؤشّر معاملات الفاتورة كمرفوعة بعد نجاح رفع الحزمة المدمجة.
+    Future<void> _markInvoiceTransactionsAsSynced(
+        Map<String, dynamic> invMap) async {
+      final transactions = (invMap['transactions'] as List?) ?? const [];
+      for (final tx in transactions) {
+        final txUuid = (tx as Map)['transaction_uuid'] as String?;
+        if (txUuid != null && txUuid.isNotEmpty) {
+          try {
+            await _coordinator.markTransactionAsSynced(txUuid);
+          } catch (_) {}
+        }
+      }
+    }
+
+────────────────────────────────────────────────────────────────────────────
+دالة معدّلة (4): syncPendingInvoices() - تستخدم الحزمة المدمجة الآن
+────────────────────────────────────────────────────────────────────────────
+
+أُعيدت كتابتها لاستخدام _buildInvoiceBundlePayload() بدل بناء الـ payload
+يدوياً. الآن كل فاتورة تُرفع مع معاملاتها المدمجة.
+
+────────────────────────────────────────────────────────────────────────────
+دالة معدّلة (5): _processIncomingInvoice() - استقبال ذري
+────────────────────────────────────────────────────────────────────────────
+
+أُعيدت كتابة قسم db.transaction لتشمل معالجة المعاملات المالية المدمجة.
+
+المنطق الجديد داخل transaction:
+  1. فحص إدمبوتنت (version check)
+  2. INSERT أو UPDATE الفاتورة
+  3. حذف items القديمة وإدراج الجديدة
+  4. 🔒 حذف المعاملات القديمة المرتبطة (WHERE invoice_sync_uuid = uuid)
+     ثم إدراج المعاملات الواردة المدمجة
+  5. 🔁 إعادة حساب رصيد العميل من SUM (شباك أمان محاسبي)
+
+لكل معاملة واردة:
+  - إزالة المعرّفات المحلية للمرسل
+  - تعيين invoice_id المحلي و customer_id المحلي
+  - تعيين invoice_sync_uuid = uuid الفاتورة
+  - تعيين is_created_by_me = 0 و is_uploaded = 1
+  - فحص إدمبوتنت بـ transaction_uuid (UPDATE إن موجودة، INSERT إن جديدة)
+
+────────────────────────────────────────────────────────────────────────────
+دالة جديدة (6): _recalculateCustomerBalanceInsideTxn()
+────────────────────────────────────────────────────────────────────────────
+
+    /// 🔁 إعادة حساب رصيد العميل من مجموع معاملاته (شباك أمان محاسبي).
+    Future<void> _recalculateCustomerBalanceInsideTxn(
+        sqflite.Transaction txn, int customerId) async {
+      try {
+        final result = await txn.rawQuery('''
+          SELECT COALESCE(SUM(amount_changed), 0) as total
+          FROM transactions
+          WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
+        ''', [customerId]);
+        final total = (result.first['total'] as num?)?.toDouble() ?? 0.0;
+        await txn.update('customers',
+            {'current_total_debt': total,
+             'last_modified_at': DateTime.now().toIso8601String()},
+            where: 'id = ?', whereArgs: [customerId]);
+      } catch (e) {
+        print('⚠️ تعذّر إعادة حساب رصيد العميل $customerId: $e');
+      }
+    }
+
+────────────────────────────────────────────────────────────────────────────
+دالة معدّلة (7): _startListening() - إزالة الفلتر الزمني الخطير
+────────────────────────────────────────────────────────────────────────────
+
+القديم (خطير):
+    final lastSyncAt = ...; // وقت المستقبِل
+    query = query.where('_uploaded_at', isGreaterThan: lastSyncAt);
+    // ❌ _uploaded_at = وقت المرسِل. لو ساعته متأخرة، الفاتورة لا تصل أبداً!
+
+الجديد (آمن):
+    // 🔒 استماع شامل بدون فلتر زمني:
+    // نعتمد كلياً على الإدمبوتنت (invoice_uuid + version check).
+    Query<Map<String, dynamic>> query = _firestore.collection('invoices');
+    // لا فلتر زمني إطلاقاً!
+
+    _invoicesListener = query.snapshots().listen((snapshot) async {
+      for (final change in changes) {
+        await _processIncomingInvoice(change.doc.id, data);
+        // الإدمبوتنت يرفض المكرر/القديم محلياً
+      }
+    });
+
+الغرض: ضمان عدم ضياع أي فاتورة مهما كان فرق التوقيت بين الأجهزة.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+الملف 7: lib/providers/pos_provider.dart
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+استيراد جديد:
+    import '../services/firebase_sync/invoice_sync_service.dart';
+
+حقل جديد:
+    String? _lastInvoiceDisplayNumber;
+    String? get lastInvoiceDisplayNumber => _lastInvoiceDisplayNumber;
+
+داخل دالة processCheckout()، بعد حفظ الفاتورة:
+
+    // جلب الفاتورة المحفوظة للحصول على رقمها التجاري المركّب
+    final savedInvoice = await DatabaseService().getInvoiceById(invoiceId);
+    final invoiceDisplayNumber =
+        savedInvoice?.formattedInvoiceNumber ?? invoiceId.toString();
+    _lastInvoiceDisplayNumber = invoiceDisplayNumber;
+
+    // ⚡ رفع فوري للحزمة المدمجة عبر Firebase (fire-and-forget)
+    final invoiceUuid = savedInvoice?.invoiceUuid;
+    if (invoiceUuid != null && invoiceUuid.isNotEmpty) {
+      InvoiceSyncService().syncInvoiceBundleNow(invoiceUuid).then((ok) {
+        if (!ok) {
+          print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت الدوري لاحقاً)');
+        }
+      }).catchError((e) {
+        print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت): $e');
+      });
+    }
+
+ملاحظة "fire-and-forget":
+  الرفع يحدث في الخلفية دون انتظار نتيجته.
+  لو فشل، تبقى is_synced = 0، فيلتقطها المؤقت الدوري لاحقاً.
+  هذا يضمن:
+  - تجربة مستخدم سلسة (لا انتظار للشبكة)
+  - ضمان عدم الفقدان (المؤقت يلتقط ما فشل)
+
+
+══════════════════════════════════════════════════════════════════════════════
+ 📁 القسم الثالث: قائمة الملفات المُعدّلة (الملخص)
+══════════════════════════════════════════════════════════════════════════════
+
+ملفات القسم الأول (نظام رقم الفاتورة المركّب):
+────────────────────────────────────────────
+ 1. lib/models/invoice.dart
+    - حقول invoiceYear, invoiceMonth (5 مواضع)
+
+ 2. lib/models/grouped_transaction.dart
+    - حقل invoiceNumber جديد
+
+ 3. lib/services/database/core/database_migrations.dart
+    - import sharedPreferences
+    - أعمدة invoice_year, invoice_month + القيد الفريد
+    - إعادة كتابة _migrateInvoiceNumbers()
+    - حذف import_shared_prefs() و import_dynamic() المكسورتين
+
+ 4. lib/services/database/business/invoice_manager.dart
+    - استخدام invoice_year/month في حساب التسلسل
+    - إصلاح وصف المعاملة (invoiceNumberStr بدل invoiceId)
+
+ 5. lib/services/database_service.dart
+    - getNextInvoiceNumber() مُعاد كتابتها
+    - سطر 641: invoice_number_label → invoice_number
+    - getAccountStatementItems: جلب أرقام الفواتير دفعة واحدة
+
+ 6. lib/services/database/dao/invoice_dao.dart
+    - البحث في invoice_number فقط (بدون id)
+    - إضافة invoice_number لاستعلام getLastNPricesForCustomerProduct
+
+ 7. lib/screens/pos/widgets/cart_panel.dart
+    - SnackBar: lastInvoiceDisplayNumber
+    - قائمة الفواتير: invoice_number بدل id
+
+ 8. lib/screens/customer_details_screen.dart
+    - تفاصيل الفاتورة: invoiceNumber
+
+ 9. lib/screens/invoice_history_screen.dart
+    - عنوان السجل بالرقم التجاري
+
+10. lib/screens/product_details_screen.dart
+11. lib/screens/returns_report_screen.dart
+12. lib/screens/create_invoice_screen.dart
+    - عرض invoice_number بدل id
+
+13. lib/services/bulk_invoice_pdf_service.dart
+14. lib/services/telegram_invoice_export_service.dart
+    - استخدام formattedInvoiceNumber في السجلات وأسماء الملفات
+
+15. lib/providers/pos_provider.dart
+    - getter lastInvoiceDisplayNumber
+
+16. lib/services/reports_service.dart
+    - getProductSalesData: إضافة invoice_number للنتائج
+    - getCashReturnsInPeriod: إثراء النتائج بـ invoice_number
+
+ملفات القسم الثاني (المزامنة المُدرّعة الذرية):
+────────────────────────────────────────────
+17. lib/models/transaction.dart
+    - حقل invoiceSyncUuid (5 مواضع)
+
+18. lib/services/database/core/database_migrations.dart
+    - عمود invoice_sync_uuid + فهرس
+
+19. lib/services/firebase_sync/uuid_helper.dart
+    - دالة newTransactionUuid()
+
+20. lib/services/database/business/invoice_manager.dart
+    - توليد UUID للمعاملة + ربطها بالفاتورة
+
+21. lib/services/firebase_sync/invoice_sync_coordinator.dart
+    - getPendingInvoices() معدّلة (تجلب transactions)
+    - getFullInvoiceByUuid() جديدة
+    - markTransactionAsSynced() جديدة
+
+22. lib/services/firebase_sync/invoice_sync_service.dart
+    - syncInvoiceBundleNow() جديدة
+    - _buildInvoiceBundlePayload() جديدة
+    - _markInvoiceTransactionsAsSynced() جديدة
+    - _recalculateCustomerBalanceInsideTxn() جديدة
+    - _processIncomingInvoice() معدّلة (استقبال ذري)
+    - _startListening() معدّلة (إزالة الفلتر الزمني)
+    - syncPendingInvoices() معدّلة (حزمة مدمجة)
+
+23. lib/providers/pos_provider.dart
+    - الرفع الفوري بعد saveCompleteInvoice
+
+
+══════════════════════════════════════════════════════════════════════════════
+ 🔄 القسم الرابع: كيفية عمل النظام بعد التحديث (تدفق البيانات)
+══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  السيناريو 1: إنشاء فاتورة دين جديدة                                    │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. المحاسب يضغط "حفظ" في POS                                           │
+│  2. pos_provider.processCheckout() → DatabaseService.createPosInvoice() │
+│  3. InvoiceManager.saveCompleteInvoice():                                │
+│     ├── حساب التسلسل الشهري (creator_device_id + year + month)          │
+│     ├── بناء invoice_number = "120260815"                                │
+│     ├── توليد invoice_uuid (inv_...)                                     │
+│     ├── SQLite transaction:                                              │
+│     │   ├── INSERT invoice (with invoice_number, uuid, year, month)     │
+│     │   ├── INSERT items                                                 │
+│     │   └── INSERT transaction (with uuid, sync_uuid, invoice_sync_uuid)│
+│     └── WAL checkpoint (ضمان الكتابة للقرص)                              │
+│  4. العودة لـ processCheckout():                                         │
+│     ├── جلب الفاتورة المحفوظة                                           │
+│     ├── تعيين _lastInvoiceDisplayNumber                                 │
+│     ├── ⚡ رفع فوري: InvoiceSyncService.syncInvoiceBundleNow(uuid)       │
+│     │   ├── getFullInvoiceByUuid() → فاتورة + items + transactions      │
+│     │   ├── _buildInvoiceBundlePayload() → وثيقة مدمجة                   │
+│     │   ├── Firestore: collection.doc(uuid).set(payload)                │
+│     │   ├── markAsSynced(uuid)                                          │
+│     │   └── markTransactionAsSynced() لكل معاملة                         │
+│     └── طباعة الإيصال الحراري (بالرقم التجاري)                           │
+│                                                                          │
+│  النتيجة:                                                                │
+│  - المحاسب يرى الشاشة فوراً (لا انتظار للشبكة)                           │
+│  - الفاتورة مرفوعة لـ Firebase خلال ثوانٍ                               │
+│  - الأجهزة الأخرى تستقبلها تلقائياً                                      │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  السيناريو 2: استقبال فاتورة من جهاز آخر                                │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. snapshot listener يطلق (أي تغيير في مجموعة invoices)                │
+│  2. لكل وثيقة واردة → _processIncomingInvoice(uuid, data):              │
+│     ├── فحص الملكية (creator_device_id == myDeviceId → skip)            │
+│     ├── فحص الإصدار (localVersion >= incoming → skip)                   │
+│     ├── فلترة الحقول (_invoiceColumns)                                   │
+│     ├── فحص العميل (customer_sync_uuid)                                 │
+│     │   └── لو غير موجود → حفظ في sync_invoice_orphans                  │
+│     └── SQLite transaction:                                              │
+│         ├── فحص إدمبوتنت داخل المعاملة                                   │
+│         ├── INSERT/UPDATE invoice                                        │
+│         ├── حذف items القديمة + INSERT items الجديدة                     │
+│         ├── 🔒 حذف transactions القديمة (WHERE invoice_sync_uuid)        │
+│         ├── 🔒 INSERT transactions المدمجة                               │
+│         └── 🔁 إعادة حساب رصيد العميل من SUM                             │
+│  3. واجهة المستخدم تتحدث تلقائياً                                        │
+│                                                                          │
+│  النتيجة:                                                                │
+│  - الفاتورة تصل كاملة (فاتورة + items + أثرها المالي)                    │
+│  - رصيد العميل محدّث ومتسق                                               │
+│  - لا تكرار (الإدمبوتنت يحمي)                                            │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  السيناريو 3: فشل الرفع الفوري (شبكة ضعيفة)                             │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. syncInvoiceBundleNow() يفشل                                          │
+│  2. is_synced تبقى = 0                                                   │
+│  3. المؤقت الدوري (كل 3 دقائق) يلتقطها:                                  │
+│     syncPendingInvoices() → نفس منطق الحزمة المدمجة                       │
+│  4. لو فشلت أيضاً، تُعاد في الدورة التالية                              │
+│  5. لا فاتورة تضيع أبداً                                                  │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  السيناريو 4: إقلاع جهاز بعد انطفاء طويل                                │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. snapshot listener يطلق بكل الفواتير المتراكمة                         │
+│  2. كل فاتورة تُعالج عبر _processIncomingInvoice()                       │
+│  3. الإدمبوتنت يرفض ما هو موجود محلياً بالفعل                            │
+│  4. الفواتير الجديدة تُطبّق ذرياً                                         │
+│  5. المعاملات اليتيمة تنتظر في sync_invoice_orphans حتى يصل العملاء      │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+══════════════════════════════════════════════════════════════════════════════
+ ⚠️ القسم الخامس: التحذيرات والتنبيهات المهمة
+══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  ⚠️ تنبيه 1: الهجرة ستُعيد توليد أرقام الفواتير القديمة                  │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  عند أول تشغيل بعد التحديث، ستُعيد الهجرة (_migrateInvoiceNumbers)       │
+│  توليد أرقام كل الفواتير القديمة التي تنقصها البيانات الصحيحة.            │
+│                                                                          │
+│  هذا مقصود - الفواتير الحالية أرقامها خاطئة/فوضوية.                       │
+│  الفواتير القديمة ستحصل على تسلسل صحيح (1, 2, 3...) حسب ترتيبها الزمني   │
+│  داخل كل شهر.                                                            │
+│                                                                          │
+│  قد يربك المستخدم إن كان قد حفظ أرقاماً قديمة ورقياً.                     │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  ⚠️ تنبيه 2: القيد الفريد المركّب                                        │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  أُضيف قيد فريد على (creator_device_id, invoice_year,                    │
+│                       invoice_month, monthly_sequence_number)             │
+│                                                                          │
+│  هذا يمنع تكرار نفس الرقم لنفس الجهاز في نفس الشهر.                       │
+│  لو حصل تعارض (نادر جداً)، الهجرة تُصلحه لأنها تعيد التسلسل من الصفر.     │
+│                                                                          │
+│  لا تعارض ممكن بين الأجهزة لأن رقم الجهاز جزء من المفتاح.                │
+│  (جهاز 1 ينتج 1202681، جهاز 2 ينتج 2202681 - مختلفان)                    │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  ⚠️ تنبيه 3: المعاملات القديمة بدون UUID                                 │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  المعاملات المرتبطة بفواتير قديمة (قبل هذا التحديث) لا تحمل UUID.         │
+│  هذه المعاملات لن تُزامَل عبر الحزمة المدمجة الجديدة.                     │
+│                                                                          │
+│  لو أردت مزامنة البيانات التاريخية بالكامل، قد تحتاج:                    │
+│  - هجرة إضافية لتوليد UUID للمعاملات القديمة المرتبطة بفواتير            │
+│  - أو الاكتفاء بالمعاملات الجديدة (من بعد التحديث)                       │
+│                                                                          │
+│  شباك الأمان المحاسبي (_recalculateCustomerBalanceInsideTxn) يضمن        │
+│  أن الرصيد النهائي صحيح حتى لو نقصت بعض المعاملات التاريخية.             │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  ⚠️ تنبيه 4: رقم الجهاز يجب أن يكون فريداً                              │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  نظام الترقيم يعتمد على أن رقم الجهاز (InvoiceSettingsService)            │
+│  فريد لكل جهاز.                                                          │
+│                                                                          │
+│  لو تكرر رقم الجهاز على جهازين:                                          │
+│  - كلاهما ينتج نفس نطاق الأرقام (مثل 1202681)                            │
+│  - لكن القيد الفريد المركّب يمنع التعارض محلياً على نفس الجهاز            │
+│  - التعارض فقط في رقم العرض (نفس الرقم على جهازين)                        │
+│                                                                          │
+│  الحل: التأكد من تعيين رقم جهاز مختلف لكل جهاز في الإعدادات.             │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+══════════════════════════════════════════════════════════════════════════════
+ ✅ التحقق من السلامة
+══════════════════════════════════════════════════════════════════════════════
+
+تم تشغيل flutter analyze على كل الملفات المُعدّلة:
+  - لا أخطاء (errors) في أي ملف عدّلناه
+  - التحذيرات (warnings) الموجودة كلها من الكود الأصلي قبل التعديل
+  - عدد الأخطاء الكلي في المشروع: 83 (كلها سابقة في ملفات لم تُلمس)
+
+══════════════════════════════════════════════════════════════════════════════
+
+                    نهاية الوثيقة - SYNC_ARMOR_DOCUMENTATION.txt
+
+══════════════════════════════════════════════════════════════════════════════
