@@ -259,78 +259,150 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     switch (status) {
       case FirebaseSyncStatus.online:
         statusColor = Colors.green;
-        statusText = 'متصل ويستمع للتغييرات';
-        statusIcon = Icons.cloud_done;
+        statusText = 'متصل ويستمع للتغييرات اللحظية';
+        statusIcon = Icons.cloud_done_rounded;
         break;
       case FirebaseSyncStatus.syncing:
         statusColor = Colors.blue;
-        statusText = 'جاري المزامنة...';
-        statusIcon = Icons.sync;
+        statusText = 'جاري المزامنة مع السحابة...';
+        statusIcon = Icons.sync_rounded;
         break;
       case FirebaseSyncStatus.offline:
         statusColor = Colors.orange;
-        statusText = 'غير متصل - يعمل محلياً';
-        statusIcon = Icons.cloud_off;
+        statusText = 'غير متصل - يعمل محلياً فقط';
+        statusIcon = Icons.cloud_off_rounded;
         break;
       case FirebaseSyncStatus.error:
         statusColor = Colors.red;
-        statusText = 'خطأ في المزامنة';
-        statusIcon = Icons.error;
+        statusText = 'خطأ في الاتصال بالمزامنة';
+        statusIcon = Icons.error_rounded;
         break;
       case FirebaseSyncStatus.disabled:
         statusColor = Colors.grey;
-        statusText = 'المزامنة معطلة';
-        statusIcon = Icons.pause_circle;
+        statusText = 'المزامنة السحابية معطلة';
+        statusIcon = Icons.pause_circle_rounded;
         break;
       default:
-        statusColor = Colors.grey;
-        statusText = 'غير مُعد';
-        statusIcon = Icons.settings;
+        statusColor = Colors.blueGrey;
+        statusText = 'غير مُعد بعد';
+        statusIcon = Icons.settings_rounded;
     }
     
-    return Card(
-      child: ListTile(
-        leading: Icon(statusIcon, color: statusColor, size: 32),
-        title: Text(
-          'حالة المزامنة',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text(statusText),
-        trailing: Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(
-            color: statusColor,
-            shape: BoxShape.circle,
+    return Container(
+      decoration: BoxDecoration(
+        color: statusColor.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: statusColor.withOpacity(0.2)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(statusIcon, color: statusColor, size: 26),
           ),
-        ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'حالة المزامنة السحابية',
+                  style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  statusText,
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: statusColor),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: statusColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _isEnabled ? 'نشط' : 'معطل',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: statusColor),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildSettingsCard() {
-    return Card(
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: Colors.grey.withOpacity(0.15)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'إعدادات المزامنة',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.deepOrange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.sync_rounded, color: Colors.deepOrange, size: 20),
+                ),
+                const SizedBox(width: 10),
+                const Text(
+                  'إعدادات المزامنة الفورية',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
-            const Divider(),
-            
-            // تفعيل/تعطيل المزامنة
+            const Divider(height: 24),
             SwitchListTile(
-              title: const Text('تفعيل المزامنة الفورية'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'تفعيل المزامنة التلقائية الحية',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
               subtitle: Text(
                 _isEnabled 
-                    ? 'المزامنة مفعلة - البيانات تتزامن تلقائياً'
-                    : 'المزامنة معطلة',
+                    ? 'المزامنة الفورية مفعلة - تتزامن الديون والفواتير تلقائياً عبر الأجهزة'
+                    : 'المزامنة معطلة - يعمل التطبيق في الوضع المحلي فقط',
+                style: const TextStyle(fontSize: 12),
               ),
               value: _isEnabled,
               onChanged: (value) => _toggleSync(value),
@@ -343,21 +415,46 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
   }
 
   Widget _buildStatsCard() {
-    return Card(
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: Colors.grey.withOpacity(0.15)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'إحصائيات المزامنة',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.analytics_rounded, color: Colors.blue, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text(
+                      'إحصائيات المزامنة السحابية',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
                 // 🔧 مؤشر تحميل الإحصائيات مع النسبة
                 if (_isLoadingStats)
@@ -374,8 +471,8 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                       ),
                       const SizedBox(width: 8),
                       SizedBox(
-                        width: 20,
-                        height: 20,
+                        width: 18,
+                        height: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           value: _loadingProgress > 0 ? _loadingProgress : null,
@@ -387,7 +484,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                   ),
               ],
             ),
-            const Divider(),
+            const Divider(height: 24),
             
             // 🔧 عرض حالة التحميل أو الإحصائيات
             if (_isLoadingStats && _syncStats == null)
@@ -430,7 +527,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Row(
                   children: [
-                    const Icon(Icons.warning, color: Colors.orange, size: 20),
+                    const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -590,56 +687,74 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
       width: double.infinity,
       child: Column(
         children: [
-          if (isPrimary)
-            ElevatedButton.icon(
-              onPressed: onPressed,
-              icon: isLoading 
-                  ? SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        value: progress,
-                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+          SizedBox(
+            height: 48,
+            width: double.infinity,
+            child: isPrimary
+                ? ElevatedButton.icon(
+                    onPressed: onPressed,
+                    icon: isLoading 
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              value: progress,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          )
+                        : Icon(icon, size: 20),
+                    label: Text(
+                      isLoading && progress != null 
+                          ? '$label (${(progress * 100).toInt()}%)'
+                          : label,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: color,
+                      foregroundColor: Colors.white,
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                    )
-                  : Icon(icon),
-              label: Text(isLoading && progress != null 
-                  ? '$label (${(progress * 100).toInt()}%)'
-                  : label),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: color,
-                foregroundColor: Colors.white,
-              ),
-            )
-          else
-            OutlinedButton.icon(
-              onPressed: onPressed,
-              icon: isLoading 
-                  ? SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        value: progress,
-                        valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  )
+                : OutlinedButton.icon(
+                    onPressed: onPressed,
+                    icon: isLoading 
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              value: progress,
+                              valueColor: AlwaysStoppedAnimation<Color>(color),
+                            ),
+                          )
+                        : Icon(icon, size: 20),
+                    label: Text(
+                      isLoading && progress != null 
+                          ? '$label (${(progress * 100).toInt()}%)'
+                          : label,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: color,
+                      side: BorderSide(color: color.withOpacity(0.4), width: 1.2),
+                      backgroundColor: color.withOpacity(0.04),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                    )
-                  : Icon(icon),
-              label: Text(isLoading && progress != null 
-                  ? '$label (${(progress * 100).toInt()}%)'
-                  : label),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: color,
-              ),
-            ),
+                    ),
+                  ),
+          ),
           // عرض رسالة التقدم إذا كانت موجودة
           if (isLoading && message != null && message.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: 6),
               child: Text(
                 message,
-                style: TextStyle(fontSize: 11, color: color.withOpacity(0.8)),
+                style: TextStyle(fontSize: 11, color: color.withOpacity(0.9), fontWeight: FontWeight.w500),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -650,12 +765,19 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
 
   Widget _buildStatRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: Colors.grey)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text(label, style: TextStyle(color: Colors.grey.shade600, fontSize: 13, fontWeight: FontWeight.w500)),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          ),
         ],
       ),
     );

@@ -345,9 +345,11 @@ service cloud.firestore {
       textDirection: TextDirection.rtl,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('إعداد قاعدة بياناتي الخاصة'),
+          title: const Text('إعداد مشروع فايربيز الخاص', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          centerTitle: true,
           backgroundColor: Colors.deepOrange,
           foregroundColor: Colors.white,
+          elevation: 0,
         ),
         body: Stepper(
           currentStep: _currentStep,
@@ -369,19 +371,26 @@ service cloud.firestore {
               padding: const EdgeInsets.only(top: 16.0),
               child: Row(
                 children: [
-                  ElevatedButton(
+                  ElevatedButton.icon(
                     onPressed: _isTesting ? null : details.onStepContinue,
+                    icon: Icon(isLastStep ? Icons.check_circle_outline : Icons.arrow_forward_rounded, size: 18),
+                    label: Text(isLastStep ? 'اختبار وحفظ الربط' : 'الخطوة التالية', style: const TextStyle(fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: isLastStep ? Colors.green : Colors.deepOrange,
                       foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
-                    child: Text(isLastStep ? 'اختبار وحفظ' : 'التالي'),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 12),
                   if (_currentStep > 0)
-                    TextButton(
+                    OutlinedButton(
                       onPressed: _isTesting ? null : details.onStepCancel,
-                      child: const Text('رجوع'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('السابق'),
                     ),
                 ],
               ),
