@@ -21,6 +21,14 @@ class _MaterialInventoryScreenState extends State<MaterialInventoryScreen> {
   String _searchQuery = '';
   List<Product> _filteredProducts = [];
 
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -163,147 +171,202 @@ class _MaterialInventoryScreenState extends State<MaterialInventoryScreen> {
         backgroundColor: const Color(0xFF3F51B5),
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          // شريط البحث
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: const Color(0xFF3F51B5),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'بحث عن مادة...',
-                prefixIcon: const Icon(Icons.search, color: Color(0xFF3F51B5)),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(30),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 20),
-              ),
-              onChanged: _filterProducts,
-            ),
-          ),
-          
-          // ملخص القيمة
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF3F51B5),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4, offset: const Offset(0, 4))],
-            ),
+      body: CustomScrollView(
+        slivers: [
+          // رأس الصفحة القابل للتمرير: شريط البحث + ملخص القيمة
+          SliverToBoxAdapter(
             child: Column(
               children: [
-                const Text('إجمالي قيمة المواد في المخزن', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                const SizedBox(height: 8),
-                Text(
-                  '${_formatCurrency(_totalInventoryValue)} د.ع',
-                  style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+                // شريط البحث
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  color: const Color(0xFF3F51B5),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'بحث عن مادة...',
+                      prefixIcon: const Icon(Icons.search, color: Color(0xFF3F51B5)),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, color: Colors.grey),
+                              onPressed: () {
+                                _searchController.clear();
+                                _filterProducts('');
+                              },
+                            )
+                          : null,
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 20),
+                    ),
+                    onChanged: _filterProducts,
+                  ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'عدد المواد: ${_products.length}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                
+                // ملخص القيمة
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF3F51B5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      const Text(
+                        'إجمالي قيمة المواد في المخزن',
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_formatCurrency(_totalInventoryValue)} د.ع',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'عدد المواد: ${_products.length}',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
           
-          // القائمة
-          Expanded(
-            child: _isLoading 
-                ? const Center(child: CircularProgressIndicator()) 
-                : _filteredProducts.isEmpty
-                    ? const Center(child: Text('لا توجد مواد', style: TextStyle(fontSize: 18, color: Colors.grey)))
-                    : ListView.builder(
+          // محتوى القائمة
+          if (_isLoading)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_filteredProducts.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(32.0),
+                  child: Text(
+                    'لا توجد مواد',
+                    style: TextStyle(fontSize: 18, color: Colors.grey),
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.all(16),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final product = _filteredProducts[index];
+                    // حساب التكلفة الإجمالية لهذا المنتج
+                    double cost = product.costPrice ?? 0.0;
+                    final totalCost = product.stockQuantity * cost;
+                    
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 2,
+                      child: Padding(
                         padding: const EdgeInsets.all(16),
-                        itemCount: _filteredProducts.length,
-                        itemBuilder: (context, index) {
-                          final product = _filteredProducts[index];
-                          // حساب التكلفة الإجمالية لهذا المنتج
-                          double cost = product.costPrice ?? 0.0;
-                          final totalCost = product.stockQuantity * cost;
-                          
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            elevation: 2,
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          product.name,
-                                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF2C3E50)),
-                                        ),
-                                      ),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFE8F5E9),
-                                          borderRadius: BorderRadius.circular(8),
-                                          border: Border.all(color: Colors.green.withOpacity(0.3)),
-                                        ),
-                                        child: Text(
-                                          '${_formatCurrency(totalCost)} د.ع',
-                                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
-                                        ),
-                                      ),
-                                    ],
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    product.name,
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF2C3E50),
+                                    ),
                                   ),
-                                  const Divider(height: 24),
-                                  Row(
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE8F5E9),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.green.withOpacity(0.3)),
+                                  ),
+                                  child: Text(
+                                    '${_formatCurrency(totalCost)} د.ع',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const Divider(height: 24),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.layers, size: 20, color: Colors.grey),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      const Icon(Icons.layers, size: 20, color: Colors.grey),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                             // السطر الأول: الإجمالي بالوحدة الأساسية
-                                             Text(
-                                              '${_formatCurrency(product.stockQuantity)} ${product.unit}',
-                                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                            ),
-                                            // السطر الثاني: التفصيل (يساوي ...)
-                                            if (product.unitHierarchy != null && product.unitHierarchy!.isNotEmpty)
-                                              Padding(
-                                                padding: const EdgeInsets.only(top: 4.0),
-                                                child: Text(
-                                                  '= ${_formatQuantityHierarchy(product.stockQuantity, product)}',
-                                                  style: TextStyle(fontSize: 14, color: Colors.grey[700], fontWeight: FontWeight.w500),
-                                                ),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      const Icon(Icons.price_check, size: 20, color: Colors.grey),
-                                      const SizedBox(width: 8),
+                                      // السطر الأول: الإجمالي بالوحدة الأساسية
                                       Text(
-                                        'تكلفة الوحدة: ${cost > 0 ? _formatCurrency(cost) : "غير محدد"}',
-                                        style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+                                        '${_formatCurrency(product.stockQuantity)} ${product.unit}',
+                                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                       ),
+                                      // السطر الثاني: التفصيل (يساوي ...)
+                                      if (product.unitHierarchy != null && product.unitHierarchy!.isNotEmpty)
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 4.0),
+                                          child: Text(
+                                            '= ${_formatQuantityHierarchy(product.stockQuantity, product)}',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.grey[700],
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
                                     ],
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          );
-                        },
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Icon(Icons.price_check, size: 20, color: Colors.grey),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'تكلفة الوحدة: ${cost > 0 ? _formatCurrency(cost) : "غير محدد"}',
+                                  style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-          ),
+                    );
+                  },
+                  childCount: _filteredProducts.length,
+                ),
+              ),
+            ),
         ],
       ),
     );

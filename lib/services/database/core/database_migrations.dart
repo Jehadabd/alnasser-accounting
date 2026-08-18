@@ -2,9 +2,6 @@
 // إنشاء الجداول وترقيتها
 
 import 'package:sqflite/sqflite.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart';
-import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../dao/product_dao.dart';
 import 'package:alnaser/services/database/core/database_helpers.dart'; // ✅ Explicit import
@@ -516,6 +513,70 @@ class DatabaseMigrations {
       FROM invoice_items ii
       JOIN invoices i ON ii.invoice_id = i.id
     ''');
+
+    // 🏷️ 1NF: جدول شرائح الأسعار المنفصل لكل منتج (إلغاء price1..price6)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS product_prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        tier_index INTEGER NOT NULL,
+        tier_name TEXT NOT NULL,
+        price_cents INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
+        UNIQUE(product_id, tier_index)
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_product_prices_product_id ON product_prices(product_id);');
+
+    // 📏 1NF: جدول الوحدات وتدرج الوحدات المنفصل لكل منتج
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS product_units (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        unit_name TEXT NOT NULL,
+        conversion_factor REAL NOT NULL DEFAULT 1.0,
+        cost_price_cents INTEGER,
+        is_base_unit INTEGER DEFAULT 0,
+        FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_product_units_product_id ON product_units(product_id);');
+
+    // ⚡ فهارس الأداء على كافة المفاتيح الأجنبية لضمان سرعة الاستعلام 100%
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_id ON invoice_items(invoice_id);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_items_product_id ON invoice_items(product_id);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices(customer_id);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(invoice_date);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_purchase_invoices_supplier ON purchase_invoices(supplier_id);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_purchase_invoice_items_invoice ON purchase_invoice_items(invoice_id);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_purchase_invoice_items_product ON purchase_invoice_items(product_id);');
+
+    // 📊 3NF Views: حساب الأرصدة والديون ديناميكياً بدون تناقض (Data Consistency Views)
+    await db.execute('''
+      CREATE VIEW IF NOT EXISTS customer_balances_view AS
+      SELECT 
+        c.id as customer_id,
+        c.name,
+        c.phone,
+        c.address,
+        COALESCE(c.current_total_debt, 0) as current_total_debt,
+        COALESCE(SUM(t.amount_changed), 0) as calculated_total_debt
+      FROM customers c
+      LEFT JOIN transactions t ON c.id = t.customer_id AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+      WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+      GROUP BY c.id;
+    ''',);
+
+    await db.execute('''
+      CREATE VIEW IF NOT EXISTS supplier_balances_view AS
+      SELECT 
+        s.id as supplier_id,
+        s.name,
+        s.phone,
+        s.total_debt_iqd,
+        s.total_debt_usd
+      FROM suppliers s;
+    ''',);
   }
 
   // إنشاء جدول FTS5 للبحث السريع
@@ -818,11 +879,169 @@ class DatabaseMigrations {
       ''');
     } catch (_) {}
 
-    // 24.د. هجرة المنتجات الموجودة: توليد sync_uuid لكل منتج محلي بلا UUID
+    // 25. هجرة المنتجات الموجودة: توليد sync_uuid لكل منتج محلي بلا UUID
     await _migrateProductSyncUuids(db);
 
-    // 25. التأكد من إعادة بناء جدول FTS والترايغرز بشكل سليم دائماً عند فتح قاعدة البيانات
+    // 26. هجرة بيانات أسعار المنتجات القديمة (price1..price6) إلى جدول product_prices المنظم (1NF)
+    await _migrateProductPricesAndUnits(db);
+
+    // 28. الأعمدة المالية الدقيقة (INTEGER cents/fils) لمنع أخطاء الفاصلة العائمة
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'current_total_debt_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'amount_changed_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'balance_before_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'new_balance_after_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'total_amount_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'final_total_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'discount_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'amount_paid_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoice_items', 'unit_price_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoice_items', 'cost_price_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoice_items', 'applied_price_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoice_items', 'item_total_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'unit_price_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'cost_price_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'total_debt_iqd_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'total_debt_usd_cents', 'INTEGER DEFAULT 0');
+
+    // 29. هجرة القيم المالية الحالية إلى أعمدة الأعداد الصحيحة الدقيقة (cents)
+    await _migrateFinancialCents(db);
+
+    // 30. إنشاء مشغلات قواعد البيانات الذرية (SQLite Triggers) لضمان اتساق البيانات وتحديث المخزون والديون
+    await _setupDatabaseTriggers(db);
+
+    // 27. التأكد من إعادة بناء جدول FTS والترايغرز بشكل سليم دائماً عند فتح قاعدة البيانات
     await _createFtsTable(db);
+  }
+
+  /// هجرة وتصحيح القيم المالية إلى أعمدة الأعداد الصحيحة (cents/fils) لضمان الدقة المالية 100%
+  static Future<void> _migrateFinancialCents(Database db) async {
+    try {
+      await db.execute("UPDATE customers SET current_total_debt_cents = CAST(ROUND(current_total_debt * 100) AS INTEGER) WHERE current_total_debt_cents = 0 AND current_total_debt != 0;");
+      await db.execute("UPDATE transactions SET amount_changed_cents = CAST(ROUND(amount_changed * 100) AS INTEGER) WHERE amount_changed_cents = 0 AND amount_changed != 0;");
+      await db.execute("UPDATE transactions SET balance_before_cents = CAST(ROUND(balance_before_transaction * 100) AS INTEGER) WHERE balance_before_cents = 0 AND balance_before_transaction IS NOT NULL;");
+      await db.execute("UPDATE transactions SET new_balance_after_cents = CAST(ROUND(new_balance_after_transaction * 100) AS INTEGER) WHERE new_balance_after_cents = 0 AND new_balance_after_transaction IS NOT NULL;");
+      await db.execute("UPDATE invoices SET total_amount_cents = CAST(ROUND(total_amount * 100) AS INTEGER) WHERE (total_amount_cents = 0 AND total_amount != 0) OR (total_amount > 0 AND total_amount_cents = 0);");
+      await db.execute("UPDATE invoices SET final_total_cents = CAST(ROUND(final_total * 100) AS INTEGER) WHERE (final_total_cents = 0 AND final_total != 0) OR (final_total > 0 AND final_total_cents = 0);");
+      await db.execute("UPDATE invoices SET discount_cents = CAST(ROUND(discount * 100) AS INTEGER) WHERE discount_cents = 0 AND discount != 0;");
+      await db.execute("UPDATE invoices SET amount_paid_cents = CAST(ROUND(amount_paid_on_invoice * 100) AS INTEGER) WHERE amount_paid_cents = 0 AND amount_paid_on_invoice != 0;");
+      await db.execute("UPDATE invoice_items SET unit_price_cents = CAST(ROUND(unit_price * 100) AS INTEGER) WHERE (unit_price_cents = 0 AND unit_price != 0) OR (unit_price > 0 AND unit_price_cents = 0);");
+      await db.execute("UPDATE invoice_items SET cost_price_cents = CAST(ROUND(cost_price * 100) AS INTEGER) WHERE cost_price_cents = 0 AND cost_price != 0;");
+      await db.execute("UPDATE invoice_items SET applied_price_cents = CAST(ROUND(applied_price * 100) AS INTEGER) WHERE (applied_price_cents = 0 AND applied_price != 0) OR (applied_price > 0 AND applied_price_cents = 0);");
+      await db.execute("UPDATE invoice_items SET item_total_cents = CAST(ROUND(item_total * 100) AS INTEGER) WHERE (item_total_cents = 0 AND item_total != 0) OR (item_total > 0 AND item_total_cents = 0);");
+      await db.execute("UPDATE products SET unit_price_cents = CAST(ROUND(unit_price * 100) AS INTEGER) WHERE unit_price_cents = 0 AND unit_price != 0;");
+      await db.execute("UPDATE products SET cost_price_cents = CAST(ROUND(cost_price * 100) AS INTEGER) WHERE cost_price_cents = 0 AND cost_price != 0;");
+      await db.execute("UPDATE suppliers SET total_debt_iqd_cents = CAST(ROUND(total_debt_iqd * 100) AS INTEGER) WHERE total_debt_iqd_cents = 0 AND total_debt_iqd != 0;");
+    } catch (e) {
+      print('Financial Cents Migration Error: $e');
+    }
+  }
+
+  /// إعداد مشغلات قاعدة البيانات الذرية (Database Triggers) للحفاظ على الاتساق التلقائي دون الاعتماد التام على Dart
+  static Future<void> _setupDatabaseTriggers(Database db) async {
+    try {
+      // مشغل لتصحيح التخصيم وتحديث كميات المخزون عند إضافة بند فاتورة جديد
+      await db.execute('DROP TRIGGER IF EXISTS trg_invoice_items_stock_deduct;');
+      await db.execute('''
+        CREATE TRIGGER IF NOT EXISTS trg_invoice_items_stock_deduct
+        AFTER INSERT ON invoice_items
+        WHEN NEW.product_id IS NOT NULL
+        BEGIN
+          UPDATE products
+          SET stock_quantity = stock_quantity - NEW.quantity_individual
+          WHERE id = NEW.product_id;
+        END;
+      ''');
+
+      // مشغل لإعادة المخزون عند حذف بند فاتورة
+      await db.execute('DROP TRIGGER IF EXISTS trg_invoice_items_stock_restore;');
+      await db.execute('''
+        CREATE TRIGGER IF NOT EXISTS trg_invoice_items_stock_restore
+        AFTER DELETE ON invoice_items
+        WHEN OLD.product_id IS NOT NULL
+        BEGIN
+          UPDATE products
+          SET stock_quantity = stock_quantity + OLD.quantity_individual
+          WHERE id = OLD.product_id;
+        END;
+      ''');
+    } catch (e) {
+      print('Setup Database Triggers Error: $e');
+    }
+  }
+
+  /// هجرة تلقائية لنقل الأسعار من الأعمدة القديمة (price1..price6) لجدول product_prices المنظم (1NF)
+  static Future<void> _migrateProductPricesAndUnits(Database db) async {
+    try {
+      // 1. التأكد من وجود جدول product_prices
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS product_prices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL,
+          tier_index INTEGER NOT NULL,
+          tier_name TEXT NOT NULL,
+          price_cents INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
+          UNIQUE(product_id, tier_index)
+        );
+      ''');
+
+      // 2. التأكد من وجود جدول product_units
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS product_units (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL,
+          unit_name TEXT NOT NULL,
+          conversion_factor REAL NOT NULL DEFAULT 1.0,
+          cost_price_cents INTEGER,
+          is_base_unit INTEGER DEFAULT 0,
+          FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE
+        );
+      ''');
+
+      // 3. فحص إذا كان هناك منتجات تحتاج ترحيل أسعارها
+      final List<Map<String, dynamic>> products = await db.rawQuery('''
+        SELECT p.id, p.price1, p.price2, p.price3, p.price4, p.price5, p.price6, p.unit, p.cost_price
+        FROM products p
+        LEFT JOIN product_prices pp ON p.id = pp.product_id
+        WHERE pp.id IS NULL
+      ''');
+
+      if (products.isEmpty) return;
+
+      final batch = db.batch();
+      for (final prod in products) {
+        final productId = prod['id'] as int;
+        final prices = [
+          prod['price1'] as num? ?? 0.0,
+          prod['price2'] as num? ?? 0.0,
+          prod['price3'] as num? ?? 0.0,
+          prod['price4'] as num? ?? 0.0,
+          prod['price5'] as num? ?? 0.0,
+          prod['price6'] as num? ?? 0.0,
+        ];
+
+        for (int i = 0; i < prices.length; i++) {
+          final priceVal = prices[i];
+          final cents = (priceVal * 1000).round();
+          batch.rawInsert('''
+            INSERT OR IGNORE INTO product_prices (product_id, tier_index, tier_name, price_cents)
+            VALUES (?, ?, ?, ?)
+          ''', [productId, i + 1, 'سعر ${i + 1}', cents]);
+        }
+
+        // إضافة الوحدة الأساسية إذا لم تكن موجودة
+        final unitName = prod['unit'] as String? ?? 'قطعة';
+        final costCents = ((prod['cost_price'] as num? ?? 0.0) * 1000).round();
+        batch.rawInsert('''
+          INSERT OR IGNORE INTO product_units (product_id, unit_name, conversion_factor, cost_price_cents, is_base_unit)
+          VALUES (?, ?, 1.0, ?, 1)
+        ''', [productId, unitName, costCents]);
+      }
+
+      await batch.commit(noResult: true);
+    } catch (e) {
+      print('Product Prices Migration Error: $e');
+    }
   }
 
   /// ترقية قاعدة البيانات
@@ -965,7 +1184,6 @@ class DatabaseMigrations {
     if (products.isEmpty) return;
 
     final batch = db.batch();
-    final now = DateTime.now().toUtc().toIso8601String();
     int migrated = 0;
 
     for (final row in products) {

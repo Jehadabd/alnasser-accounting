@@ -583,4 +583,60 @@ class ProductDao {
     }
     return product.costPrice ?? 0.0;
   }
+
+  // -------------------------------------------------------------
+  // 🏷️ 1NF: عمليات شرائح الأسعار والوحدات المُنظمة (Product Prices & Units)
+  // -------------------------------------------------------------
+
+  /// جلب شرائح الأسعار الخاصة بالمنتج من جدول product_prices المنظم
+  Future<List<ProductPrice>> getProductPrices(int productId) async {
+    final db = await getDatabase();
+    try {
+      final maps = await db.query(
+        'product_prices',
+        where: 'product_id = ?',
+        whereArgs: [productId],
+        orderBy: 'tier_index ASC',
+      );
+      return maps.map((m) => ProductPrice.fromMap(m)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// جلب الوحدات وتراكيبها المُنظمة للمنتج من جدول product_units
+  Future<List<ProductUnit>> getProductUnits(int productId) async {
+    final db = await getDatabase();
+    try {
+      final maps = await db.query(
+        'product_units',
+        where: 'product_id = ?',
+        whereArgs: [productId],
+      );
+      return maps.map((m) => ProductUnit.fromMap(m)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// حفظ شريحة سعر جديدة للمنتج (1NF)
+  Future<int> insertProductPrice(ProductPrice price) async {
+    final db = await getDatabase();
+    return await db.insert(
+      'product_prices',
+      price.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// حفظ وحدة جديدة للمنتج (1NF)
+  Future<int> insertProductUnit(ProductUnit unit) async {
+    final db = await getDatabase();
+    return await db.insert(
+      'product_units',
+      unit.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 }
+

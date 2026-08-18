@@ -12,15 +12,25 @@ class InvoiceItem {
   int? productId; // Foreign key to Product
   String productName;
   String unit;
-  double unitPrice; // This is the *selling* unit price from the product
+  // 💰 حقول الدقة المالية بالأعداد الصحيحة
+  int unitPriceCents;
+  int appliedPriceCents;
+  int itemTotalCents;
+
+  double get unitPrice => unitPriceCents / 100.0;
+  set unitPrice(double value) => unitPriceCents = (value * 100).round();
+
+  double get appliedPrice => appliedPriceCents / 100.0;
+  set appliedPrice(double value) => appliedPriceCents = (value * 100).round();
+
+  double get itemTotal => itemTotalCents / 100.0;
+  set itemTotal(double value) => itemTotalCents = (value * 100).round();
+
   double? costPrice; // Added: The cost price of the item at the time of sale (made nullable)
   double? actualCostPrice; // التكلفة الفعلية للمنتج في وقت البيع - للحسابات الدقيقة
   // الكميات - حقل واحد فقط يُستخدم في كل مرة
   double? quantityIndividual; // Quantity in pieces or meters
   double? quantityLargeUnit; // Quantity in cartons/packets or full meters
-  // الأسعار - السعر المطبق لهذا البند المحدد
-  double appliedPrice;
-  double itemTotal;
   String? saleType; // نوع البيع بالحرف العربي: ق/ك/م/ل
   double? unitsInLargeUnit; // عدد القطع في الكرتون أو الأمتار في اللفة (للوحدة الكبيرة)
 
@@ -44,19 +54,24 @@ class InvoiceItem {
     this.productId,
     required this.productName,
     required this.unit,
-    required this.unitPrice,
+    double unitPrice = 0.0,
+    int? unitPriceCents,
     this.quantityIndividual,
     this.quantityLargeUnit,
-    required this.appliedPrice,
-    required this.itemTotal,
+    double appliedPrice = 0.0,
+    int? appliedPriceCents,
+    double itemTotal = 0.0,
+    int? itemTotalCents,
     this.costPrice, // Made optional
     this.actualCostPrice, // التكلفة الفعلية للمنتج في وقت البيع
     this.saleType, // أضف هذا
     this.unitsInLargeUnit,
     String? uniqueId, // أضف هذا
     this.productSyncUuid, // 🔄 ربط ذري للمنتج عبر sync_uuid
-  }) : this.uniqueId =
-            uniqueId ?? 'item_${DateTime.now().microsecondsSinceEpoch}' {
+  })  : unitPriceCents = unitPriceCents ?? (unitPrice * 100).round(),
+        appliedPriceCents = appliedPriceCents ?? (appliedPrice * 100).round(),
+        itemTotalCents = itemTotalCents ?? (itemTotal * 100).round(),
+        uniqueId = uniqueId ?? 'item_${DateTime.now().microsecondsSinceEpoch}' {
     // Initialize controllers with initial values - مع تنسيق الأرقام بفواصل
     productNameController = TextEditingController(text: productName);
     quantityIndividualController =
@@ -96,12 +111,15 @@ class InvoiceItem {
       'product_name': productName,
       'unit': unit,
       'unit_price': unitPrice, // Selling unit price
+      'unit_price_cents': unitPriceCents,
       'cost_price': costPrice ?? 0.0, // إرسال 0.0 بدلاً من null لتجنب خطأ NOT NULL
       'actual_cost_price': actualCostPrice ?? 0.0, // التكلفة الفعلية للمنتج في وقت البيع
       'quantity_individual': quantityIndividual ?? 0.0, // تجنب خطأ NOT NULL
       'quantity_large_unit': quantityLargeUnit ?? 0.0, // تجنب خطأ NOT NULL
       'applied_price': appliedPrice,
+      'applied_price_cents': appliedPriceCents,
       'item_total': itemTotal,
+      'item_total_cents': itemTotalCents,
       'sale_type': saleType, // أضف هذا
       'units_in_large_unit': unitsInLargeUnit,
       'unique_id': uniqueId, // أضف هذا
@@ -133,6 +151,27 @@ class InvoiceItem {
       }
       quantityIndividual = null; // مسح القيمة الأخرى
     }
+
+    final double parsedUnitPrice = (map['unit_price'] as num?)?.toDouble() ?? 0.0;
+    final int? parsedUnitPriceCents = map['unit_price_cents'] as int?;
+    final int calculatedUnitPriceCents = (parsedUnitPrice * 100).round();
+    final int finalUnitPriceCents = (parsedUnitPriceCents != null && (parsedUnitPriceCents / 100.0 - parsedUnitPrice).abs() < 0.001)
+        ? parsedUnitPriceCents
+        : calculatedUnitPriceCents;
+
+    final double parsedAppliedPrice = (map['applied_price'] as num?)?.toDouble() ?? 0.0;
+    final int? parsedAppliedPriceCents = map['applied_price_cents'] as int?;
+    final int calculatedAppliedPriceCents = (parsedAppliedPrice * 100).round();
+    final int finalAppliedPriceCents = (parsedAppliedPriceCents != null && (parsedAppliedPriceCents / 100.0 - parsedAppliedPrice).abs() < 0.001)
+        ? parsedAppliedPriceCents
+        : calculatedAppliedPriceCents;
+
+    final double parsedItemTotal = (map['item_total'] as num?)?.toDouble() ?? 0.0;
+    final int? parsedItemTotalCents = map['item_total_cents'] as int?;
+    final int calculatedItemTotalCents = (parsedItemTotal * 100).round();
+    final int finalItemTotalCents = (parsedItemTotalCents != null && (parsedItemTotalCents / 100.0 - parsedItemTotal).abs() < 0.001)
+        ? parsedItemTotalCents
+        : calculatedItemTotalCents;
     
     return InvoiceItem(
       id: map['id'] as int?,
@@ -140,13 +179,16 @@ class InvoiceItem {
       productId: map['product_id'] as int?,
       productName: map['product_name'] ?? '',
       unit: map['unit'] ?? '',
-      unitPrice: (map['unit_price'] as num?)?.toDouble() ?? 0.0,
+      unitPrice: parsedUnitPrice,
+      unitPriceCents: finalUnitPriceCents,
       costPrice: (map['cost_price'] as num?)?.toDouble(),
       actualCostPrice: (map['actual_cost_price'] as num?)?.toDouble(),
       quantityIndividual: quantityIndividual,
       quantityLargeUnit: quantityLargeUnit,
-      appliedPrice: (map['applied_price'] as num?)?.toDouble() ?? 0.0,
-      itemTotal: (map['item_total'] as num?)?.toDouble() ?? 0.0,
+      appliedPrice: parsedAppliedPrice,
+      appliedPriceCents: finalAppliedPriceCents,
+      itemTotal: parsedItemTotal,
+      itemTotalCents: finalItemTotalCents,
       saleType: saleType,
       unitsInLargeUnit: (map['units_in_large_unit'] as num?)?.toDouble(),
       uniqueId: map['unique_id'] ?? 'item_${DateTime.now().microsecondsSinceEpoch}',

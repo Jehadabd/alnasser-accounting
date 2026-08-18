@@ -478,14 +478,27 @@ class InvoiceController {
             WHERE creator_device_id = ?
               AND invoice_year = ?
               AND invoice_month = ?
-              AND is_created_by_me = 1
           ''', [creatorDeviceIdStr, invoiceYear, invoiceMonth]);
           
-          nextSeq = 1;
+          int currentSeq = 1;
           if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {
-            nextSeq = (seqResult.first['max_seq'] as int) + 1;
+            currentSeq = (seqResult.first['max_seq'] as int) + 1;
           }
           
+          // 🛡️ حلقة حماية تمنع التعارض المطلق لـ UNIQUE constraint
+          while (true) {
+            final checkSeq = await txn.query(
+              'invoices',
+              columns: ['id'],
+              where: 'creator_device_id = ? AND invoice_year = ? AND invoice_month = ? AND monthly_sequence_number = ?',
+              whereArgs: [creatorDeviceIdStr, invoiceYear, invoiceMonth, currentSeq],
+              limit: 1,
+            );
+            if (checkSeq.isEmpty) break;
+            currentSeq++;
+          }
+          
+          nextSeq = currentSeq;
           invoiceNumberStr = '$deviceIdNum$invoiceYear$invoiceMonth$nextSeq';
         }
 
@@ -709,6 +722,7 @@ class InvoiceController {
                 
                 await txn.update('customers', {
                   'current_total_debt': balanceAfter,
+                  'current_total_debt_cents': (balanceAfter * 100).round(),
                   'last_modified_at': DateTime.now().toIso8601String(),
                 }, where: 'id = ?', whereArgs: [oldCustomerId]);
                 
@@ -746,6 +760,7 @@ class InvoiceController {
               
               await txn.update('customers', {
                 'current_total_debt': balanceAfter,
+                'current_total_debt_cents': (balanceAfter * 100).round(),
                 'last_modified_at': DateTime.now().toIso8601String(),
               }, where: 'id = ?', whereArgs: [customer.id]);
               
@@ -786,6 +801,7 @@ class InvoiceController {
                 
                 await txn.update('customers', {
                   'current_total_debt': oldBalanceAfter,
+                  'current_total_debt_cents': (oldBalanceAfter * 100).round(),
                   'last_modified_at': DateTime.now().toIso8601String(),
                 }, where: 'id = ?', whereArgs: [oldCustomerId]);
                 
@@ -819,6 +835,7 @@ class InvoiceController {
                 
                 await txn.update('customers', {
                   'current_total_debt': newBalanceAfter,
+                  'current_total_debt_cents': (newBalanceAfter * 100).round(),
                   'last_modified_at': DateTime.now().toIso8601String(),
                 }, where: 'id = ?', whereArgs: [newCustomerId]);
                 
@@ -856,6 +873,7 @@ class InvoiceController {
               
               await txn.update('customers', {
                 'current_total_debt': balanceAfter,
+                'current_total_debt_cents': (balanceAfter * 100).round(),
                 'last_modified_at': DateTime.now().toIso8601String(),
               }, where: 'id = ?', whereArgs: [customer.id]);
               
@@ -895,6 +913,7 @@ class InvoiceController {
             
             await txn.update('customers', {
               'current_total_debt': balanceAfter,
+              'current_total_debt_cents': (balanceAfter * 100).round(),
               'last_modified_at': DateTime.now().toIso8601String(),
             }, where: 'id = ?', whereArgs: [customer.id]);
             

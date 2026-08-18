@@ -109,12 +109,24 @@ class InvoiceManager {
           WHERE creator_device_id = ?
             AND invoice_year = ?
             AND invoice_month = ?
-            AND is_created_by_me = 1
         ''', [deviceIdStr, invoiceYear, invoiceMonth]);
 
         int nextSeq = 1;
         if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {
           nextSeq = (seqResult.first['max_seq'] as int) + 1;
+        }
+
+        // 🛡️ حلقة أمان تفحص وجود نفس الرقم التسلسلي وتمنع UNIQUE constraint
+        while (true) {
+          final checkSeq = await txn.query(
+            'invoices',
+            columns: ['id'],
+            where: 'creator_device_id = ? AND invoice_year = ? AND invoice_month = ? AND monthly_sequence_number = ?',
+            whereArgs: [deviceIdStr, invoiceYear, invoiceMonth, nextSeq],
+            limit: 1,
+          );
+          if (checkSeq.isEmpty) break;
+          nextSeq++;
         }
 
         // رقم الفاتورة التجاري كنص: [جهاز][سنة][شهر][تسلسل]

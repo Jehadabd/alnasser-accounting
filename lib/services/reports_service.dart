@@ -421,17 +421,19 @@ class ReportsService {
         COALESCE(SUM(CASE WHEN payment_type = 'نقد' THEN total_amount ELSE 0 END), 0) as cash_sales,
         COALESCE(SUM(CASE WHEN payment_type = 'دين' THEN total_amount ELSE 0 END), 0) as credit_sales
       FROM invoices
-      WHERE DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?
-        AND status = 'محفوظة' $_deviceFilter
-    ''', [startStr, endStr]);
+      WHERE (substr(invoice_date, 1, 10) >= ? AND substr(invoice_date, 1, 10) <= ? OR (DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?))
+        AND (status = 'محفوظة' OR status IS NULL OR status = '') 
+        AND (is_deleted IS NULL OR is_deleted = 0) $_deviceFilter
+    ''', [startStr, endStr, startStr, endStr]);
     
     // جلب الفواتير المحفوظة لحساب التكلفة والربح لكل فاتورة
     final invoices = await db.rawQuery('''
       SELECT id, total_amount, return_amount
       FROM invoices
-      WHERE DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?
-        AND status = 'محفوظة' $_deviceFilter
-    ''', [startStr, endStr]);
+      WHERE (substr(invoice_date, 1, 10) >= ? AND substr(invoice_date, 1, 10) <= ? OR (DATE(invoice_date) >= ? AND DATE(invoice_date) <= ?))
+        AND (status = 'محفوظة' OR status IS NULL OR status = '') 
+        AND (is_deleted IS NULL OR is_deleted = 0) $_deviceFilter
+    ''', [startStr, endStr, startStr, endStr]);
     
     // حساب التكلفة والربح لكل فاتورة بنفس منطق getMonthlySalesSummary
     double totalCostCalculated = 0.0;

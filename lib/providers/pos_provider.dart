@@ -222,18 +222,43 @@ class POSProvider extends ChangeNotifier {
   }
 
   /// إضافة منتج بالباركود مباشرة
-  /// يبحث عن المنتج بالباركود ويضيفه للسلة
+  /// يبحث عن المنتج بالباركود في الذاكرة وقاعدة البيانات ويضيفه للسلة
   /// يعيد المنتج إذا وُجد وأُضيف، null إذا لم يُعثر عليه
-  Product? addProductByBarcode(String barcode) {
-    if (barcode.isEmpty) return null;
+  Future<Product?> addProductByBarcode(String barcode) async {
+    final cleanBarcode = barcode.trim();
+    if (cleanBarcode.isEmpty) return null;
     
-    final product = _allProducts.cast<Product?>().firstWhere(
-      (p) => p?.barcode == barcode,
+    // 1. البحث أولاً في قائمة المنتجات المحملة بالذاكرة
+    Product? product = _allProducts.cast<Product?>().firstWhere(
+      (p) => p?.barcode != null && p!.barcode!.trim() == cleanBarcode,
       orElse: () => null,
     );
     
+    // 2. إذا لم يتم العثور عليه في الذاكرة، نبحث في قاعدة البيانات (يشمل جدول product_barcodes والباركود الأساسي)
+    if (product == null) {
+      try {
+        product = await DatabaseService().findProductByBarcode(cleanBarcode);
+        if (product != null) {
+          final exists = _allProducts.any((p) => p.id == product!.id);
+          if (!exists) {
+            _allProducts.add(product);
+            _applyFilter();
+          }
+        }
+      } catch (e) {
+        debugPrint('Error searching product by barcode: $e');
+      }
+    }
+    
     if (product != null) {
-      addToCart(product);
+      // فحص إذا كان هناك سعر بيع مخصص لهذا الباركود
+      double? customPrice;
+      try {
+        final barcodePriceInfo = await DatabaseService().getBarcodePrice(cleanBarcode);
+        customPrice = barcodePriceInfo['sell_price'];
+      } catch (_) {}
+
+      addToCart(product, price: customPrice);
       return product;
     }
     return null;

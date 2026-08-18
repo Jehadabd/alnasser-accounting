@@ -554,83 +554,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Icon(Icons.keyboard_arrow_up, size: 28),
                 ),
               ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                FloatingActionButton(
-                  heroTag: 'add_customer',
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const AddCustomerScreen(),
-                      ),
-                    );
-                  },
-                  tooltip: 'إضافة عميل جديد',
-                  child: const Icon(Icons.person_add_alt_1), // Modern icon
-                ),
-                const SizedBox(width: 16), // Increased spacing between FABs
-                FloatingActionButton(
-                  heroTag: 'main_debt',
-                  onPressed: () {
-                    // Already on main screen, maybe refresh or show a message
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                          content:
-                              Text('أنت بالفعل في الشاشة الرئيسية (سجل الديون).'),
-                          backgroundColor: Theme.of(context).colorScheme.secondary),
-                    );
-                  },
-                  tooltip: 'سجل الديون',
-                  child: const Icon(Icons.book_outlined), // Modern icon
-                ),
-                const SizedBox(width: 16),
-                FloatingActionButton(
-                  heroTag: 'add_product',
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/add_product');
-                  },
-                  tooltip: 'إدخال بضاعة',
-                  child: const Icon(Icons.inventory_2_outlined), // Modern icon
-                ),
-                const SizedBox(width: 16),
-                FloatingActionButton(
-                  heroTag: 'installers',
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/installers');
-                  },
-                  tooltip: 'المؤسسين',
-                  child: const Icon(Icons.engineering_outlined), // Modern icon
-                ),
-                const SizedBox(width: 16),
-                FloatingActionButton(
-                  heroTag: 'create_invoice',
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/create_invoice');
-                  },
-                  tooltip: 'إنشاء قائمة',
-                  child: const Icon(Icons.playlist_add_check), // Modern icon
-                ),
-                const SizedBox(width: 16),
-                FloatingActionButton(
-                  heroTag: 'edit_invoices',
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/edit_invoices');
-                  },
-                  tooltip: 'تعديل القوائم',
-                  child: const Icon(Icons.receipt_long), // Modern icon
-                ),
-                const SizedBox(width: 16),
-                FloatingActionButton(
-                  heroTag: 'edit_products',
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/edit_products');
-                  },
-                  tooltip: 'تعديل البضاعة',
-                  child: const Icon(Icons.edit_note), // Modern icon
-                ),
-              ],
+            FloatingActionButton(
+              heroTag: 'add_customer',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const AddCustomerScreen(),
+                  ),
+                );
+              },
+              tooltip: 'إضافة عميل جديد',
+              child: const Icon(Icons.person_add_alt_1), // Modern icon
             ),
           ],
         ),

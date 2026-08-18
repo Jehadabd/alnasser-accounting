@@ -129,11 +129,13 @@ class DebtCalculator {
         WHERE customer_id = ?
       ''', [customerId]);
       final correctBalance = ((result.first['total'] as num?) ?? 0).toDouble();
+      final correctCents = (correctBalance * 100).round();
       
       await db.update(
         'customers',
         {
           'current_total_debt': correctBalance,
+          'current_total_debt_cents': correctCents,
           'last_modified_at': DateTime.now().toIso8601String(),
         },
         where: 'id = ?',

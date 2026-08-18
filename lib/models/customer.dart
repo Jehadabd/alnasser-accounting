@@ -3,7 +3,7 @@ class Customer {
   final int? id;
   final String name;
   final String? phone;
-  final double currentTotalDebt;
+  final int currentTotalDebtCents;
   final String? generalNote;
   final String? address;
   final DateTime createdAt;
@@ -11,18 +11,22 @@ class Customer {
   final String? audioNotePath;
   final String? syncUuid; // 🔄 معرف المزامنة الفريد
 
+  double get currentTotalDebt => currentTotalDebtCents / 100.0;
+
   Customer({
     this.id,
     required this.name,
     this.phone,
-    this.currentTotalDebt = 0.0,
+    double currentTotalDebt = 0.0,
+    int? currentTotalDebtCents,
     this.generalNote,
     this.address,
     DateTime? createdAt,
     DateTime? lastModifiedAt,
     this.audioNotePath,
     this.syncUuid,
-  })  : createdAt = createdAt ?? DateTime.now(),
+  })  : currentTotalDebtCents = currentTotalDebtCents ?? (currentTotalDebt * 100).round(),
+        createdAt = createdAt ?? DateTime.now(),
         lastModifiedAt = lastModifiedAt ?? DateTime.now();
 
   Map<String, dynamic> toMap() {
@@ -31,6 +35,7 @@ class Customer {
       'name': name,
       'phone': phone,
       'current_total_debt': currentTotalDebt,
+      'current_total_debt_cents': currentTotalDebtCents,
       'general_note': generalNote,
       'address': address,
       'created_at': createdAt.toIso8601String(),
@@ -41,11 +46,21 @@ class Customer {
   }
 
   factory Customer.fromMap(Map<String, dynamic> map) {
+    final double parsedDebt = (map['current_total_debt'] as num?)?.toDouble() ?? 0.0;
+    final int? parsedDebtCents = map['current_total_debt_cents'] as int?;
+
+    // 🛡️ حساب السنتات من قيمة الدين المحدثة parsedDebt في حال وجود تفاوت مع القيم القديمة
+    final int calculatedCents = (parsedDebt * 100).round();
+    final int finalCents = (parsedDebtCents != null && (parsedDebtCents / 100.0 - parsedDebt).abs() < 0.001)
+        ? parsedDebtCents
+        : calculatedCents;
+
     return Customer(
-      id: map['id'] as int,
-      name: map['name'] as String,
+      id: map['id'] as int?,
+      name: map['name'] as String? ?? '',
       phone: map['phone'] as String?,
-      currentTotalDebt: map['current_total_debt'] as double,
+      currentTotalDebt: parsedDebt,
+      currentTotalDebtCents: finalCents,
       generalNote: map['general_note'] as String?,
       address: map['address'] as String?,
       createdAt: DateTime.parse(map['created_at'] as String),

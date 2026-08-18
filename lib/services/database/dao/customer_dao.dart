@@ -356,6 +356,24 @@ class CustomerDao {
     }
   }
 
+  /// 📊 3NF: استعلام رصيد العميل المحسوب ديناميكياً من customer_balances_view كمرجع موثوق 100%
+  Future<double> getCustomerBalanceFromView(int customerId) async {
+    final db = await getDatabase();
+    try {
+      final res = await db.rawQuery(
+        'SELECT calculated_total_debt FROM customer_balances_view WHERE customer_id = ?',
+        [customerId],
+      );
+      if (res.isNotEmpty && res.first['calculated_total_debt'] != null) {
+        return (res.first['calculated_total_debt'] as num).toDouble();
+      }
+      return 0.0;
+    } catch (e) {
+      print('Error getting customer balance from view: $e');
+      return 0.0;
+    }
+  }
+
   /// جلب العملاء المُعدّلين اليوم
   Future<List<Customer>> getCustomersModifiedToday() async {
     final db = await getDatabase();

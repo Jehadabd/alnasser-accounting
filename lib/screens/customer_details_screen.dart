@@ -64,7 +64,12 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   Future<void> _loadTransactions() async {
     if (!mounted) return;
     if (widget.customer.id != null) {
-      await context.read<AppProvider>().loadCustomerTransactions(widget.customer.id!);
+      final fresh = await DatabaseService().getCustomerById(widget.customer.id!);
+      if (fresh != null && mounted) {
+        await context.read<AppProvider>().selectCustomer(fresh);
+      } else {
+        await context.read<AppProvider>().loadCustomerTransactions(widget.customer.id!);
+      }
       
       // تحميل المعاملات المجمعة
       try {

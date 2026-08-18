@@ -80,8 +80,14 @@ class _POSScreenState extends State<POSScreen> {
     }
   }
   
-  void _processBarcode(String barcode) {
-    final product = context.read<POSProvider>().addProductByBarcode(barcode);
+  Future<void> _processBarcode(String barcode) async {
+    final cleanBarcode = barcode.trim();
+    if (cleanBarcode.isEmpty) return;
+
+    final product = await context.read<POSProvider>().addProductByBarcode(cleanBarcode);
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     if (product != null) {
       // تم إضافة المنتج بنجاح
       ScaffoldMessenger.of(context).showSnackBar(
@@ -95,7 +101,7 @@ class _POSScreenState extends State<POSScreen> {
       // لم يتم العثور على المنتج
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('⚠ لم يتم العثور على منتج بالباركود: $barcode'),
+          content: Text('⚠ لم يتم العثور على منتج بالباركود: $cleanBarcode'),
           backgroundColor: Colors.orange,
           duration: const Duration(seconds: 2),
         ),

@@ -10,9 +10,20 @@ class Invoice {
   DateTime invoiceDate;
   String paymentType;
   // Relationship with Invoice Items will be handled separately
-  double totalAmount;
-  double discount;
-  double amountPaidOnInvoice;
+  // 💰 الدقة المالية بالأعداد الصحيحة (Cents Representation)
+  int totalAmountCents;
+  int discountCents;
+  int amountPaidOnInvoiceCents;
+
+  double get totalAmount => totalAmountCents / 100.0;
+  set totalAmount(double value) => totalAmountCents = (value * 100).round();
+
+  double get discount => discountCents / 100.0;
+  set discount(double value) => discountCents = (value * 100).round();
+
+  double get amountPaidOnInvoice => amountPaidOnInvoiceCents / 100.0;
+  set amountPaidOnInvoice(double value) => amountPaidOnInvoiceCents = (value * 100).round();
+
   double loadingFee;
   DateTime createdAt;
   DateTime lastModifiedAt;
@@ -45,9 +56,12 @@ class Invoice {
     this.installerName,
     required this.invoiceDate,
     required this.paymentType,
-    required this.totalAmount,
-    this.discount = 0.0,
-    this.amountPaidOnInvoice = 0.0,
+    double totalAmount = 0.0,
+    int? totalAmountCents,
+    double discount = 0.0,
+    int? discountCents,
+    double amountPaidOnInvoice = 0.0,
+    int? amountPaidOnInvoiceCents,
     this.loadingFee = 0.0,
     required this.createdAt,
     required this.lastModifiedAt,
@@ -67,7 +81,9 @@ class Invoice {
     this.invoiceYear,
     this.invoiceMonth,
     this.isCreatedByMe = true,
-  });
+  })  : totalAmountCents = totalAmountCents ?? (totalAmount * 100).round(),
+        discountCents = discountCents ?? (discount * 100).round(),
+        amountPaidOnInvoiceCents = amountPaidOnInvoiceCents ?? (amountPaidOnInvoice * 100).round();
 
   // Helper getters
   String get formattedInvoiceDate {
@@ -101,8 +117,11 @@ class Invoice {
       'invoice_date': invoiceDate.toIso8601String(),
       'payment_type': paymentType,
       'total_amount': totalAmount,
+      'total_amount_cents': totalAmountCents,
       'discount': discount,
+      'discount_cents': discountCents,
       'amount_paid_on_invoice': amountPaidOnInvoice,
+      'amount_paid_cents': amountPaidOnInvoiceCents,
       'loading_fee': loadingFee,
       'created_at': createdAt.toIso8601String(),
       'last_modified_at': lastModifiedAt.toIso8601String(),
@@ -127,6 +146,27 @@ class Invoice {
 
   // Extract an Invoice object from a Map object
   factory Invoice.fromMap(Map<String, dynamic> map) {
+    final double parsedTotal = (map['total_amount'] as num?)?.toDouble() ?? 0.0;
+    final int? parsedTotalCents = map['total_amount_cents'] as int?;
+    final int calculatedTotalCents = (parsedTotal * 100).round();
+    final int finalTotalCents = (parsedTotalCents != null && (parsedTotalCents / 100.0 - parsedTotal).abs() < 0.001)
+        ? parsedTotalCents
+        : calculatedTotalCents;
+
+    final double parsedDiscount = (map['discount'] as num?)?.toDouble() ?? 0.0;
+    final int? parsedDiscountCents = map['discount_cents'] as int?;
+    final int calculatedDiscountCents = (parsedDiscount * 100).round();
+    final int finalDiscountCents = (parsedDiscountCents != null && (parsedDiscountCents / 100.0 - parsedDiscount).abs() < 0.001)
+        ? parsedDiscountCents
+        : calculatedDiscountCents;
+
+    final double parsedPaid = (map['amount_paid_on_invoice'] as num?)?.toDouble() ?? 0.0;
+    final int? parsedPaidCents = map['amount_paid_cents'] as int?;
+    final int calculatedPaidCents = (parsedPaid * 100).round();
+    final int finalPaidCents = (parsedPaidCents != null && (parsedPaidCents / 100.0 - parsedPaid).abs() < 0.001)
+        ? parsedPaidCents
+        : calculatedPaidCents;
+
     return Invoice(
       id: map['id'] as int?,
       customerName: map['customer_name'] ?? '',
@@ -135,9 +175,12 @@ class Invoice {
       installerName: map['installer_name'] as String?,
       invoiceDate: DateTime.parse(map['invoice_date']),
       paymentType: map['payment_type'] ?? 'نقد',
-      totalAmount: (map['total_amount'] as num?)?.toDouble() ?? 0.0,
-      discount: (map['discount'] as num?)?.toDouble() ?? 0.0,
-      amountPaidOnInvoice: (map['amount_paid_on_invoice'] as num?)?.toDouble() ?? 0.0,
+      totalAmount: parsedTotal,
+      totalAmountCents: finalTotalCents,
+      discount: parsedDiscount,
+      discountCents: finalDiscountCents,
+      amountPaidOnInvoice: parsedPaid,
+      amountPaidOnInvoiceCents: finalPaidCents,
       loadingFee: (map['loading_fee'] as num?)?.toDouble() ?? 0.0,
       createdAt: DateTime.parse(map['created_at']),
       lastModifiedAt: DateTime.parse(map['last_modified_at']),

@@ -5180,6 +5180,8 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     
     // إضافة listener لنقل التركيز إلى Autocomplete عند طلب التركيز على _detailsFocusNode
     _detailsFocusNode.addListener(_onDetailsFocusChanged);
+    // 🎯 إضافة listener لتظليل كامل السعر عند استقبال المؤشر
+    _priceFocusNode.addListener(_onPriceFocusChanged);
     
     // Initialize ID controller from current product if resolvable
     final prod = widget.allProducts.firstWhere(
@@ -5203,13 +5205,28 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   
   // دالة للتعامل مع تغيير التركيز على حقل التفاصيل
   void _onDetailsFocusChanged() {
-    // يمكن إضافة منطق هنا إذا لزم الأnged: _detailsFocusNode.hasFocus=${_detailsFocusNode.hasFocus}');
+    // يمكن إضافة منطق هنا إذا لزم الأمر
+  }
+
+  // 🎯 دالة لتظليل كامل السعر عند استقبال التركيز
+  void _onPriceFocusChanged() {
+    if (_priceFocusNode.hasFocus) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_priceFocusNode.hasFocus && _priceController.text.isNotEmpty) {
+          _priceController.selection = TextSelection(
+            baseOffset: 0,
+            extentOffset: _priceController.text.length,
+          );
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
-    // إزالة الـ listener قبل التخلص من FocusNode
+    // إزالة الـ listeners قبل التخلص من FocusNode
     _detailsFocusNode.removeListener(_onDetailsFocusChanged);
+    _priceFocusNode.removeListener(_onPriceFocusChanged);
     
     // تنظيف الـ controller الذي نملكه
     _ownedDetailsController?.dispose();
@@ -5473,7 +5490,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     widget.onItemUpdated(_currentItem);
   }
 
-  void _updateSaleType(String newType) {
+  Future<void> _updateSaleType(String newType) async {
     Product? product = widget.allProducts.firstWhere(
       (p) => p.name == _currentItem.productName,
       orElse: () => Product(
@@ -5506,12 +5523,36 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         conversionFactor = product.lengthPerUnit ?? 1.0;
       }
     }
-    setState(() {
-      double newAppliedPrice;
+
+    // 🧠 استشارة محرك التسعير الذكي لنوع البيع المحدد
+    double newAppliedPrice = 0.0;
+    bool smartPriceFound = false;
+    if (product != null && product.id != null) {
+      try {
+        final db = widget.databaseService ?? DatabaseService();
+        int? custId;
+        final custName = widget.currentCustomerName.trim();
+        if (custName.isNotEmpty) {
+          final c = await db.findCustomerByNormalizedName(custName);
+          if (c != null) custId = c.id;
+        }
+        final smartResult = await SmartPricingService().getSmartPriceEnhanced(
+          productId: product.id!,
+          customerId: custId,
+          saleType: newType,
+        );
+        if (smartResult != null && smartResult.price > 0) {
+          newAppliedPrice = smartResult.price;
+          smartPriceFound = true;
+        }
+      } catch (_) {}
+    }
+
+    if (!smartPriceFound) {
       if ((product?.unit == 'piece' && newType != 'قطعة') ||
           (product?.unit == 'meter' && newType == 'لفة')) {
         // عند التحويل من قطعة إلى باكيت أو من متر إلى لفة: السعر للوحدة الكبيرة = السعر الحالي × عامل التحويل
-        newAppliedPrice = _currentItem.appliedPrice * conversionFactor;
+        newAppliedPrice = (_currentItem.appliedPrice > 0 ? _currentItem.appliedPrice : (product?.unitPrice ?? 0.0)) * conversionFactor;
       } else if ((product?.unit == 'piece' &&
               _currentItem.saleType != 'قطعة' &&
               newType == 'قطعة') ||
@@ -5521,11 +5562,14 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         // عند التحويل من باكيت إلى قطعة أو من لفة إلى متر: السعر للوحدة الصغيرة = السعر الحالي ÷ عامل التحويل
         newAppliedPrice = _currentItem.appliedPrice / conversionFactor;
       } else {
-        newAppliedPrice = _currentItem.appliedPrice;
+        newAppliedPrice = _currentItem.appliedPrice > 0 ? _currentItem.appliedPrice : (product?.unitPrice ?? 0.0);
       }
-      double quantity = _currentItem.quantityIndividual ??
-          _currentItem.quantityLargeUnit ??
-          1;
+    }
+
+    double quantity = _currentItem.quantityIndividual ??
+        _currentItem.quantityLargeUnit ??
+        1;
+    setState(() {
       _currentItem = _currentItem.copyWith(
         saleType: newType,
         appliedPrice: newAppliedPrice,
@@ -5541,17 +5585,39 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
       _priceController.text =
           (newAppliedPrice > 0) ? _formatNumber(newAppliedPrice) : '';
       widget.onItemUpdated(_currentItem);
-      // بعد اختيار نوع البيع، انتقل تلقائياً إلى السعر وافتح قائمة الأسعار
+      // بعد اختيار نوع البيع، انتقل تلقائياً إلى السعر
       FocusScope.of(context).requestFocus(_priceFocusNode);
-      setState(() {
-        _openPriceDropdown = true;
-      });
     });
+
+    // 🎯 تظليل السعر بالكامل فوراً عند الانتقال
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_priceFocusNode.hasFocus && _priceController.text.isNotEmpty) {
+        _priceController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _priceController.text.length,
+        );
+      }
+    });
+
     // تحديث أقل سعر تاريخي عند تغيير نوع البيع
     _fetchLowestRecentPrice();
   }
 
   void _updatePrice(String value) {
+    if (value.trim().isEmpty) {
+      setState(() {
+        double quantity = _currentItem.quantityIndividual ??
+            _currentItem.quantityLargeUnit ??
+            1;
+        _currentItem = _currentItem.copyWith(
+          appliedPrice: 0.0,
+          itemTotal: 0.0,
+        );
+      });
+      widget.onItemUpdated(_currentItem);
+      _fetchLowestRecentPrice();
+      return;
+    }
     double? newPrice = safeParseDouble(value);
     if (newPrice == null || newPrice < 0) return;
     setState(() {
@@ -5638,7 +5704,33 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     }
   }
 
-  void _applyProductSelection(Product prod) {
+  Future<void> _applyProductSelection(Product prod) async {
+    final saleType = (prod.unit == 'piece') ? 'قطعة' : ((prod.unit == 'meter') ? 'متر' : prod.unit);
+    
+    // 🧠 حساب السعر الذكي للمنتج بناءً على العميل ونوع البيع
+    double suggestedPrice = prod.unitPrice > 0 ? prod.unitPrice : prod.price1;
+    try {
+      final db = widget.databaseService ?? DatabaseService();
+      int? custId;
+      final custName = widget.currentCustomerName.trim();
+      if (custName.isNotEmpty) {
+        final c = await db.findCustomerByNormalizedName(custName);
+        if (c != null) custId = c.id;
+      }
+      if (prod.id != null) {
+        final smartResult = await SmartPricingService().getSmartPriceEnhanced(
+          productId: prod.id!,
+          customerId: custId,
+          saleType: saleType,
+        );
+        if (smartResult != null && smartResult.price > 0) {
+          suggestedPrice = smartResult.price;
+        }
+      }
+    } catch (_) {}
+
+    final quantity = _currentItem.quantityIndividual ?? _currentItem.quantityLargeUnit ?? 1.0;
+
     setState(() {
       _idController.text = prod.id?.toString() ?? '';
       _rowIdSuggestion = null;
@@ -5647,16 +5739,15 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         productName: prod.name,
         unit: prod.unit,
         unitPrice: prod.unitPrice,
+        saleType: saleType,
+        appliedPrice: suggestedPrice,
+        itemTotal: quantity * suggestedPrice,
+        quantityIndividual: (saleType == 'قطعة' || saleType == 'متر') ? quantity : null,
+        quantityLargeUnit: (saleType != 'قطعة' && saleType != 'متر') ? quantity : null,
       );
-      // مزامنة خانة التفاصيل فوراً
+      // مزامنة خانة التفاصيل والسعر فوراً
       _detailsController?.text = prod.name;
-      if (prod.unit == 'piece') {
-        _currentItem = _currentItem.copyWith(saleType: 'قطعة');
-      } else if (prod.unit == 'meter') {
-        _currentItem = _currentItem.copyWith(saleType: 'متر');
-      } else {
-        _currentItem = _currentItem.copyWith(saleType: prod.unit);
-      }
+      _priceController.text = suggestedPrice > 0 ? _formatNumber(suggestedPrice) : '';
     });
     widget.onItemUpdated(_currentItem);
     // نقل المؤشر مباشرة إلى حقل العدد
@@ -5760,6 +5851,15 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                             onSubmitted: (val) {
                               onFieldSubmitted();
                               _validateStockByManualName(val); // 🔍 تحقق نهائي عند الضغط على Enter
+                              final sanitizedInput = val.trim().replaceAll(' ', '');
+                              if (sanitizedInput.isNotEmpty) {
+                                try {
+                                  final matchingProduct = widget.allProducts.firstWhere(
+                                    (p) => p.name.trim().replaceAll(' ', '') == sanitizedInput,
+                                  );
+                                  _applyProductSelection(matchingProduct);
+                                } catch (_) {}
+                              }
                               widget.onItemUpdated(_currentItem);
                               if (!_isRowLocked) {
                                 FocusScope.of(context).requestFocus(_quantityFocusNode);

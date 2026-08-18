@@ -1273,11 +1273,13 @@ class DatabaseService {
   
   /// البحث عن منتج بالباركود
   Future<Product?> findProductByBarcode(String barcode) async {
+    final cleanBarcode = barcode.trim();
+    if (cleanBarcode.isEmpty) return null;
     final db = await _productDao.getDatabase();
     
     // أولاً: البحث في جدول الباركودات المتعددة
     final barcodeResult = await db.query('product_barcodes',
-      where: 'barcode = ?', whereArgs: [barcode], limit: 1);
+      where: 'TRIM(barcode) = ? OR barcode = ?', whereArgs: [cleanBarcode, cleanBarcode], limit: 1);
     
     if (barcodeResult.isNotEmpty) {
       final productId = barcodeResult.first['product_id'] as int;
@@ -1286,7 +1288,7 @@ class DatabaseService {
     
     // ثانياً: البحث في حقل الباركود الأساسي للمنتج
     final products = await db.query('products', 
-      where: 'barcode = ?', whereArgs: [barcode], limit: 1);
+      where: 'TRIM(barcode) = ? OR barcode = ?', whereArgs: [cleanBarcode, cleanBarcode], limit: 1);
     
     if (products.isNotEmpty) {
       return Product.fromMap(products.first);
@@ -1297,14 +1299,16 @@ class DatabaseService {
   
   /// جلب سعر باركود محدد (إذا كان له سعر مختلف)
   Future<Map<String, double?>> getBarcodePrice(String barcode) async {
+    final cleanBarcode = barcode.trim();
+    if (cleanBarcode.isEmpty) return {'cost_price': null, 'sell_price': null};
     final db = await _productDao.getDatabase();
     final result = await db.query('product_barcodes',
-      where: 'barcode = ?', whereArgs: [barcode], limit: 1);
+      where: 'TRIM(barcode) = ? OR barcode = ?', whereArgs: [cleanBarcode, cleanBarcode], limit: 1);
     
     if (result.isNotEmpty) {
       return {
-        'cost_price': result.first['cost_price'] as double?,
-        'sell_price': result.first['sell_price'] as double?,
+        'cost_price': (result.first['cost_price'] as num?)?.toDouble(),
+        'sell_price': (result.first['sell_price'] as num?)?.toDouble(),
       };
     }
     return {'cost_price': null, 'sell_price': null};
@@ -1540,12 +1544,23 @@ class DatabaseService {
       WHERE creator_device_id = ?
         AND invoice_year = ?
         AND invoice_month = ?
-        AND is_created_by_me = 1
     ''', [deviceIdStr, invoiceYear, invoiceMonth]);
 
     int nextSeq = 1;
     if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {
       nextSeq = (seqResult.first['max_seq'] as int) + 1;
+    }
+
+    while (true) {
+      final checkSeq = await db.query(
+        'invoices',
+        columns: ['id'],
+        where: 'creator_device_id = ? AND invoice_year = ? AND invoice_month = ? AND monthly_sequence_number = ?',
+        whereArgs: [deviceIdStr, invoiceYear, invoiceMonth, nextSeq],
+        limit: 1,
+      );
+      if (checkSeq.isEmpty) break;
+      nextSeq++;
     }
 
     return '$deviceIdNum$invoiceYear$invoiceMonth$nextSeq';

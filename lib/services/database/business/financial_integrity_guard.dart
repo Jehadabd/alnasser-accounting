@@ -104,7 +104,7 @@ class FinancialIntegrityGuard {
   /// سجل الإنذارات
   final List<IntegrityAlert> _alerts = [];
   int _alertCounter = 0;
-
+///
   FinancialIntegrityGuard({
     required this.getDatabase,
     required this.invoiceDao,
@@ -196,7 +196,7 @@ class FinancialIntegrityGuard {
       return GuardResult.fail('C001', 'العميل $customerId غير موجود');
     }
     final res = await db.rawQuery(
-      'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+       'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ?',
       [customerId],
     );
     final calculated = ((res.first['total'] as num?) ?? 0).toDouble();

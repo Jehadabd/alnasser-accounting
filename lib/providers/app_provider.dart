@@ -392,8 +392,20 @@ class AppProvider with ChangeNotifier {
 
   // Customer selection
   Future<void> selectCustomer(Customer customer) async {
-    _selectedCustomer = customer;
-    await loadCustomerTransactions(customer.id!);
+    Customer freshCustomer = customer;
+    if (customer.id != null) {
+      try {
+        final loaded = await _db.getCustomerById(customer.id!);
+        if (loaded != null) {
+          freshCustomer = loaded;
+        }
+      } catch (e) {
+        debugPrint('Error loading fresh customer: $e');
+      }
+    }
+    _selectedCustomer = freshCustomer;
+    await loadCustomerTransactions(freshCustomer.id!);
+    notifyListeners();
   }
 
   // Drive upload methods removed

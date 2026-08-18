@@ -46,8 +46,8 @@ class InvoiceSyncService {
   /// آخر يُفشل الإدراج. و`monthly_sequence_number` يبقى رقم عرض محلياً.
   static const _invoiceColumns = {
     'customer_name', 'customer_phone', 'customer_address', 'installer_name',
-    'invoice_date', 'payment_type', 'total_amount', 'discount',
-    'amount_paid_on_invoice', 'loading_fee', 'created_at', 'last_modified_at',
+    'invoice_date', 'payment_type', 'total_amount', 'total_amount_cents', 'discount', 'discount_cents',
+    'amount_paid_on_invoice', 'amount_paid_cents', 'loading_fee', 'created_at', 'last_modified_at',
     'status', 'return_amount', 'points_rate', 'notes', 'final_total',
     'invoice_uuid', 'creator_device_id', 'version',
     'invoice_number', // ✅ رقم الفاتورة التجاري (Natural Key)
@@ -68,8 +68,8 @@ class InvoiceSyncService {
   /// عندنا. بدلاً منه نستخدم `product_sync_uuid` لمطابقة المنتج عبر الأجهزة
   /// (مما يُمكّن خصم المخزون بشكل صحيح على الجهاز المستقبِل).
   static const _itemColumns = {
-    'product_name', 'unit', 'unit_price', 'cost_price', 'actual_cost_price',
-    'quantity_individual', 'quantity_large_unit', 'applied_price', 'item_total',
+    'product_name', 'unit', 'unit_price', 'unit_price_cents', 'cost_price', 'cost_price_cents', 'actual_cost_price',
+    'quantity_individual', 'quantity_large_unit', 'applied_price', 'applied_price_cents', 'item_total', 'item_total_cents',
     'sale_type', 'units_in_large_unit', 'unique_id',
     'product_sync_uuid', // 🔄 ربط ذري بالمنتج عبر sync_uuid (لخصم المخزون)
   };
@@ -453,6 +453,14 @@ class InvoiceSyncService {
 
         int invoiceId;
         final bool isUpdate;
+        // 🛡️ تأمين حقول السنتات للفاتورة
+        final totalAmount = (invoiceData['total_amount'] as num?)?.toDouble() ?? 0.0;
+        invoiceData['total_amount_cents'] = (totalAmount * 100).round();
+        final discount = (invoiceData['discount'] as num?)?.toDouble() ?? 0.0;
+        invoiceData['discount_cents'] = (discount * 100).round();
+        final paid = (invoiceData['amount_paid_on_invoice'] as num?)?.toDouble() ?? 0.0;
+        invoiceData['amount_paid_cents'] = (paid * 100).round();
+
         if (rows.isNotEmpty) {
           final currentVersion = (rows.first['version'] as num?)?.toInt() ?? 0;
           if (currentVersion >= incomingVersion) {
@@ -487,6 +495,16 @@ class InvoiceSyncService {
           itemMap['item_total'] = itemMap['item_total'] ?? 0.0;
           itemMap['product_name'] = itemMap['product_name'] ?? 'منتج غير معروف';
           itemMap['unit'] = itemMap['unit'] ?? '';
+
+          // 🛡️ تأمين حقول السنتات للأصناف الواردة
+          final uPrice = (itemMap['unit_price'] as num?)?.toDouble() ?? 0.0;
+          itemMap['unit_price_cents'] = (uPrice * 100).round();
+          final appPrice = (itemMap['applied_price'] as num?)?.toDouble() ?? 0.0;
+          itemMap['applied_price_cents'] = (appPrice * 100).round();
+          final iTotal = (itemMap['item_total'] as num?)?.toDouble() ?? 0.0;
+          itemMap['item_total_cents'] = (iTotal * 100).round();
+          final cPrice = (itemMap['cost_price'] as num?)?.toDouble() ?? 0.0;
+          itemMap['cost_price_cents'] = (cPrice * 100).round();
 
           itemMap['invoice_id'] = invoiceId;
           await txn.insert('invoice_items', itemMap);

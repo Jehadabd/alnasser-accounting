@@ -270,15 +270,6 @@ class Product {
   /// Returns all available units for this product (base unit + hierarchy units)
   List<String> getAllUnitLevels() {
     List<String> levels = [];
-    // The base unit logic might be complex depending on how 'unit' is stored ('piece' vs 'meter') 
-    // and 'isWeighable'. But generally, the 'unit' field is the base.
-    // If we want to be friendly, we can check logic. 
-    // For now, let's trust 'unit' and 'unitHierarchy'.
-    
-    // BUT: In old logic 'unit' might be 'piece' or 'meter'.
-    // In Joker, we might rely on unitHierarchy heavily.
-    
-    // Add base unit (Use localized name if possible, here simple string)
     levels.add(unit == 'piece' ? 'قطعة' : (unit == 'meter' ? 'متر' : unit));
 
     for (var item in getUnitHierarchyList()) {
@@ -289,3 +280,85 @@ class Product {
     return levels;
   }
 }
+
+/// 🏷️ 1NF: كائن شريحة السعر المنفصل (ProductPrice)
+class ProductPrice {
+  final int? id;
+  final int productId;
+  final int tierIndex;
+  final String tierName;
+  final int priceCents;
+
+  ProductPrice({
+    this.id,
+    required this.productId,
+    required this.tierIndex,
+    required this.tierName,
+    required this.priceCents,
+  });
+
+  double get priceMajor => priceCents / 1000.0;
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'product_id': productId,
+      'tier_index': tierIndex,
+      'tier_name': tierName,
+      'price_cents': priceCents,
+    };
+  }
+
+  factory ProductPrice.fromMap(Map<String, dynamic> map) {
+    return ProductPrice(
+      id: map['id'],
+      productId: map['product_id'],
+      tierIndex: map['tier_index'],
+      tierName: map['tier_name'],
+      priceCents: map['price_cents'] as int,
+    );
+  }
+}
+
+/// 📏 1NF: كائن وحدة المنتج المُنظم (ProductUnit)
+class ProductUnit {
+  final int? id;
+  final int productId;
+  final String unitName;
+  final double conversionFactor;
+  final int? costPriceCents;
+  final bool isBaseUnit;
+
+  ProductUnit({
+    this.id,
+    required this.productId,
+    required this.unitName,
+    this.conversionFactor = 1.0,
+    this.costPriceCents,
+    this.isBaseUnit = false,
+  });
+
+  double? get costPriceMajor => costPriceCents != null ? costPriceCents! / 1000.0 : null;
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'product_id': productId,
+      'unit_name': unitName,
+      'conversion_factor': conversionFactor,
+      'cost_price_cents': costPriceCents,
+      'is_base_unit': isBaseUnit ? 1 : 0,
+    };
+  }
+
+  factory ProductUnit.fromMap(Map<String, dynamic> map) {
+    return ProductUnit(
+      id: map['id'],
+      productId: map['product_id'],
+      unitName: map['unit_name'],
+      conversionFactor: (map['conversion_factor'] as num).toDouble(),
+      costPriceCents: map['cost_price_cents'] as int?,
+      isBaseUnit: map['is_base_unit'] == 1,
+    );
+  }
+}
