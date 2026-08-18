@@ -237,20 +237,38 @@ class AppProvider with ChangeNotifier {
     });
   }
 
-  // تغيير نوع الترتيب
+  // تغيير نوع الترتيب - 📄 يعيد التحميل من الصفحة الأولى بالترتيب الجديد
   Future<void> setSortType(CustomerSortType sortType) async {
     _currentSortType = sortType;
-    await _applySorting();
-    _applySearchFilter();
+    await _loadCustomersPage(refresh: true);
+    _filteredCustomers = List.from(_customers);
     notifyListeners();
   }
 
-  // إعادة تعيين الترتيب للافتراضي (أبجدي)
-  void resetSortType() {
-    _currentSortType = CustomerSortType.alphabetical;
-    _customers.sort((a, b) => a.name.compareTo(b.name));
-    _applySearchFilter();
+  /// 🧹 تنظيف مؤقت البحث عند التخلص من الـ provider
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  // (محجوظة للتوافق) - الترتيب المحلي لم يعد المستخدم مع وضع الـ Pagination
+  Future<void> _applySorting_legacy() async {
     notifyListeners();
+  }
+
+  /// 📄 مع Pagination: البحث يجري في SQL، وهذه مجرد مزامنة القائمة المعروضة
+  /// مع القائمة المحمّلة (تبقى لاستدعاءات addCustomer/updateCustomer القديمة).
+  void _applySearchFilter() {
+    _filteredCustomers = List.from(_customers);
+    notifyListeners();
+  }
+
+  // إعادة تعيين الترتيب للافتراضي (أبجدي) - 📄 مع إعادة تحميل من SQL
+  Future<void> resetSortType() async {
+    _currentSortType = CustomerSortType.alphabetical;
+    await _loadCustomersPage(refresh: true);
+    _applySearchFilter();
   }
 
   Future<void> addCustomer(Customer customer) async {
@@ -369,18 +387,6 @@ class AppProvider with ChangeNotifier {
       await _loadCustomersPage(refresh: true);
       notifyListeners();
     });
-    notifyListeners();
-  }
-
-  void _applySearchFilter() {
-    if (_searchQuery.isEmpty) {
-      _filteredCustomers = List.from(_customers);
-    } else {
-      _filteredCustomers = _customers
-          .where((customer) =>
-              customer.name.toLowerCase().contains(_searchQuery.toLowerCase()))
-          .toList();
-    }
     notifyListeners();
   }
 

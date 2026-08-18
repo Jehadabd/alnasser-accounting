@@ -821,11 +821,38 @@ class InvoiceSyncService {
     final already = await txn.query(
       'transactions',
       columns: ['id'],
-      where: 'invoice_sync_uuid = ? OR invoice_id = ?',
+      where: '(invoice_sync_uuid = ? AND invoice_sync_uuid IS NOT NULL AND invoice_sync_uuid != "") OR (invoice_id = ? AND invoice_id IS NOT NULL)',
       whereArgs: [invoiceUuid, invoiceId],
       limit: 1,
     );
     if (already.isNotEmpty) return;
+
+    // 🔍 حماية فائقة ضد التكرار: البحث عن معاملة وصلت عبر مزامنة المعاملات لنفس العميل والمبلغ ولم تُرطب بالفاتورة بعد
+    final unlinkedMatch = await txn.query(
+      'transactions',
+      columns: ['id'],
+      where: '''customer_id = ?
+                AND ABS(amount_changed - ?) < 0.01
+                AND (invoice_sync_uuid IS NULL OR invoice_sync_uuid = '')
+                AND (is_deleted IS NULL OR is_deleted = 0)''',
+      whereArgs: [customerId, remaining],
+      limit: 1,
+    );
+
+    if (unlinkedMatch.isNotEmpty) {
+      final matchId = unlinkedMatch.first['id'] as int;
+      await txn.update(
+        'transactions',
+        {
+          'invoice_id': invoiceId,
+          'invoice_sync_uuid': invoiceUuid,
+        },
+        where: 'id = ?',
+        whereArgs: [matchId],
+      );
+      print('🔗 [InvoiceSync] رُبطت المعاملة الواردة (id=$matchId) بالفاتورة $invoiceUuid بدلاً من مضاعفة الدين');
+      return;
+    }
 
     final custRows = await txn.query('customers',
         columns: ['current_total_debt'],

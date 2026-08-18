@@ -59,12 +59,17 @@ void main() async {
   // تهيئة الخطوط العربية
   await FontManager.loadArabicFonts();
 
-  // Force Landscape Orientation on Mobile
+  // إتاحة التحكم باتجاه الشاشة للجوال (أفقي ثابت أو تدوير تلقائي)
   if (Platform.isAndroid || Platform.isIOS) {
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    final String storedOrientation = GetStorage().read('screen_orientation') ?? 'landscape';
+    if (storedOrientation == 'auto') {
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    } else {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
   }
 
   // تحميل ملف .env من عدة مواقع محتملة
@@ -236,15 +241,20 @@ void main() async {
   //    fire-and-forget: لا نُعلّق الإقلاع؛ التهيئة تحدث في الخلفية.
   //    تتم فقط لو الرخصة مفعّلة (لا داعي للمزامنة على شاشة التفعيل).
   if (isLicenseActivated) {
-    FirebaseSyncService().initialize().then((ok) {
-      if (ok) {
-        print('✅ [main.dart] بدأت المزامنة تلقائياً عند الإقلاع');
-      } else {
-        print('⚠️ [main.dart] تعذّر بدء المزامنة التلقائية (ستُحاول لاحقاً)');
-      }
-    }).catchError((e) {
-      print('⚠️ [main.dart] خطأ في بدء المزامنة التلقائية: $e');
-    });
+    final license = licenseService.getStoredLicense();
+    if (license != null && license.isSyncAllowed) {
+      FirebaseSyncService().initialize().then((ok) {
+        if (ok) {
+          print('✅ [main.dart] بدأت المزامنة تلقائياً عند الإقلاع');
+        } else {
+          print('⚠️ [main.dart] تعذّر بدء المزامنة التلقائية (ستُحاول لاحقاً)');
+        }
+      }).catchError((e) {
+        print('⚠️ [main.dart] خطأ في بدء المزامنة التلقائية: $e');
+      });
+    } else {
+      print('ℹ️ [main.dart] المزامنة غير مشمولة لهذا الترخيص (${license?.appMode})');
+    }
   }
 }
 
@@ -266,7 +276,7 @@ class MyApp extends StatelessWidget {
         Provider<EnsembleAIService>(create: (_) => EnsembleAIService()),
       ],
       child: MaterialApp(
-        title: 'دفتر ديوني',
+        title: 'الناصر',
         theme: ThemeData(
           primarySwatch: Colors.blue,
           fontFamily: 'Cairo',

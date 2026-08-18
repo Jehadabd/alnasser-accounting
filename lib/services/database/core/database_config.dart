@@ -56,11 +56,15 @@ class DatabaseConfig {
     // Temp Store in Memory: تسريع العمليات المؤقتة
     await db.rawQuery('PRAGMA temp_store = MEMORY');
     
-    // Memory-mapped I/O: تسريع القراءة (30GB max)
-    await db.rawQuery('PRAGMA mmap_size = 30000000000');
-    
-    // Cache Size: 200MB RAM cache للبيانات المتكررة
-    await db.rawQuery('PRAGMA cache_size = -200000');
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      // Memory-mapped I/O للكمبيوتر والديسكتوب
+      await db.rawQuery('PRAGMA mmap_size = 30000000000');
+      await db.rawQuery('PRAGMA cache_size = -200000');
+    } else {
+      // للأندرويد والموبايل: حدود آمنة تمنع إغلاق التطبيق الفجائي (OS OOM Killer)
+      await db.rawQuery('PRAGMA mmap_size = 268435456'); // 256MB max
+      await db.rawQuery('PRAGMA cache_size = -16000');   // 16MB cache
+    }
   }
 
   /// التحقق من سلامة قاعدة البيانات

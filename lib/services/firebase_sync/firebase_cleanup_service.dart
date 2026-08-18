@@ -4,7 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_sync_config.dart';
 
 class FirebaseCleanupService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  FirebaseFirestore? _firestoreInstance;
+  FirebaseFirestore get _firestore => _firestoreInstance ??= FirebaseFirestore.instance;
   static const String _lastCleanupKey = 'last_firebase_cleanup_time';
   static const int _cleanupIntervalHours = 24; // Run once a day
 

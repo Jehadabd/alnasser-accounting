@@ -34,7 +34,8 @@ class DiscrepancyResolutionService {
   DiscrepancyResolutionService._internal();
 
   final DatabaseService _db = DatabaseService();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  FirebaseFirestore? _firestoreInstance;
+  FirebaseFirestore get _firestore => _firestoreInstance ??= FirebaseFirestore.instance;
 
   /// 🔍 فحص عميل محدد للبحث عن الفروقات وتحديد سببها
   Future<ResolutionAssessment> analyzeCustomer(String customerSyncUuid, double localBalance, double remoteBalance) async {

@@ -282,7 +282,11 @@ class POSProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  String? _lastErrorMessage;
+  String? get lastErrorMessage => _lastErrorMessage;
+
   Future<bool> processCheckout() async {
+    _lastErrorMessage = null;
     if (_cartItems.isEmpty) return false;
 
     _isLoading = true;
@@ -361,6 +365,7 @@ class POSProvider extends ChangeNotifier {
         clearCart();
         return true;
     } catch(e) {
+        _lastErrorMessage = e.toString().replaceAll('Exception: ', '');
         print("Checkout error: $e");
         return false;
     } finally {

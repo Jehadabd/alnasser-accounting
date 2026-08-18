@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/app_settings.dart';
 import '../services/settings_manager.dart';
 import '../screens/inventory_menu_screen.dart';
+import '../services/license_service.dart';
 
 /// 🧭 شريط التنقل الجانبي التكيفي (Adaptive Side Navigation Rail)
 /// يظهر على الشاشات الكبيرة (تابلت / ديسكتوب) تلقائياً، أو عندما يُفعّله المستخدم من الإعدادات.
@@ -13,21 +14,23 @@ class AppSideNav extends StatelessWidget {
     required this.currentRoute,
   });
 
-  /// التحقق مما إذا كان يجب عرض شريط التنقل بناءً على حجم الشاشة والإعدادات
+  /// التحقق مما إذا كان يجب عرض شريط التنقل بناءً على الإعدادات
   static bool shouldShow(BuildContext context, AppSettings settings) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isTabletOrDesktop = screenWidth >= 600;
-    return isTabletOrDesktop || settings.showSideNav;
+    return settings.showSideNav;
   }
 
   @override
   Widget build(BuildContext context) {
-    final items = [
+    final license = LicenseService().getStoredLicense();
+    final bool isDebtsOnly = license?.isDebtsOnly ?? false;
+
+    final allItems = [
       _NavItem(
         route: '/pos',
         title: 'الكاشير',
         icon: Icons.point_of_sale,
         color: const Color(0xFFFF5722),
+        isFullAppOnly: true,
       ),
       _NavItem(
         route: '/debt_register',
@@ -40,24 +43,28 @@ class AppSideNav extends StatelessWidget {
         title: 'المخزون',
         icon: Icons.inventory_2,
         color: const Color(0xFF4CAF50),
+        isFullAppOnly: true,
       ),
       _NavItem(
         route: '/create_invoice',
         title: 'إنشاء قائمة',
         icon: Icons.list_alt,
         color: const Color(0xFF2196F3),
+        isFullAppOnly: true,
       ),
       _NavItem(
         route: '/edit_invoices',
         title: 'تعديل القوائم',
         icon: Icons.edit_note,
         color: const Color(0xFF8D6E63),
+        isFullAppOnly: true,
       ),
       _NavItem(
         route: '/suppliers',
         title: 'الموردون',
         icon: Icons.local_shipping,
         color: const Color(0xFF9C27B0),
+        isFullAppOnly: true,
       ),
       _NavItem(
         route: '/reports',
@@ -72,6 +79,8 @@ class AppSideNav extends StatelessWidget {
         color: const Color(0xFF607D8B),
       ),
     ];
+
+    final items = isDebtsOnly ? allItems.where((item) => !item.isFullAppOnly).toList() : allItems;
 
     return Container(
       width: 72,
@@ -202,11 +211,13 @@ class _NavItem {
   final String title;
   final IconData icon;
   final Color color;
+  final bool isFullAppOnly;
 
-  _NavItem({
+  const _NavItem({
     required this.route,
     required this.title,
     required this.icon,
     required this.color,
+    this.isFullAppOnly = false,
   });
 }

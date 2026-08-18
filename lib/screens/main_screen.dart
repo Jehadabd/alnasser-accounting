@@ -24,6 +24,7 @@ import 'inventory_menu_screen.dart'; // ✅ Added
 import '../services/alert_service.dart'; // 🔔 Added
 import '../models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
+import '../services/license_service.dart'; // 🔐 نظام التراخيص
 // ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
 // تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
 class MainScreen extends StatefulWidget {
@@ -292,9 +293,9 @@ class _MainScreenState extends State<MainScreen> {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.15),
-            blurRadius: 15,
-            offset: const Offset(0, 6),
+            color: color.withOpacity(0.12),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
@@ -304,31 +305,42 @@ class _MainScreenState extends State<MainScreen> {
           onTap: onTap,
           borderRadius: BorderRadius.circular(20),
           child: Padding(
-            padding: const EdgeInsets.all(8.0),
+            padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 12.0),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.1),
+                    color: color.withOpacity(0.12),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(icon, size: 48, color: color),
+                  child: Icon(icon, size: 38, color: color),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF1E1E2E),
-                    height: 1.1,
+                const SizedBox(height: 10),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1E1E2E),
+                      height: 1.2,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 4),
-                Container(width: 20, height: 3, decoration: BoxDecoration(color: color.withOpacity(0.4), borderRadius: BorderRadius.circular(2))),
+                Container(
+                  width: 22, 
+                  height: 3, 
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.4), 
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ],
             ),
           ),
@@ -339,15 +351,53 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final license = LicenseService().getStoredLicense();
+    final bool isDebtsOnly = license?.isDebtsOnly ?? false;
     final screenWidth = MediaQuery.of(context).size.width;
-    final isLargeScreen = screenWidth > 600;
-    final crossAxisCount = isLargeScreen ? 6 : 5;
-    final childAspectRatio = 0.7;
-    final buttonFontSize = 40.0;
-    final iconSize = 60.0;
-    final buttonPadding = 4.0;
-    final buttonSpacing = 4.0;
-    final gridSpacing = 32.0;
+
+    // 📱 حساب عدد الأعسبة ونسبة الحجم استجابياً حسب حجم الشاشة ونوع الترخيص
+    int crossAxisCount;
+    double childAspectRatio;
+    double gridSpacing;
+
+    if (isDebtsOnly) {
+      // 📘 نمط سجل الديون (4 أزرار فقط)
+      if (screenWidth < 600) {
+        // جوال عمودي: 2 عمود × 2 صفوف (تنسيق أنيق وشاشات كبيرة)
+        crossAxisCount = 2;
+        childAspectRatio = 1.15;
+        gridSpacing = 16.0;
+      } else if (screenWidth < 900) {
+        // جوال أفقي / تابلت صغير: 4 أزرار بصف واحد
+        crossAxisCount = 4;
+        childAspectRatio = 1.05;
+        gridSpacing = 20.0;
+      } else {
+        // تابلت كبير / ديسكتوب: 4 أزرار بصف واحد متباعد
+        crossAxisCount = 4;
+        childAspectRatio = 1.25;
+        gridSpacing = 24.0;
+      }
+    } else {
+      // 🏬 التطبيق الكامل (9 أزرار)
+      if (screenWidth < 500) {
+        crossAxisCount = 2;
+        childAspectRatio = 1.05;
+        gridSpacing = 14.0;
+      } else if (screenWidth < 800) {
+        crossAxisCount = 3;
+        childAspectRatio = 1.0;
+        gridSpacing = 16.0;
+      } else if (screenWidth < 1100) {
+        crossAxisCount = 4;
+        childAspectRatio = 1.05;
+        gridSpacing = 20.0;
+      } else {
+        crossAxisCount = 5;
+        childAspectRatio = 1.15;
+        gridSpacing = 24.0;
+      }
+    }
 
     return PopScope(
       canPop: false,
@@ -364,7 +414,7 @@ class _MainScreenState extends State<MainScreen> {
       child: Scaffold(
       backgroundColor: _backgroundColor,
       appBar: AppBar(
-        title: const Text('دفتر ديوني', style: TextStyle(fontSize: 24)),
+        title: const Text('الناصر', style: TextStyle(fontSize: 24)),
         centerTitle: true,
         backgroundColor: _primaryColor,
         elevation: 0,
@@ -421,17 +471,18 @@ class _MainScreenState extends State<MainScreen> {
           crossAxisSpacing: gridSpacing,
           childAspectRatio: childAspectRatio,
           children: [
-            // 💰 POS Button - First and Prominent
-            _buildModernFeatureButton(
-              icon: Icons.point_of_sale,
-              title: 'الكاشير',
-              onTap: () {
-                if (_checkPermission(AppPermissions.posAccess)) {
-                  Navigator.pushNamed(context, '/pos');
-                }
-              },
-              color: const Color(0xFFFF5722), // Vibrant Orange
-            ),
+            // 💰 POS Button - Only for Full App
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.point_of_sale,
+                title: 'الكاشير',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.posAccess)) {
+                    Navigator.pushNamed(context, '/pos');
+                  }
+                },
+                color: const Color(0xFFFF5722), // Vibrant Orange
+              ),
 
             _buildModernFeatureButton(
               icon: Icons.book,
@@ -444,44 +495,45 @@ class _MainScreenState extends State<MainScreen> {
               color: _primaryColor,
             ),
             
-            // 🆕 زر المخزون (القائمة الجديدة)
-            _buildModernFeatureButton(
-              icon: Icons.inventory_2, // أيقونة المخزون
-              title: 'المخزون',
-              onTap: () {
-                // يمكن استخدام صلاحية عامة أو التحقق داخل القائمة
-                // سنستخدم صلاحية productEntry كبداية للدخول
-                if (_checkPermission(AppPermissions.productEntry) || _checkPermission(AppPermissions.editProducts)) {
-                   Navigator.push(
-                     context,
-                     MaterialPageRoute(builder: (context) => const InventoryMenuScreen()),
-                   );
-                }
-              },
-              color: const Color(0xFF4CAF50),
-            ),
+            // 🆕 زر المخزون - Only for Full App
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.inventory_2, // أيقونة المخزون
+                title: 'المخزون',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.productEntry) || _checkPermission(AppPermissions.editProducts)) {
+                     Navigator.push(
+                       context,
+                       MaterialPageRoute(builder: (context) => const InventoryMenuScreen()),
+                     );
+                  }
+                },
+                color: const Color(0xFF4CAF50),
+              ),
 
-            _buildModernFeatureButton(
-              icon: Icons.list_alt,
-              title: 'إنشاء قائمة',
-              onTap: () {
-                if (_checkPermission(AppPermissions.createInvoice)) {
-                  Navigator.pushNamed(context, '/create_invoice');
-                }
-              },
-              color: const Color(0xFF2196F3),
-            ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.list_alt,
+                title: 'إنشاء قائمة',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.createInvoice)) {
+                    Navigator.pushNamed(context, '/create_invoice');
+                  }
+                },
+                color: const Color(0xFF2196F3),
+              ),
             
-            _buildModernFeatureButton(
-              icon: Icons.edit_note,
-              title: 'تعديل القوائم',
-              onTap: () {
-                if (_checkPermission(AppPermissions.editInvoices)) {
-                  Navigator.pushNamed(context, '/edit_invoices');
-                }
-              },
-              color: const Color(0xFF795548),
-            ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.edit_note,
+                title: 'تعديل القوائم',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.editInvoices)) {
+                    Navigator.pushNamed(context, '/edit_invoices');
+                  }
+                },
+                color: const Color(0xFF795548),
+              ),
 
             _buildModernFeatureButton(
               icon: Icons.cloud_upload,
@@ -760,21 +812,22 @@ class _MainScreenState extends State<MainScreen> {
               },
               color: const Color(0xFF673AB7),
             ),           
-            _buildModernFeatureButton(
-              icon: Icons.factory,
-              title: 'الموردون',
-              onTap: () {
-                if (_checkPermission(AppPermissions.suppliers)) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const SuppliersDashboardScreen(),
-                    ),
-                  );
-                }
-              },
-              color: const Color(0xFF455A64),
-            ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.factory,
+                title: 'الموردون',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.suppliers)) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const SuppliersDashboardScreen(),
+                      ),
+                    );
+                  }
+                },
+                color: const Color(0xFF455A64),
+              ),
           ],
         ),
       ),

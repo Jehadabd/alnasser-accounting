@@ -100,17 +100,20 @@ class _CartPanelState extends State<CartPanel> {
                         margin: const EdgeInsets.only(top: 4),
                         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8)]),
                         child: Column(
-                          children: provider.filteredCustomers.map((customer) => ListTile(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            leading: CircleAvatar(radius: 12, backgroundColor: Colors.blue[50], child: const Icon(Icons.person, size: 14, color: Colors.blue)),
-                            title: Text(customer.name, style: const TextStyle(fontSize: 13)),
-                            subtitle: customer.currentTotalDebt > 0 ? Text('دين: ${customer.currentTotalDebt.toStringAsFixed(0)}', style: TextStyle(fontSize: 10, color: Colors.orange[700])) : null,
-                            onTap: () {
-                              _customerController.text = customer.name;
-                              provider.selectCustomer(customer);
-                              setState(() => _showSuggestions = false);
-                            },
+                          children: provider.filteredCustomers.map((customer) => Material(
+                            color: Colors.transparent,
+                            child: ListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              leading: CircleAvatar(radius: 12, backgroundColor: Colors.blue[50], child: const Icon(Icons.person, size: 14, color: Colors.blue)),
+                              title: Text(customer.name, style: const TextStyle(fontSize: 13)),
+                              subtitle: customer.currentTotalDebt > 0 ? Text('دين: ${customer.currentTotalDebt.toStringAsFixed(0)}', style: TextStyle(fontSize: 10, color: Colors.orange[700])) : null,
+                              onTap: () {
+                                _customerController.text = customer.name;
+                                provider.selectCustomer(customer);
+                                setState(() => _showSuggestions = false);
+                              },
+                            ),
                           )).toList(),
                         ),
                       ),
@@ -385,6 +388,11 @@ class _CartPanelState extends State<CartPanel> {
                             _discountController.clear();
                             _paidController.clear();
                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم حفظ الفاتورة #${provider.lastInvoiceDisplayNumber ?? provider.lastInvoiceId} بنجاح!'), backgroundColor: Colors.green));
+                          } else if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(provider.lastErrorMessage ?? 'حدث خطأ أثناء حفظ الفاتورة'),
+                              backgroundColor: Colors.red,
+                            ));
                           }
                         },
                         style: ElevatedButton.styleFrom(

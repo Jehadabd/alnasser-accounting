@@ -25,6 +25,7 @@ import 'package:alnaser/models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
 import 'package:path_provider/path_provider.dart' as pp;
 import '../services/invoice_pdf_service.dart';
+import '../services/smart_pricing_service.dart';
 import '../widgets/formatters.dart';
 import 'dart:async';
 import 'package:provider/provider.dart';
@@ -3890,8 +3891,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     );
   }
 
-  // Helper method to update price based on selected list type AND selected unit
-  void _updatePriceForSelectedProduct(Product product) {
+  // Helper method to update price based on selected list type AND selected unit (with Smart Pricing)
+  Future<void> _updatePriceForSelectedProduct(Product product) async {
       double? basePrice;
       switch (_selectedListType) {
           case 'مفرد':
@@ -3914,6 +3915,26 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
               break;
           default:
               basePrice = product.price1;
+      }
+      
+      // 🧠 استشارة محرك التسعير الذكي عند إدخال صنف من جدول الفاتورة
+      if (product.id != null) {
+        try {
+          int? custId;
+          final custName = customerNameController.text.trim();
+          if (custName.isNotEmpty) {
+            final c = await db.findCustomerByNormalizedName(custName);
+            if (c != null) custId = c.id;
+          }
+          final smartResult = await SmartPricingService().getSmartPriceEnhanced(
+            productId: product.id!,
+            customerId: custId,
+            saleType: _selectedListType,
+          );
+          if (smartResult != null && smartResult.price > 0) {
+            basePrice = smartResult.price;
+          }
+        } catch (_) {}
       }
       
       if (basePrice == null || basePrice <= 0) {

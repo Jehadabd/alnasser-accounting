@@ -196,7 +196,7 @@ class FinancialIntegrityGuard {
       return GuardResult.fail('C001', 'العميل $customerId غير موجود');
     }
     final res = await db.rawQuery(
-      'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ?',
+      'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
       [customerId],
     );
     final calculated = ((res.first['total'] as num?) ?? 0).toDouble();
@@ -324,7 +324,7 @@ class FinancialIntegrityGuard {
     for (final c in customers) {
       if (c.id == null) continue;
       final res = await db.rawQuery(
-        'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ?',
+        'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
         [c.id],
       );
       final calc = ((res.first['total'] as num?) ?? 0).toDouble();
@@ -643,7 +643,7 @@ class FinancialIntegrityGuard {
 
     // الطريقة الثانية: من مجموع transactions
     final txSumRes = await db.rawQuery(
-      'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ?',
+      'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
       [customerId],
     );
     final method2 = ((txSumRes.first['total'] as num?) ?? 0).toDouble();
@@ -1052,7 +1052,7 @@ class FinancialIntegrityGuard {
       if (c.id == null) continue;
       checked++;
       final result = await db.rawQuery(
-        'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ?',
+        'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
         [c.id],
       );
       final calc = ((result.first['total'] as num?) ?? 0).toDouble();

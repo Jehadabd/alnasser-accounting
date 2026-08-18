@@ -7,9 +7,10 @@ import 'package:crypto/crypto.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'firebase_sync/firebase_sync_config.dart';
 
 class LicenseService {
-  static const String _apiUrl = 'https://script.google.com/macros/s/AKfycby96_DzLGyvw1LGyj9K8irCyPWOIb3o5rde7RMaxj_rhjAXt-fPHbPxPKniHloLGg0JYw/exec';
+  static const String _apiUrl = 'https://script.google.com/macros/s/AKfycbwWDr3ALJ8jzhqIruH5GYEVbWL_EXRjxGux9Pcz-IwZPhIbv_T2Dsn7p2YGqWxA-7j1pQ/exec';
   
   // مفاتيح التخزين المحلي
   static const String _keyLicense = 'license_data';
@@ -243,12 +244,17 @@ class LicenseService {
         );
       }
 
+      final newAppMode = (response['appMode'] ?? 'full_sync').toString().toLowerCase();
+      final bool newSyncAllowed = response['isSyncAllowed'] as bool? ?? 
+          (newAppMode == 'full_sync' || (newAppMode == 'full' && newAppMode != 'debts_only' && newAppMode != 'full_offline'));
+
       // حفظ بيانات الترخيص محلياً
       final licenseData = {
         'username': response['subUsername'] ?? username,
         'mainUsername': response['mainUsername'] ?? username,
         'subUsername': response['subUsername'] ?? username,
-        'appMode': response['appMode'] ?? 'full',
+        'appMode': newAppMode,
+        'isSyncAllowed': newSyncAllowed,
         'deviceId': deviceId,
         'type': response['type'],
         'expires': expiresDate.toIso8601String(),
@@ -260,6 +266,9 @@ class LicenseService {
       await _storage.write(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
       await _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
       
+      // 🚀 تفعيل/تعطيل مفتاح المزامنة أوتوماتيكياً حسب نوع الترخيص عند التفعيل
+      await FirebaseSyncConfig.setEnabled(newSyncAllowed);
+
       // حفظ فرق الوقت مع السيرفر
       if (response['serverTime'] != null) {
         final serverTime = _parseDate(response['serverTime']);
@@ -272,7 +281,7 @@ class LicenseService {
       return LicenseResult(
         success: true,
         type: response['type'],
-        appMode: response['appMode'] ?? 'full',
+        appMode: newAppMode,
         mainUsername: response['mainUsername'],
         subUsername: response['subUsername'],
         expires: expiresDate.toIso8601String(),
@@ -460,11 +469,18 @@ class LicenseService {
         );
       }
       
-      // تحديث البيانات المحلية
+      // تحديث البيانات المحلية شأملة نمط التطبيق وسماح المزامنة
+      final newAppMode = (response['appMode'] ?? license.appMode).toString().toLowerCase();
+      final bool newSyncAllowed = response['isSyncAllowed'] as bool? ?? (newAppMode == 'full_sync' || (newAppMode == 'full' && newAppMode != 'debts_only' && newAppMode != 'full_offline'));
+
       final licenseData = {
         'username': license.username,
+        'mainUsername': response['mainUsername'] ?? license.mainUsername,
+        'subUsername': response['subUsername'] ?? license.subUsername,
+        'appMode': newAppMode,
+        'isSyncAllowed': newSyncAllowed,
         'deviceId': deviceId,
-        'type': response['type'],
+        'type': response['type'] ?? license.type,
         'expires': expiresDate.toIso8601String(),
         'daysLeft': expiresDate.difference(DateTime.now()).inDays,
         'lastVerified': DateTime.now().toIso8601String(),
@@ -473,16 +489,22 @@ class LicenseService {
       await _storage.write(_keyLicense, jsonEncode(licenseData));
       await _storage.write(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
       await _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
+
+      // 🚀 تفعيل/تعطيل مفتاح المزامنة أوتوماتيكياً حسب النمط المجلوب من السيرفر
+      await FirebaseSyncConfig.setEnabled(newSyncAllowed);
       
-      print('🔐 [LICENSE] License updated silently. New expiry: $expiresDate');
+      print('🔐 [LICENSE] License updated silently. Mode: $newAppMode, Sync: $newSyncAllowed, Expiry: $expiresDate');
       
       return LicenseResult(
         success: true,
-        type: response['type'],
+        type: response['type'] ?? license.type,
+        appMode: newAppMode,
+        mainUsername: response['mainUsername'] ?? license.mainUsername,
+        subUsername: response['subUsername'] ?? license.subUsername,
         expires: expiresDate.toIso8601String(),
         daysLeft: expiresDate.difference(DateTime.now()).inDays,
         warning: response['warning'],
-        wasRenewed: true, // إشارة أنه تم التجديد
+        wasRenewed: true,
       );
     } else {
       // فشل التحقق - ربما تم تعليق الحساب أو تغيير الجهاز
@@ -669,12 +691,13 @@ class LicenseData {
   final String username;
   final String? mainUsername;
   final String? subUsername;
-  final String appMode; // 'full' or 'debts_only'
+  final String appMode; // 'full', 'debts_only', 'full_offline', 'full_sync'
   final String deviceId;
   final String type;
   final String expires;
   final int? daysLeft;
-  
+  final bool isSyncAllowed;
+
   LicenseData({
     required this.username,
     this.mainUsername,
@@ -684,19 +707,41 @@ class LicenseData {
     required this.type,
     required this.expires,
     this.daysLeft,
-  });
-  
+    bool? isSyncAllowed,
+  }) : isSyncAllowed = isSyncAllowed ?? (appMode == 'full_sync' || (appMode == 'full' && appMode != 'debts_only' && appMode != 'full_offline' && appMode != 'full_no_sync'));
+
+  bool get isDebtsOnly => appMode == 'debts_only';
+  bool get isFullOffline => appMode == 'full_offline' || appMode == 'full_no_sync';
+  bool get isFullSync => isSyncAllowed;
+
   factory LicenseData.fromJson(Map<String, dynamic> json) {
+    final mode = (json['appMode'] ?? json['mode'] ?? 'full').toString().toLowerCase();
+    final bool syncAllowed = json['isSyncAllowed'] as bool? ?? (mode == 'full_sync' || (mode == 'full' && mode != 'debts_only' && mode != 'full_offline' && mode != 'full_no_sync'));
     return LicenseData(
       username: json['username'] ?? json['subUsername'] ?? '',
       mainUsername: json['mainUsername'],
       subUsername: json['subUsername'],
-      appMode: json['appMode'] ?? 'full',
+      appMode: mode,
       deviceId: json['deviceId'] ?? '',
       type: json['type'] ?? 'trial',
       expires: (json['expires'] ?? '').toString(),
       daysLeft: json['daysLeft'],
+      isSyncAllowed: syncAllowed,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'username': username,
+      'mainUsername': mainUsername,
+      'subUsername': subUsername,
+      'appMode': appMode,
+      'isSyncAllowed': isSyncAllowed,
+      'deviceId': deviceId,
+      'type': type,
+      'expires': expires,
+      'daysLeft': daysLeft,
+    };
   }
 }
 

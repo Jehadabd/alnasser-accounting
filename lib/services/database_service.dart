@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import '../models/person_data.dart'; // Added import
 
@@ -18,6 +19,7 @@ import '../models/invoice.dart';
 import '../models/app_settings.dart';
 import '../models/invoice_design_settings.dart';
 import 'firebase_sync/product_sync_service.dart';
+import 'firebase_sync/firebase_sync_service.dart';
 import '../models/invoice_item.dart';
 import '../models/invoice_adjustment.dart';
 import '../models/installer.dart';
@@ -498,13 +500,30 @@ class DatabaseService {
     return result;
   }
 
-  /// 🔒 حذف زبون - يذهب للهارد مباشرة
+  /// 🔒 حذف زبون - يذهب للهارد مباشرة ويتزامن الحذف مع باقي الأجهزة
   Future<int> deleteCustomer(int id) async {
-    await database;
+    final db = await database;
+    
+    // 🔍 جلب sync_uuid للعميل قبل حذفه لإبلاغ الأجهزة الأخرى
+    String? syncUuid;
+    final res = await db.query('customers', columns: ['sync_uuid'], where: 'id = ?', whereArgs: [id], limit: 1);
+    if (res.isNotEmpty) {
+      syncUuid = res.first['sync_uuid'] as String?;
+    }
+
     final result = await _customerDao.deleteCustomer(id);
     
     // 🚀 إبطال Cache بعد الحذف
     invalidateCustomersCache();
+    
+    // 📡 حذف العميل من Firebase لإبلاغ باقي الأجهزة
+    if (syncUuid != null && syncUuid.isNotEmpty) {
+      try {
+        FirebaseSyncService().deleteCustomerFromFirebase(syncUuid);
+      } catch (e) {
+        print('⚠️ تعذّر إرسال أمر حذف العميل لـ Firebase: $e');
+      }
+    }
     
     return result;
   }
@@ -1028,26 +1047,26 @@ class DatabaseService {
     String? note,
   }) async {
     final db = await database;
-    
+
     await db.transaction((txn) async {
-      // 1. جلب المخزون الحالي
-      final productResult = await txn.query('products', 
-        columns: ['stock_quantity'], 
-        where: 'id = ?', 
+      // 1. جلب المخزون الحالي + sync_uuid
+      final productResult = await txn.query('products',
+        columns: ['stock_quantity', 'sync_uuid'],
+        where: 'id = ?',
         whereArgs: [productId]);
-      
+
       if (productResult.isEmpty) {
         throw Exception('المنتج غير موجود');
       }
-      
+
       final currentStock = (productResult.first['stock_quantity'] as num?)?.toDouble() ?? 0.0;
       final newStock = currentStock + quantityChange;
-      
+
       // 2. التحقق من أن المخزون لن يصبح سالباً
       if (newStock < 0) {
         throw Exception('لا يمكن أن يصبح المخزون سالباً');
       }
-      
+
       // 3. تحديث المخزون
       await txn.update(
         'products',
@@ -1055,7 +1074,7 @@ class DatabaseService {
         where: 'id = ?',
         whereArgs: [productId],
       );
-      
+
       // 4. تسجيل التعديل في سجل التدقيق
       await txn.insert('financial_audit_log', {
         'operation_type': quantityChange >= 0 ? 'stock_add' : 'stock_subtract',
@@ -1066,6 +1085,29 @@ class DatabaseService {
         'notes': note ?? (quantityChange >= 0 ? 'إضافة مخزون يدوية' : 'طرح مخزون يدوي'),
         'created_at': DateTime.now().toIso8601String(),
       });
+
+      // 📝 تسجيل التعديل في سجل تعديلات المنتجات (تتبع: من الجهاز، متى، ماذا)
+      try {
+        String deviceId = 'local';
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          deviceId = prefs.getString('firebase_sync_device_id') ??
+              (prefs.getInt('invoice_device_id') ?? 1).toString();
+        } catch (_) {}
+        await txn.insert('product_edit_history', {
+          'product_id': productId,
+          'product_sync_uuid': productResult.first['sync_uuid'],
+          'field_changed': 'stock_quantity',
+          'old_value': currentStock.toString(),
+          'new_value': newStock.toString(),
+          'edit_type': 'stock_adjust',
+          'device_id': deviceId,
+          'note': note ?? 'تعديل مخزون يدوي',
+          'created_at': DateTime.now().toIso8601String(),
+        });
+      } catch (e) {
+        print('⚠️ تعذّر تسجيل تعديل المخزون في product_edit_history: $e');
+      }
     });
   }
   
@@ -1924,35 +1966,73 @@ class DatabaseService {
     required double discount,
     required double paidAmount,
   }) async {
-     await database;
-     // Helper to delegate to InvoiceManager
-     // converting inputs to what InvoiceManager might expect or creating raw maps
-     final inv = Invoice(
-        invoiceDate: DateTime.now(),
-        totalAmount: totalAmount,
-        paymentType: paymentType,
-        customerName: customerName ?? 'عميل نقدي',
-        amountPaidOnInvoice: paidAmount, // Corrected field name
-        status: 'محفوظة',
-        discount: discount,
-        createdAt: DateTime.now(),
-        lastModifiedAt: DateTime.now(),
-        customerId: null, // Logic to find customer ID by name needed if not simple
-     );
-     
-     // Need to convert Map items to InvoiceItem objects for saveCompleteInvoice
-     List<InvoiceItem> invoiceItems = items.map((i) => InvoiceItem(
-        invoiceId: 0, // Temp ID
-        productName: i['product_name'],
-        quantityIndividual: (i['quantity'] as num).toDouble(), // Corrected field name
-        unit: 'piece', // Default assumption
-        unitPrice: (i['price'] as num).toDouble(),
-        appliedPrice: (i['price'] as num).toDouble(),
-        itemTotal: ((i['quantity'] as num) * (i['price'] as num)).toDouble(),
-        // Add other fields as necessary from the map
-     )).toList();
+    final db = await database;
 
-     return saveCompleteInvoice(inv, invoiceItems);
+    final String finalCustomerName = (customerName != null && customerName.trim().isNotEmpty)
+        ? customerName.trim()
+        : 'عميل نقدي';
+
+    if (paymentType == 'دين' && finalCustomerName == 'عميل نقدي') {
+      throw Exception('الرجاء إدخال اسم العميل أولاً لحفظ فاتورة الدين');
+    }
+
+    int? resolvedCustomerId;
+
+    if (finalCustomerName != 'عميل نقدي') {
+      final matches = await db.query(
+        'customers',
+        where: 'name = ? OR name = ?',
+        whereArgs: [finalCustomerName, DatabaseHelpers.normalizeArabic(finalCustomerName)],
+        limit: 1,
+      );
+
+      if (matches.isNotEmpty) {
+        resolvedCustomerId = matches.first['id'] as int;
+      } else {
+        // إنشاء حساب عميل جديد تلقائياً عند إدخال اسم غير موجود في السجل
+        final newCustomer = Customer(
+          name: finalCustomerName,
+          currentTotalDebt: 0.0,
+          createdAt: DateTime.now(),
+          lastModifiedAt: DateTime.now(),
+        );
+        resolvedCustomerId = await insertCustomer(newCustomer);
+      }
+    }
+
+    final inv = Invoice(
+      invoiceDate: DateTime.now(),
+      totalAmount: totalAmount,
+      paymentType: paymentType,
+      customerName: finalCustomerName,
+      amountPaidOnInvoice: paidAmount,
+      status: 'محفوظة',
+      discount: discount,
+      createdAt: DateTime.now(),
+      lastModifiedAt: DateTime.now(),
+      customerId: resolvedCustomerId,
+    );
+
+    List<InvoiceItem> invoiceItems = items.map((i) {
+      final qty = (i['quantity'] as num).toDouble();
+      final price = (i['price'] as num).toDouble();
+      return InvoiceItem(
+        invoiceId: 0,
+        productId: i['product_id'],
+        productName: i['product_name'],
+        quantityIndividual: qty,
+        unit: i['unit'] ?? 'piece',
+        unitPrice: price,
+        appliedPrice: price,
+        costPrice: (i['cost_price'] as num?)?.toDouble(),
+        actualCostPrice: (i['cost_price'] as num?)?.toDouble(),
+        saleType: i['sale_type'],
+        unitsInLargeUnit: (i['units_in_large_unit'] as num?)?.toDouble(),
+        itemTotal: qty * price,
+      );
+    }).toList();
+
+    return saveCompleteInvoice(inv, invoiceItems);
   }
   
   // Analytics Delegations
@@ -2025,6 +2105,83 @@ class DatabaseService {
   Future<void> restoreFromBackup() async {
     // This calls the static method in DatabaseConfig
     await DatabaseConfig.restoreFromBackup();
+  }
+
+  /// استعادة قاعدة البيانات من ملف خارجي (.db) استعادة كاملة وتلقائية
+  Future<bool> restoreDatabaseFromFile(File importedFile) async {
+    if (!await importedFile.exists()) {
+      throw Exception('الملف المحدد غير موجود');
+    }
+
+    final targetPath = await DatabaseConfig.getDatabasePath();
+    final targetDir = Directory(dirname(targetPath));
+    if (!await targetDir.exists()) {
+      await targetDir.create(recursive: true);
+    }
+
+    final safetyBackupPath = join(targetDir.path, 'debt_book_safety_backup.db');
+
+    // 1. إغلاق الاتصال الحالي لضمان عدم قفل الملف
+    if (_database != null) {
+      if (_database!.isOpen) {
+        await _database!.close();
+      }
+      _database = null;
+    }
+
+    // 2. إنشاء نسخة احتياطية آمنة قبل الاستبدال
+    final currentDbFile = File(targetPath);
+    if (await currentDbFile.exists()) {
+      try {
+        await currentDbFile.copy(safetyBackupPath);
+      } catch (e) {
+        print('تحذير: تعذر إنشاء نسخة سلامة احتياطية: $e');
+      }
+    }
+
+    try {
+      // 3. مسح ملفات WAL و SHM القديمة لقاعدة البيانات السابقة
+      final walFile = File('$targetPath-wal');
+      final shmFile = File('$targetPath-shm');
+      if (await walFile.exists()) await walFile.delete();
+      if (await shmFile.exists()) await shmFile.delete();
+
+      // 4. نسخ واستبدال قاعدة البيانات بالملف المستورد
+      await importedFile.copy(targetPath);
+
+      // 5. مسح ملفات WAL و SHM إذا كانت مرفقة مع الملف المستورد
+      final importedWal = File('${importedFile.path}-wal');
+      final importedShm = File('${importedFile.path}-shm');
+      if (await importedWal.exists()) {
+        await importedWal.copy('$targetPath-wal');
+      }
+      if (await importedShm.exists()) {
+        await importedShm.copy('$targetPath-shm');
+      }
+
+      // 6. فتح وتنشيط قاعدة البيانات المستعادة والتحقق من سلامتها
+      final newDb = await database;
+      final isHealthy = await DatabaseConfig.checkIntegrity(newDb);
+
+      if (!isHealthy) {
+        throw Exception('ملف قاعدة البيانات المستورد تالف أو غير صالح');
+      }
+
+      print('✅ تمت استعادة قاعدة البيانات بنجاح من الملف المستورد');
+      return true;
+    } catch (e) {
+      print('❌ فشلت الاستعادة، جاري التراجع للنسخة السابقة: $e');
+      if (_database != null && _database!.isOpen) {
+        await _database!.close();
+        _database = null;
+      }
+      final safetyFile = File(safetyBackupPath);
+      if (await safetyFile.exists()) {
+        await safetyFile.copy(targetPath);
+        await database;
+      }
+      rethrow;
+    }
   }
   
   String normalizeArabic(String input) {

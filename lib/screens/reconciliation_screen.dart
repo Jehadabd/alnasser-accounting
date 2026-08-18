@@ -1,15 +1,14 @@
 // lib/screens/reconciliation_screen.dart
 //
-// مطابقة حية بين الأجهزة المتصلة (لا مقابل السحابة):
-// تطلب موافقة الأجهزة الحاضرة، ثم يقارن كل جهاز ديونه الحالية
-// وعدد معاملاته مع الجهاز النظير عبر بث Firestore الحيّ.
+// 📡 الشاشة التفاعلية التكيفية للمطابقة الحية بين الأجهزة (Live Reconciliation)
+// تتيح للمستخدم تحديد العملاء وتحديد ما إذا كانت بيانات هذا الجهاز هي الصحيحة أم بيانات الجهاز الآخر،
+// مع التنسيق التلقائي والتفاعل البشري الإنساني وتنظيف مجلدات السحابة فور الانتهاء.
 
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
-
 import '../services/firebase_sync/live_match_service.dart';
+import '../services/firebase_sync/armored_reconciliation_service.dart';
 
 class ReconciliationScreen extends StatefulWidget {
   const ReconciliationScreen({super.key});
@@ -22,34 +21,68 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
   final LiveMatchService _live = LiveMatchService();
   final NumberFormat _money = NumberFormat('#,##0.##');
 
-  StreamSubscription<LiveMatchSnapshot>? _sub;
+  StreamSubscription<LiveMatchSnapshot>? _subSnap;
+  StreamSubscription<String>? _subPeerNotify;
   LiveMatchSnapshot? _snap;
   String _progress = '';
   bool _busy = false;
   Timer? _pollTimer;
 
+  // 🎯 العملاء المحدّدون بالـ Checkbox للمطابقة الجماعية
+  final Set<String> _selectedUuids = {};
+
+  // ⏳ العملاء الجاري معالجتهم حياً (لإظهار مؤشر التحميل لكل كارت)
+  final Set<String> _busyCustomerUuids = {};
+
   @override
   void initState() {
     super.initState();
     _live.start();
-    _sub = _live.snapshots.listen((s) {
-      if (mounted) setState(() => _snap = s);
+
+    // 📡 1) الاستماع للقطات المطابقة الحية
+    _subSnap = _live.snapshots.listen((s) {
+      if (mounted) {
+        setState(() {
+          _snap = s;
+          // تنظيف التحديدات والحسابات المشغولة التي تم تطبيقها وتمت مطابقتها بنجاح
+          final validMismatches = s.mismatches.map((m) => m.customerSyncUuid).toSet();
+          _selectedUuids.removeWhere((id) => !validMismatches.contains(id));
+          _busyCustomerUuids.removeWhere((id) => !validMismatches.contains(id));
+        });
+      }
     });
-    // أول تحديث فوري حتى لا تبقى الشاشة على قائمة فارغة.
+
+    // 📩 2) الاستماع للإشعارات التفاعلية الواردة من الأجهزة الأخرى
+    _subPeerNotify = _live.onPeerNotification.listen((msg) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: const Color(0xFF6C63FF),
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    });
+
     unawaited(_live.recompute());
   }
 
   @override
   void dispose() {
-    _sub?.cancel();
+    _subSnap?.cancel();
+    _subPeerNotify?.cancel();
     _pollTimer?.cancel();
     super.dispose();
   }
 
+  /// 📡 إرسال طلب المطابقة الحية
   Future<void> _requestMatch() async {
     setState(() {
       _busy = true;
-      _progress = 'جاري دعوة الأجهزة المتصلة...';
+      _progress = 'جاري الاتصال ودعوة الأجهزة القريبة...';
     });
     try {
       await _live.recompute();
@@ -69,14 +102,14 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-              'أُرسل طلب المطابقة الحية. بانتظار موافقة الأجهزة خلال دقيقتين.'),
+          content: Text('📡 تم إرسال طلب المطابقة الحية. بانتظار موافقة الجهاز الآخر...'),
+          backgroundColor: Color(0xFF4A90E2),
         ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e'), backgroundColor: Colors.red),
+        SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) {
@@ -88,551 +121,712 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
     }
   }
 
-  /// تأكيد صريح: هذا الجهاز هو المصدر الصحيح — لا حذف أبداً.
-  Future<bool> _confirmThisDeviceIsTruth({required String actionLabel}) async {
-    final peer = _snap?.peerDeviceName ?? 'الجهاز الآخر';
-    final choice = await showDialog<String>(
+  /// 🧹 إنهاء الجلسة وتنظيف مجلدات المطابقة المؤقتة في السحابة
+  Future<void> _endSessionAndClean() async {
+    setState(() {
+      _busy = true;
+      _progress = 'جاري إنهاء الجلسة وتنظيف السحابة...';
+    });
+    try {
+      await _live.endSession();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ تم إنهاء الجلسة وتنظيف المجلدات المؤقتة من السحابة بنجاح!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() { _busy = false; _progress = ''; });
+    }
+  }
+
+  // 📤 اعتماد بيانات هذا الجهاز للمحددين (إرسال وتحديث الجهاز الآخر)
+  Future<void> _resolveSelectedMineIsTruth(List<LiveCustomerMatch> mismatches) async {
+    final targetUuids = _selectedUuids.isEmpty
+        ? mismatches.map((m) => m.customerSyncUuid).toSet()
+        : Set<String>.from(_selectedUuids);
+
+    if (targetUuids.isEmpty) return;
+
+    final peerName = _snap?.peerDeviceName ?? 'الجهاز الآخر';
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => Directionality(
+      builder: (ctx) => Directionality(
         textDirection: TextDirection.rtl,
         child: AlertDialog(
-          title: const Text('تأكيد مصدر البيانات'),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.upload_rounded, color: Colors.green),
+              SizedBox(width: 8),
+              Text('تأكيد واعتماد بيانات جهازي'),
+            ],
+          ),
           content: Text(
-            'هل أنت متأكد أن المعلومات في هذا الحاسوب هي الدقيقة، '
-            'وأن بيانات «$peer» هي الخطأ؟\n\n'
-            '• موافق: $actionLabel (رفع فقط — لا يُحذف أي معاملة).\n'
-            '• النظير صحيح: تُضاف معاملات تصحيحية للفروقات فقط (بدون حذف).\n'
-            '• إلغاء: لا تغيير.',
+            'هل أنت متأكد أن حسابات العملاء المحددين (${targetUuids.length}) في هذا الجهاز هي الصحيحة والدقيقة؟\n\n'
+            '• سيتم إرسال كافة معاملاتهم وتحديث بياناتهم لدى «$peerName» دون حذف أي سجل محلي.',
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, 'cancel'),
+              onPressed: () => Navigator.pop(ctx, false),
               child: const Text('إلغاء'),
             ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'peer'),
-              child: const Text('النظير صحيح'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context, 'local'),
-              child: const Text('موافق — بياناتي صحيحة'),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.check_circle),
+              label: const Text('نعم، بياناتي هي الصحيحة'),
             ),
           ],
         ),
       ),
     );
-    if (choice == 'peer') {
-      setState(() {
-        _busy = true;
-        _progress = 'جاري إضافة معاملات تصحيحية (بدون حذف)...';
-      });
-      try {
-        final n = await _live.addCorrectiveTransactionsForPeerTruth();
-        if (!mounted) return false;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(n == 0
-                ? 'لا فروقات تحتاج تصحيحاً'
-                : 'أُضيفت $n معاملة تصحيحية — لم يُحذف شيء'),
-          ),
-        );
-      } finally {
-        if (mounted) {
-          setState(() {
-            _busy = false;
-            _progress = '';
-          });
-        }
-      }
-      return false;
-    }
-    return choice == 'local';
-  }
 
-  Future<void> _inspectAll() async {
-    if (_snap?.sessionActive != true) return;
-    final ok = await _confirmThisDeviceIsTruth(
-      actionLabel: 'ملء طابور إعادة رفع المعاملات غير المتطابقة فقط',
-    );
-    if (!ok || !mounted) return;
+    if (confirmed != true || !mounted) return;
 
     setState(() {
       _busy = true;
-      _progress = 'جاري فحص الفروقات (قراءة فقط — بلا حذف)...';
+      _busyCustomerUuids.addAll(targetUuids);
+      _progress = 'جاري رفع واعتماد بيانات العملاء المحددين...';
     });
+
     try {
-      final added = await _live.inspectAndQueueMismatches();
+      // 🛡️ المطابقة المحصّنة المغلقة: رفع الكشف الكامل → الطرف الآخر يطبّق
+      //    إدمبوتنت → يرد برصيده → نتحقق من التطابق → حذف فوري من فولدر المطابقة.
+      final armored = ArmoredReconciliationService();
+      int done = 0, success = 0;
+      for (final uuid in targetUuids) {
+        if (mounted) {
+          setState(() => _progress =
+              'جاري مطابقة العميل ${done + 1}/${targetUuids.length}...');
+        }
+        final ok = await armored.pushMyTruthForCustomer(uuid);
+        if (ok) success++;
+        done++;
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(added == 0
-              ? 'لا توجد معاملات مملوكة لهذا الجهاز تحتاج إعادة رفع'
-              : 'أُضيفت $added معاملة إلى طابور إعادة الرفع (لم يُحذف شيء)'),
+          content: success == targetUuids.length
+              ? Text('✅ تمت مطابقة ${targetUuids.length} عميل مع «$peerName» '
+                  'وتأكيد التطابق — ونُظّف فولدر المطابقة!')
+              : Text('⚠️ نجحت مطابقة $success من ${targetUuids.length} — '
+                  'راجع الرسائل لمعرفة غير المتطابق'),
+          backgroundColor: success == targetUuids.length ? Colors.green : Colors.orange,
         ),
       );
+      setState(() => _selectedUuids.clear());
     } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _progress = '';
-        });
-      }
+      if (mounted) setState(() { _busy = false; _progress = ''; });
     }
   }
 
-  Future<void> _inspectOne(LiveCustomerMatch c) async {
-    final added = await _live.inspectCustomer(c.customerSyncUuid);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(added == 0
-            ? 'لا مشاكل مملوكة عند ${c.customerName}'
-            : 'أُضيفت $added معاملة لـ ${c.customerName} (بلا حذف)'),
+  // 📥 اعتماد بيانات الجهاز الآخر للمحددين (تطبيق الفروقات)
+  Future<void> _resolveSelectedPeerIsTruth(List<LiveCustomerMatch> mismatches) async {
+    final targetUuids = _selectedUuids.isEmpty
+        ? mismatches.map((m) => m.customerSyncUuid).toSet()
+        : Set<String>.from(_selectedUuids);
+
+    if (targetUuids.isEmpty) return;
+
+    final peerName = _snap?.peerDeviceName ?? 'الجهاز الآخر';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.download_rounded, color: Color(0xFF4A90E2)),
+              SizedBox(width: 8),
+              Text('تأكيد اعتماد بيانات الجهاز الآخر'),
+            ],
+          ),
+          content: Text(
+            'هل تريد تسوية رصيد العملاء المحددين (${targetUuids.length}) بناءً على حسابات «$peerName»؟\n\n'
+            '• سيتم إرسال طلب حي للجهاز الآخر لرفع كشوفاتهم فوراً لربطها واحتسابها محلياً دون حذف أي سجل.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء'),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4A90E2), foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.check_circle),
+              label: const Text('نعم، اعتمد بيانات الجهاز الآخر'),
+            ),
+          ],
+        ),
       ),
     );
-  }
 
-  Future<void> _forceUploadQueue() async {
-    final n = _snap?.uploadQueue.length ?? 0;
-    if (n == 0) return;
-    final ok = await _confirmThisDeviceIsTruth(
-      actionLabel: 'إعادة رفع $n معاملة يملكها هذا الجهاز',
-    );
-    if (!ok || !mounted) return;
+    if (confirmed != true || !mounted) return;
 
     setState(() {
       _busy = true;
-      _progress = 'جاري الرفع القسري (بلا حذف)...';
+      _busyCustomerUuids.addAll(targetUuids);
+      _progress = 'جاري إرسال طلب لـ «$peerName» وتحديث الحسابات...';
     });
+
     try {
-      final result = await _live.forceUploadQueue(
-        onProgress: (done, total, name) {
-          if (mounted) {
-            setState(() => _progress = 'رفع $done/$total — $name');
-          }
-        },
-      );
+      // 🛡️ المطابقة المحصّنة (truth_pull): نطلب كشف العميل من «$peerName»،
+      //    يرفعه فوراً، نطبّقه محلياً إدمبوتنت (بدون معاملات تصحيحية وهمية)،
+      //    نتحقق من تطابق رصيدنا مع الرصيد المرجعي، ثم نحذف فولدر المطابقة.
+      final armored = ArmoredReconciliationService();
+      int done = 0, success = 0;
+      for (final uuid in targetUuids) {
+        if (mounted) {
+          setState(() => _progress =
+              'جاري طلب كشف العميل ${done + 1}/${targetUuids.length} من «$peerName»...');
+        }
+        final ok = await armored.pullPeerTruthForCustomer(uuid);
+        if (ok) success++;
+        done++;
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-              'تم: ${result.ok} · فشل: ${result.failed} · تُخطّي: ${result.skipped}'),
+          content: success == targetUuids.length
+              ? Text('✅ تم استلام كشوف ${targetUuids.length} عميل من «$peerName» '
+                  'وتطبيقها والتأكد من التطابق!')
+              : Text('⚠️ نجح $success من ${targetUuids.length} — تأكد أن الجهاز '
+                  'الآخر متصل وفعّل المطابقة'),
+          backgroundColor: success == targetUuids.length ? Colors.green : Colors.orange,
         ),
       );
     } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _progress = '';
-        });
-      }
+      if (mounted) setState(() { _busy = false; _progress = ''; });
     }
   }
 
-  Future<void> _forceReuploadEverything() async {
-    if (_snap?.sessionActive != true) return;
-    final ok = await _confirmThisDeviceIsTruth(
-      actionLabel:
-          'رفع جميع العملاء الحاليين مع جميع معاملاتهم مجدداً (حتى المرفوعة مسبقاً)، ثم يطلب من الجهاز الآخر تنزيلها والتحقق',
-    );
-    if (!ok || !mounted) return;
-
-    setState(() {
-      _busy = true;
-      _progress = 'جاري رفع كل العملاء والمعاملات مجدداً...';
-    });
+  // 👤 إجراء فردي لعميل واحد: بياناتنا صحيحة
+  Future<void> _resolveSingleMineIsTruth(LiveCustomerMatch customer) async {
+    final uuid = customer.customerSyncUuid;
+    setState(() => _busyCustomerUuids.add(uuid));
     try {
-      final result = await _live.forceReuploadAllCustomersAndOwnedTxs(
-        onProgress: (done, total, msg) {
-          if (mounted) setState(() => _progress = msg);
-        },
-      );
-      if (!mounted) return;
-      final success = result['success'] == true;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: success ? null : Colors.red,
-          content: Text(success
-              ? 'اكتمل الرفع: ${result['uploadedCustomers'] ?? 0} عميل، '
-                  '${result['uploadedTransactions'] ?? 0} معاملة — لم يُحذف شيء. '
-                  'اطلب من الجهاز الآخر المزامنة/التنزيل للتحقق.'
-              : 'فشل: ${result['error'] ?? 'خطأ غير معروف'}'),
-        ),
-      );
+      await _resolveSelectedMineIsTruth([customer]);
     } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _progress = '';
-        });
-      }
+      if (mounted) setState(() => _busyCustomerUuids.remove(uuid));
+    }
+  }
+
+  // 👤 إجراء فردي لعميل واحد: الجهاز الآخر صحيح
+  Future<void> _resolveSinglePeerIsTruth(LiveCustomerMatch customer) async {
+    final uuid = customer.customerSyncUuid;
+    setState(() => _busyCustomerUuids.add(uuid));
+    try {
+      await _resolveSelectedPeerIsTruth([customer]);
+    } finally {
+      if (mounted) setState(() => _busyCustomerUuids.remove(uuid));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final snap = _snap;
-    final others = snap?.otherDeviceCount ?? 0;
+    final peerName = snap?.peerDeviceName ?? 'الجهاز الآخر';
+    final onlineDevices = snap?.onlineDevices ?? [];
+    final mismatches = snap?.mismatches ?? [];
+    final allCustomers = snap?.customers ?? [];
+    final matchedCustomers = allCustomers.where((c) => c.isMatch).toList();
 
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
+        backgroundColor: const Color(0xFFF5F7FB),
         appBar: AppBar(
           title: const Text('المطابقة الحية بين الأجهزة'),
+          centerTitle: true,
+          backgroundColor: const Color(0xFF1E1E2E),
+          elevation: 2,
           actions: [
             IconButton(
-              tooltip: 'تحديث الأجهزة',
-              onPressed: _busy ? null : () => _live.recompute(),
               icon: const Icon(Icons.refresh),
+              tooltip: 'تحديث الحسابات',
+              onPressed: _busy ? null : () => unawaited(_live.recompute()),
             ),
           ],
         ),
-        body: snap == null
-            ? const Center(child: CircularProgressIndicator())
-            : Column(
-                children: [
-                  if (_busy || _progress.isNotEmpty)
-                    const LinearProgressIndicator(),
-                  if (_progress.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(8),
-                      child:
-                          Text(_progress, style: const TextStyle(fontSize: 12)),
+        body: Column(
+          children: [
+            // 📡 شريط حالة الاتصال والتقدم
+            if (_progress.isNotEmpty)
+              Container(
+                color: Colors.amber.shade700,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     ),
-                  _buildHeader(snap, others),
-                  _buildActions(snap, others),
-                  Expanded(child: _buildBody(snap)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _progress,
+                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(12),
+                children: [
+                  // 📱 كارت حالة الجلسة والأجهزة الحاضرة
+                  _buildHeaderCard(snap, onlineDevices),
+
+                  const SizedBox(height: 12),
+
+                  if (snap != null && snap.sessionActive && snap.peerStreamReady) ...[
+                    // 🎛️ شريط التحكم واختيار العملاء إذا كان هناك فروقات
+                    if (mismatches.isNotEmpty) ...[
+                      _buildBatchActionBar(mismatches, peerName),
+                      const SizedBox(height: 12),
+                      
+                      // ⚠️ قائمة الكروت غير المتطابقة
+                      Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 22),
+                          const SizedBox(width: 6),
+                          Text(
+                            'عملاء يحتاجون مطابقة (${mismatches.length})',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2E)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ...mismatches.map((c) => _buildCustomerMismatchCard(c, peerName)),
+                    ] else ...[
+                      // ✅ لا فروقات
+                      Card(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        color: const Color(0xFFE8F5E9),
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            children: [
+                              const Icon(Icons.check_circle_rounded, color: Colors.green, size: 52),
+                              const SizedBox(height: 12),
+                              Text(
+                                'ممتاز! جميع الحسابات متطابقة مع «$peerName» 100%',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2E7D32)),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                'تتطابق الديون المتبقية وعدد المعاملات بين الجهازين بالكامل.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 12, color: Colors.black54),
+                              ),
+                              const SizedBox(height: 12),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                                onPressed: _busy ? null : _endSessionAndClean,
+                                icon: const Icon(Icons.cleaning_services_rounded),
+                                label: const Text('إنهاء وتنظيف مجلدات السحابة 🧹'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 16),
+
+                    // 🟢 قائمة العملاء المتطابقين
+                    if (matchedCustomers.isNotEmpty) ...[
+                      ExpansionTile(
+                        initiallyExpanded: mismatches.isEmpty,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        title: Text(
+                          'العملاء المتطابقون (${matchedCustomers.length})',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey.shade700),
+                        ),
+                        leading: const Icon(Icons.verified, color: Colors.green),
+                        children: matchedCustomers.map(_buildMatchedCustomerTile).toList(),
+                      ),
+                    ],
+                  ],
                 ],
               ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildHeader(LiveMatchSnapshot snap, int others) {
-    final active = snap.sessionActive && snap.peerStreamReady;
-    final debtOk = active &&
-        (snap.localTotalDebt - snap.peerTotalDebt).abs() <= 1.0;
+  /// 📡 كارت الأجهزة المتصلة وبدء الجلسة
+  Widget _buildHeaderCard(LiveMatchSnapshot? snap, List<Map<String, dynamic>> devices) {
+    final isSessionActive = snap?.sessionActive == true && snap?.peerStreamReady == true;
 
     return Card(
-      margin: const EdgeInsets.all(12),
-      color: !snap.sessionActive
-          ? Colors.blue.shade50
-          : (debtOk ? Colors.green.shade50 : Colors.orange.shade50),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isSessionActive ? Colors.green.withOpacity(0.1) : const Color(0xFF4A90E2).withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    isSessionActive ? Icons.sync_rounded : Icons.cell_tower_rounded,
+                    color: isSessionActive ? Colors.green : const Color(0xFF4A90E2),
+                    size: 26,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isSessionActive
+                            ? 'جلسة مطابقة حية نشطة مع «${snap?.peerDeviceName}»'
+                            : 'المطابقة الحية بين الأجهزة',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        isSessionActive
+                            ? 'تتم المقارنة اللحظية للديون والمعاملات مباشرة بدون مسح'
+                            : 'اضغط بدء المطابقة للبحث عن الأجهزة المتصلة ومقارنة الحسابات',
+                        style: const TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.devices, size: 18, color: Colors.grey),
+                    const SizedBox(width: 6),
+                    Text(
+                      'الأجهزة المتصلة: ${devices.length}',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    if (isSessionActive) ...[
+                      TextButton.icon(
+                        style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+                        onPressed: _busy ? null : _endSessionAndClean,
+                        icon: const Icon(Icons.cleaning_services_rounded, size: 16),
+                        label: const Text('إنهاء 🧹'),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isSessionActive ? Colors.amber.shade800 : const Color(0xFF4A90E2),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      onPressed: _busy ? null : _requestMatch,
+                      icon: Icon(isSessionActive ? Icons.refresh : Icons.radar, size: 18),
+                      label: Text(isSessionActive ? 'تحديث' : 'بدء المطابقة'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 🎛️ شريط الإجراءات الجماعية واختيار العملاء
+  Widget _buildBatchActionBar(List<LiveCustomerMatch> mismatches, String peerName) {
+    final allSelected = _selectedUuids.length == mismatches.length && mismatches.isNotEmpty;
+
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      color: const Color(0xFF1E1E2E),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Checkbox(
+                  value: allSelected,
+                  activeColor: const Color(0xFF6C63FF),
+                  onChanged: (val) {
+                    setState(() {
+                      if (val == true) {
+                        _selectedUuids.addAll(mismatches.map((m) => m.customerSyncUuid));
+                      } else {
+                        _selectedUuids.clear();
+                      }
+                    });
+                  },
+                ),
+                Text(
+                  allSelected
+                      ? 'تحديد الكل (${mismatches.length})'
+                      : 'تم تحديد (${_selectedUuids.length}) من (${mismatches.length})',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                // 📤 زر اعتماد بياناتنا
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green.shade600,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: _busy ? null : () => _resolveSelectedMineIsTruth(mismatches),
+                    icon: const Icon(Icons.upload_rounded, size: 18),
+                    label: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(_selectedUuids.isEmpty ? 'بياناتي صحيحة (رفع الكل)' : 'بياناتي صحيحة (${_selectedUuids.length})'),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // 📥 زر اعتماد بيانات الجهاز الآخر
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4A90E2),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: _busy ? null : () => _resolveSelectedPeerIsTruth(mismatches),
+                    icon: const Icon(Icons.download_rounded, size: 18),
+                    label: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(_selectedUuids.isEmpty ? '$peerName صحيح (طلب الكل)' : '$peerName صحيح (${_selectedUuids.length})'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ⚠️ كارت العميل غير المتطابق (تنسيق مريح ومستجيب للجوال مع مؤشر التحميل)
+  Widget _buildCustomerMismatchCard(LiveCustomerMatch c, String peerName) {
+    final isSelected = _selectedUuids.contains(c.customerSyncUuid);
+    final isProcessing = _busyCustomerUuids.contains(c.customerSyncUuid);
+    final diff = c.debtDifference;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isSelected ? const Color(0xFF6C63FF) : Colors.transparent,
+          width: 2,
+        ),
+      ),
+      elevation: 2,
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // العنوان ومربع التحديد
             Row(
               children: [
-                Icon(
-                  active ? Icons.sensors : Icons.sensors_off,
-                  color: active ? Colors.green : Colors.grey,
+                Checkbox(
+                  value: isSelected,
+                  activeColor: const Color(0xFF6C63FF),
+                  onChanged: isProcessing ? null : (val) {
+                    setState(() {
+                      if (val == true) {
+                        _selectedUuids.add(c.customerSyncUuid);
+                      } else {
+                        _selectedUuids.remove(c.customerSyncUuid);
+                      }
+                    });
+                  },
                 ),
-                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    snap.statusMessage ?? '',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    c.customerName,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'الفرق: ${_money.format(diff.abs())} د.ع',
+                    style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            Text(
-              'المقارنة: ديون هذا الجهاز الحالية ↔ ديون الجهاز المتصل الحالية '
-              '(ليست السحابة).',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-            ),
-            const Divider(),
-            _kv('أجهزة متصلة الآن', '${snap.onlineDeviceCount}'),
-            _kv('أجهزة أخرى حاضرة', '$others',
-                warn: others == 0 && snap.onlineDeviceCount > 0),
-            _kv('هذا الجهاز — إجمالي الديون',
-                '${_money.format(snap.localTotalDebt)} د.ع'),
-            if (active) ...[
-              _kv('${snap.peerDeviceName} — إجمالي الديون',
-                  '${_money.format(snap.peerTotalDebt)} د.ع'),
-              _kv(
-                'فرق الإجمالي',
-                _money.format(snap.localTotalDebt - snap.peerTotalDebt),
-                warn: (snap.localTotalDebt - snap.peerTotalDebt).abs() > 1,
-              ),
-              _kv('عملاء غير متطابقين', '${snap.mismatches.length}',
-                  warn: snap.mismatches.isNotEmpty),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
 
-  Widget _buildActions(LiveMatchSnapshot snap, int others) {
-    final queue = snap.uploadQueue;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Column(
-        children: [
-          if (!snap.sessionActive)
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _busy || others == 0 ? null : _requestMatch,
-                icon: const Icon(Icons.groups),
-                label: Text(others == 0
-                    ? 'لا يوجد جهاز آخر متصل'
-                    : 'طلب مطابقة حية مع الأجهزة المتصلة ($others)'),
+            // ⏳ مؤشر التحميل التفاعلي أثناء معالجة هذا العميل
+            if (isProcessing) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.amber.shade300),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'جاري رفع ومطابقة معاملات «${c.customerName}» حياً...',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.amber.shade900),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            )
-          else ...[
+              const SizedBox(height: 8),
+            ],
+
+            // 📊 مقارنة البيانات جنبًا إلى جنب (Responsive Card Layout)
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F9FA),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  // هذا الجهاز
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.computer, size: 14, color: Colors.blue),
+                            SizedBox(width: 4),
+                            Text('هذا الجهاز (هنا)', style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_money.format(c.localDebt)} د.ع',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2E)),
+                        ),
+                        Text(
+                          '${c.localTxCount} معاملة',
+                          style: const TextStyle(fontSize: 11, color: Colors.black54),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(width: 1, height: 36, color: Colors.grey.shade300),
+                  const SizedBox(width: 12),
+                  // الجهاز الآخر
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.smartphone, size: 14, color: Colors.orange),
+                            const SizedBox(width: 4),
+                            Text(peerName, style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_money.format(c.peerDebt)} د.ع',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2E)),
+                        ),
+                        Text(
+                          '${c.peerTxCount} معاملة',
+                          style: const TextStyle(fontSize: 11, color: Colors.black54),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // 👈 👉 أزرار القرار السريع لكل عميل
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _busy ? null : _inspectAll,
-                    icon: const Icon(Icons.search),
-                    label: Text(
-                        'فحص الفروقات (${snap.mismatches.length})'),
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.green.shade700,
+                      side: BorderSide(color: Colors.green.shade400),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                    onPressed: (_busy || isProcessing) ? null : () => _resolveSingleMineIsTruth(c),
+                    icon: const Icon(Icons.upload_rounded, size: 16),
+                    label: const FittedBox(fit: BoxFit.scaleDown, child: Text('بياناتي صحيحة 📤')),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed:
-                        _busy || queue.isEmpty ? null : _forceUploadQueue,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepOrange,
-                      foregroundColor: Colors.white,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF4A90E2),
+                      side: const BorderSide(color: Color(0xFF4A90E2)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
                     ),
-                    icon: const Icon(Icons.cloud_upload),
-                    label: Text('رفع الطابور (${queue.length})'),
+                    onPressed: (_busy || isProcessing) ? null : () => _resolveSinglePeerIsTruth(c),
+                    icon: const Icon(Icons.download_rounded, size: 16),
+                    label: FittedBox(fit: BoxFit.scaleDown, child: Text('$peerName صحيح 📥')),
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _busy ? null : _forceReuploadEverything,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal.shade700,
-                  foregroundColor: Colors.white,
-                ),
-                icon: const Icon(Icons.upload_file),
-                label: const Text(
-                    'رفع جميع العملاء ومعاملاتهم مجدداً (تجاوز المرفوع)'),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'لا يوجد حذف معاملات في المطابقة الحية. الفحص يقرأ فقط؛ '
-                'الرفع يعيد إرسال البيانات ويطلب من النظير التنزيل والتحقق.',
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
-              ),
-            ),
-          ],
-          if (snap.sessionActive)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _busy
-                    ? null
-                    : () async {
-                        await _live.endSession();
-                        await _live.recompute();
-                      },
-                icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                label: const Text('إنهاء جلسة المطابقة الحية'),
-              ),
-            ),
-          if (queue.isNotEmpty)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _busy ? null : _live.clearQueue,
-                icon: const Icon(Icons.clear_all, size: 18),
-                label: const Text('تفريغ الطابور'),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBody(LiveMatchSnapshot snap) {
-    final waitingForPeer = snap.sessionStatus == 'requesting' ||
-        (snap.sessionActive && !snap.peerStreamReady) ||
-        _busy;
-
-    if (waitingForPeer) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 20),
-              Text(
-                snap.sessionStatus == 'requesting'
-                    ? 'جاري انتظار موافقة الأجهزة وبدء المطابقة...'
-                    : (snap.statusMessage ?? 'جاري تحميل المطابقة...'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'تتم مقارنة الديون وعدد المعاملات مع الجهاز الآخر مباشرة.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: Colors.black54),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (!snap.sessionActive || !snap.peerStreamReady) {
-      final devices = snap.onlineDevices;
-      return ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('الأجهزة الحاضرة (${devices.length})',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  if (devices.isEmpty)
-                    const Text(
-                      'لا أجهزة متصلة بنبضة حيّة الآن.\n'
-                      'تأكد أن الجهاز الآخر مفتوح والمزامنة مفعّلة.',
-                    )
-                  else
-                    ...devices.map((d) => ListTile(
-                          dense: true,
-                          leading: Icon(
-                            d['isCurrentDevice'] == true
-                                ? Icons.smartphone
-                                : Icons.computer,
-                            color: Colors.green,
-                          ),
-                          title: Text(d['deviceName'] as String? ?? ''),
-                          subtitle: Text(d['isCurrentDevice'] == true
-                              ? 'هذا الجهاز'
-                              : 'متصل — يمكن دعوته للمطابقة'),
-                        )),
-                ],
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    final mismatches = snap.mismatches;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-      children: [
-        if (mismatches.isNotEmpty) ...[
-          _buildMismatchTable(mismatches, snap.peerDeviceName ?? 'الجهاز الآخر'),
-          const SizedBox(height: 12),
-          Text(
-            'تفاصيل غير المتطابقين (${mismatches.length})',
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-          ),
-          const SizedBox(height: 6),
-          ...mismatches.map(_buildCustomerTile),
-          const Divider(height: 28),
-          Text(
-            'المتطابقون (${snap.customers.length - mismatches.length})',
-            style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                color: Colors.grey.shade700),
-          ),
-          const SizedBox(height: 6),
-          ...snap.customers.where((c) => c.isMatch).map(_buildCustomerTile),
-        ] else ...[
-          Card(
-            color: Colors.green.shade50,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'كل العملاء متطابقون مع ${snap.peerDeviceName}: '
-                'نفس الدين ونفس عدد المعاملات.',
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          ...snap.customers.map(_buildCustomerTile),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildMismatchTable(
-      List<LiveCustomerMatch> mismatches, String peerName) {
-    return Card(
-      color: Colors.red.shade50,
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'جدول الفروقات مع $peerName (${mismatches.length})',
-              style: const TextStyle(
-                  fontWeight: FontWeight.bold, color: Colors.red),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'لكل عميل: الدين الحالي وعدد المعاملات على الجهازين.',
-              style: TextStyle(fontSize: 11, color: Colors.black54),
-            ),
-            const SizedBox(height: 8),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                headingRowHeight: 36,
-                dataRowMinHeight: 40,
-                dataRowMaxHeight: 56,
-                columnSpacing: 14,
-                columns: [
-                  const DataColumn(label: Text('العميل')),
-                  const DataColumn(label: Text('دين هنا'), numeric: true),
-                  DataColumn(label: Text('دين $peerName'), numeric: true),
-                  const DataColumn(label: Text('الفرق'), numeric: true),
-                  const DataColumn(label: Text('معاملات هنا'), numeric: true),
-                  DataColumn(label: Text('معاملات $peerName'), numeric: true),
-                ],
-                rows: mismatches.map((c) {
-                  final diff = c.debtDifference;
-                  return DataRow(cells: [
-                    DataCell(SizedBox(
-                      width: 130,
-                      child: Text(c.customerName,
-                          overflow: TextOverflow.ellipsis),
-                    )),
-                    DataCell(Text(_money.format(c.localDebt))),
-                    DataCell(Text(_money.format(c.peerDebt))),
-                    DataCell(Text(
-                      _money.format(diff),
-                      style: TextStyle(
-                        color: diff.abs() > 0.01 ? Colors.red : null,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    )),
-                    DataCell(Text('${c.localTxCount}')),
-                    DataCell(Text('${c.peerTxCount}')),
-                  ]);
-                }).toList(),
-              ),
             ),
           ],
         ),
@@ -640,93 +834,14 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
     );
   }
 
-  Widget _buildCustomerTile(LiveCustomerMatch c) {
-    final ok = c.isMatch;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ExpansionTile(
-        leading: Icon(
-          ok ? Icons.check_circle : Icons.warning_amber,
-          color: ok ? Colors.green : Colors.orange,
-        ),
-        title: Text(c.customerName),
-        subtitle: Text(
-          ok
-              ? 'متطابق · ${_money.format(c.localDebt)} · ${c.localTxCount} معاملة'
-              : 'فرق · هنا ${_money.format(c.localDebt)}/${c.localTxCount}'
-                  ' · ${c.peerDeviceName} ${_money.format(c.peerDebt)}/${c.peerTxCount}',
-          style: TextStyle(
-            fontSize: 12,
-            color: ok ? Colors.green.shade700 : Colors.orange.shade800,
-          ),
-        ),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (!ok) ...[
-                  ...c.mismatchReasons.map((r) => Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text('⚠ $r',
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.red)),
-                      )),
-                  const Divider(),
-                ],
-                _kv('دين هنا', _money.format(c.localDebt)),
-                _kv('دين ${c.peerDeviceName}', _money.format(c.peerDebt)),
-                _kv('فرق الدين', _money.format(c.debtDifference),
-                    warn: c.debtDifference.abs() > 0.01),
-                _kv('معاملات هنا', '${c.localTxCount}'),
-                _kv('معاملات ${c.peerDeviceName}', '${c.peerTxCount}'),
-                if (c.ownedProblems.isNotEmpty) ...[
-                  const Divider(),
-                  Text(
-                    'معاملات هذا الجهاز المرشّحة (${c.ownedProblems.length})',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, color: Colors.red),
-                  ),
-                  ...c.ownedProblems.take(20).map((p) => Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          '• ${_money.format(p.amount)} — ${p.reason}',
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                      )),
-                ],
-                if (!ok) ...[
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : () => _inspectOne(c),
-                    icon: const Icon(Icons.playlist_add),
-                    label: const Text('إضافة للطابور'),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _kv(String k, String v, {bool warn = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(k, style: const TextStyle(fontSize: 13)),
-          Text(v,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: warn ? Colors.red : null,
-              )),
-        ],
-      ),
+  /// 🟢 كارت العميل المتطابق
+  Widget _buildMatchedCustomerTile(LiveCustomerMatch c) {
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.check_circle, color: Colors.green, size: 20),
+      title: Text(c.customerName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+      subtitle: Text('الرصيد: ${_money.format(c.localDebt)} د.ع · (${c.localTxCount} معاملة)', style: const TextStyle(fontSize: 11)),
+      trailing: const Icon(Icons.lock, color: Colors.grey, size: 16),
     );
   }
 }

@@ -75,6 +75,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (shouldShow != _showScrollToTop) {
       setState(() => _showScrollToTop = shouldShow);
     }
+    // 📄 Lazy loading: عند الاقتراب من نهاية القائمة نحمّل الصفحة التالية
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      final app = context.read<AppProvider>();
+      if (app.hasMoreData && !app.isLoadingMore) {
+        app.loadMoreCustomers();
+      }
+    }
     
     // تحميل المزيد من العملاء عند الوصول للنهاية
     if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
@@ -258,7 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('دفتر ديوني'),
+          title: const Text('الناصر'),
           actions: [
             IconButton(
               icon: const Icon(Icons.receipt_long,
@@ -502,7 +510,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 24.0,
                               vertical: 12.0), // Padding for the list itself
-                          itemCount: provider.customers.length + (provider.isFetchingMore ? 1 : 0),
+                          itemCount: provider.customers.length + (provider.isLoadingMore ? 1 : 0),
                           itemBuilder: (context, index) {
                             if (index == provider.customers.length) {
                               return const Padding(

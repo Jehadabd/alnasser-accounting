@@ -6,6 +6,7 @@ import 'package:printing/printing.dart';
 import '../models/purchase_invoice.dart';
 import '../models/purchase_invoice_item.dart';
 import '../services/purchase_service.dart';
+import 'create_purchase_invoice_screen.dart';
 
 class InvoiceDetailsSplitScreen extends StatefulWidget {
   final int invoiceId;
@@ -49,6 +50,22 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
         backgroundColor: const Color(0xFF0F172A),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit, color: Colors.blue),
+            tooltip: 'تعديل الفاتورة',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => CreatePurchaseInvoiceScreen(
+                    existingInvoice: _invoice,
+                  ),
+                ),
+              ).then((_) => _loadData()); // Reload after edit
+            },
+          ),
+        ],
       ),
       body: Row(
         children: [

@@ -210,13 +210,17 @@ class TransactionDao {
   /// جلب معاملات العميل
   Future<List<DebtTransaction>> getCustomerTransactions(
     int customerId, {
-    String orderBy = 'transaction_date DESC, id DESC'
+    String orderBy = 'transaction_date DESC, id DESC',
+    bool includeDeleted = false,
   }) async {
     final db = await getDatabase();
     try {
+      final whereClause = includeDeleted
+          ? 'customer_id = ?'
+          : 'customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)';
       final List<Map<String, dynamic>> maps = await db.query(
         'transactions',
-        where: 'customer_id = ?',
+        where: whereClause,
         whereArgs: [customerId],
         orderBy: orderBy,
       );
@@ -435,7 +439,7 @@ class TransactionDao {
     try {
       final db = await getDatabase();
       final res = await db.rawQuery(
-        'SELECT COALESCE(SUM(amount_changed), 0) AS total FROM transactions WHERE customer_id = ?;',
+        'SELECT COALESCE(SUM(amount_changed), 0) AS total FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0);',
         [customerId]
       );
       final double total = ((res.first['total'] as num?) ?? 0).toDouble();
@@ -506,7 +510,7 @@ class TransactionDao {
     try {
       final maps = await db.query(
         'transactions',
-        where: 'transaction_date >= ? AND transaction_date <= ?',
+        where: 'transaction_date >= ? AND transaction_date <= ? AND (is_deleted IS NULL OR is_deleted = 0)',
         whereArgs: [start.toIso8601String(), end.toIso8601String()],
         orderBy: 'transaction_date DESC',
       );
@@ -523,17 +527,17 @@ class TransactionDao {
       final totalDebts = await db.rawQuery('''
         SELECT COALESCE(SUM(amount_changed), 0) as total 
         FROM transactions 
-        WHERE customer_id = ? AND amount_changed > 0
+        WHERE customer_id = ? AND amount_changed > 0 AND (is_deleted IS NULL OR is_deleted = 0)
       ''', [customerId]);
       
       final totalPayments = await db.rawQuery('''
         SELECT COALESCE(SUM(-amount_changed), 0) as total 
         FROM transactions 
-        WHERE customer_id = ? AND amount_changed < 0
+        WHERE customer_id = ? AND amount_changed < 0 AND (is_deleted IS NULL OR is_deleted = 0)
       ''', [customerId]);
       
       final count = await db.rawQuery('''
-        SELECT COUNT(1) as count FROM transactions WHERE customer_id = ?
+        SELECT COUNT(1) as count FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
       ''', [customerId]);
       
       return {

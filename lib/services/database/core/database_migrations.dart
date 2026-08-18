@@ -521,8 +521,14 @@ class DatabaseMigrations {
   // إنشاء جدول FTS5 للبحث السريع
   static Future<void> _createFtsTable(Database db) async {
     try {
+      // إجبار إعادة بناء الجدول والترايغرز في حال كان الهيكل القديم تالفاً
+      await db.execute('DROP TRIGGER IF EXISTS products_ai;');
+      await db.execute('DROP TRIGGER IF EXISTS products_ad;');
+      await db.execute('DROP TRIGGER IF EXISTS products_au;');
+      await db.execute('DROP TABLE IF EXISTS products_fts;');
+      
       await db.execute('''
-        CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
+        CREATE VIRTUAL TABLE products_fts USING fts5(
           name, 
           unit, 
           content='products', 
@@ -532,17 +538,17 @@ class DatabaseMigrations {
       
       // الترايغرز
       await db.execute('''
-        CREATE TRIGGER IF NOT EXISTS products_ai AFTER INSERT ON products BEGIN
+        CREATE TRIGGER products_ai AFTER INSERT ON products BEGIN
           INSERT INTO products_fts(rowid, name, unit) VALUES (new.id, new.name, new.unit);
         END;
       ''');
       await db.execute('''
-        CREATE TRIGGER IF NOT EXISTS products_ad AFTER DELETE ON products BEGIN
+        CREATE TRIGGER products_ad AFTER DELETE ON products BEGIN
           INSERT INTO products_fts(products_fts, rowid, name, unit) VALUES('delete', old.id, old.name, old.unit);
         END;
       ''');
       await db.execute('''
-        CREATE TRIGGER IF NOT EXISTS products_au AFTER UPDATE ON products BEGIN
+        CREATE TRIGGER products_au AFTER UPDATE ON products BEGIN
           INSERT INTO products_fts(products_fts, rowid, name, unit) VALUES('delete', old.id, old.name, old.unit);
           INSERT INTO products_fts(rowid, name, unit) VALUES (new.id, new.name, new.unit);
         END;
@@ -692,6 +698,8 @@ class DatabaseMigrations {
     await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'is_deleted', 'INTEGER DEFAULT 0');
     await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'synced_at', 'TEXT');
     await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'is_created_by_me', 'INTEGER DEFAULT 1');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'last_debt_added', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'last_modified_at', 'TEXT');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'is_created_by_me', 'INTEGER DEFAULT 1');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'is_deleted', 'INTEGER DEFAULT 0');
 
@@ -812,6 +820,9 @@ class DatabaseMigrations {
 
     // 24.د. هجرة المنتجات الموجودة: توليد sync_uuid لكل منتج محلي بلا UUID
     await _migrateProductSyncUuids(db);
+
+    // 25. التأكد من إعادة بناء جدول FTS والترايغرز بشكل سليم دائماً عند فتح قاعدة البيانات
+    await _createFtsTable(db);
   }
 
   /// ترقية قاعدة البيانات

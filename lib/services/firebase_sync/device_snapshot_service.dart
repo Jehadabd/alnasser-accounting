@@ -44,7 +44,8 @@ class DeviceSnapshotService {
   DeviceSnapshotService._internal();
 
   final DatabaseService _db = DatabaseService();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  FirebaseFirestore? _firestoreInstance;
+  FirebaseFirestore get _firestore => _firestoreInstance ??= FirebaseFirestore.instance;
 
   /// 📸 إنشاء لقطة شاملة لما قام به هذا الجهاز
   Future<DeviceSnapshot> createSnapshot() async {

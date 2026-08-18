@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
+import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -46,8 +47,14 @@ class MainActivity : FlutterActivity() {
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
 
         // Register USB permission receiver
+        // Android 13+ (API 33) requires RECEIVER_NOT_EXPORTED or RECEIVER_EXPORTED flag
         val filter = IntentFilter(ACTION_USB_PERMISSION)
-        registerReceiver(usbPermissionReceiver, filter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(usbPermissionReceiver, filter)
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {

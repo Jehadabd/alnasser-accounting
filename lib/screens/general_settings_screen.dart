@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:get_storage/get_storage.dart';
 
 import 'package:alnaser/models/app_settings.dart';
 import 'package:alnaser/services/settings_manager.dart';
@@ -26,6 +28,7 @@ import 'discord_settings_screen.dart'; // 💬 إعدادات Discord
 import 'dropbox_backup_screen.dart'; // ☁️ النسخ الاحتياطي السحابي
 import 'firebase_sync_settings_screen.dart';
 import 'firebase_custom_setup_screen.dart';
+import 'package:file_picker/file_picker.dart';
 import '../services/license_service.dart';
 
 import '../models/account_statement_item.dart';
@@ -42,6 +45,7 @@ class GeneralSettingsScreen extends StatefulWidget {
 
 class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   late AppSettings _appSettings;
+  bool _isLoadingSettings = true;
   final List<TextEditingController> _phoneNumberControllers = [];
   final TextEditingController _companyDescriptionController = TextEditingController();
   
@@ -100,7 +104,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   bool _loadingPrinters = false;
   bool _scanningUsb = false;
   bool _showSideNav = false;
-
+  String _screenOrientation = 'landscape';
+  bool _isSyncAllowed = true;
 
   @override
   void initState() {
@@ -110,6 +115,11 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
   Future<void> _loadSettings() async {
     _appSettings = await SettingsManager.getAppSettings();
+    
+    // تحميل الترخيص والاتجاه
+    final storedLicense = LicenseService().getStoredLicense();
+    _isSyncAllowed = storedLicense?.isSyncAllowed ?? true;
+    _screenOrientation = GetStorage().read('screen_orientation') ?? 'landscape';
     
     // تحميل الألوان
     _remainingAmountColor = Color(_appSettings.remainingAmountColor);
@@ -178,9 +188,11 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         !_availablePrinters.any((p) => p.name == _posThermalPrinter!.name && p.address == _posThermalPrinter!.address)) {
       _availablePrinters.add(_posThermalPrinter!);
     }
-    _loadPrinters();
-    
-    setState(() {});
+    if (mounted) {
+      setState(() {
+        _isLoadingSettings = false;
+      });
+    }
   }
   
   Future<void> _showAddManualPrinterDialog() async {
@@ -832,6 +844,128 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     );
   }
 
+  Future<void> _changeOrientation(String mode) async {
+    setState(() => _screenOrientation = mode);
+    await GetStorage().write('screen_orientation', mode);
+    if (mode == 'auto') {
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    } else {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+  }
+
+  Future<void> _checkLicenseUpgradeOnline() async {
+    final licenseService = LicenseService();
+    final currentLicense = licenseService.getStoredLicense();
+    if (currentLicense == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('الترخيص غير مفعّل على هذا الجهاز'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('جاري الاتصال بالسيرفر والتحقق من ترقية الحساب...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final hasInternet = await licenseService.hasInternetConnection();
+      if (!hasInternet) {
+        if (mounted) Navigator.pop(context);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ يلزم الاتصال بالإنترنت للتحقق من ترقية الاشتراك!'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final result = await licenseService.verifyWithServer();
+      if (mounted) Navigator.pop(context);
+
+      if (result.success) {
+        await _loadSettings();
+        final updatedLicense = licenseService.getStoredLicense();
+        
+        String modeName = 'التطبيق الشامل الكامل مع المزامنة';
+        if (updatedLicense?.appMode == 'debts_only') {
+          modeName = 'سجل الديون والتصديق فقط';
+        } else if (updatedLicense?.appMode == 'full_offline') {
+          modeName = 'التطبيق الشامل الكامل (أوفلاين)';
+        }
+
+        String typeLabel = updatedLicense?.type == 'lifetime' || (updatedLicense?.expires.contains('2099') == true)
+            ? 'اشتراك دائم مدى الحياة (Lifetime)'
+            : 'اشتراك مؤقت حتى ${updatedLicense?.expires.split("T").first ?? ""}';
+
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.stars, color: Colors.amber, size: 28),
+                  SizedBox(width: 8),
+                  Text('تم التحديث والترقية بنجاح'),
+                ],
+              ),
+              content: Text(
+                '🎉 تم الاتصال بالسيرفر بنجاح وتحديث بيانات اشتراكك!\n\n'
+                '• نوع الترخيص الحالي: $modeName\n'
+                '• طابع الاشتراك: $typeLabel\n'
+                '• خدمة المزامنة السحابية: ${updatedLicense?.isSyncAllowed == true ? "متاحة ومفعّلة ✅" : "غير مشمولة ❌"}',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('موافق'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('فشل التحديث: ${result.error ?? result.message ?? "تعذر الاتصال بالسيرفر"}'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('حدث خطأ أثناء التحديث: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _showSelfUnbindDialog() async {
     final licenseService = LicenseService();
     final storedLicense = licenseService.getStoredLicense();
@@ -1001,8 +1135,134 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     );
   }
 
+  Future<void> _restoreDatabaseFromFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        dialogTitle: 'اختر ملف قاعدة البيانات النسخة الاحتياطية (.db)',
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      final selectedFilePath = result.files.single.path;
+      if (selectedFilePath == null || selectedFilePath.isEmpty) return;
+
+      final file = File(selectedFilePath);
+      if (!await file.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('الملف المحدد غير موجود'), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
+
+      final fileName = file.path.split(Platform.pathSeparator).last;
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
+              SizedBox(width: 8),
+              Text('تأكيد استعادة قاعدة البيانات'),
+            ],
+          ),
+          content: Text(
+            '⚠️ تنبيه هام:\nسيتم استبدال قاعدة البيانات الحالية بالملف المستورد ($fileName).\n\nهل أنت مأكد من استعادة وتطبيق هذه القاعدة الآن؟',
+            style: const TextStyle(height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('إلغاء'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('استعادة واستبدال'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('جاري استعادة قاعدة البيانات وتحديث النظام...'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      final success = await DatabaseService().restoreDatabaseFromFile(file);
+
+      if (mounted) {
+        Navigator.pop(context); // إغلاق حوار التحميل
+        if (success) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green, size: 28),
+                  SizedBox(width: 8),
+                  Text('تمت الاستعادة بنجاح'),
+                ],
+              ),
+              content: const Text('تمت استعادة كافة الفواتير والديون والبيانات بنجاح! سيتم إعادة تحميل التطبيق الآن.'),
+              actions: [
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('حسناً'),
+                ),
+              ],
+            ),
+          );
+
+          Navigator.pushNamedAndRemoveUntil(context, '/main', (route) => false);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).maybePop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('فشلت استعادة قاعدة البيانات: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingSettings) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('الإعدادات العامة'),
+          centerTitle: true,
+          backgroundColor: primaryColor,
+          foregroundColor: Colors.white,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('الإعدادات العامة'),
@@ -1030,15 +1290,43 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           _buildSettingsCard(
             icon: Icons.vpn_key_rounded,
             iconColor: Colors.amber.shade800,
-            title: 'إدارة الترخيص ونقل الجهاز',
+            title: 'إدارة الترخيص وترقية الحساب',
             child: Column(
               children: [
+                if (!_isSyncAllowed) ...[
+                  _buildActionTile(
+                    icon: Icons.published_with_changes_rounded,
+                    iconColor: Colors.teal,
+                    title: 'فحص وترقية الاشتراك أونلاين',
+                    subtitle: 'الاتصال بالسيرفر فوراً لتفعيل ترقية الحساب (من ديون إلى شامل أو مزامنة)',
+                    onTap: _checkLicenseUpgradeOnline,
+                  ),
+                  const Divider(height: 1),
+                ],
                 _buildActionTile(
                   icon: Icons.phonelink_erase_rounded,
                   iconColor: Colors.orange.shade800,
                   title: 'تصفير الترخيص ونقل الحساب إلى جهاز آخر',
                   subtitle: 'فك ارتباط هذا الجهاز لتمكينك من تسجيل الدخول بنفس الحساب من كمبيوتر/هاتف جديد',
                   onTap: _showSelfUnbindDialog,
+                ),
+              ],
+            ),
+          ),
+
+          // 📦 قسم استعادة النسخة الاحتياطية لقاعدة البيانات
+          _buildSettingsCard(
+            icon: Icons.settings_backup_restore_rounded,
+            iconColor: Colors.blue.shade700,
+            title: 'استعادة النسخة الاحتياطية لقاعدة البيانات',
+            child: Column(
+              children: [
+                _buildActionTile(
+                  icon: Icons.folder_open_rounded,
+                  iconColor: Colors.blue.shade700,
+                  title: 'استعادة قاعدة البيانات من ملف (.db)',
+                  subtitle: 'استعادة الفواتير والديون والبيانات بعد تغيير الجهاز أو من ملف محفوض (مثل تيليجرام)',
+                  onTap: _restoreDatabaseFromFile,
                 ),
               ],
             ),
@@ -1329,41 +1617,69 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             ),
           ),
 
-          // 🔥 إعدادات مزامنة Firebase
-          _buildSettingsCard(
-            icon: Icons.sync,
-            iconColor: Colors.orange,
-            title: 'مزامنة Firebase',
-            child: Column(
-              children: [
-                _buildActionTile(
-                  icon: Icons.cloud_sync,
-                  iconColor: Colors.orange,
-                  title: 'إعدادات المزامنة بين الأجهزة',
-                  subtitle: 'إدارة أجهزة نقاط البيع، تتبع حالة المزامنة، ومطابقة البيانات',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const FirebaseSyncSettingsScreen()),
-                    ).then((_) => _loadSettings());
-                  },
-                ),
-                const Divider(height: 1),
-                _buildActionTile(
-                  icon: Icons.admin_panel_settings,
-                  iconColor: Colors.deepOrange,
-                  title: 'إعداد ربط Firebase مخصص',
-                  subtitle: 'تغيير مشروع الفايربيس وربط قاعدة بيانات جديدة (للمسؤولين فقط)',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const FirebaseCustomSetupScreen()),
-                    ).then((_) => _loadSettings());
-                  },
-                ),
-              ],
+          // 📱 إعدادات اتجاه الشاشة (الأندرويد والجوال)
+          if (Platform.isAndroid || Platform.isIOS)
+            _buildSettingsCard(
+              icon: Icons.screen_rotation,
+              iconColor: Colors.purple,
+              title: 'اتجاه الشاشة (الجوال والتابلت)',
+              child: Column(
+                children: [
+                  RadioListTile<String>(
+                    title: const Text('أفقي ثابت (Landscape)'),
+                    subtitle: const Text('تثبيت الشاشة بالوضع الأفقي فقط وتفادي التدوير التلقائي'),
+                    value: 'landscape',
+                    groupValue: _screenOrientation,
+                    onChanged: (val) => _changeOrientation(val!),
+                  ),
+                  const Divider(height: 1),
+                  RadioListTile<String>(
+                    title: const Text('عرض تلقائي (Auto-Rotate)'),
+                    subtitle: const Text('السماح بالتدوير التلقائي حسب وضع الجوال ومستشعر الدوران'),
+                    value: 'auto',
+                    groupValue: _screenOrientation,
+                    onChanged: (val) => _changeOrientation(val!),
+                  ),
+                ],
+              ),
             ),
-          ),
+
+          // 🔥 إعدادات مزامنة Firebase (تظهر فقط إذا كانت المزامنة مشمولة في الترخيص)
+          if (_isSyncAllowed)
+            _buildSettingsCard(
+              icon: Icons.sync,
+              iconColor: Colors.orange,
+              title: 'مزامنة Firebase',
+              child: Column(
+                children: [
+                  _buildActionTile(
+                    icon: Icons.cloud_sync,
+                    iconColor: Colors.orange,
+                    title: 'إعدادات المزامنة بين الأجهزة',
+                    subtitle: 'إدارة أجهزة نقاط البيع، تتبع حالة المزامنة، ومطابقة البيانات',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const FirebaseSyncSettingsScreen()),
+                      ).then((_) => _loadSettings());
+                    },
+                  ),
+                  const Divider(height: 1),
+                  _buildActionTile(
+                    icon: Icons.admin_panel_settings,
+                    iconColor: Colors.deepOrange,
+                    title: 'إعداد ربط Firebase مخصص',
+                    subtitle: 'تغيير مشروع الفايربيس وربط قاعدة بيانات جديدة (للمسؤولين فقط)',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const FirebaseCustomSetupScreen()),
+                      ).then((_) => _loadSettings());
+                    },
+                  ),
+                ],
+              ),
+            ),
 
 
           // 📤 إعدادات رفع قاعدة البيانات إلى تيليغرام

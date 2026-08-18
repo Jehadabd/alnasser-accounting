@@ -213,7 +213,10 @@ class InvoiceManager {
               // 3. تحديث رصيد العميل
               await txn.update(
                 'customers', 
-                {'current_total_debt': newDebt, 'last_debt_added': DateTime.now().toIso8601String()},
+                {
+                  'current_total_debt': newDebt, 
+                  'last_modified_at': DateTime.now().toIso8601String(),
+                },
                 where: 'id = ?',
                 whereArgs: [invoice.customerId]
               );

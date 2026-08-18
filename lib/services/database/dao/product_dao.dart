@@ -3,6 +3,7 @@
 
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../services/firebase_sync/uuid_helper.dart';
 import '../../../models/product.dart';
 import '../core/database_helpers.dart';
@@ -249,7 +250,32 @@ class ProductDao {
       } catch (e) {
         print('WARN: Failed to build unit_costs on update: $e');
       }
-      
+
+      // 📝 سجل التعديلات: نقارن القديم بالجديد ونسجّل كل حقل تغيّر
+      try {
+        final oldRows = await db.query('products',
+            where: 'id = ?', whereArgs: [product.id], limit: 1);
+        if (oldRows.isNotEmpty) {
+          final old = oldRows.first;
+          final deviceBatch = await _getDeviceId();
+          final batchHist = db.batch();
+          _recordFieldDiff(batchHist, product.id, old, productMap, 'name', 'الاسم');
+          _recordFieldDiff(batchHist, product.id, old, productMap, 'unit_price', 'السعر الأساسي');
+          _recordFieldDiff(batchHist, product.id, old, productMap, 'price1', 'السعر 1');
+          _recordFieldDiff(batchHist, product.id, old, productMap, 'price2', 'السعر 2');
+          _recordFieldDiff(batchHist, product.id, old, productMap, 'price3', 'السعر 3');
+          _recordFieldDiff(batchHist, product.id, old, productMap, 'cost_price', 'سعر التكلفة');
+          _recordFieldDiff(batchHist, product.id, old, productMap, 'stock_quantity', 'المخزون');
+          if (deviceBatch != null) await batchHist.commit(noResult: true);
+        }
+      } catch (e) {
+        print('WARN: Failed to record product edit history: $e');
+      }
+
+      // 🔄 حقول المزامنة: آخر جهاز عدّل + إعادة جدولة الرفع (last_synced_at يصبح
+      // أقدم من last_modified_at فتلتقطه syncPendingProducts)
+      productMap['last_modified_by_device_id'] = await _getDeviceIdStr();
+
       return await db.update(
         'products',
         productMap,
@@ -258,6 +284,45 @@ class ProductDao {
       );
     } catch (e) {
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
+    }
+  }
+
+  /// يسجّل فرق حقل واحد في جدول product_edit_history
+  void _recordFieldDiff(dynamic batch, int? productId,
+      Map<String, dynamic> old, Map<String, dynamic> newMap,
+      String column, String label) {
+    final oldVal = old[column]?.toString();
+    final newVal = newMap[column]?.toString();
+    if (oldVal != newVal) {
+      batch.insert('product_edit_history', {
+        'product_id': productId,
+        'product_sync_uuid': old['sync_uuid'],
+        'field_changed': column,
+        'old_value': oldVal,
+        'new_value': newVal,
+        'edit_type': 'manual_edit',
+        'device_id': _lastKnownDeviceId,
+        'note': 'تعديل $label',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    }
+  }
+
+  /// cache لمعرّف الجهاز (تفادي قراءة التخزين الآمن لكل حقل)
+  static String _lastKnownDeviceId = 'local';
+  Future<dynamic> _getDeviceId() async {
+    _lastKnownDeviceId = await _getDeviceIdStr();
+    return _lastKnownDeviceId;
+  }
+
+  Future<String> _getDeviceIdStr() async {
+    try {
+      // استيراد مؤجل لتفادي الاعتماد الدائري مع خدمات المزامنة
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('firebase_sync_device_id') ??
+          (prefs.getInt('invoice_device_id') ?? 1).toString();
+    } catch (_) {
+      return 'local';
     }
   }
 

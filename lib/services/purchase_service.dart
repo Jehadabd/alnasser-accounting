@@ -138,6 +138,57 @@ class PurchaseService with ChangeNotifier {
   }
 
   // --- Invoice Actions ---
+  
+  /// تعديل فاتورة مشتريات موجودة مع إرجاع التأثيرات السابقة وتطبيق التأثيرات الجديدة
+  Future<void> updatePurchaseInvoiceWithReversal(PurchaseInvoice oldInvoice, PurchaseInvoice newInvoice, List<PurchaseInvoiceItem> oldItems, List<PurchaseInvoiceItem> newItems) async {
+    final db = await _db.database;
+    
+    String costingMethod = 'last_purchase';
+    try {
+      final settings = await SettingsManager.getAppSettings();
+      costingMethod = settings.costingMethod;
+    } catch (e) {
+      print('Warning: Could not load costingMethod: $e');
+    }
+    
+    await db.transaction((txn) async {
+      // 1. Revert Old Effects (if invoice was confirmed)
+      if (oldInvoice.status == 'confirmed') {
+        for (var item in oldItems) {
+          await _reverseProductStock(txn, item);
+        }
+        await _reverseSupplierDebtOnInvoice(txn, oldInvoice.supplierId, oldInvoice.totalAmount, oldInvoice.paidAmount, oldInvoice.currency);
+      }
+      
+      // 2. Delete Old Items
+      await txn.delete('purchase_invoice_items', where: 'invoice_id = ?', whereArgs: [oldInvoice.id]);
+      
+      // 3. Update Invoice Record
+      final invoiceMap = newInvoice.toMap();
+      invoiceMap.remove('id');
+      await txn.update('purchase_invoices', invoiceMap, where: 'id = ?', whereArgs: [oldInvoice.id]);
+      
+      // 4. Insert New Items
+      for (var item in newItems) {
+        final itemMap = item.toMap();
+        itemMap['invoice_id'] = oldInvoice.id;
+        itemMap.remove('id');
+        itemMap.remove('product_name');
+        await txn.insert('purchase_invoice_items', itemMap);
+      }
+      
+      // 5. Apply New Effects (if new invoice is confirmed)
+      if (newInvoice.status == 'confirmed') {
+        for (var item in newItems) {
+          await _updateProductStockAndCost(txn, item, costingMethod);
+        }
+        await _updateSupplierDebtOnInvoice(txn, newInvoice.supplierId, newInvoice.totalAmount, newInvoice.paidAmount, newInvoice.currency);
+      }
+    });
+    
+    notifyListeners();
+  }
+
   Future<void> savePurchaseInvoice(PurchaseInvoice invoice, List<PurchaseInvoiceItem> items, {bool confirm = false}) async {
     final db = await _db.database;
     
@@ -263,6 +314,25 @@ class PurchaseService with ChangeNotifier {
     print('💾 DB_UPDATE: ✅ Product updated successfully!');
   }
 
+  Future<void> _reverseProductStock(Transaction txn, PurchaseInvoiceItem item) async {
+    final List<Map<String, dynamic>> products = await txn.query('products', where: 'id = ?', whereArgs: [item.productId]);
+    if (products.isEmpty) return;
+    
+    final product = products.first;
+    double currentStock = (product['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+    double oldQty = item.baseQuantity;
+    
+    double newStock = currentStock - oldQty;
+    if (newStock < 0) newStock = 0.0; // Prevent negative stock due to manual edits
+    
+    await txn.update(
+      'products', 
+      {'stock_quantity': newStock},
+      where: 'id = ?',
+      whereArgs: [item.productId],
+    );
+  }
+
   Future<void> _updateSupplierDebtOnInvoice(Transaction txn, int supplierId, double totalAmount, double paidAmount, String currency) async {
     final List<Map<String, dynamic>> suppliers = await txn.query('suppliers', where: 'id = ?', whereArgs: [supplierId]);
     if (suppliers.isEmpty) return;
@@ -283,6 +353,31 @@ class PurchaseService with ChangeNotifier {
       await txn.update(
         'suppliers',
         {'total_debt_iqd': currentDebt + addedDebt},
+        where: 'id = ?',
+        whereArgs: [supplierId],
+      );
+    }
+  }
+
+  Future<void> _reverseSupplierDebtOnInvoice(Transaction txn, int supplierId, double totalAmount, double paidAmount, String currency) async {
+    final List<Map<String, dynamic>> suppliers = await txn.query('suppliers', where: 'id = ?', whereArgs: [supplierId]);
+    if (suppliers.isEmpty) return;
+
+    double subtractedDebt = totalAmount - paidAmount;
+    
+    if (currency == 'USD') {
+      double currentDebt = (suppliers.first['total_debt_usd'] as num?)?.toDouble() ?? 0.0;
+      await txn.update(
+        'suppliers',
+        {'total_debt_usd': currentDebt - subtractedDebt},
+        where: 'id = ?',
+        whereArgs: [supplierId],
+      );
+    } else {
+      double currentDebt = (suppliers.first['total_debt_iqd'] as num?)?.toDouble() ?? 0.0;
+      await txn.update(
+        'suppliers',
+        {'total_debt_iqd': currentDebt - subtractedDebt},
         where: 'id = ?',
         whereArgs: [supplierId],
       );

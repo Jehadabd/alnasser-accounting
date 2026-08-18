@@ -15,6 +15,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../utils/uuid_helper.dart';
 import '../database_service.dart';
+import '../database/core/database_helpers.dart';
 import '../sync/sync_security.dart';
 import 'firebase_sync_service.dart';
 import 'reconciliation_service.dart' show ReconciliationService;
@@ -229,10 +230,12 @@ class LiveMatchService {
   final _snapshotController = StreamController<LiveMatchSnapshot>.broadcast();
   final _requestController = StreamController<LiveMatchRequest>.broadcast();
   final _showMatchScreenController = StreamController<String>.broadcast();
+  final _peerNotificationController = StreamController<String>.broadcast();
 
   Stream<LiveMatchSnapshot> get snapshots => _snapshotController.stream;
   Stream<LiveMatchRequest> get onRequest => _requestController.stream;
   Stream<String> get onMatchScreenRequested => _showMatchScreenController.stream;
+  Stream<String> get onPeerNotification => _peerNotificationController.stream;
 
   LiveMatchSnapshot? _last;
   LiveMatchSnapshot? get last => _last;
@@ -242,6 +245,8 @@ class LiveMatchService {
 
   FirebaseFirestore? get _fs => _sync.firestore;
   String? get _myId => _sync.deviceId;
+
+  StreamSubscription<QuerySnapshot>? _commandsSub;
 
   /// يبدأ الاستماع لطلبات الجلسات فقط — لا مقارنة بلا جهاز متصل موافق.
   void start() {
@@ -258,6 +263,8 @@ class LiveMatchService {
         .snapshots()
         .listen(_onSessions, onError: (e) => print('❌ جلسات المطابقة الحية: $e'));
 
+    _startCommandsListener();
+
     _localRefreshTimer?.cancel();
     _localRefreshTimer =
         Timer.periodic(const Duration(seconds: 4), (_) => recompute());
@@ -269,10 +276,12 @@ class LiveMatchService {
   void stop() {
     _sessionsSub?.cancel();
     _peerSub?.cancel();
+    _commandsSub?.cancel();
     _publishTimer?.cancel();
     _localRefreshTimer?.cancel();
     _sessionsSub = null;
     _peerSub = null;
+    _commandsSub = null;
     _publishTimer = null;
     _localRefreshTimer = null;
   }
@@ -537,12 +546,19 @@ class LiveMatchService {
     _activeSessionId = null;
     _sessionStatus = '';
 
-    // امسح حالتنا المنشورة حتى لا تُقرأ كقديمة لاحقاً.
+    // 🧹 امسح حالتنا المنشورة والأوامر المؤقتة حتى تظل مجلدات السحابة ناصعة ونظيفة
     final fs = _fs;
     final myId = _myId;
     if (fs != null && myId != null) {
       try {
         await fs.collection(_peerStateCol).doc(myId).delete();
+      } catch (_) {}
+
+      try {
+        final pendingCmds = await fs.collection('live_match_commands').where('targetDeviceId', isEqualTo: myId).get();
+        for (final doc in pendingCmds.docs) {
+          await doc.reference.delete();
+        }
       } catch (_) {}
     }
   }
@@ -742,9 +758,9 @@ class LiveMatchService {
 
     final local = await _readLocalCustomers();
     final peer = _peer!;
+    final db = await _db.database;
 
     // معاملات هذا الجهاز — للطابور فقط عند الفحص.
-    final db = await _db.database;
     final ownedRows = await db.rawQuery('''
       SELECT t.sync_uuid AS uuid,
              t.amount_changed AS amount,
@@ -761,24 +777,59 @@ class LiveMatchService {
     final ownedByCustomer = <String, List<Map<String, dynamic>>>{};
     for (final row in ownedRows) {
       final cu = row['customer_uuid'] as String?;
-      if (cu == null || cu.isEmpty) continue; // تخطي الصفوف بدون customer_uuid
+      if (cu == null || cu.isEmpty) continue;
       ownedByCustomer.putIfAbsent(cu, () => []).add(row);
     }
 
-    final allUuids = <String>{
-      ...local.customers.map((c) => c.syncUuid),
-      ...peer.customers.keys,
-    };
+    // 🔍 1) تجميع وتثبيت العملاء المحليين بالاسم المعياري المقاس
+    final localByName = <String, ({String syncUuid, String name, int id, double debt, int txCount, double txSum})>{};
+    for (final c in local.customers) {
+      final normName = DatabaseHelpers.normalizeArabic(c.name);
+      if (!localByName.containsKey(normName)) {
+        localByName[normName] = c;
+      }
+    }
 
-    final localByUuid = {
-      for (final c in local.customers) c.syncUuid: c,
+    // 🔍 2) تجميع وتثبيت عملاء الجهاز النظير بالاسم المعياري المقاس
+    final peerByName = <String, ({String name, double debt, int txCount, double txSum, String syncUuid})>{};
+    for (final entry in peer.customers.entries) {
+      final peerCust = entry.value;
+      final normName = DatabaseHelpers.normalizeArabic(peerCust.name);
+      if (!peerByName.containsKey(normName)) {
+        peerByName[normName] = (
+          name: peerCust.name,
+          debt: peerCust.debt,
+          txCount: peerCust.txCount,
+          txSum: peerCust.txSum,
+          syncUuid: entry.key,
+        );
+      } else {
+        final existing = peerByName[normName]!;
+        if (peerCust.debt.abs() > existing.debt.abs()) {
+          peerByName[normName] = (
+            name: peerCust.name,
+            debt: peerCust.debt,
+            txCount: peerCust.txCount,
+            txSum: peerCust.txSum,
+            syncUuid: entry.key,
+          );
+        }
+      }
+    }
+
+    // 🔍 3) تجميع كل الأسماء الفريدة بدون تكرار
+    final allNormNames = <String>{
+      ...localByName.keys,
+      ...peerByName.keys,
     };
 
     final matches = <LiveCustomerMatch>[];
-    for (final uuid in allUuids) {
-      final loc = localByUuid[uuid];
-      final rem = peer.customers[uuid];
+    for (final normName in allNormNames) {
+      final loc = localByName[normName];
+      final rem = peerByName[normName];
+
       final name = loc?.name ?? rem?.name ?? 'غير معروف';
+      final syncUuid = loc?.syncUuid ?? rem?.syncUuid ?? '';
       final localDebt = loc?.debt ?? 0.0;
       final localCount = loc?.txCount ?? 0;
       final localSum = loc?.txSum ?? 0.0;
@@ -791,26 +842,23 @@ class LiveMatchService {
       final localDrift = (localDebt - localSum).abs() > 0.01;
 
       final problems = <QueuedOwnedTx>[];
-      if (debtDiffers || countDiffers || localDrift) {
-        // إن كان عندنا دين أعلى أو معاملات أكثر: قد نملك معاملات لم تصل للآخر.
-        // نضع في الطابور معاملاتنا غير المرفوعة أو كل معاملاتنا إن العدد أكبر.
-        for (final owned in ownedByCustomer[uuid] ?? const []) {
+      if ((debtDiffers || countDiffers || localDrift) && syncUuid.isNotEmpty) {
+        for (final owned in ownedByCustomer[syncUuid] ?? const []) {
           final uploaded = ((owned['uploaded'] as num?)?.toInt() ?? 0) == 1;
           final txUuid = owned['uuid'] as String;
           final amount = (owned['amount'] as num?)?.toDouble() ?? 0.0;
           if (!uploaded) {
             problems.add(QueuedOwnedTx(
               syncUuid: txUuid,
-              customerSyncUuid: uuid,
+              customerSyncUuid: syncUuid,
               customerName: name,
               amount: amount,
               reason: 'غير مرفوعة — قد تكون سبب الفرق مع ${peer.deviceName}',
             ));
           } else if (countDiffers && localCount > peerCount) {
-            // مرشّحة لإعادة الرفع القسري: لدينا معاملات أكثر من النظير.
             problems.add(QueuedOwnedTx(
               syncUuid: txUuid,
-              customerSyncUuid: uuid,
+              customerSyncUuid: syncUuid,
               customerName: name,
               amount: amount,
               reason: 'مرشّحة لإعادة الرفع — عددنا أكبر من ${peer.deviceName}',
@@ -820,7 +868,7 @@ class LiveMatchService {
       }
 
       matches.add(LiveCustomerMatch(
-        customerSyncUuid: uuid,
+        customerSyncUuid: syncUuid,
         customerName: name,
         localCustomerId: loc?.id ?? 0,
         localDebt: localDebt,
@@ -1022,6 +1070,183 @@ class LiveMatchService {
       return created;
     } finally {
       DatabaseService.blockTransactionDeletes = false;
+    }
+  }
+
+  /// عندما تكون بيانات الجهاز الآخر هي الصحيحة لعملاء محددين:
+  /// إضافة معاملة تصحيحية محلياً للعملاء المحددين دون حذف أي بيانات
+  Future<int> addCorrectiveTransactionsForSelectedPeerTruth(Set<String> selectedUuids) async {
+    if (!sessionActive || selectedUuids.isEmpty) return 0;
+    DatabaseService.blockTransactionDeletes = true;
+    try {
+      final snap = await recompute();
+      int created = 0;
+      final db = await _db.database;
+      for (final c in snap.mismatches) {
+        if (!selectedUuids.contains(c.customerSyncUuid)) continue;
+        if (c.localCustomerId <= 0) continue;
+        final diff = c.peerDebt - c.localDebt;
+        if (diff.abs() < 0.01) continue;
+
+        final customerRows = await db.query('customers', columns: ['name'], where: 'id = ?', whereArgs: [c.localCustomerId], limit: 1);
+        final customerName = customerRows.isNotEmpty ? customerRows.first['name'] as String : 'unknown';
+        final now = DateTime.now();
+        final uuid = SyncSecurity.generateTransactionUuid(customerName, diff, now);
+        final nowIso = now.toIso8601String();
+        final newBalance = c.localDebt + diff;
+        await db.insert('transactions', {
+          'customer_id': c.localCustomerId,
+          'amount_changed': diff,
+          'new_balance_after_transaction': newBalance,
+          'transaction_type': 'live_match_adjustment',
+          'transaction_note':
+              'تعديل مطابقة حية مع ${c.peerDeviceName} (اعتماد الجهاز الآخر كصحيح)',
+          'description': 'تصحيح مطابقة حية',
+          'transaction_date': nowIso,
+          'created_at': nowIso,
+          'last_modified_at': nowIso,
+          'sync_uuid': uuid,
+          'transaction_uuid': uuid,
+          'is_created_by_me': 1,
+          'is_uploaded': 0,
+          'is_deleted': 0,
+        });
+        await db.rawUpdate(
+          'UPDATE customers SET current_total_debt = ?, last_modified_at = ? WHERE id = ?',
+          [newBalance, nowIso, c.localCustomerId],
+        );
+        created++;
+      }
+      await _publishLocalState();
+      await recompute();
+      return created;
+    } finally {
+      DatabaseService.blockTransactionDeletes = false;
+    }
+  }
+
+  /// إعادة رفع واعتماد بيانات هذا الجهاز لعملاء محددين:
+  /// يتم إعادة بث بيانات العملاء المحددين ومعاملاتهم إلى Firebase فوراً
+  Future<void> forceUploadSelectedCustomers(Set<String> selectedUuids, {void Function(int done, int total, String msg)? onProgress}) async {
+    if (selectedUuids.isEmpty) return;
+    int done = 0;
+    final total = selectedUuids.length;
+    for (final uuid in selectedUuids) {
+      done++;
+      onProgress?.call(done, total, 'جاري رفع بيانات العميل $done/$total...');
+      await inspectCustomer(uuid);
+      await notifyPeerOfPushedCustomer(uuid);
+    }
+    await forceUploadQueue(onProgress: (d, t, name) {
+      onProgress?.call(d, t, 'جاري بث المعاملات $d/$t ($name)...');
+    });
+    await _publishLocalState();
+    await recompute();
+  }
+
+  /// 📡 الاستماع للأوامر الواردة حياً من الأجهزة الأخرى بخصوص التحديث المباشر للعملاء
+  void _startCommandsListener() {
+    final fs = _fs;
+    final myId = _myId;
+    if (fs == null || myId == null || _commandsSub != null) return;
+
+    _commandsSub = fs
+        .collection('live_match_commands')
+        .where('targetDeviceId', isEqualTo: myId)
+        .snapshots()
+        .listen((snapshot) async {
+      for (final change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final data = change.doc.data();
+          if (data == null) continue;
+          final command = data['command'] as String?;
+          final customerSyncUuid = data['customerSyncUuid'] as String?;
+          final senderDeviceId = data['senderDeviceId'] as String?;
+
+          if (customerSyncUuid == null) continue;
+
+          if (command == 'request_customer_data' || command == 'reupload_customer') {
+            print('📩 [LiveMatchService] الجهاز ($senderDeviceId) يطلب رفع معاملات العميل $customerSyncUuid...');
+            await reuploadLocalCustomerTransactionsToPeer(customerSyncUuid, targetPeerId: senderDeviceId);
+            unawaited(change.doc.reference.delete());
+          } else if (command == 'push_customer_notify') {
+            final db = await _db.database;
+            final cust = await db.query('customers', columns: ['name'], where: 'sync_uuid = ?', whereArgs: [customerSyncUuid], limit: 1);
+            final name = cust.isNotEmpty ? cust.first['name'] as String : 'العميل';
+            _peerNotificationController.add('📲 جاري تنزيل ومطابقة معاملات «$name» المرفوعة من الجهاز الآخر...');
+            
+            // انتظار المزامنة لتطبيق البيانات ثم تحديث حالة المطابقة للمقابلة
+            await Future.delayed(const Duration(seconds: 2));
+            await _publishLocalState();
+            await recompute();
+            unawaited(change.doc.reference.delete());
+          }
+        }
+      }
+    }, onError: (e) => print('⚠️ [LiveMatchService] خطأ استماع أوامر المطابقة: $e'));
+  }
+
+  /// 📤 إرسال طلب للجهاز الآخر لإعادة رفع معاملات عملاء محددين لكون بياناته هي الصحيحة
+  Future<void> requestPeerToUploadCustomers(Set<String> customerSyncUuids) async {
+    final fs = _fs;
+    final myId = _myId;
+    final peerId = _selectedPeerId;
+    if (fs == null || myId == null || peerId == null || customerSyncUuids.isEmpty) return;
+
+    for (final uuid in customerSyncUuids) {
+      final docId = 'cmd_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(99999)}';
+      await fs.collection('live_match_commands').doc(docId).set({
+        'command': 'request_customer_data',
+        'targetDeviceId': peerId,
+        'senderDeviceId': myId,
+        'customerSyncUuid': uuid,
+        'createdAt': DateTime.now().toIso8601String(),
+      });
+    }
+  }
+
+  /// 📤 إخطار الجهاز الآخر أننا قمنا برفع بيانات عميل صحيحة ليقوم بتنزيلها ومطابقتها
+  Future<void> notifyPeerOfPushedCustomer(String customerSyncUuid) async {
+    final fs = _fs;
+    final myId = _myId;
+    final peerId = _selectedPeerId;
+    if (fs == null || myId == null || peerId == null) return;
+
+    final docId = 'cmd_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(99999)}';
+    await fs.collection('live_match_commands').doc(docId).set({
+      'command': 'push_customer_notify',
+      'targetDeviceId': peerId,
+      'senderDeviceId': myId,
+      'customerSyncUuid': customerSyncUuid,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// 🔄 إعادة رفع معاملات عميل محدد من SQLite إلى Firebase استجابة لطلب الجهاز النظير
+  Future<void> reuploadLocalCustomerTransactionsToPeer(String customerSyncUuid, {String? targetPeerId}) async {
+    try {
+      final db = await _db.database;
+      final cust = await db.query('customers', columns: ['id', 'name'], where: 'sync_uuid = ?', whereArgs: [customerSyncUuid], limit: 1);
+      if (cust.isEmpty) return;
+      final customerId = cust.first['id'] as int;
+      final customerName = cust.first['name'] as String? ?? 'العميل';
+
+      _peerNotificationController.add('📲 جاري رفع معاملات العميل «$customerName» بناءً على طلب الجهاز الآخر...');
+
+      await db.update(
+        'transactions',
+        {'is_uploaded': 0},
+        where: 'customer_id = ?',
+        whereArgs: [customerId],
+      );
+
+      await _sync.repairAndSyncAllTransactions();
+      await notifyPeerOfPushedCustomer(customerSyncUuid);
+      await _publishLocalState();
+      await recompute();
+      print('✅ [LiveMatchService] تم بث معاملات العميل ($customerName) للجهاز النظير بنجاح!');
+    } catch (e) {
+      print('❌ [LiveMatchService] خطأ في إعادة بث معاملات العميل للجهاز النظير: $e');
     }
   }
 

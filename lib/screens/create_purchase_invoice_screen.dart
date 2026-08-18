@@ -21,8 +21,9 @@ import 'product_entry_screen.dart';
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
   final Supplier? preselectedSupplier;
+  final PurchaseInvoice? existingInvoice;
 
-  const CreatePurchaseInvoiceScreen({super.key, this.preselectedSupplier});
+  const CreatePurchaseInvoiceScreen({super.key, this.preselectedSupplier, this.existingInvoice});
 
   @override
   State<CreatePurchaseInvoiceScreen> createState() => _CreatePurchaseInvoiceScreenState();
@@ -55,7 +56,18 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   void initState() {
     super.initState();
     _selectedSupplier = widget.preselectedSupplier;
-    if (_selectedSupplier != null) {
+    
+    if (widget.existingInvoice != null) {
+      final inv = widget.existingInvoice!;
+      _invoiceNumberController.text = inv.invoiceNumber;
+      _notesController.text = inv.notes ?? '';
+      _invoiceDate = inv.date;
+      _dueDate = inv.dueDate;
+      _currency = inv.currency;
+      _attachmentPath = inv.attachmentPath;
+      _paidAmountController.text = inv.paidAmount.toString();
+      _paymentType = inv.isPaid ? 'نقد' : (inv.paidAmount > 0 ? 'دين' : (inv.totalAmount == 0 ? 'نقد' : 'دين'));
+    } else if (_selectedSupplier != null) {
       _currency = _selectedSupplier!.currency;
     }
     _loadData();
@@ -74,7 +86,13 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       _suppliers = suppliers;
       _products = products;
       // Find matching supplier from loaded list (to match dropdown items by reference)
-      if (_selectedSupplier != null) {
+      if (widget.existingInvoice != null) {
+        try {
+          _selectedSupplier = _suppliers.firstWhere((s) => s.id == widget.existingInvoice!.supplierId);
+          _currency = _selectedSupplier!.currency;
+          _loadDelegatesForSupplier(_selectedSupplier!.id!);
+        } catch (_) {}
+      } else if (_selectedSupplier != null) {
         _selectedSupplier = _suppliers.firstWhere(
           (s) => s.id == _selectedSupplier!.id,
           orElse: () => _selectedSupplier!,
@@ -83,6 +101,28 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         _loadDelegatesForSupplier(_selectedSupplier!.id!);
       }
       _isLoading = false;
+    });
+
+    if (widget.existingInvoice != null) {
+      _loadExistingItems(widget.existingInvoice!.id!);
+    }
+  }
+
+  Future<void> _loadExistingItems(int invoiceId) async {
+    final purchaseService = context.read<PurchaseService>();
+    final items = await purchaseService.getInvoiceItems(invoiceId);
+    
+    // Refresh product names for display
+    final dbService = DatabaseService();
+    final allProducts = await dbService.getAllProducts();
+    
+    final updatedItems = items.map((item) {
+      final p = allProducts.firstWhere((p) => p.id == item.productId, orElse: () => Product(name: 'محذوف', unit: 'piece', unitPrice: 0, price1: 0, createdAt: DateTime.now(), lastModifiedAt: DateTime.now(), categoryId: 0, isWeighable: false));
+      return item.copyWith(productName: p.name);
+    }).toList();
+
+    setState(() {
+      _items = updatedItems;
     });
   }
 
@@ -101,7 +141,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: const Text('فاتورة شراء جديدة'),
+        title: Text(widget.existingInvoice != null ? 'تعديل فاتورة مشتريات' : 'فاتورة شراء جديدة'),
         backgroundColor: const Color(0xFF455A64),
         foregroundColor: Colors.white,
         elevation: 0,
@@ -919,7 +959,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         attachmentPath: _attachmentPath,
       );
 
-      await context.read<PurchaseService>().savePurchaseInvoice(invoice, _items, confirm: confirm);
+      if (widget.existingInvoice != null) {
+        final oldItems = await purchaseService.getInvoiceItems(widget.existingInvoice!.id!);
+        await purchaseService.updatePurchaseInvoiceWithReversal(
+          widget.existingInvoice!,
+          invoice,
+          oldItems,
+          _items,
+        );
+      } else {
+        await purchaseService.savePurchaseInvoice(invoice, _items, confirm: confirm);
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
