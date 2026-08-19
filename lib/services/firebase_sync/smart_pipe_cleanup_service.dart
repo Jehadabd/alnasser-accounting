@@ -45,14 +45,14 @@ class SmartPipeCleanupService {
   Timer? _cleanupTimer;
   bool _isRunning = false;
 
-  // حذف بعد أسبوع (7 أيام) من الرفع إذا قرأها الجميع
-  static const int _gracePeriodDays = 7;
-
-  // جهاز خامل أكثر من 90 يوم → يُستبعد من حساب القراءة
-  static const int _deviceInactiveDays = 90;
+  // حذف بعد المدة التي يضبطها المستخدم (getAutoDeleteDays) من الرفع
+  // وشرط إضافي إلزامي: قراءة المستند من كل الأجهزة المؤهلة (ACKs)
 
   // جهاز جديد لم يكمل مزامنته بعد → يُستبعد أيضاً
   static const String _newDeviceFlag = 'isNewDevice';
+
+  // جهاز اعتُبر خارج الخدمة بقرار يدوي من صاحب المحل → يُستبعد
+  static const String _retiredDeviceFlag = 'isRetired';
 
   // ═══════════════════════════════════════════════════════════════════════
   // تشغيل وإيقاف
@@ -143,10 +143,14 @@ class SmartPipeCleanupService {
         );
       }
 
-      final cutoff =
-          DateTime.now().subtract(Duration(days: _gracePeriodDays));
+      // 🔒 الحذف يتبع المدة التي ضبطها المستخدم في الإعدادات
+      final userDays = await FirebaseSyncSecuritySettings.getAutoDeleteDays();
+      final cutoff = DateTime.now().subtract(Duration(days: userDays));
+      print('🧹 [SmartPipe] عمر الحذف الأدنى: $userDays يوم (قبل ${cutoff.toString().split(' ')[0]})');
 
-      // 2. حذف المعاملات
+      // 2. حذف المعاملات (بعد قراءة الجميع فقط)
+      //    الحقول متوافقة مع TransactionAckService.sendAck:
+      //    transactionUuid / receiverDeviceId
       final txResult = await _cleanupCollection(
         groupId: groupId,
         collection: 'transactions',
@@ -155,7 +159,7 @@ class SmartPipeCleanupService {
         cutoff: cutoff,
         eligibleDevices: eligibleDevices,
         ackCollection: 'transaction_acks',
-        ackSyncField: 'transactionSyncUuid',
+        ackSyncField: 'transactionUuid',
         ackDeviceField: 'receiverDeviceId',
       );
       deletedTx = txResult['deleted'] as int;
@@ -182,8 +186,8 @@ class SmartPipeCleanupService {
       // 5. حذف ACKs القديمة التابعة لمستندات محذوفة
       deletedAcks = await _cleanupOrphanedAcks(groupId);
 
-      // 6. الحذف النهائي (Hard TTL) بناءً على إعدادات المستخدم الديناميكية
-      await _runHardTTLCleanup(groupId);
+      // 🔒 تم إلغاء الحذف النهائي الأعمى (_runHardTTLCleanup):
+      // لا يُمحى أي مستند مهما تقادم إلا إذا قرأته كل الأجهزة المؤهلة أعلاه.
 
       print(
           '✅ [SmartPipe] اكتمل: معاملات=$deletedTx، فواتير=$deletedInv، عملاء=$deletedCust، ACKs=$deletedAcks، تخطي=$skipped');
@@ -212,7 +216,9 @@ class SmartPipeCleanupService {
         .collection('devices')
         .get();
 
-    final now = DateTime.now();
+    // ملاحظة: كل مستخدم يملك مشروع Firebase خاصاً، فكل الأجهزة في
+    // هذا المشروع تنتمي لنفس المجموعة عملياً — لا حاجة لتصفية إضافية.
+
     final eligible = <String>{};
 
     for (final doc in snapshot.docs) {
@@ -221,20 +227,12 @@ class SmartPipeCleanupService {
       // جهاز جديد لم يكمل مزامنته → مستبعد من الحساب
       if (data[_newDeviceFlag] == true) continue;
 
-      final lastSeen = data['lastSeen'];
-      DateTime? lastSeenDate;
+      // 🚫 جهاز اعتُبر خارج الخدمة بقرار يدوي موثّق → مستبعد
+      if (data[_retiredDeviceFlag] == true) continue;
 
-      if (lastSeen is Timestamp) {
-        lastSeenDate = lastSeen.toDate();
-      } else if (lastSeen is String) {
-        lastSeenDate = DateTime.tryParse(lastSeen);
-      }
-
-      // جهاز خامل أكثر من 90 يوم → يُستبعد
-      if (lastSeenDate == null ||
-          now.difference(lastSeenDate).inDays > _deviceInactiveDays) {
-        continue;
-      }
+      // ⚠️ لا يوجد استبعاد تلقائي للأجهزة الخاملة بعد الآن:
+      // الجهاز الغائب يبقى مطالباً بالقراءة (ACK) حتى يعود أو يُعتبر
+      // خارج الخدمة بقرار يدوي — هذا يمنع فقد بيانات جهاز غائب طويلاً.
 
       eligible.add(doc.id);
     }
@@ -260,59 +258,75 @@ class SmartPipeCleanupService {
     int deleted = 0;
     int skipped = 0;
 
-    // جلب batch من 100 مستند
-    final snapshot = await _firestore!
-        .collection(collection)
-        .limit(100)
-        .get();
+    // 🔁 تصفّح دائري كامل للمجموعة (بدل عينة 100 محدودة سابقاً)
+    const batchSize = 500;
+    DocumentSnapshot<Object?>? lastDoc;
 
-    for (final doc in snapshot.docs) {
-      final data = doc.data();
-
-      // 1. التحقق من تجاوز grace period
-      final ts = data[timestampField];
-      DateTime? uploadedAt;
-
-      if (ts is Timestamp) {
-        uploadedAt = ts.toDate();
-      } else if (ts is String) {
-        uploadedAt = DateTime.tryParse(ts);
+    while (true) {
+      var query = _firestore!
+          .collection(collection)
+          .orderBy(FieldPath.documentId)
+          .limit(batchSize);
+      if (lastDoc != null) {
+        query = query.startAfterDocument(lastDoc);
       }
 
-      if (uploadedAt == null || uploadedAt.isAfter(cutoff)) {
-        // لم تمر grace period بعد
-        continue;
-      }
+      final snapshot = await query.get();
+      if (snapshot.docs.isEmpty) break;
+      lastDoc = snapshot.docs.last;
 
-      // 2. جهاز المُرسل
-      final senderId = data[senderField] as String?;
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
 
-      // 3. جلب ACKs لهذا المستند
-      final acksSnapshot = await _firestore!
-          .collection(ackCollection)
-          .where(ackSyncField, isEqualTo: doc.id)
-          .get();
+        // 1. التحقق من تجاوز المدة التي ضبطها المستخدم
+        final ts = data[timestampField];
+        DateTime? uploadedAt;
 
-      final ackedDevices =
-          acksSnapshot.docs.map((a) => a.data()[ackDeviceField] as String? ?? '').toSet();
+        if (ts is Timestamp) {
+          uploadedAt = ts.toDate();
+        } else if (ts is String) {
+          uploadedAt = DateTime.tryParse(ts);
+        }
 
-      // 4. التحقق: هل كل جهاز مؤهل (غير المرسل) قرأ المستند؟
-      bool allRead = true;
-      for (final device in eligibleDevices) {
-        if (device == senderId) continue; // المرسل لا يحتاج ACK
-        if (!ackedDevices.contains(device)) {
-          allRead = false;
-          break;
+        if (uploadedAt == null || uploadedAt.isAfter(cutoff)) {
+          // لم تمر المدة بعد
+          continue;
+        }
+
+        // 2. جهاز المُرسل
+        final senderId = data[senderField] as String?;
+
+        // 3. جلب ACKs لهذا المستند
+        final acksSnapshot = await _firestore!
+            .collection(ackCollection)
+            .where(ackSyncField, isEqualTo: doc.id)
+            .get();
+
+        final ackedDevices = acksSnapshot.docs
+            .map((a) => a.data()[ackDeviceField] as String? ?? '')
+            .toSet();
+
+        // 4. التحقق: هل كل جهاز مؤهل (غير المرسل) قرأ المستند؟
+        bool allRead = true;
+        for (final device in eligibleDevices) {
+          if (device == senderId) continue; // المرسل لا يحتاج ACK
+          if (!ackedDevices.contains(device)) {
+            allRead = false;
+            break;
+          }
+        }
+
+        if (allRead) {
+          await doc.reference.delete();
+          deleted++;
+          print('🗑️ [SmartPipe] حُذف من $collection: ${doc.id}');
+        } else {
+          skipped++;
         }
       }
 
-      if (allRead) {
-        await doc.reference.delete();
-        deleted++;
-        print('🗑️ [SmartPipe] حُذف من $collection: ${doc.id}');
-      } else {
-        skipped++;
-      }
+      // آخر دفعة أصغر من الحجم → انتهينا
+      if (snapshot.docs.length < batchSize) break;
     }
 
     return {'deleted': deleted, 'skipped': skipped};
@@ -386,6 +400,25 @@ class SmartPipeCleanupService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // اعتبار جهاز خارج الخدمة / إعادته للخدمة (قرار يدوي من صاحب المحل)
+  // ═══════════════════════════════════════════════════════════════════════
+  // الجهاز المُعتَرف خارج الخدمة لا يُطالَب بـ ACK، فيتاح حذف مستنداته
+  // القديمة بعد قراءة بقية الأجهزة. القرار يدوي وموثّق بالتاريخ لضمان
+  // عدم فقد بيانات جهاز غائب مؤقتاً.
+
+  Future<void> setDeviceRetired(String deviceId, bool retired) async {
+    _firestore ??= FirebaseFirestore.instance;
+    await _firestore!.collection('devices').doc(deviceId).set({
+      _retiredDeviceFlag: retired,
+      if (retired) 'retiredAt': DateTime.now().toIso8601String(),
+      if (!retired) 'reactivatedAt': DateTime.now().toIso8601String(),
+    }, SetOptions(merge: true));
+    print(retired
+        ? '🚫 [SmartPipe] الجهاز $deviceId اعتُبر خارج الخدمة (قرار يدوي)'
+        : '✅ [SmartPipe] الجهاز $deviceId أعيد للخدمة');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // إرسال Read ACK عند قراءة مستند
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -403,8 +436,9 @@ class SmartPipeCleanupService {
           .collection('transaction_acks')
           .doc('${syncUuid}_$deviceId')
           .set({
-        'transactionSyncUuid': syncUuid,
-        'deviceId': deviceId,
+        // 🔒 نفس أسماء حقول TransactionAckService.sendAck ليعمل فحص الحذف
+        'transactionUuid': syncUuid,
+        'receiverDeviceId': deviceId,
         'readAt': FieldValue.serverTimestamp(),
         'groupSecret': groupSecret,
       }, SetOptions(merge: true));
@@ -439,58 +473,9 @@ class SmartPipeCleanupService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // الحذف التلقائي الديناميكي (Hard TTL) كبديل لفايربيس
+  // 🚫 تم إلغاء الحذف النهائي الأعمى (Hard TTL)
   // ═══════════════════════════════════════════════════════════════════════
-
-  Future<void> _runHardTTLCleanup(String groupId) async {
-    try {
-      final days = await FirebaseSyncSecuritySettings.getAutoDeleteDays();
-      final cutoff = DateTime.now().subtract(Duration(days: days));
-      
-      print('🗑️ [Hard TTL] فحص التواريخ الأقدم من $days يوم (قبل ${cutoff.toString().split(' ')[0]})...');
-
-      int ttlDeleted = 0;
-      final collections = {
-        'transactions': 'uploadedAt',
-        'customers': 'uploadedAt',
-        'invoices': 'uploadedAt'
-      };
-
-      for (var entry in collections.entries) {
-        final collName = entry.key;
-        final dateField = entry.value;
-
-        // جلب عينة لفحصها محلياً لدعم التاريخين (String و Timestamp)
-        final snapshot = await _firestore!
-            .collection(collName)
-            .limit(300)
-            .get();
-
-        for (final doc in snapshot.docs) {
-          final data = doc.data();
-          final rawDate = data[dateField] ?? data['uploadedAt'];
-          DateTime? date;
-
-          if (rawDate is Timestamp) {
-            date = rawDate.toDate();
-          } else if (rawDate is String) {
-            date = DateTime.tryParse(rawDate);
-          }
-
-          if (date != null && date.isBefore(cutoff)) {
-            await doc.reference.delete();
-            ttlDeleted++;
-          }
-        }
-      }
-
-      if (ttlDeleted > 0) {
-        print('✅ [Hard TTL] تم تدمير $ttlDeleted سجل منتهي الصلاحية نهائياً بنجاح.');
-      } else {
-        print('ℹ️ [Hard TTL] لا توجد سجلات منتهية الصلاحية.');
-      }
-    } catch (e) {
-      print('❌ [Hard TTL] فشل الحذف التلقائي: $e');
-    }
-  }
+  // كان هذا المسار يحذف المستندات القديمة دون أي فحص لقراءة الأجهزة (ACKs)،
+  // مما قد يفقد بيانات جهاز غائب. الحذف الآن يمر حصرياً عبر _cleanupCollection
+  // بشرطين معاً: تجاوز المدة التي ضبطها المستخدم + قراءة جميع الأجهزة المؤهلة.
 }

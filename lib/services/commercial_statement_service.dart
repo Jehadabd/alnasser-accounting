@@ -141,13 +141,38 @@ class CommercialStatementService {
     final fetchedInvoiceIds = invoiceIds.toSet();
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 5. بناء قائمة السطور
+    // 5. بناء قائمة العمليات مع الرصيد المتراكم
     // ═══════════════════════════════════════════════════════════════════════════
     final List<Map<String, dynamic>> entries = [];
+
+    // جلب أرقام الفواتير للمعاملات المرتبطة بفواتير قد لا تكون في نطاق الفلترة
+    final orphanInvoiceIds = allInvoiceTx
+        .map((t) => t['invoice_id'] as int?)
+        .whereType<int>()
+        .where((id) => !fetchedInvoiceIds.contains(id))
+        .toSet()
+        .toList();
+    final Map<int, String> orphanInvoiceNumbers = {};
+    if (orphanInvoiceIds.isNotEmpty) {
+      final placeholders = List.filled(orphanInvoiceIds.length, '?').join(',');
+      final rows = await db.rawQuery(
+        'SELECT id, invoice_number FROM invoices WHERE id IN ($placeholders)',
+        orphanInvoiceIds,
+      );
+      for (final r in rows) {
+        final numVal = r['invoice_number'] as String?;
+        if (numVal != null && numVal.isNotEmpty) {
+          orphanInvoiceNumbers[r['id'] as int] = numVal;
+        }
+      }
+    }
 
     // إضافة الفواتير
     for (final inv in invoices) {
       final invoiceId = inv['id'] as int;
+      final invoiceNumber = (inv['invoice_number'] as String?)?.isNotEmpty == true
+          ? (inv['invoice_number'] as String)
+          : '$invoiceId';
       final invoiceDate = DateTime.parse(inv['invoice_date'] as String);
       final totalAmount = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
       final paymentType = inv['payment_type'] as String? ?? '';
@@ -202,25 +227,25 @@ class CommercialStatementService {
           paymentType == 'نقد' && invoiceTx.isNotEmpty;
 
       if (isTrueCashInvoice) {
-        description = 'فاتورة رقم #$invoiceId نقد';
+        description = 'فاتورة رقم #$invoiceNumber نقد';
         entryType = 'cash_invoice';
         netDebtAmount = 0;
       } else if (convertedFromDebtToCash) {
-        description = 'فاتورة رقم #$invoiceId (تحولت لنقد)';
+        description = 'فاتورة رقم #$invoiceNumber (تحولت لنقد)';
         entryType = 'converted_to_cash';
         wasConverted = true;
         originalPaymentType = 'دين';
       } else if (convertedFromCashToDebt) {
-        description = 'فاتورة رقم #$invoiceId (تحولت لدين)';
+        description = 'فاتورة رقم #$invoiceNumber (تحولت لدين)';
         entryType = 'converted_to_debt';
         wasConverted = true;
         originalPaymentType = 'نقد';
       } else if (paymentType == 'دين') {
-        description = 'فاتورة رقم #$invoiceId';
+        description = 'فاتورة رقم #$invoiceNumber';
         entryType = 'debt_invoice';
       } else {
         // فاتورة نقد لكن لها معاملات (حالة غير متوقعة)
-        description = 'فاتورة رقم #$invoiceId نقد';
+        description = 'فاتورة رقم #$invoiceNumber نقد';
         entryType = 'cash_invoice';
         netDebtAmount = 0;
       }
@@ -234,6 +259,7 @@ class CommercialStatementService {
         'debtAfter': 0.0,
         'type': entryType,
         'invoiceId': invoiceId,
+        'invoiceNumber': invoiceNumber,
         'paymentType': paymentType,
         'paidAmount': amountPaidOnInvoice,
         'wasConverted': wasConverted,
@@ -293,8 +319,9 @@ class CommercialStatementService {
       final note = tx['transaction_note'] as String?;
       final txId = tx['id'] as int?;
       final createdAt = tx['created_at'] as String?;
+      final invNumber = (invoiceId != null ? orphanInvoiceNumbers[invoiceId] : null) ?? '$invoiceId';
 
-      String description = 'فاتورة #$invoiceId';
+      String description = 'فاتورة #$invNumber';
       if (note != null && note.isNotEmpty) {
         description += ' - $note';
       }

@@ -10,6 +10,7 @@ import 'package:sqflite/sqflite.dart' as sqflite show Transaction;
 import 'package:uuid/uuid.dart';
 import 'firebase_sync_config.dart';
 import 'invoice_sync_coordinator.dart';
+import 'smart_pipe_cleanup_service.dart';
 import 'sync_event_bus.dart';
 import '../database_service.dart';
 import '../../utils/inventory_helpers.dart';
@@ -618,6 +619,19 @@ class InvoiceSyncService {
           entityType: 'invoice',
           entityUuid: uuid,
         );
+      }
+
+      // 🧾 إرسال ACK قراءة الفاتورة — لا تُحذف من السحابة إلا به
+      // (SmartPipeCleanupService يفحص invoice_read_acks قبل أي حذف)
+      try {
+        await SmartPipeCleanupService().markInvoiceRead(
+          groupId: 'default_sync_group',
+          invoiceUuid: uuid,
+          deviceId: myDeviceId,
+          groupSecret: data['groupSecret'] as String? ?? '',
+        );
+      } catch (_) {
+        // ACK غير حرج للاستلام — يُعاد عند وصول نسخة أحدث
       }
     } catch (e) {
       print('❌ فشل حفظ الفاتورة $uuid: $e');

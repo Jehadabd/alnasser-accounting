@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'settings_manager.dart';
 import 'pdf_header.dart';
 import 'logo_service.dart';
+import 'database_service.dart';
 
 class PdfService {
   static final PdfService _instance = PdfService._internal();
@@ -202,9 +203,35 @@ class PdfService {
       return NumberFormat('#,##0', 'en_US').format(value);
     }
 
+    // 🔢 جلب أرقام الفواتير التجارية المنسقة من قاعدة البيانات
+    final invoiceIds = transactions
+        .map((t) => t.transaction?.invoiceId)
+        .whereType<int>()
+        .toSet()
+        .toList();
+    final Map<int, String> invoiceNumberById = {};
+    if (invoiceIds.isNotEmpty) {
+      try {
+        final db = await DatabaseService().database;
+        final placeholders = List.filled(invoiceIds.length, '?').join(',');
+        final rows = await db.rawQuery(
+          'SELECT id, invoice_number FROM invoices WHERE id IN ($placeholders)',
+          invoiceIds,
+        );
+        for (final r in rows) {
+          final numVal = r['invoice_number'] as String?;
+          if (numVal != null && numVal.isNotEmpty) {
+            invoiceNumberById[r['id'] as int] = numVal;
+          }
+        }
+      } catch (_) {}
+    }
+
     String formatDescription(AccountStatementItem item) {
-      final hasInvoice = item.transaction?.invoiceId != null;
-      final invoicePart = hasInvoice ? 'فاتورة #${item.transaction?.invoiceId}' : '';
+      final invId = item.transaction?.invoiceId;
+      final hasInvoice = invId != null;
+      final displayNum = hasInvoice ? (invoiceNumberById[invId] ?? '$invId') : '';
+      final invoicePart = hasInvoice ? 'فاتورة #$displayNum' : '';
       
       // جلب الملاحظة النصية إن وجدت
       final note = item.transaction?.transactionNote?.trim() ?? '';
@@ -541,9 +568,26 @@ class PdfService {
       return NumberFormat('#,##0', 'en_US').format(value);
     }
 
+    // 🔢 جلب جميع أرقام الفواتير التجارية المنسقة من قاعدة البيانات
+    final Map<int, String> invoiceNumberById = {};
+    try {
+      final db = await DatabaseService().database;
+      final rows = await db.rawQuery(
+        'SELECT id, invoice_number FROM invoices WHERE invoice_number IS NOT NULL AND invoice_number != ""',
+      );
+      for (final r in rows) {
+        final numVal = r['invoice_number'] as String?;
+        if (numVal != null && numVal.isNotEmpty) {
+          invoiceNumberById[r['id'] as int] = numVal;
+        }
+      }
+    } catch (_) {}
+
     String formatDescription(AccountStatementItem item) {
-      final hasInvoice = item.transaction?.invoiceId != null;
-      final invoicePart = hasInvoice ? 'فاتورة #${item.transaction?.invoiceId}' : '';
+      final invId = item.transaction?.invoiceId;
+      final hasInvoice = invId != null;
+      final displayNum = hasInvoice ? (invoiceNumberById[invId] ?? '$invId') : '';
+      final invoicePart = hasInvoice ? 'فاتورة #$displayNum' : '';
       
       // جلب الملاحظة النصية إن وجدت
       final note = item.transaction?.transactionNote?.trim() ?? '';

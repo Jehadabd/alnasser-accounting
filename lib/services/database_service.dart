@@ -500,11 +500,11 @@ class DatabaseService {
     return result;
   }
 
-  /// 🔒 حذف زبون - يذهب للهارد مباشرة ويتزامن الحذف مع باقي الأجهزة
+  /// 🔒 حذف زبون منطقياً (Soft Delete) ويتزامن الحذف بأمان مع باقي الأجهزة
   Future<int> deleteCustomer(int id) async {
     final db = await database;
     
-    // 🔍 جلب sync_uuid للعميل قبل حذفه لإبلاغ الأجهزة الأخرى
+    // 🔍 جلب sync_uuid للعميل قبل الحذف لإبلاغ الأجهزة الأخرى
     String? syncUuid;
     final res = await db.query('customers', columns: ['sync_uuid'], where: 'id = ?', whereArgs: [id], limit: 1);
     if (res.isNotEmpty) {
@@ -516,10 +516,15 @@ class DatabaseService {
     // 🚀 إبطال Cache بعد الحذف
     invalidateCustomersCache();
     
-    // 📡 حذف العميل من Firebase لإبلاغ باقي الأجهزة
+    // 📡 مزامنة أمر الحذف المنطقي مع Firebase لإبلاغ باقي الأجهزة
     if (syncUuid != null && syncUuid.isNotEmpty) {
       try {
-        FirebaseSyncService().deleteCustomerFromFirebase(syncUuid);
+        final updatedRows = await db.query('customers', where: 'id = ?', whereArgs: [id], limit: 1);
+        if (updatedRows.isNotEmpty) {
+          FirebaseSyncService().uploadCustomer(updatedRows.first);
+        } else {
+          FirebaseSyncService().deleteCustomerFromFirebase(syncUuid);
+        }
       } catch (e) {
         print('⚠️ تعذّر إرسال أمر حذف العميل لـ Firebase: $e');
       }

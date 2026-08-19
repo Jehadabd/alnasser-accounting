@@ -19,8 +19,39 @@ class CustomerDao {
     final db = await getDatabase();
     
     return await db.transaction((txn) async {
-      // إدراج العميل أولاً
-      final customerId = await txn.insert('customers', customer.toMap());
+      // 🛡️ التحقق من وجود عميل محذوف سابقاً بنفس الاسم ورقم الهاتف لإعادة تنشيطه بدلاً من تضارب القيد الفريد
+      final normalizedQuery = DatabaseHelpers.normalizeArabic(customer.name.trim());
+      final existingRows = await txn.rawQuery('''
+        SELECT * FROM customers 
+        WHERE (name = ? OR name = ?) 
+          AND (phone = ? OR (phone IS NULL AND ? IS NULL))
+        LIMIT 1
+      ''', [customer.name.trim(), normalizedQuery, customer.phone, customer.phone]);
+      
+      int customerId;
+      if (existingRows.isNotEmpty) {
+        final existingId = existingRows.first['id'] as int;
+        final isDeleted = ((existingRows.first['is_deleted'] as int?) ?? 0) == 1;
+        if (isDeleted) {
+          // إعادة تنشيط العميل المحذوف وتحديث بياناته
+          final updatedCustomer = customer.copyWith(
+            id: existingId,
+            isDeleted: false,
+            lastModifiedAt: DateTime.now(),
+          );
+          await txn.update(
+            'customers',
+            updatedCustomer.toMap(),
+            where: 'id = ?',
+            whereArgs: [existingId],
+          );
+          customerId = existingId;
+        } else {
+          customerId = await txn.insert('customers', customer.toMap());
+        }
+      } else {
+        customerId = await txn.insert('customers', customer.toMap());
+      }
       
       // إذا كان هناك دين مبدئي، أضف معاملة تلقائية
       if (customer.currentTotalDebt > 0) {
@@ -35,6 +66,7 @@ class CustomerDao {
           'description': 'رصيد افتتاحي',
           'created_at': now.toIso8601String(),
           'invoice_id': null,
+          'is_deleted': 0,
         });
         
         print('✅ تم إضافة معاملة الدين المبدئي: ${customer.currentTotalDebt} دينار للعميل: ${customer.name}');
@@ -44,12 +76,16 @@ class CustomerDao {
     });
   }
 
-  /// جلب جميع العملاء
+  /// جلب جميع العملاء النشطين
   Future<List<Customer>> getAllCustomers({String orderBy = 'name ASC'}) async {
     final db = await getDatabase();
     try {
       final List<Map<String, dynamic>> maps =
-          await db.query('customers', orderBy: orderBy);
+          await db.query(
+            'customers',
+            where: 'is_deleted IS NULL OR is_deleted = 0',
+            orderBy: orderBy,
+          );
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
       print('Error getting all customers: $e');
@@ -95,7 +131,7 @@ class CustomerDao {
             WHERE (i.customer_id = c.id OR ((i.customer_id IS NULL OR i.customer_id = 0) AND i.customer_name = c.name)) AND i.status = 'محفوظة' $deviceFilter
           ), 0) as total_sales_for_sort
         FROM customers c
-        WHERE 1=1 $searchCondition
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0) $searchCondition
         ORDER BY total_sales_for_sort DESC, c.name ASC
         LIMIT ? OFFSET ?
       ''', args);
@@ -114,7 +150,8 @@ class CustomerDao {
       final List<Map<String, dynamic>> maps = await db.rawQuery('''
         SELECT c.*
         FROM customers c
-        WHERE EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id LIMIT 1)
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+          AND EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1)
         ORDER BY ${orderBy.replaceAll("'", "")}
       ''');
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
@@ -138,7 +175,8 @@ class CustomerDao {
     try {
       final List<dynamic> args = [];
       String whereClause = '''
-        EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id LIMIT 1)
+        (c.is_deleted IS NULL OR c.is_deleted = 0)
+        AND EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1)
       ''';
 
       // بحث في SQL على الاسم والهاتف (بدل فلترة الذاكرة)
@@ -176,8 +214,9 @@ class CustomerDao {
         FROM customers c
         LEFT JOIN transactions t ON t.customer_id = c.id 
           AND t.transaction_type IN ('manual_debt', 'DEBT_ADDITION', 'debt_addition')
-        WHERE c.current_total_debt > 0
-           OR EXISTS (SELECT 1 FROM transactions t2 WHERE t2.customer_id = c.id LIMIT 1)
+          AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+          AND (c.current_total_debt > 0 OR EXISTS (SELECT 1 FROM transactions t2 WHERE t2.customer_id = c.id AND (t2.is_deleted IS NULL OR t2.is_deleted = 0) LIMIT 1))
         GROUP BY c.id
         ORDER BY last_debt_date DESC NULLS LAST, c.name ASC
       ''');
@@ -197,8 +236,9 @@ class CustomerDao {
         FROM customers c
         LEFT JOIN transactions t ON t.customer_id = c.id 
           AND t.transaction_type IN ('debt_payment', 'DEBT_PAYMENT')
-        WHERE c.current_total_debt > 0
-           OR EXISTS (SELECT 1 FROM transactions t2 WHERE t2.customer_id = c.id LIMIT 1)
+          AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+          AND (c.current_total_debt > 0 OR EXISTS (SELECT 1 FROM transactions t2 WHERE t2.customer_id = c.id AND (t2.is_deleted IS NULL OR t2.is_deleted = 0) LIMIT 1))
         GROUP BY c.id
         ORDER BY last_payment_date DESC NULLS LAST, c.name ASC
       ''');
@@ -217,8 +257,9 @@ class CustomerDao {
         SELECT c.id, MAX(t.transaction_date) as last_transaction_date
         FROM customers c
         LEFT JOIN transactions t ON t.customer_id = c.id
-        WHERE c.current_total_debt > 0
-           OR EXISTS (SELECT 1 FROM transactions t2 WHERE t2.customer_id = c.id LIMIT 1)
+          AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+          AND (c.current_total_debt > 0 OR EXISTS (SELECT 1 FROM transactions t2 WHERE t2.customer_id = c.id AND (t2.is_deleted IS NULL OR t2.is_deleted = 0) LIMIT 1))
         GROUP BY c.id
         ORDER BY last_transaction_date DESC NULLS LAST, c.name ASC
       ''');
@@ -276,44 +317,51 @@ class CustomerDao {
     return result;
   }
 
-  /// حذف عميل
+  /// حذف عميل منطقياً (Soft Delete) مع حفظ الفواتير وحجب العميل ومعاملاته النشطة
   Future<int> deleteCustomer(int id) async {
     final db = await getDatabase();
+    final now = DateTime.now().toIso8601String();
     try {
-      // حذف المعاملات المرتبطة بالعميل يدوياً (لضمان الحذف حتى لو CASCADE لم يعمل)
-      await db.delete(
-        'transactions',
-        where: 'customer_id = ?',
-        whereArgs: [id],
-      );
-      
-      // حذف سندات القبض المرتبطة بالعميل
-      await db.delete(
-        'customer_receipt_vouchers',
-        where: 'customer_id = ?',
-        whereArgs: [id],
-      );
-      
-      // حذف العميل
-      final result = await db.delete(
-        'customers',
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-      
-      return result;
+      return await db.transaction((txn) async {
+        // 1) وضع علامة الحذف على المعاملات المرتبطة بالعميل (Soft Delete)
+        await txn.update(
+          'transactions',
+          {
+            'is_deleted': 1,
+            'is_uploaded': 0,
+          },
+          where: 'customer_id = ?',
+          whereArgs: [id],
+        );
+        
+        // 2) وضع علامة الحذف على العميل (Soft Delete) وتصفير رصيد الدين
+        final result = await txn.update(
+          'customers',
+          {
+            'is_deleted': 1,
+            'current_total_debt': 0.0,
+            'current_total_debt_cents': 0,
+            'last_modified_at': now,
+            'sync_last_update_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+        
+        return result;
+      });
     } catch (e) {
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }
 
-  /// بحث العملاء
+  /// بحث العملاء النشطين
   Future<List<Customer>> searchCustomers(String query) async {
     final db = await getDatabase();
     try {
       final List<Map<String, dynamic>> maps = await db.query(
         'customers',
-        where: 'name LIKE ? OR phone LIKE ?',
+        where: '(name LIKE ? OR phone LIKE ?) AND (is_deleted IS NULL OR is_deleted = 0)',
         whereArgs: ['%$query%', '%$query%'],
         orderBy: 'name ASC',
       );
@@ -323,7 +371,7 @@ class CustomerDao {
     }
   }
 
-  /// البحث عن عميل بالاسم المطبع
+  /// البحث عن عميل نشط بالاسم المطبع
   Future<Customer?> findCustomerByNormalizedName(String name, {String? phone}) async {
     final db = await getDatabase();
     final normalizedQuery = DatabaseHelpers.normalizeArabic(name.trim());
@@ -336,12 +384,14 @@ class CustomerDao {
           SELECT * FROM customers 
           WHERE (name = ? OR name = ?)
             AND (phone = ? OR phone IS NULL OR phone = '')
+            AND (is_deleted IS NULL OR is_deleted = 0)
           LIMIT 1
         ''', [name.trim(), normalizedQuery, phone]);
       } else {
         results = await db.rawQuery('''
           SELECT * FROM customers 
-          WHERE name = ? OR name = ?
+          WHERE (name = ? OR name = ?)
+            AND (is_deleted IS NULL OR is_deleted = 0)
           LIMIT 1
         ''', [name.trim(), normalizedQuery]);
       }
@@ -383,7 +433,8 @@ class CustomerDao {
       
       final List<Map<String, dynamic>> maps = await db.rawQuery('''
         SELECT * FROM customers 
-        WHERE last_modified_at LIKE '$todayString%'
+        WHERE (is_deleted IS NULL OR is_deleted = 0)
+          AND last_modified_at LIKE '$todayString%'
         ORDER BY last_modified_at DESC
       ''');
       
@@ -405,7 +456,8 @@ class CustomerDao {
       final List<Map<String, dynamic>> maps = await db.rawQuery('''
         SELECT DISTINCT c.* FROM customers c
         INNER JOIN transactions t ON t.customer_id = c.id
-        WHERE t.transaction_date >= ? AND t.transaction_date <= ?
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+          AND t.transaction_date >= ? AND t.transaction_date <= ?
         ORDER BY c.name ASC
       ''', [startDate, endDate]);
       
@@ -424,7 +476,8 @@ class CustomerDao {
       
       final List<Map<String, dynamic>> maps = await db.rawQuery('''
         SELECT c.* FROM customers c
-        WHERE c.current_total_debt > 0
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+          AND c.current_total_debt > 0
           AND c.last_modified_at < ?
         ORDER BY c.current_total_debt DESC
       ''', [cutoffDate.toIso8601String()]);

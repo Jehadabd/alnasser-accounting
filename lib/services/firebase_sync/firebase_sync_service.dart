@@ -25,6 +25,7 @@ import 'product_sync_service.dart'; // 📦 مزامنة المنتجات
 import 'reconciliation_service.dart'; // 🧮 المطابقة بين الأجهزة
 import 'armored_reconciliation_service.dart'; // 🛡️ المطابقة المحصّنة مغلقة الحلقة
 import 'live_match_service.dart'; // 📡 مطابقة حية جهاز↔جهاز
+import 'smart_pipe_cleanup_service.dart'; // 🧹 الحذف الذكي بشرط قراءة الجميع
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../sync/sync_validation.dart';
 import '../sync/sync_security.dart';
@@ -132,7 +133,7 @@ class FirebaseSyncService {
   static const Duration _baseRetryDelay = Duration(seconds: 2);
   
   // 🧹 إعدادات التنظيف التلقائي
-  static const int _keepFirebaseDataDays = 7; // 7 أيام فقط
+  // (أُلغي _keepFirebaseDataDays=7: التنظيف يتبع مدة المستخدم + فحص ACKs)
   static const int _maxFirebaseOperations = 10000; // 10,000 عملية كحد أقصى
   
   // 🔐 إعدادات الأمان
@@ -752,20 +753,20 @@ class FirebaseSyncService {
     print('👂 بدء الاستماع للتغييرات من Firebase...');
     print('   📍 المجموعة: $_groupId');
     print('   📱 معرف الجهاز: $_deviceId');
-    
-    // استخراج آخر عملية مزامنة لجلب الجديد فقط (الاستماع الذكي)
+
+    // 🔒 استماع شامل بلا فلتر زمني (نفس نهج الفواتير المجرّب).
+    // الفلتر السابق (lastModifiedAt > lastSyncAt) كان يتجاوز أي عميل أو
+    // معاملة رُفعت أثناء إيقاف هذا الجهاز إذا سقطت خارج النافذة (فرق
+    // ساعات الأجهزة / مقارنة نصية ISO)، فلا تصل أبداً حتى بمزامنة يدوية.
+    // التطبيق الاستقبالي إدمبوتنت بالكالة (sync_uuid + مطابقة الاسم)،
+    // لذا الاستماع الشامل آمن ولا يكرر شيئاً.
     final db = await _db.database;
     final syncState = await db.query('sync_state', limit: 1);
     final lastSyncAt = syncState.isNotEmpty ? syncState.first['last_sync_at'] as String? : null;
-    
-    Query<Map<String, dynamic>> customersQuery = _firestore!.collection('customers');
-    Query<Map<String, dynamic>> transactionsQuery = _firestore!.collection('transactions');
-    
-    if (lastSyncAt != null) {
-      print('🧠 تفعيل الاستماع الذكي (Smart Listener) بدءاً من: $lastSyncAt');
-      customersQuery = customersQuery.where('lastModifiedAt', isGreaterThan: lastSyncAt);
-      transactionsQuery = transactionsQuery.where('lastModifiedAt', isGreaterThan: lastSyncAt);
-    }
+    print('🧠 استماع شامل إدمبوتنت (آخر مزامنة مرجعية: ${lastSyncAt ?? "لا يوجد"} — للاطلاع فقط)');
+
+    final Query<Map<String, dynamic>> customersQuery = _firestore!.collection('customers');
+    final Query<Map<String, dynamic>> transactionsQuery = _firestore!.collection('transactions');
     
     // الاستماع لتغييرات العملاء
     _customersListener = customersQuery
@@ -1672,14 +1673,20 @@ class FirebaseSyncService {
     }
   }
 
-  /// 🗑️ حذف عميل من Firebase عند حذفه محلياً ليتزامن مع جميع الأجهزة
+  /// 🗑️ حذف عميل من Firebase عند حذفه محلياً ليتزامن مع جميع الأجهزة (Soft Delete Tombstone)
   Future<void> deleteCustomerFromFirebase(String syncUuid) async {
     if (_groupId == null || _firestore == null) return;
     try {
-      await _firestore!.collection('customers').doc(syncUuid).delete();
-      print('🗑️ [FirebaseSyncService] تم حذف العميل من Firebase بنجاح: $syncUuid');
+      final now = DateTime.now().toIso8601String();
+      await _firestore!.collection('customers').doc(syncUuid).set({
+        'isDeleted': true,
+        'is_deleted': 1,
+        'lastModifiedAt': now,
+        'deviceId': _deviceId,
+      }, SetOptions(merge: true));
+      print('🗑️ [FirebaseSyncService] تم تسجيل حذف العميل في Firebase بنجاح (Tombstone): $syncUuid');
     } catch (e) {
-      print('❌ [FirebaseSyncService] خطأ أثناء حذف العميل من Firebase: $e');
+      print('❌ [FirebaseSyncService] خطأ أثناء تسجيل حذف العميل في Firebase: $e');
     }
   }
 
@@ -1724,12 +1731,6 @@ class FirebaseSyncService {
   /// يرجع true عند النجاح (أو عند تخطي مقصود)، و false عند فشل الرفع
   Future<bool> uploadCustomer(Map<String, dynamic> customerData) async {
     if (!_isInitialized || _groupId == null) return true;
-    
-    // 🔒 لا نرفع العملاء المحذوفين
-    if (customerData['is_deleted'] == 1) {
-      print('⏭️ تخطي رفع عميل محذوف');
-      return true;
-    }
     
     //  التحقق  من Rate Limiting
     if (!_rateLimiter.canProceed()) {
@@ -1821,6 +1822,7 @@ class FirebaseSyncService {
         signature = SyncSecurity.signData(dataToSign, _groupSecretKey!);
       }
       
+      final bool isDeleted = ((customerData['is_deleted'] as int?) ?? 0) == 1;
       final now = DateTime.now();
       await _firestore!
           .collection('customers')
@@ -1829,13 +1831,14 @@ class FirebaseSyncService {
             'syncUuid': syncUuid,
             'name': customerData['name'],
             'phone': customerData['phone'],
-            'currentTotalDebt': customerData['current_total_debt'],
+            'currentTotalDebt': isDeleted ? 0.0 : customerData['current_total_debt'],
             'generalNote': customerData['general_note'],
             'address': customerData['address'],
             'createdAt': customerData['created_at'],
             'lastModifiedAt': customerData['last_modified_at'] ?? now.toIso8601String(),
             'audioNotePath': customerData['audio_note_path'],
-            'isDeleted': false, // 🔒 دائماً false - لا نرفع عملاء محذوفين
+            'isDeleted': isDeleted,
+            'is_deleted': isDeleted ? 1 : 0,
             'deviceId': _deviceId,
             'originDeviceId': _deviceId, // 🔍 للتتبع والتدقيق
             'checksum': checksum,
@@ -1909,12 +1912,6 @@ class FirebaseSyncService {
     bool force = false,
   }) async {
     if (!_isInitialized || _groupId == null) return true;
-    
-    // 🔒 لا نرفع المعاملات المحذوفة
-    if (txData['is_deleted'] == 1) {
-      print('⏭️ تخطي رفع معاملة محذوفة');
-      return true;
-    }
     
     // 🔒 حديد: لا تُرفع معاملة أتت من المزامنة بأي طريق كان.
     // NULL يُعامل كـ «من هذا الجهاز» للتوافق مع السجلات القديمة فقط.
@@ -2008,6 +2005,7 @@ class FirebaseSyncService {
         signature = SyncSecurity.signData(dataToSign, _groupSecretKey!);
       }
       
+      final bool isTxDeleted = ((txData['is_deleted'] as int?) ?? 0) == 1;
       await _firestore!
           .collection('transactions')
           .doc(syncUuid)
@@ -2025,7 +2023,8 @@ class FirebaseSyncService {
             'createdAt': txData['created_at'],
             'lastModifiedAt': DateTime.now().toIso8601String(),
             'audioNotePath': txData['audio_note_path'],
-            'isDeleted': false, // 🔒 دائماً false - لا نرفع معاملات محذوفة
+            'isDeleted': isTxDeleted,
+            'is_deleted': isTxDeleted ? 1 : 0,
             'deviceId': _deviceId,
             'originDeviceId': _deviceId, // 🔍 للتتبع والتدقيق
             'checksum': checksum,
@@ -2092,6 +2091,59 @@ class FirebaseSyncService {
   /// للعميل التالي إلا بعد التأكد أن العميل الحالي رُفع هو ومعاملاته كلها.
   /// هذا يمنع «عاصفة الرفع» (نفس المعاملة تُرفع من 3 مصادر) ويضمن ترتيبًا
   /// منطقيًا: العميل دائمًا يصل قبل معاملاته إلى الجهاز الآخر.
+  /// 🚀 رفع فوري لعميل محدد ومعاملاته المعلقة (يُستدعى لحظة إنشاء/تعديل العميل).
+  ///
+  /// قبل هذه الدالة كان الإنشاء يُخزَّن محلياً فقط، والرفع ينتظر الدورة
+  /// الخلفية (10 دقائق) أو الـ watchdog (30 ثانية) — فإذا أُغلق التطبيق
+  /// بسرعة بعد الإضافة بقي العميل محلياً ولم يصل لبقية الأجهزة.
+  /// المنطق نفسه كتلة _syncPendingChanges: العميل أولاً ثم معاملاته.
+  Future<void> syncCustomerNow(int customerId) async {
+    if (!_isInitialized || _groupId == null) return;
+
+    try {
+      final db = await _db.database;
+      final rows = await db.query(
+        'customers',
+        where: 'id = ? AND sync_uuid IS NOT NULL AND sync_uuid != \'\' '
+            'AND (is_deleted IS NULL OR is_deleted = 0) '
+            'AND (is_created_by_me = 1 OR is_created_by_me IS NULL)',
+        whereArgs: [customerId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+
+      final customer = rows.first;
+      final customerSyncUuid = customer['sync_uuid'] as String;
+
+      final customerOk = await uploadCustomer(customer);
+      if (!customerOk) return;
+
+      final pendingTx = await db.query(
+        'transactions',
+        where: 'customer_id = ? AND transaction_uuid IS NOT NULL AND transaction_uuid != \'\' '
+            'AND (is_deleted IS NULL OR is_deleted = 0) '
+            'AND (is_uploaded = 0 OR is_uploaded IS NULL) '
+            'AND (is_created_by_me = 1 OR is_created_by_me IS NULL)',
+        whereArgs: [customerId],
+        orderBy: 'transaction_date ASC, id ASC',
+      );
+
+      for (final tx in pendingTx) {
+        try {
+          await uploadTransaction(tx, customerSyncUuid);
+        } catch (e) {
+          print('⚠️ [رفع فوري] فشل رفع معاملة ${tx['transaction_uuid']}: $e '
+              '(ستُعاد تلقائياً)');
+        }
+      }
+
+      print('🚀 [رفع فوري] اكتمل رفع العميل "${customer['name']}" '
+          'و${pendingTx.length} معاملة');
+    } catch (e) {
+      print('⚠️ [رفع فوري] فشل رفع العميل $customerId: $e (ستتكفل به المزامنة الخلفية)');
+    }
+  }
+
   Future<void> _syncPendingChanges({
     void Function(double progress, String message)? onProgress,
   }) async {
@@ -3302,73 +3354,19 @@ class FirebaseSyncService {
     if (_groupId == null || _firestore == null) {
       return {'error': 'غير مُعد'};
     }
-    
-    print('🧹 جاري تنظيف البيانات القديمة من Firebase...');
-    
-    final cutoffDate = DateTime.now().subtract(Duration(days: _keepFirebaseDataDays));
-    
-    int deletedCustomers = 0;
-    int deletedTransactions = 0;
-    
-    try {
-      // جلب المعاملات لتنظيفها (القديمة جداً)
-      final transactionsQuery = await _firestore!
-          .collection('transactions')
-          .limit(500)
-          .get();
-       
-      for (final doc in transactionsQuery.docs) {
-        final data = doc.data();
-        final dateStr = data['transactionDate'] as String? ?? data['createdAt'] as String?;
-        if (dateStr != null) {
-          try {
-            final date = DateTime.parse(dateStr);
-            if (date.isBefore(cutoffDate)) {
-              await doc.reference.delete();
-              deletedTransactions++;
-            }
-          } catch (_) {
-            // تجاهل الأخطاء في تحليل التاريخ
-          }
-        }
-      }
-      
-      // جلب العملاء المحذوفين فقط ثم تصفيتهم محلياً
-      final deletedCustomersQuery = await _firestore!
-          .collection('customers')
-          .where('isDeleted', isEqualTo: true)
-          .limit(100)
-          .get();
-      
-      for (final doc in deletedCustomersQuery.docs) {
-        final data = doc.data();
-        final deletedAtStr = data['deletedAt'] as String?;
-        if (deletedAtStr != null) {
-          try {
-            final deletedAt = DateTime.parse(deletedAtStr);
-            if (deletedAt.isBefore(cutoffDate)) {
-              await doc.reference.delete();
-              deletedCustomers++;
-            }
-          } catch (_) {
-            // تجاهل الأخطاء في تحليل التاريخ
-          }
-        }
-      }
-      
-      print('✅ تم حذف $deletedCustomers عميل و $deletedTransactions معاملة قديمة');
-      
-      return {
-        'success': true,
-        'deletedCustomers': deletedCustomers,
-        'deletedTransactions': deletedTransactions,
-        'cutoffDate': cutoffDate.toIso8601String(),
-      };
-      
-    } catch (e) {
-      print('❌ فشل التنظيف: $e');
-      return {'error': e.toString()};
-    }
+
+    // 🔒 تحويل آمن: هذا المسار كان يحذف المعاملات الأقدم من 7 أيام ثابتة
+    // (متتجاهلاً إعدادات المستخدم وفحص قراءة الأجهزة). الحذف الآن يمر حصرياً
+    // عبر SmartPipeCleanupService بشرطين: مدة المستخدم + قراءة الجميع (ACKs).
+    print('🧹 cleanupOldFirebaseData: تحويل إلى الحذف الذكي الآمن (SmartPipe)...');
+    final result = await SmartPipeCleanupService().runManualCleanup();
+    return {
+      'success': true,
+      'deletedCustomers': result.deletedCustomers,
+      'deletedTransactions': result.deletedTransactions,
+      'skippedPendingRead': result.skippedPendingRead,
+      'mode': 'smart_pipe_ack_gated',
+    };
   }
 
   /// حذف قاعدة البيانات السحابية بالكامل
@@ -3986,6 +3984,7 @@ class FirebaseSyncService {
     _rateLimiter.recordOperation();
 
     final checksum = _calculateChecksum(customerData);
+    final bool isCustDeleted = ((customerData['is_deleted'] as int?) ?? 0) == 1;
 
     try {
       await _firestore!
@@ -3995,14 +3994,15 @@ class FirebaseSyncService {
         'syncUuid': syncUuid,
         'name': customerData['name'],
         'phone': customerData['phone'],
-        'currentTotalDebt': customerData['current_total_debt'],
+        'currentTotalDebt': isCustDeleted ? 0.0 : customerData['current_total_debt'],
         'generalNote': customerData['general_note'],
         'address': customerData['address'],
         'createdAt': customerData['created_at'],
         'lastModifiedAt':
             customerData['last_modified_at'] ?? DateTime.now().toIso8601String(),
         'audioNotePath': customerData['audio_note_path'],
-        'isDeleted': false,
+        'isDeleted': isCustDeleted,
+        'is_deleted': isCustDeleted ? 1 : 0,
         'deviceId': _deviceId,
         'originDeviceId': _deviceId,
         'checksum': checksum,
@@ -4056,6 +4056,7 @@ class FirebaseSyncService {
     _rateLimiter.recordOperation();
 
     final checksum = _calculateChecksum(txData);
+    final bool isTxDeleted = ((txData['is_deleted'] as int?) ?? 0) == 1;
 
     try {
       await _firestore!
@@ -4074,7 +4075,8 @@ class FirebaseSyncService {
         'createdAt': txData['created_at'],
         'lastModifiedAt': DateTime.now().toIso8601String(),
         'audioNotePath': txData['audio_note_path'],
-        'isDeleted': false,
+        'isDeleted': isTxDeleted,
+        'is_deleted': isTxDeleted ? 1 : 0,
         'deviceId': _deviceId,
         'originDeviceId': _deviceId,
         'checksum': checksum,

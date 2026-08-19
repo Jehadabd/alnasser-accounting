@@ -2753,42 +2753,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
       // دالة لجلب معاملات العميل وتحويلها إلى AccountStatementItem
       Future<List<AccountStatementItem>> getCustomerTransactionsForStatement(int customerId) async {
-        final transactions = await db.getCustomerTransactions(customerId, orderBy: 'transaction_date ASC, id ASC');
-        final allTransactions = <AccountStatementItem>[];
-        
-        for (var transaction in transactions) {
-          if (transaction.transactionDate != null) {
-            String description = '';
-            if (transaction.amountChanged > 0) {
-              description = 'إضافة دين';
-            } else if (transaction.amountChanged < 0) {
-              description = 'تسديد دين';
-            } else {
-              description = 'معاملة مالية';
-            }
-            if (transaction.invoiceId != null) {
-              description += ' (فاتورة #${transaction.invoiceId})';
-            }
-            
-            allTransactions.add(AccountStatementItem(
-              date: transaction.transactionDate!,
-              description: description,
-              amount: transaction.amountChanged,
-              type: 'transaction',
-              transaction: transaction,
-            ));
-          }
-        }
-        
-        // حساب الرصيد قبل وبعد كل معاملة
-        double currentBalance = 0.0;
-        for (var item in allTransactions) {
-          item.balanceBefore = currentBalance;
-          currentBalance += item.amount;
-          item.balanceAfter = currentBalance;
-        }
-        
-        return allTransactions;
+        return await db.getAccountStatementItems(customerId);
       }
 
       // إنشاء ملف PDF

@@ -47,6 +47,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   
   // 📊 المعاملات المجمعة (فواتير مجمعة + معاملات يدوية)
   List<GroupedTransactionItem> _groupedTransactions = [];
+  Map<int, String> _invoiceNumberMap = {}; // خريطة ربط معرف الفاتورة برقمها التجاري المنسق
   bool _useGroupedView = true; // استخدام العرض المجمع افتراضياً
 
   @override
@@ -75,9 +76,16 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       try {
         final db = DatabaseService();
         final grouped = await db.getGroupedCustomerTransactions(widget.customer.id!);
+        final Map<int, String> invNumbers = {};
+        for (var g in grouped) {
+          if (g.invoiceId != null && g.invoiceNumber != null) {
+            invNumbers[g.invoiceId!] = g.invoiceNumber!;
+          }
+        }
         if (mounted) {
           setState(() {
             _groupedTransactions = grouped;
+            _invoiceNumberMap = invNumbers;
           });
         }
       } catch (e) {
@@ -290,19 +298,27 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       }
       for (final uri in attempts) {
         try {
-          if (await canLaunchUrl(uri)) {
-            final opened = await launchUrl(
+          final opened = await launchUrl(
+            uri,
+            mode: LaunchMode.externalApplication,
+          );
+          if (opened) {
+            success = true;
+            break;
+          }
+        } catch (_) {
+          try {
+            final fallbackOpened = await launchUrl(
               uri,
-              mode: LaunchMode.externalApplication,
+              mode: LaunchMode.platformDefault,
             );
-            if (opened) {
+            if (fallbackOpened) {
               success = true;
               break;
             }
+          } catch (_) {
+            continue;
           }
-        } catch (e) {
-          // جرّب الرابط التالي في حال الفشل
-          continue;
         }
       }
       
@@ -358,6 +374,251 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     }
   }
 
+  /// دالة تعديل بيانات العميل
+  Future<void> _editCustomerDetails() async {
+    final nameController = TextEditingController(text: widget.customer.name);
+    final phoneController = TextEditingController(text: widget.customer.phone ?? '');
+    final addressController = TextEditingController(text: widget.customer.address ?? '');
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('تعديل معلومات العميل'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'الاسم'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: phoneController,
+                  decoration: const InputDecoration(labelText: 'الهاتف'),
+                  keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: addressController,
+                  decoration: const InputDecoration(labelText: 'العنوان'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('حفظ')),
+          ],
+        );
+      },
+    );
+    if (result == true && mounted) {
+      String? normalizedPhone;
+      if (phoneController.text.trim().isNotEmpty) {
+        normalizedPhone = _normalizePhoneNumber(phoneController.text.trim());
+      }
+      
+      final provider = context.read<AppProvider>();
+      final currentCustomer = provider.selectedCustomer ?? widget.customer;
+      
+      final updated = currentCustomer.copyWith(
+        name: nameController.text.trim(),
+        phone: normalizedPhone,
+        address: addressController.text.trim(),
+        currentTotalDebt: currentCustomer.currentTotalDebt,
+        lastModifiedAt: DateTime.now(),
+      );
+      await provider.updateCustomer(updated);
+      
+      try {
+        final db = DatabaseService();
+        await db.updateOldInvoicesWithCustomerIds();
+      } catch (_) {}
+      
+      if (mounted) {
+        String message = 'تم تحديث بيانات العميل';
+        if (normalizedPhone != null) {
+          message += '\nتم تحويل رقم الهاتف إلى: $normalizedPhone';
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  /// دالة حذف العميل مع التحقق والأمان
+  Future<void> _handleDeleteCustomer() async {
+    final provider = context.read<AppProvider>();
+    final customer = provider.selectedCustomer ?? widget.customer;
+    final hasDebt = (customer.currentTotalDebt ?? 0) > 0.01;
+    
+    if (hasDebt) {
+      final warningConfirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange[700], size: 28),
+              const SizedBox(width: 8),
+              const Text('تنبيه!', style: TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'هذا العميل عليه دين بقيمة:',
+                style: TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red[300]!),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.monetization_on, color: Colors.red[700]),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${NumberFormat('#,##0', 'en_US').format(customer.currentTotalDebt ?? 0)} د.ع',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'هل أنت متأكد من حذف هذا العميل؟\nسيتم حذف جميع سجلات الديون والمعاملات المرتبطة به.',
+                style: TextStyle(fontSize: 14),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('إلغاء', style: TextStyle(color: Colors.grey[700])),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('تأكيد الحذف', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+      
+      if (warningConfirmed != true || !mounted) return;
+      
+      final passwordController = TextEditingController();
+      final passwordService = PasswordService();
+      final passwordVerified = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('أدخل كلمة السر للتأكيد', style: TextStyle(fontSize: 18)),
+          content: TextField(
+            controller: passwordController,
+            obscureText: true,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'كلمة السر',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              prefixIcon: const Icon(Icons.lock),
+            ),
+            onSubmitted: (value) async {
+              final isCorrect = await passwordService.verifyPassword(value);
+              Navigator.of(context).pop(isCorrect);
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('إلغاء'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final isCorrect = await passwordService.verifyPassword(passwordController.text);
+                Navigator.of(context).pop(isCorrect);
+              },
+              child: const Text('تأكيد'),
+            ),
+          ],
+        ),
+      );
+      
+      if (passwordVerified != true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('كلمة السر غير صحيحة أو تم الإلغاء'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+    } else {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('تأكيد الحذف',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text(
+              'هل أنت متأكد من حذف هذا العميل؟ لا يمكن التراجع عن هذا الإجراء.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('إلغاء',
+                  style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('حذف',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ),
+          ],
+        ),
+      );
+      
+      if (confirmed != true || !mounted) return;
+    }
+    
+    try {
+      await provider.deleteCustomer(widget.customer.id!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('تم حذف العميل ${widget.customer.name} بنجاح!'),
+              backgroundColor: Theme.of(context).colorScheme.tertiary),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(e.toString().replaceAll('Exception: ', '')),
+              backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Define the consistent theme colors for the screen
@@ -366,8 +627,6 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         const Color(0xFF8C9EFF); // Light Indigo Accent (Indigo A200)
     final Color textColor =
         const Color(0xFF212121); // Dark grey for general text
-    final Color lightBackgroundColor =
-        const Color(0xFFF8F8F8); // Very light grey for text field fill
     final Color successColor =
         Colors.green[600]!; // Green for success messages/positive debt
     final Color errorColor =
@@ -378,392 +637,184 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         // Define color scheme for light theme
         colorScheme: ColorScheme.light(
           primary: primaryColor,
-          onPrimary: Colors.white, // Text/icons on primary color
+          onPrimary: Colors.white,
           secondary: accentColor,
-          onSecondary: Colors.black, // Text/icons on secondary color
-          surface: Colors.white, // Card/sheet background
-          onSurface: textColor, // Text/icons on surface
-          background: Colors.white, // Scaffold background
-          onBackground: textColor, // Text/icons on background
+          onSecondary: Colors.black,
+          surface: Colors.white,
+          onSurface: textColor,
+          background: Colors.white,
+          onBackground: textColor,
           error: errorColor,
-          onError: Colors.white, // Text/icons on error color
-          tertiary: successColor, // Custom color for success, used in SnackBars
+          onError: Colors.white,
+          tertiary: successColor,
         ),
-        // Define typography (font family and text styles)
-        fontFamily: 'Roboto', // Modern, clean font
+        fontFamily: 'Roboto',
         textTheme: TextTheme(
           titleLarge: TextStyle(
               fontSize: 22.0,
               fontWeight: FontWeight.bold,
-              color: Colors.white), // AppBar title
+              color: Colors.white),
           titleMedium: TextStyle(
               fontSize: 18.0,
               fontWeight: FontWeight.w600,
-              color: textColor), // Section titles
+              color: textColor),
           bodyLarge:
-              TextStyle(fontSize: 16.0, color: textColor), // General body text
+              TextStyle(fontSize: 16.0, color: textColor),
           bodyMedium:
-              TextStyle(fontSize: 14.0, color: textColor), // Smaller body text
+              TextStyle(fontSize: 14.0, color: textColor),
           labelLarge: TextStyle(
               fontSize: 16.0,
               color: Colors.white,
-              fontWeight: FontWeight.w600), // Button text
+              fontWeight: FontWeight.w600),
           labelMedium: TextStyle(
-              fontSize: 14.0, color: Colors.grey[600]), // Input field labels
+              fontSize: 14.0, color: Colors.grey[600]),
           bodySmall: TextStyle(
-              fontSize: 12.0, color: Colors.grey[700]), // Hint text / captions
+              fontSize: 12.0, color: Colors.grey[700]),
         ),
-        // Define AppBar theme
         appBarTheme: AppBarTheme(
-          backgroundColor: primaryColor, // AppBar background color
-          foregroundColor: Colors.white, // AppBar text/icon color
-          centerTitle: true, // Center title
-          elevation: 4, // Shadow elevation
-          titleTextStyle: TextStyle(
-            // Title text style (inherits from TextTheme.titleLarge)
-            fontSize: 24.0,
-            fontWeight: FontWeight.w600,
+          backgroundColor: primaryColor,
+          foregroundColor: Colors.white,
+          centerTitle: false,
+          elevation: 4,
+          titleTextStyle: const TextStyle(
+            fontSize: 20.0,
+            fontWeight: FontWeight.bold,
             color: Colors.white,
           ),
         ),
-        // Define Card theme
         cardTheme: CardThemeData(
-          elevation: 3, // Consistent shadow for cards
+          elevation: 3,
           shape: RoundedRectangleBorder(
-            borderRadius:
-                BorderRadius.circular(12.0), // Rounded corners for cards
+            borderRadius: BorderRadius.circular(12.0),
           ),
-          margin: EdgeInsets
-              .zero, // Reset default card margin to manage it manually
+          margin: EdgeInsets.zero,
         ),
-        // Define ListTile theme
         listTileTheme: ListTileThemeData(
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-          tileColor: Colors.transparent, // Default transparent
+          tileColor: Colors.transparent,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.0)),
         ),
-        // Define TextButton theme
         textButtonTheme: TextButtonThemeData(
           style: TextButton.styleFrom(
-            foregroundColor: primaryColor, // Primary color for text buttons
-            textStyle: TextStyle(fontSize: 16.0, fontWeight: FontWeight.w600),
+            foregroundColor: primaryColor,
+            textStyle: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.w600),
           ),
         ),
-        // Define IconButton color
         iconTheme: IconThemeData(color: Colors.grey[700], size: 24.0),
       ),
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.customer.name),
+          title: Text(
+            widget.customer.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           actions: [
+            // ✏️ تعديل معلومات العميل
             IconButton(
               icon: const Icon(Icons.edit, color: Colors.white),
               tooltip: 'تعديل معلومات العميل',
-              onPressed: () async {
-                final nameController = TextEditingController(text: widget.customer.name);
-                final phoneController = TextEditingController(text: widget.customer.phone ?? '');
-                final addressController = TextEditingController(text: widget.customer.address ?? '');
-                final result = await showDialog<bool>(
-                  context: context,
-                  builder: (context) {
-                    return AlertDialog(
-                      title: const Text('تعديل معلومات العميل'),
-                      content: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            TextField(
-                              controller: nameController,
-                              decoration: const InputDecoration(labelText: 'الاسم'),
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: phoneController,
-                              decoration: const InputDecoration(labelText: 'الهاتف'),
-                              keyboardType: TextInputType.phone,
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: addressController,
-                              decoration: const InputDecoration(labelText: 'العنوان'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-                        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('حفظ')),
-                      ],
-                    );
-                  },
-                );
-                if (result == true && mounted) {
-                  // تحويل رقم الهاتف إلى الصيغة الدولية تلقائياً
-                  String? normalizedPhone;
-                  if (phoneController.text.trim().isNotEmpty) {
-                    normalizedPhone = _normalizePhoneNumber(phoneController.text.trim());
-                  }
-                  
-                  // الحصول على البيانات المحدثة من المزود (Provider)
-                  final provider = context.read<AppProvider>();
-                  final currentCustomer = provider.selectedCustomer ?? widget.customer;
-                  
-                  final updated = currentCustomer.copyWith(
-                    name: nameController.text.trim(),
-                    phone: normalizedPhone,
-                    address: addressController.text.trim(),
-                    currentTotalDebt: currentCustomer.currentTotalDebt, // الحفاظ على قيمة الدين المحدثة
-                    lastModifiedAt: DateTime.now(),
-                  );
-                  await provider.updateCustomer(updated);
-                  
-                  // تحديث الفواتير القديمة المرتبطة بهذا العميل
-                  try {
-                    final db = DatabaseService();
-                    await db.updateOldInvoicesWithCustomerIds();
-                  } catch (e) {
-                    // تجاهل الخطأ
-                  }
-                  
-                  if (mounted) {
-                    String message = 'تم تحديث بيانات العميل';
-                    if (normalizedPhone != null) {
-                      message += '\nتم تحويل رقم الهاتف إلى: $normalizedPhone';
-                    }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(message),
-                        duration: const Duration(seconds: 3),
-                      ),
-                    );
-                  }
-                }
-              },
+              onPressed: _editCustomerDetails,
             ),
-            IconButton(
-              icon: const Icon(Icons.receipt_long,
-                  color: Colors.white), // Color changed
-              tooltip: 'كشف الحساب',
-              onPressed: () => _generateAccountStatement(),
-            ),
-            // 📊 زر كشف الحساب التجاري
-            IconButton(
-              icon: const Icon(Icons.analytics, color: Colors.white),
-              tooltip: 'كشف الحساب التجاري',
-              onPressed: () => _showCommercialStatement(),
-            ),
-            // 📄 زر أرشيف سندات القبض
-            IconButton(
-              icon: const Icon(Icons.archive, color: Colors.white),
-              tooltip: 'أرشيف سندات القبض',
-              onPressed: () => _showReceiptVouchersArchive(),
-            ),
-            // 🛡️ زر فحص السلامة المالية
-            IconButton(
-              icon: const Icon(Icons.verified_user, color: Colors.white),
-              tooltip: 'فحص السلامة المالية',
-              onPressed: () => _showFinancialIntegrityReport(),
-            ),
-            // 📋 زر سجل التدقيق المالي
-            IconButton(
-              icon: const Icon(Icons.history, color: Colors.white),
-              tooltip: 'سجل التدقيق المالي',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => AuditLogScreen(
-                      customerId: widget.customer.id,
-                      customerName: widget.customer.name,
-                      entityType: 'customer',
-                    ),
-                  ),
-                );
-              },
-            ),
-
-            // زر إرسال واتساب
+            // 💬 إرسال واتساب
             IconButton(
               icon: const Icon(Icons.message, color: Colors.white),
               tooltip: 'إرسال رسالة واتساب',
               onPressed: _sendWhatsAppMessage,
             ),
+            // 📄 كشف الحساب
             IconButton(
-              icon: const Icon(Icons.delete,
-                  color: Colors.white), // Color changed
-              tooltip: 'حذف العميل', // Added tooltip
-              onPressed: () async {
-                final provider = context.read<AppProvider>();
-                final customer = provider.selectedCustomer ?? widget.customer;
-                final hasDebt = (customer.currentTotalDebt ?? 0) > 0.01;
-                
-                if (hasDebt) {
-                  // العميل عليه دين - عرض تحذير خاص
-                  final warningConfirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: Row(
-                        children: [
-                          Icon(Icons.warning_amber_rounded, color: Colors.orange[700], size: 28),
-                          const SizedBox(width: 8),
-                          const Text('تنبيه!', style: TextStyle(fontWeight: FontWeight.bold)),
-                        ],
+              icon: const Icon(Icons.receipt_long, color: Colors.white),
+              tooltip: 'كشف الحساب',
+              onPressed: () => _generateAccountStatement(),
+            ),
+            // ⋯ المزيد من الخيارات
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: Colors.white),
+              tooltip: 'خيارات إضافية',
+              onSelected: (value) {
+                switch (value) {
+                  case 'commercial_statement':
+                    _showCommercialStatement();
+                    break;
+                  case 'receipt_archive':
+                    _showReceiptVouchersArchive();
+                    break;
+                  case 'financial_integrity':
+                    _showFinancialIntegrityReport();
+                    break;
+                  case 'audit_log':
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => AuditLogScreen(
+                          customerId: widget.customer.id,
+                          customerName: widget.customer.name,
+                          entityType: 'customer',
+                        ),
                       ),
-                      content: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'هذا العميل عليه دين بقيمة:',
-                            style: TextStyle(fontSize: 16),
-                          ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.red[50],
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.red[300]!),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.monetization_on, color: Colors.red[700]),
-                                const SizedBox(width: 8),
-                                Text(
-                                  '${NumberFormat('#,##0', 'en_US').format(customer.currentTotalDebt ?? 0)} د.ع',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.red[700],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'هل أنت متأكد من حذف هذا العميل؟\nسيتم حذف جميع سجلات الديون والمعاملات المرتبطة به.',
-                            style: TextStyle(fontSize: 14),
-                          ),
-                        ],
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: Text('إلغاء', style: TextStyle(color: Colors.grey[700])),
-                        ),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                          ),
-                          onPressed: () => Navigator.pop(context, true),
-                          child: const Text('تأكيد الحذف', style: TextStyle(color: Colors.white)),
-                        ),
-                      ],
-                    ),
-                  );
-                  
-                  if (warningConfirmed != true || !mounted) return;
-                  
-                  // طلب كلمة السر
-                  final passwordController = TextEditingController();
-                  final passwordService = PasswordService();
-                  final passwordVerified = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('أدخل كلمة السر للتأكيد', style: TextStyle(fontSize: 18)),
-                      content: TextField(
-                        controller: passwordController,
-                        obscureText: true,
-                        autofocus: true,
-                        decoration: InputDecoration(
-                          labelText: 'كلمة السر',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.lock),
-                        ),
-                        onSubmitted: (value) async {
-                          final isCorrect = await passwordService.verifyPassword(value);
-                          Navigator.of(context).pop(isCorrect);
-                        },
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: const Text('إلغاء'),
-                        ),
-                        ElevatedButton(
-                          onPressed: () async {
-                            final isCorrect = await passwordService.verifyPassword(passwordController.text);
-                            Navigator.of(context).pop(isCorrect);
-                          },
-                          child: const Text('تأكيد'),
-                        ),
-                      ],
-                    ),
-                  );
-                  
-                  if (passwordVerified != true) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('كلمة السر غير صحيحة أو تم الإلغاء'),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                    }
-                    return;
-                  }
-                } else {
-                  // العميل ليس عليه دين - تأكيد عادي
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('تأكيد الحذف',
-                          style: TextStyle(fontWeight: FontWeight.bold)),
-                      content: const Text(
-                          'هل أنت متأكد من حذف هذا العميل؟ لا يمكن التراجع عن هذا الإجراء.'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: Text('إلغاء',
-                              style: TextStyle(color: Theme.of(context).colorScheme.primary)),
-                        ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, true),
-                          child: Text('حذف',
-                              style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                        ),
-                      ],
-                    ),
-                  );
-                  
-                  if (confirmed != true || !mounted) return;
-                }
-                
-                // تنفيذ الحذف
-                try {
-                  await provider.deleteCustomer(widget.customer.id!);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                          content: Text('تم حذف العميل ${widget.customer.name} بنجاح!'),
-                          backgroundColor: Theme.of(context).colorScheme.tertiary),
                     );
-                    Navigator.pop(context);
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                          content: Text(e.toString().replaceAll('Exception: ', '')),
-                          backgroundColor: Colors.red),
-                    );
-                  }
+                    break;
+                  case 'delete_customer':
+                    _handleDeleteCustomer();
+                    break;
                 }
               },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'commercial_statement',
+                  child: Row(
+                    children: [
+                      Icon(Icons.analytics, color: Colors.blueGrey, size: 20),
+                      SizedBox(width: 12),
+                      Text('كشف الحساب التجاري'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'receipt_archive',
+                  child: Row(
+                    children: [
+                      Icon(Icons.archive, color: Colors.blueGrey, size: 20),
+                      SizedBox(width: 12),
+                      Text('أرشيف سندات القبض'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'financial_integrity',
+                  child: Row(
+                    children: [
+                      Icon(Icons.verified_user, color: Colors.blueGrey, size: 20),
+                      SizedBox(width: 12),
+                      Text('فحص السلامة المالية'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'audit_log',
+                  child: Row(
+                    children: [
+                      Icon(Icons.history, color: Colors.blueGrey, size: 20),
+                      SizedBox(width: 12),
+                      Text('سجل التدقيق المالي'),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'delete_customer',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                      SizedBox(width: 12),
+                      Text('حذف العميل', style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1234,6 +1285,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                 final transaction = transactions[index];
                                 return TransactionListTile(
                                   transaction: transaction,
+                                  invoiceNumber: _invoiceNumberMap[transaction.invoiceId],
                                   onEdit: (updated) async {
                                     try {
                                       final db = DatabaseService();
@@ -2253,7 +2305,10 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
   String _getTransactionDescription(DebtTransaction transaction) {
     final hasInvoice = transaction.invoiceId != null;
-    final invoicePart = hasInvoice ? ' (فاتورة #${transaction.invoiceId})' : '';
+    final invLabel = (hasInvoice && _invoiceNumberMap.containsKey(transaction.invoiceId))
+        ? _invoiceNumberMap[transaction.invoiceId]!
+        : (transaction.invoiceId?.toString() ?? '');
+    final invoicePart = hasInvoice ? ' (فاتورة #$invLabel)' : '';
     if (transaction.transactionType == 'invoice_debt') {
       return 'معاملة مالية - إضافة دين$invoicePart';
     } else if (transaction.transactionType == 'manual_payment') {
@@ -2261,9 +2316,9 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     } else if (transaction.transactionType == 'manual_debt') {
       return 'معاملة يدوية (إضافة دين)';
     } else if (transaction.transactionType == 'Invoice_Debt_Adjustment') {
-      return 'تعديل فاتورة رقم: ${transaction.invoiceId}';
+      return 'تعديل فاتورة رقم: $invLabel';
     } else if (transaction.transactionType == 'Invoice_Debt_Reversal') {
-      return 'حذف فاتورة رقم: ${transaction.invoiceId}';
+      return 'حذف فاتورة رقم: $invLabel';
     } else if (hasInvoice) {
       // أي معاملة أخرى مرتبطة بفاتورة
       return 'معاملة مالية$invoicePart';
@@ -2275,6 +2330,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
 class TransactionListTile extends StatelessWidget {
   final DebtTransaction transaction;
+  final String? invoiceNumber;
   
   // Callbacks for edit and refresh after change
   final Future<void> Function(DebtTransaction updated)? onEdit;
@@ -2286,6 +2342,7 @@ class TransactionListTile extends StatelessWidget {
   const TransactionListTile({
     super.key,
     required this.transaction,
+    this.invoiceNumber,
     this.onEdit,
     this.onConvertType,
     this.onRefresh,
@@ -2347,7 +2404,7 @@ class TransactionListTile extends StatelessWidget {
                       .bodySmall), // Themed text style
             if (isInvoiceRelated)
               Text(
-                'مرتبطة بالفاتورة #${transaction.invoiceId}',
+                'مرتبطة بالفاتورة #${invoiceNumber ?? transaction.invoiceId}',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     fontStyle: FontStyle.italic,
                     color: Colors.grey[600]), // Themed text style
@@ -2360,8 +2417,8 @@ class TransactionListTile extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // تمت إزالة زر تحويل نوع المعاملة بناءً على طلب المستخدم
-              if (transaction.isCreatedByMe)
+              // 🔒 المعاملات المرتبطة بالفواتير لا يتم تعديلها من سجل المعاملات لمنع تضارب الحسابات
+              if (transaction.isCreatedByMe && !isInvoiceRelated)
                 IconButton(
                   icon: const Icon(Icons.edit, size: 18),
                   visualDensity: VisualDensity.compact,

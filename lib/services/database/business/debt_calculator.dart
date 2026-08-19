@@ -18,6 +18,7 @@ class DebtCalculator {
         SELECT COALESCE(SUM(current_total_debt), 0) as total 
         FROM customers 
         WHERE current_total_debt > 0
+          AND (is_deleted IS NULL OR is_deleted = 0)
       ''');
       return ((result.first['total'] as num?) ?? 0).toDouble();
     } catch (e) {
@@ -30,7 +31,9 @@ class DebtCalculator {
     final db = await getDatabase();
     try {
       final result = await db.rawQuery('''
-        SELECT COUNT(1) as count FROM customers WHERE current_total_debt > 0
+        SELECT COUNT(1) as count FROM customers 
+        WHERE current_total_debt > 0
+          AND (is_deleted IS NULL OR is_deleted = 0)
       ''');
       return (result.first['count'] as int?) ?? 0;
     } catch (e) {
@@ -46,6 +49,7 @@ class DebtCalculator {
         SELECT id, name, phone, current_total_debt 
         FROM customers 
         WHERE current_total_debt > 0
+          AND (is_deleted IS NULL OR is_deleted = 0)
         ORDER BY current_total_debt DESC
         LIMIT ?
       ''', [limit]);
@@ -64,6 +68,7 @@ class DebtCalculator {
         WHERE amount_changed < 0 
           AND transaction_date >= ? 
           AND transaction_date <= ?
+          AND (is_deleted IS NULL OR is_deleted = 0)
       ''', [start.toIso8601String(), end.toIso8601String()]);
       return ((result.first['total'] as num?) ?? 0).toDouble();
     } catch (e) {
@@ -81,6 +86,7 @@ class DebtCalculator {
         WHERE amount_changed > 0 
           AND transaction_date >= ? 
           AND transaction_date <= ?
+          AND (is_deleted IS NULL OR is_deleted = 0)
       ''', [start.toIso8601String(), end.toIso8601String()]);
       return ((result.first['total'] as num?) ?? 0).toDouble();
     } catch (e) {
@@ -109,6 +115,7 @@ class DebtCalculator {
         SELECT COALESCE(SUM(amount_changed), 0) as total 
         FROM transactions 
         WHERE customer_id = ?
+          AND (is_deleted IS NULL OR is_deleted = 0)
       ''', [customerId]);
       final calculatedBalance = ((calcResult.first['total'] as num?) ?? 0).toDouble();
       
@@ -127,6 +134,7 @@ class DebtCalculator {
         SELECT COALESCE(SUM(amount_changed), 0) as total 
         FROM transactions 
         WHERE customer_id = ?
+          AND (is_deleted IS NULL OR is_deleted = 0)
       ''', [customerId]);
       final correctBalance = ((result.first['total'] as num?) ?? 0).toDouble();
       final correctCents = (correctBalance * 100).round();
@@ -150,7 +158,11 @@ class DebtCalculator {
   Future<int> fixAllCustomerBalances() async {
     final db = await getDatabase();
     try {
-      final customers = await db.query('customers', columns: ['id']);
+      final customers = await db.query(
+        'customers',
+        columns: ['id'],
+        where: 'is_deleted IS NULL OR is_deleted = 0',
+      );
       int fixed = 0;
       
       for (final customer in customers) {
@@ -189,8 +201,9 @@ class DebtCalculator {
       final customers = await db.rawQuery('''
         SELECT c.id, c.current_total_debt, MAX(t.transaction_date) as last_tx_date
         FROM customers c
-        LEFT JOIN transactions t ON t.customer_id = c.id
+        LEFT JOIN transactions t ON t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0)
         WHERE c.current_total_debt > 0
+          AND (c.is_deleted IS NULL OR c.is_deleted = 0)
         GROUP BY c.id
       ''');
       

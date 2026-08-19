@@ -14,6 +14,8 @@ import '../services/telegram_backup_service.dart';
 import '../services/settings_manager.dart';
 import '../services/debt_report_service.dart'; // ✅ Added import
 import '../services/firebase_sync/sync_event_bus.dart';
+import '../services/firebase_sync/firebase_sync_service.dart'; // 🚀 رفع فوري عند الإنشاء/التعديل
+import '../services/firebase_sync/firebase_sync_config.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
@@ -271,12 +273,27 @@ class AppProvider with ChangeNotifier {
     _applySearchFilter();
   }
 
+  /// 🚀 رفع فوري لعميل إلى السحابة (إن كانت المزامنة مفعّلة) — لا يفعل شيئاً محلياً.
+  Future<void> _syncCustomerNow(int customerId) async {
+    try {
+      if (!await FirebaseSyncConfig.isEnabled()) return;
+      await FirebaseSyncService().syncCustomerNow(customerId);
+    } catch (_) {
+      // المزامنة الخلفية ستتكفل به لاحقاً
+    }
+  }
+
   Future<void> addCustomer(Customer customer) async {
     final id = await _db.insertCustomer(customer);
     final newCustomer = customer.copyWith(id: id);
     _customers.add(newCustomer);
     _applySearchFilter();
     notifyListeners();
+
+    // 🚀 رفع فوري للسحابة لحظة الإنشاء (لا ننتظر الدورة الخلفية):
+    // إذا أُغلق التطبيق بسرعة بعد الإضافة يبقى العميل محلياً فقط.
+    // fire-and-forget: لا نحظر الواجهة، والفشل تلتقطه المزامنة الخلفية.
+    unawaited(_syncCustomerNow(id));
   }
 
   Future<void> updateCustomer(Customer customer) async {
@@ -289,6 +306,10 @@ class AppProvider with ChangeNotifier {
       }
       _applySearchFilter();
       notifyListeners();
+
+      // 🚀 رفع فوري للتعديل أيضاً (الاسم/الهاتف/العنوان تصل فوراً)
+      final editedId = customer.id;
+      if (editedId != null) unawaited(_syncCustomerNow(editedId));
     }
   }
 

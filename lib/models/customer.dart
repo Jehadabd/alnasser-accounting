@@ -10,6 +10,7 @@ class Customer {
   final DateTime lastModifiedAt;
   final String? audioNotePath;
   final String? syncUuid; // 🔄 معرف المزامنة الفريد
+  final bool isDeleted; // 🗑️ علامة الحذف المنطقي
 
   double get currentTotalDebt => currentTotalDebtCents / 100.0;
 
@@ -25,6 +26,7 @@ class Customer {
     DateTime? lastModifiedAt,
     this.audioNotePath,
     this.syncUuid,
+    this.isDeleted = false,
   })  : currentTotalDebtCents = currentTotalDebtCents ?? (currentTotalDebt * 100).round(),
         createdAt = createdAt ?? DateTime.now(),
         lastModifiedAt = lastModifiedAt ?? DateTime.now();
@@ -42,6 +44,7 @@ class Customer {
       'last_modified_at': lastModifiedAt.toIso8601String(),
       'audio_note_path': audioNotePath,
       'sync_uuid': syncUuid,
+      'is_deleted': isDeleted ? 1 : 0,
     };
   }
 
@@ -67,6 +70,7 @@ class Customer {
       lastModifiedAt: DateTime.parse(map['last_modified_at'] as String),
       audioNotePath: map['audio_note_path'] as String?,
       syncUuid: map['sync_uuid'] as String?,
+      isDeleted: ((map['is_deleted'] as int?) ?? 0) == 1,
     );
   }
 
@@ -81,6 +85,7 @@ class Customer {
     DateTime? lastModifiedAt,
     String? audioNotePath,
     String? syncUuid,
+    bool? isDeleted,
   }) {
     return Customer(
       id: id ?? this.id,
@@ -93,6 +98,7 @@ class Customer {
       lastModifiedAt: lastModifiedAt ?? this.lastModifiedAt,
       audioNotePath: audioNotePath ?? this.audioNotePath,
       syncUuid: syncUuid ?? this.syncUuid,
+      isDeleted: isDeleted ?? this.isDeleted,
     );
   }
 }

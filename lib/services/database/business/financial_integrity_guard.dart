@@ -910,13 +910,13 @@ class FinancialIntegrityGuard {
       // 1. إجمالي الديون
       final db = await getDatabase();
       final debtRes = await db.rawQuery(
-        'SELECT COALESCE(SUM(current_total_debt), 0) as total FROM customers WHERE current_total_debt > 0',
+        'SELECT COALESCE(SUM(current_total_debt), 0) as total FROM customers WHERE current_total_debt > 0 AND (is_deleted IS NULL OR is_deleted = 0)',
       );
       results['total_debt'] = ((debtRes.first['total'] as num?) ?? 0).toDouble();
 
       // 2. إجمالي معاملات الديون
       final txRes = await db.rawQuery(
-        'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions',
+        'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE (is_deleted IS NULL OR is_deleted = 0)',
       );
       results['total_transactions'] = ((txRes.first['total'] as num?) ?? 0).toDouble();
 
@@ -1001,7 +1001,7 @@ class FinancialIntegrityGuard {
       // 3. إجمالي الديون
       final db = await getDatabase();
       final totalDebtRes = await db.rawQuery(
-        'SELECT COALESCE(SUM(current_total_debt), 0) as total FROM customers',
+        'SELECT COALESCE(SUM(current_total_debt), 0) as total FROM customers WHERE (is_deleted IS NULL OR is_deleted = 0)',
       );
       report['total_debt'] = ((totalDebtRes.first['total'] as num?) ?? 0).toDouble();
 

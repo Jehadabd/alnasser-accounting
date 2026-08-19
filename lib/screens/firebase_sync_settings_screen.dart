@@ -10,6 +10,7 @@ import '../services/firebase_sync/firebase_sync_service.dart';
 import 'package:sqflite/sqflite.dart';
 import '../services/firebase_sync/firebase_custom_config.dart';
 import '../services/firebase_sync/invoice_sync_service.dart';
+import '../services/firebase_sync/smart_pipe_cleanup_service.dart';
 import '../services/database_service.dart';
 import 'firebase_custom_setup_screen.dart';
 import 'reconciliation_screen.dart';
@@ -1741,6 +1742,20 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                                                 ),
                                               ),
                                             ],
+                                            if (device['isRetired'] == true) ...[
+                                              const SizedBox(width: 8),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.orange,
+                                                  borderRadius: BorderRadius.circular(10),
+                                                ),
+                                                child: const Text(
+                                                  'خارج الخدمة',
+                                                  style: TextStyle(color: Colors.white, fontSize: 9),
+                                                ),
+                                              ),
+                                            ],
                                           ],
                                         ),
                                         const SizedBox(height: 2),
@@ -1751,6 +1766,26 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                                       ],
                                     ),
                                   ),
+                                  // زر اعتبار الجهاز خارج الخدمة / إعادته
+                                  if (!isCurrentDevice)
+                                    IconButton(
+                                      icon: Icon(
+                                        device['isRetired'] == true
+                                            ? Icons.play_circle_outline
+                                            : Icons.power_settings_new,
+                                        color: device['isRetired'] == true
+                                            ? Colors.green
+                                            : Colors.orange,
+                                        size: 20,
+                                      ),
+                                      onPressed: () =>
+                                          _confirmToggleRetireDevice(device),
+                                      tooltip: device['isRetired'] == true
+                                          ? 'إعادة الجهاز للخدمة'
+                                          : 'اعتبار الجهاز خارج الخدمة',
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                    ),
                                   // زر الحذف
                                   if (!isCurrentDevice)
                                     IconButton(
@@ -1864,6 +1899,71 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
   }
   
   /// تأكيد إزالة جهاز
+  /// 🚫 اعتبار جهاز خارج الخدمة / إعادته للخدمة (قرار يدوي موثّق)
+  ///
+  /// الجهاز الخارج عن الخدمة لا يُطالَب بتأكيد قراءة (ACK)، فتتاح إزالة
+  /// مستنداته القديمة من السحابة بعد قراءة بقية الأجهزة. استخدمه فقط
+  /// لجهاز لن يعود (بِيع/تالف) — الجهاز الغائب مؤقتاً يبقى محفوظاً له.
+  Future<void> _confirmToggleRetireDevice(Map<String, dynamic> device) async {
+    final retiring = device['isRetired'] != true;
+    final name = device['deviceName'] ?? 'جهاز غير معروف';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(retiring ? 'اعتبار الجهاز خارج الخدمة' : 'إعادة الجهاز للخدمة'),
+        content: Text(
+          retiring
+              ? 'هل تريد اعتبار الجهاز "$name" خارج الخدمة نهائياً؟\n\n'
+                  '• لن يُنتظر هذا الجهاز في مزامنة الحذف من السحابة.\n'
+                  '• استخدم هذا الخيار فقط لجهاز بِيع أو تالف أو لن يعود.\n'
+                  '• قرارك يُوثّق بالتاريخ، ويمكن التراجع عنه بإعادة الجهاز للخدمة.'
+              : 'سيعود الجهاز "$name" للحساب ضمن أجهزة المزامنة، '
+                  'وستُنتظر قراءته (ACK) قبل حذف أي بيانات من السحابة.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: retiring ? Colors.orange : Colors.green,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(retiring ? 'خارج الخدمة' : 'إعادة للخدمة'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await SmartPipeCleanupService()
+          .setDeviceRetired(device['deviceId'] as String, retiring);
+      // تحديث العرض المحلي فوراً
+      setState(() => device['isRetired'] = retiring);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(retiring
+                ? '🚫 اعتُبر "$name" خارج الخدمة (قرار موثّق بالتاريخ)'
+                : '✅ أعيد "$name" للخدمة'),
+            backgroundColor: retiring ? Colors.orange : Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ فشل تنفيذ العملية: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _confirmRemoveDevice(Map<String, dynamic> device) async {
     final confirmed = await showDialog<bool>(
       context: context,
