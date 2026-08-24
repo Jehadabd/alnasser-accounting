@@ -352,6 +352,11 @@ class AppProvider with ChangeNotifier {
     // 3. إعادة تحميل المعاملات لعرض الأرصدة الصحيحة (قبل/بعد) التي حسبتها قاعدة البيانات
     await loadCustomerTransactions(transaction.customerId);
 
+    // 🚀 رفع فوري للسحابة لحظة إنشاء المعاملة (العميل أولاً ثم معاملاته).
+    // قبل هذا كانت المعاملة تنتظر دورة watchdog/الخلفية — فإذا أُغلق التطبيق
+    // قبل الدورة بقيت محلية ولا تصل لبقية الأجهزة إلا عند فتحه مجدداً.
+    unawaited(_syncCustomerNow(transaction.customerId));
+
     // 4. تسجيل العملية في سجل التدقيق
     try {
       final auditService = FinancialAuditService();
@@ -397,6 +402,11 @@ class AppProvider with ChangeNotifier {
     await loadCustomerTransactions(updatedCustomer.id!);
     _applySearchFilter();
     notifyListeners();
+
+    // 🚀 رفع فوري للتعديل (updateManualTransaction يعلّم is_uploaded=0
+    // فيلتقطه syncCustomerNow ويعيد رفعه فوراً)
+    final updId = updatedCustomer.id;
+    if (updId != null) unawaited(_syncCustomerNow(updId));
   }
 
   // Search functionality - مع debounce لتفادي إثقال قاعدة البيانات

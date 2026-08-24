@@ -188,6 +188,16 @@ class FirebaseSyncService {
   // 🛡️ مؤقت استقرار الاتصال (للتحقق المتبادل - 15 دقيقة)
   Timer? _stabilityTimer;
   bool _isVerificationScheduled = false;
+
+  // 🔄 مؤقت إعادة محاولة التهيئة: إذا فشلت المصادقة أو اختبار الاتصال لحظة
+  // فتح التطبيق (والجهاز متصل أصلاً)، لا يُطلق connectivity_plus أي حدث جديد،
+  // فتبقى المزامنة ميتة بصمت حتى إعادة تشغيل التطبيق. هذا المؤقت يعيد
+  // المحاولة كل 30 ثانية حتى تنجح التهيئة (مثلاً هاتف فُتح بعد يومين أوفلاين
+  // ثم التقط الشبكة، لكن signInAnonymously فشل أول مرة).
+  Timer? _initRetryTimer;
+  static const Duration _initRetryInterval = Duration(seconds: 30);
+  // هل آخر فشل تهيئة قابل للإعادة؟ (فشل مصادقة/اتصال = نعم، عدم ضبط/ترخيص = لا)
+  bool _initFailureRetryable = false;
   
   // Callbacks
   final _statusController = StreamController<FirebaseSyncStatus>.broadcast();
@@ -255,6 +265,7 @@ class FirebaseSyncService {
     final license = LicenseService().getStoredLicense();
     if (license != null && !license.isSyncAllowed) {
       print('🔒 [FirebaseSyncService] المزامنة غير مشمولة في هذا الترخيص (${license.appMode}) - تم حظر محرك المزامنة.');
+      _initFailureRetryable = false; // إعادة المحاولة بلا فائدة هنا
       _updateStatus(FirebaseSyncStatus.disabled);
       return false;
     }
@@ -271,15 +282,19 @@ class FirebaseSyncService {
         try {
           final uid = await authService.signInAnonymously();
           if (uid == null) {
-            print('❌ فشل تسجيل الدخول - لا يمكن المزامنة');
+            print('❌ فشل تسجيل الدخول - لا يمكن المزامنة (ستتم إعادة المحاولة)');
             _updateStatus(FirebaseSyncStatus.offline);
             _errorController.add('فشل المصادقة المجهولة');
+            _initFailureRetryable = true; // 🔄 فشل مؤقت غالباً - أعد المحاولة دورياً
+            _scheduleInitRetry();
             return false;
           }
         } catch (authErr) {
           _updateStatus(FirebaseSyncStatus.error);
           _errorController.add('خطأ مصادقة: $authErr');
-          throw Exception('خطأ في مصادقة Firebase: $authErr');
+          _initFailureRetryable = true; // 🔄 فشل مؤقت غالباً - أعد المحاولة دورياً
+          _scheduleInitRetry();
+          return false;
         }
       }
       print('✅ المصادقة ناجحة: ${authService.uid}');
@@ -290,6 +305,7 @@ class FirebaseSyncService {
       final isEnabled = await FirebaseSyncConfig.isEnabled();
       
       if (!isConfigured || !isEnabled) {
+        _initFailureRetryable = false; // الإعدادات لن تتغير وحدها - لا إعادة محاولة
         _updateStatus(FirebaseSyncStatus.notConfigured);
         return false;
       }
@@ -337,6 +353,8 @@ class FirebaseSyncService {
       if (!testPassed) {
         _updateStatus(FirebaseSyncStatus.error);
         _errorController.add('فشل الاتصال بـ Firebase أو تعذر إنشاء المجلدات.');
+        _initFailureRetryable = true; // 🔄 قد يكون انقطاعاً مؤقتاً - أعد المحاولة دورياً
+        _scheduleInitRetry();
         return false;
       }
       
@@ -424,26 +442,56 @@ class FirebaseSyncService {
         print('⚠️ خطأ/تأخير في بدء الاستماع (تخطي): $e');
       }
       
-      // مزامنة البيانات المعلقة — تشغيل خلفي (لا يحظر التهيئة).
-      // 🔒 قبل هذا التعديل كانت تُستدعى بمهلة 15 ثانية، فكانت تُقتل قبل اكتمالها
-      // لأن رفع 89 عميل + معاملاتهم عميل-بعميل يستغرق دقائق. الآن تشتغل في
-      // الخلفية حتى لو طالت، والتهيئة تكمل فورًا والاستماع يعمل بالتوازي.
-      onProgress?.call(0.7, 'جاري بدء المزامنة في الخلفية...');
-      // fire-and-forget: لا ننتظرها.
-      Future(() async {
-        try {
-          await _syncPendingChanges();
-        } catch (e) {
-          print('⚠️ خطأ في المزامنة الخلفية الأولية: $e');
-        }
-        // 🔄 سحب كامل إدمبوتنت بعد رفع المعلق: يضمن وصول كل ما فات هذا
-        // الجهاز أثناء إيقافه مهما كان سبب فواته من المستمعين اللحظيين.
-        try {
-          await performFullCatchUp();
-        } catch (e) {
-          print('⚠️ خطأ في السحب الكامل عند التشغيل: $e');
-        }
-      });
+      // ═══ ترتيب الإقلاع (كما هو مطلوب): ═══
+      // 1) المصادقة + فحص الاتصال (تم أعلاه)
+      // 2) رفع كل المعلق محلياً أولاً: معاملات، ثم فواتير، ثم منتجات
+      // 3) ثم السحب الكامل من Firebase لالتقاط آخر التغييرات
+
+      // مزامنة البيانات المعلقة عند الإقلاع.
+      // 🔒 ننتظرها بمهلة 90 ثانية بدل fire-and-forget تماماً: لو فُتح التطبيق
+      // قصيراً ثم أُغلق (سيناريو الهاتف بعد يومين أوفلاين)، كان الرفع الخلفي
+      // يُقتل مع إغلاق التطبيق ولا يُرفع شيء حتى فتحٍ لاحق. بانتظارها حتى 90
+      // ثانية تُرفع معظم الحِمل (10 معاملات أو أكثر) قبل اكتمال التهيئة.
+      // إن انتهت المهلة يستمر الرفع في الخلفية (المؤقت لا يلغي المستقبل)،
+      // ويلتقط الـ Watchdog أي متبقٍّ لاحقاً.
+      onProgress?.call(0.7, 'جاري رفع المعاملات المعلقة...');
+      try {
+        await _syncPendingChanges().timeout(
+          const Duration(seconds: 90),
+          onTimeout: () => print('⏳ استمرار التهيئة - رفع المعلق ما زال جارياً في الخلفية'),
+        );
+      } catch (e) {
+        print('⚠️ خطأ في المزامنة الخلفية الأولية: $e');
+      }
+
+      // 🧾 محرك الفواتير: يجب أن يبدأ قبل السحب الكامل حتى تُرفع الفواتير
+      // المعلقة محلياً أولاً (رفع + استماع للوارد + مؤقتات إعادة المحاولة).
+      try {
+        await InvoiceSyncService().startSync();
+      } catch (e) {
+        print('⚠️ تعذّر بدء مزامنة الفواتير: $e');
+      }
+
+      // 📦 محرك المنتجات: رفع المعلق + تنزيل الكتالوج + الاستماع الحي —
+      // قبل السحب الكامل بنفس المنطق.
+      try {
+        await ProductSyncService().startSync();
+        print('📦 تم تشغيل محرك مزامنة المنتجات بنجاح');
+      } catch (e) {
+        print('⚠️ تعذّر بدء مزامنة المنتجات: $e');
+      }
+
+      // 🔄 سحب كامل إدمبوتنت بعد رفع كل المعلق (معاملات + فواتير + منتجات):
+      // يضمن وصول كل ما فات هذا الجهاز أثناء إيقافه مهما كان سبب فواته من
+      // المستمعين اللحظيين.
+      try {
+        await performFullCatchUp().timeout(
+          const Duration(seconds: 120),
+          onTimeout: () => print('⏳ استمرار التهيئة - السحب الكامل ما زال جارياً في الخلفية'),
+        );
+      } catch (e) {
+        print('⚠️ خطأ في السحب الكامل عند التشغيل: $e');
+      }
       
       // 🔐 تحميل Retry Queue من قاعدة البيانات
       try {
@@ -465,24 +513,11 @@ class FirebaseSyncService {
       // 🔄 بدء المزامنة الخلفية الدورية
       _startBackgroundSync();
 
-      // 🧾 تشغيل محرك مزامنة الفواتير (رفع المعلّق + الاستماع للوارد).
-      // بدون هذا السطر تُرفع الفواتير يدوياً فقط ولا تصل أبداً للأجهزة الأخرى.
-      try {
-        await InvoiceSyncService().startSync();
-      } catch (e) {
-        print('⚠️ تعذّر بدء مزامنة الفواتير: $e');
-      }
-
-      // 📦 تشغيل محرك مزامنة المنتجات (رفع المعلّق + تنزيل الكتالوج + الاستماع الحي).
-      try {
-        await ProductSyncService().startSync();
-        print('📦 تم تشغيل محرك مزامنة المنتجات بنجاح');
-      } catch (e) {
-        print('⚠️ تعذّر بدء مزامنة المنتجات: $e');
-      }
-
       onProgress?.call(0.95, 'اكتملت التهيئة');
       _isInitialized = true;
+      _initFailureRetryable = false;
+      _initRetryTimer?.cancel(); // ✅ نجحت التهيئة - لا حاجة لإعادة المحاولة
+      _initRetryTimer = null;
       _updateStatus(FirebaseSyncStatus.online);
 
       // 🧮 الاستماع لطلبات المطابقة + التدقيق التلقائي عند سكون النظام.
@@ -507,8 +542,44 @@ class FirebaseSyncService {
       print('❌ Firebase Sync initialization failed: $e');
       _updateStatus(FirebaseSyncStatus.error);
       _errorController.add('فشل تهيئة المزامنة: $e');
+      _initFailureRetryable = true; // 🔄 قد يكون فشلاً مؤقتاً (شبكة/اتصال)
+      _scheduleInitRetry();
       return false;
     }
+  }
+
+  /// 🔄 جدولة إعادة محاولة التهيئة بعد فشل قابل للإعادة.
+  /// يعيد المحاولة فقط عند توفر اتصال فعلي بالإنترنت، ويتوقف فور نجاح التهيئة.
+  void _scheduleInitRetry() {
+    if (_isInitialized || !_initFailureRetryable) return;
+    _initRetryTimer?.cancel();
+    _initRetryTimer = Timer(_initRetryInterval, () async {
+      if (_isInitialized || !_initFailureRetryable) return;
+
+      // لا تُهدر محاولات مصادقة/اتصال بلا إنترنت
+      try {
+        final results = await Connectivity().checkConnectivity();
+        if (results.contains(ConnectivityResult.none)) {
+          print('⏳ [InitRetry] لا يوجد اتصال - إعادة الجدولة...');
+          _scheduleInitRetry();
+          return;
+        }
+      } catch (e) {
+        print('⚠️ [InitRetry] تعذر فحص الاتصال: $e');
+      }
+
+      print('🔄 [InitRetry] إعادة محاولة تهيئة المزامنة...');
+      try {
+        final ok = await initialize();
+        if (!ok) {
+          _scheduleInitRetry(); // فشلت مجدداً - أعد الجدولة
+        }
+      } catch (e) {
+        print('❌ [InitRetry] استثناء أثناء إعادة المحاولة: $e');
+        _scheduleInitRetry();
+      }
+    });
+    print('⏱️ [InitRetry] ستتم إعادة محاولة التهيئة خلال ${_initRetryInterval.inSeconds} ثانية');
   }
   
   /// إيقاف الخدمة
@@ -525,6 +596,8 @@ class FirebaseSyncService {
     _operationTracker?.dispose(); // 🔄 إيقاف تتبع العمليات
     _ackService?.dispose(); // 📬 إيقاف خدمة التأكيد
     _retryTimer?.cancel(); // 🔄 إيقاف مؤقت Retry
+    _initRetryTimer?.cancel(); // 🔄 إيقاف مؤقت إعادة محاولة التهيئة
+    _initRetryTimer = null;
     _statusController.close();
     _errorController.close();
     _syncEventController.close();
