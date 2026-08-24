@@ -29,6 +29,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:sqflite/sqflite.dart' hide Transaction;
 import 'firebase_sync_config.dart';
+import 'match_verdict_service.dart'; // ⚖️ بثّ قرارات الإبطال لبقية الأجهزة
 import '../database_service.dart';
 import '../database/core/database_helpers.dart';
 
@@ -265,6 +266,8 @@ class ArmoredReconciliationService {
         _emit('⚠️ وصل الطلب بدون كشف — تجاهل');
         return;
       }
+      // ⚖️ جهاز الحقيقة يوثَّق في الكشف — يستخدمه بثّ قرارات المطابقة
+      ledger['truthDeviceId'] = data['requesterDeviceId'] ?? 'unknown';
       final applied = await _applyCustomerLedger(ledger);
       final balance = await _localBalanceFor(customerSyncUuid);
 
@@ -440,7 +443,11 @@ class ArmoredReconciliationService {
     int ignored = 0;
     int skippedNoUuid = 0;
     int deletedLocal = 0;
-    
+
+    // ⚖️ تُرفع خارج معاملة SQLite (لا I/O سحابي داخلها) ثم تُبثّ
+    // كقرارات مطابقة لبقية الأجهزة بعد اكتمال الإبطال المحلي.
+    final List<Map<String, dynamic>> rowsToVoidBroadcast = [];
+
     await db.transaction((txn) async {
       final incomingUuids = <String>{};
       
@@ -498,6 +505,7 @@ class ArmoredReconciliationService {
         
         for (final row in excessRows) {
           rowsToDelete.add(Map<String, dynamic>.from(row));
+          rowsToVoidBroadcast.add(Map<String, dynamic>.from(row));
           await txn.update('transactions', {'is_deleted': 1}, where: 'id = ?', whereArgs: [row['id']]);
           deletedLocal++;
         }
@@ -539,6 +547,23 @@ class ArmoredReconciliationService {
             'سيُبلَّغ المُبادِر بالتباين');
       }
     });
+
+    // ⚖️ بثّ قرارات الإبطال لبقية الأجهزة (خارج معاملة SQLite):
+    // الجهاز الخامس/السادس الذي لم يكن في الجلسة يستقبلها ويبطل ما عنده
+    // أيضاً — فينتشر الإصلاح على الشبكة كلها بضغطة واحدة.
+    if (rowsToVoidBroadcast.isNotEmpty) {
+      try {
+        await MatchVerdictService().publishVerdicts(
+          customerSyncUuid: customerSyncUuid,
+          voidedRows: rowsToVoidBroadcast,
+          truthDeviceId: ledger['truthDeviceId'] as String? ?? 'unknown',
+          referenceBalance: refBalance,
+        );
+      } catch (e) {
+        print('🛡️⚠️ [تطبيق كشف] فشل بثّ قرارات الإبطال (غير حرج محلياً): $e');
+      }
+    }
+
     return applied;
   }
 

@@ -160,8 +160,7 @@ class IntegrityService {
        );
      }
      
-     final res = await db.rawQuery('SELECT SUM(amount_changed) as total FROM transactions WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)', [customerId]);
-     final calculated = ((res.first['total'] as num?) ?? 0).toDouble();
+ final res = await db.rawQuery('SELECT SUM(amount_changed) as total FROM transactions WHERE customer_id = ?', [customerId]);     final calculated = ((res.first['total'] as num?) ?? 0).toDouble();
      final recorded = customer.currentTotalDebt;
      
      final diff = (calculated - recorded).abs();

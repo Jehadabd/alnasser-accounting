@@ -81,10 +81,8 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
   // --- Multi-Barcode Data ---
   List<Map<String, dynamic>> _barcodeItems = [];
   
-  // --- Expandable Sections State ---
-  bool _showAdditionalPrices = false;
-  bool _showAdditionalBarcodes = false;
-  bool _showUnitHierarchy = false;
+  // --- Advanced Segmented Tab State (0: Prices, 1: Barcodes, 2: Units Hierarchy) ---
+  int _selectedAdvancedTab = 0;
 
   @override
   void initState() {
@@ -126,7 +124,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
       bool exists = _hierarchyItems.any((item) => item['unit_name'] == invoiceUnit);
       if (!exists) {
         setState(() {
-          _showUnitHierarchy = true;
+          _selectedAdvancedTab = 2;
           _hierarchyItems.add({
             'unit_name': invoiceUnit,
             'contains_qty': 0.0, // User must fill this
@@ -206,231 +204,491 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
     );
   }
 
-  Widget _buildExpandableSection({
+  /// بناء زر كبسولي تفاعلي لشريط التبويبات المدمج
+  Widget _buildAdvancedTabButton({
+    required int index,
     required String title,
-    required bool isExpanded,
-    required VoidCallback onToggle,
-    required Widget child,
-    String? subtitle,
-    IconData? icon,
+    required IconData icon,
+    required Color activeColor,
+    int badgeCount = 0,
+  }) {
+    final isSelected = _selectedAdvancedTab == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _selectedAdvancedTab = index;
+          });
+        },
+        borderRadius: BorderRadius.circular(10),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          decoration: BoxDecoration(
+            color: isSelected ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.06),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: isSelected ? activeColor : Colors.grey[600],
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    color: isSelected ? activeColor : Colors.grey[700],
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (badgeCount > 0) ...[
+                const SizedBox(width: 5),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isSelected ? activeColor : Colors.grey[400],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '$badgeCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// بناء بطاقة سعر إضافي بتصميم عصري
+  Widget _buildPriceFieldCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required TextEditingController controller,
   }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.2)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: color.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
-        border: Border.all(color: isExpanded ? kPrimaryColor.withOpacity(0.5) : Colors.transparent),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          InkWell(
-            onTap: onToggle,
-            borderRadius: BorderRadius.circular(16),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: (isExpanded ? kPrimaryColor : Colors.grey).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: color, size: 16),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: color),
                     ),
-                    child: Icon(
-                      icon ?? Icons.more_horiz,
-                      color: isExpanded ? kPrimaryColor : Colors.grey,
-                      size: 20,
+                    Text(
+                      subtitle,
+                      style: TextStyle(fontSize: 10, color: Colors.grey[500]),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: isExpanded ? kPrimaryColor : Colors.grey[800],
-                          ),
-                        ),
-                        if (subtitle != null) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            subtitle,
-                            style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                    color: Colors.grey,
-                  ),
-                ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            decoration: BoxDecoration(
+              color: kInputFillColor,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.grey.withOpacity(0.15)),
+            ),
+            child: TextFormField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                hintText: '0.0',
+                hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
+                isDense: true,
+                suffixText: 'د.ع',
+                suffixStyle: TextStyle(fontSize: 11, color: Colors.grey[500], fontWeight: FontWeight.bold),
               ),
             ),
           ),
-          if (isExpanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: child,
-            ),
         ],
       ),
     );
   }
 
+  /// بناء عقدة هرمية للوحدات الكبرى بتصميم حديث وسهل
   Widget _buildHierarchyNode({
-    int? index,
-    String? title,
-    String? subtitle,
-    required bool isRoot,
+    required int index,
   }) {
-    if (isRoot) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-          color: kPrimaryColor.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: kPrimaryColor.withOpacity(0.3)),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.circle, color: kPrimaryColor, size: 12),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title ?? 'قطعة', style: const TextStyle(fontWeight: FontWeight.bold)),
-                Text(subtitle ?? 'الوحدة الأساسية', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
-
-    // For hierarchy items
-    final item = _hierarchyItems[index!];
-    final qtyController = TextEditingController(text: (item['contains_qty'] ?? 0).toString());
+    final item = _hierarchyItems[index];
+    final qtyController = TextEditingController(
+      text: (item['contains_qty'] != null && item['contains_qty'] > 0)
+          ? (item['contains_qty'] % 1 == 0 ? item['contains_qty'].toInt().toString() : item['contains_qty'].toString())
+          : '',
+    );
     final availableUnits = _getAvailableUnitsForHierarchy(index);
-    final currentUnitName = item['unit_name']?.toString() ?? '';
+    final currentUnitName = item['unit_name']?.toString().trim() ?? '';
+    final baseName = _baseUnitNameController.text.trim().isEmpty ? 'قطعة' : _baseUnitNameController.text.trim();
+    final prevUnitName = index == 0
+        ? baseName
+        : (_hierarchyItems[index - 1]['unit_name']?.toString().trim().isNotEmpty == true
+            ? _hierarchyItems[index - 1]['unit_name'].toString().trim()
+            : 'الوحدة السابقة');
+    final qty = (item['contains_qty'] as num?)?.toDouble() ?? 0;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    final List<String> quickUnitSuggestions = [
+      'كرتون',
+      'باكيت',
+      'درزن',
+      'صندوق',
+      'طرد',
+      'كيس',
+      'شدة',
+      'سيت',
+      'بندل',
+      'كونية',
+    ];
+
+    return Column(
+      children: [
+        if (index > 0) ...[
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Text('اسم الوحدة', style: TextStyle(color: kPrimaryColor, fontWeight: FontWeight.bold, fontSize: 12)),
-                const SizedBox(height: 8),
                 Container(
-                  decoration: BoxDecoration(color: kInputFillColor, borderRadius: BorderRadius.circular(12)),
-                  child: Autocomplete<String>(
-                    initialValue: TextEditingValue(text: currentUnitName),
-                    optionsBuilder: (textEditingValue) {
-                      if (textEditingValue.text.isEmpty) return availableUnits;
-                      return availableUnits.where((u) => u.contains(textEditingValue.text));
-                    },
-                    onSelected: (selection) {
-                      setState(() => _hierarchyItems[index]['unit_name'] = selection);
-                    },
-                    fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
-                      return TextField(
-                        controller: controller,
-                        focusNode: focusNode,
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                          hintText: 'كرتون، باكيت...',
-                          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
-                        ),
-                        onChanged: (v) => _hierarchyItems[index]['unit_name'] = v,
-                      );
-                    },
-                    optionsViewBuilder: (context, onSelected, options) {
-                      return Align(
-                        alignment: Alignment.topRight,
-                        child: Material(
-                          elevation: 4,
-                          borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            constraints: const BoxConstraints(maxHeight: 200, maxWidth: 200),
-                            child: ListView.builder(
-                              padding: EdgeInsets.zero,
-                              shrinkWrap: true,
-                              itemCount: options.length,
-                              itemBuilder: (context, i) {
-                                final opt = options.elementAt(i);
-                                return ListTile(
-                                  dense: true,
-                                  title: Text(opt),
-                                  onTap: () => onSelected(opt),
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                      );
-                    },
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF059669).withOpacity(0.2)),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.arrow_downward_rounded, size: 14, color: Color(0xFF059669)),
+                      SizedBox(width: 4),
+                      Text(
+                        'المستوى التالي',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF059669)),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Builder(
-              builder: (context) {
-                // الحصول على اسم الوحدة الحالية والسابقة
-                final currentUnitName = item['unit_name']?.toString() ?? '';
-                final String prevUnitName;
-                if (index == 0) {
-                  prevUnitName = _baseUnitNameController.text.isEmpty ? 'قطعة' : _baseUnitNameController.text;
-                } else {
-                  prevUnitName = _hierarchyItems[index - 1]['unit_name']?.toString() ?? 'وحدة';
-                }
-                
-                // بناء النص الديناميكي
-                final String dynamicLabel = currentUnitName.isNotEmpty 
-                    ? '$currentUnitName يحتوي على كم $prevUnitName؟'
-                    : 'يحتوي على كم $prevUnitName؟';
-                
-                return ModernTextField(
-                  controller: qtyController,
-                  label: dynamicLabel,
-                  hint: 'عدد الوحدات',
-                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-                  onChanged: (v) => _hierarchyItems[index]['contains_qty'] = double.tryParse(v.replaceAll(',', '')) ?? 0,
-                );
-              },
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.red),
-            onPressed: () => setState(() => _hierarchyItems.removeAt(index)),
-          ),
         ],
-      ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF059669).withOpacity(0.25)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF059669).withOpacity(0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header Row: Level chip + Title + Delete Button
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF059669),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'المستوى #${index + 1}',
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    currentUnitName.isNotEmpty ? 'عبوة: $currentUnitName' : 'تحديد وحدة كبرى جديدة',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: kTextColor),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 20),
+                    tooltip: 'حذف هذا المستوى',
+                    onPressed: () => setState(() => _hierarchyItems.removeAt(index)),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 12),
+
+              // Visual Equation Formula
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF059669).withOpacity(0.2)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calculate_outlined, color: Color(0xFF059669), size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: RichText(
+                        text: TextSpan(
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF065F46)),
+                          children: [
+                            const TextSpan(text: 'المعادلة: 1 '),
+                            TextSpan(
+                              text: currentUnitName.isNotEmpty ? '[$currentUnitName]' : '[الوحدة الكبرى]',
+                              style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF059669)),
+                            ),
+                            const TextSpan(text: ' = '),
+                            TextSpan(
+                              text: qty > 0 ? (qty % 1 == 0 ? qty.toInt().toString() : qty.toString()) : '؟',
+                              style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF059669)),
+                            ),
+                            TextSpan(
+                              text: ' [$prevUnitName]',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // Quick suggestion chips
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('اختيار سريع للوحدة:', style: TextStyle(fontSize: 11, color: Colors.grey[600], fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 6),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: quickUnitSuggestions.map((unit) {
+                        final isSelected = currentUnitName == unit;
+                        return Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                _hierarchyItems[index]['unit_name'] = unit;
+                              });
+                            },
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: isSelected ? const Color(0xFF059669) : const Color(0xFFF3F4F6),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: isSelected ? const Color(0xFF059669) : Colors.grey.withOpacity(0.2),
+                                ),
+                              ),
+                              child: Text(
+                                unit,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  color: isSelected ? Colors.white : Colors.grey[800],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 14),
+
+              // Form fields: Unit name + Multiplier Qty
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Unit Name
+                  Expanded(
+                    flex: 3,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('اسم الوحدة الكبرى', style: TextStyle(color: Color(0xFF059669), fontWeight: FontWeight.bold, fontSize: 11)),
+                        const SizedBox(height: 6),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: kInputFillColor,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.grey.withOpacity(0.15)),
+                          ),
+                          child: Autocomplete<String>(
+                            initialValue: TextEditingValue(text: currentUnitName),
+                            optionsBuilder: (textEditingValue) {
+                              if (textEditingValue.text.isEmpty) return availableUnits;
+                              return availableUnits.where((u) => u.contains(textEditingValue.text));
+                            },
+                            onSelected: (selection) {
+                              setState(() => _hierarchyItems[index]['unit_name'] = selection);
+                            },
+                            fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+                              if (controller.text != currentUnitName && currentUnitName.isNotEmpty) {
+                                controller.text = currentUnitName;
+                              }
+                              return TextField(
+                                controller: controller,
+                                focusNode: focusNode,
+                                decoration: InputDecoration(
+                                  border: InputBorder.none,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                  hintText: 'مثال: كرتون...',
+                                  hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12),
+                                  isDense: true,
+                                ),
+                                onChanged: (v) => _hierarchyItems[index]['unit_name'] = v,
+                              );
+                            },
+                            optionsViewBuilder: (context, onSelected, options) {
+                              return Align(
+                                alignment: Alignment.topRight,
+                                child: Material(
+                                  elevation: 4,
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    constraints: const BoxConstraints(maxHeight: 200, maxWidth: 200),
+                                    child: ListView.builder(
+                                      padding: EdgeInsets.zero,
+                                      shrinkWrap: true,
+                                      itemCount: options.length,
+                                      itemBuilder: (context, i) {
+                                        final opt = options.elementAt(i);
+                                        return ListTile(
+                                          dense: true,
+                                          title: Text(opt),
+                                          onTap: () => onSelected(opt),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(width: 12),
+
+                  // Multiplier Qty
+                  Expanded(
+                    flex: 2,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'كم $prevUnitName بداخلها؟',
+                          style: const TextStyle(color: Color(0xFF059669), fontWeight: FontWeight.bold, fontSize: 11),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 6),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: kInputFillColor,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.grey.withOpacity(0.15)),
+                          ),
+                          child: TextField(
+                            controller: qtyController,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                            decoration: InputDecoration(
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              hintText: 'مثال: 12',
+                              hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12),
+                              isDense: true,
+                            ),
+                            onChanged: (v) {
+                              setState(() {
+                                _hierarchyItems[index]['contains_qty'] = double.tryParse(v.replaceAll(',', '')) ?? 0;
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -439,85 +697,477 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
     return double.tryParse(val.replaceAll(',', '')) ?? 0.0;
   }
 
-  /// بناء صف باركود إضافي
+  /// بناء صف باركود إضافي بتصميم عصري مريح
   Widget _buildBarcodeRow(int index) {
     final item = _barcodeItems[index];
     final barcodeController = TextEditingController(text: item['barcode'] ?? '');
     final labelController = TextEditingController(text: item['variant_label'] ?? '');
     final priceController = TextEditingController(
-      text: item['sell_price'] != null ? item['sell_price'].toString() : '',
+      text: item['sell_price'] != null ? (item['sell_price'] % 1 == 0 ? (item['sell_price'] as double).toInt().toString() : item['sell_price'].toString()) : '',
     );
-    
+
     return Container(
-      padding: const EdgeInsets.all(12),
       margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withOpacity(0.2)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFEA580C).withOpacity(0.25)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFEA580C).withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // الباركود
-          Expanded(
-            flex: 2,
-            child: TextField(
-              controller: barcodeController,
-              decoration: InputDecoration(
-                labelText: 'الباركود ${index + 1}',
-                hintText: 'امسح الباركود...',
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          // Header Row: Badge + Label preview + Delete
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEA580C).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'باركود #${index + 1}',
+                  style: const TextStyle(
+                    color: Color(0xFFEA580C),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
-              onChanged: (v) => _barcodeItems[index]['barcode'] = v,
-            ),
-          ),
-          const SizedBox(width: 12),
-          // اسم النكهة/اللون
-          Expanded(
-            flex: 2,
-            child: TextField(
-              controller: labelController,
-              decoration: InputDecoration(
-                labelText: 'الوصف',
-                hintText: 'مثال: برتقال، أحمر...',
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              const SizedBox(width: 8),
+              if ((item['variant_label']?.toString().isNotEmpty ?? false))
+                Expanded(
+                  child: Text(
+                    item['variant_label'] ?? '',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: kTextColor),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                )
+              else
+                const Spacer(),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 20),
+                tooltip: 'حذف هذا الباركود',
+                onPressed: () => setState(() => _barcodeItems.removeAt(index)),
               ),
-              onChanged: (v) => _barcodeItems[index]['variant_label'] = v,
-            ),
+            ],
           ),
-          const SizedBox(width: 12),
-          // سعر مختلف (اختياري)
-          Expanded(
-            flex: 1,
-            child: TextField(
-              controller: priceController,
-              decoration: InputDecoration(
-                labelText: 'سعر مختلف',
-                hintText: 'اختياري',
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          const SizedBox(height: 12),
+          // Inputs Row 1: Barcode (with Camera) + Description (Flavor/Color)
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('الباركود', style: TextStyle(color: Color(0xFFEA580C), fontWeight: FontWeight.bold, fontSize: 11)),
+                    const SizedBox(height: 6),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: kInputFillColor,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.withOpacity(0.15)),
+                      ),
+                      child: TextField(
+                        controller: barcodeController,
+                        decoration: InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          hintText: 'امسح أو اكتب الباركود...',
+                          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12),
+                          isDense: true,
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.camera_alt_rounded, color: Color(0xFFEA580C), size: 18),
+                            tooltip: 'مسح بالكاميرا',
+                            onPressed: () async {
+                              final code = await CameraBarcodeScannerDialog.scan(context);
+                              if (code != null && code.isNotEmpty) {
+                                setState(() {
+                                  _barcodeItems[index]['barcode'] = code;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                        onChanged: (v) => _barcodeItems[index]['barcode'] = v,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-              onChanged: (v) => _barcodeItems[index]['sell_price'] = _parse(v),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('الوصف / النكهة / اللون', style: TextStyle(color: Color(0xFFEA580C), fontWeight: FontWeight.bold, fontSize: 11)),
+                    const SizedBox(height: 6),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: kInputFillColor,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.withOpacity(0.15)),
+                      ),
+                      child: TextField(
+                        controller: labelController,
+                        decoration: InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          hintText: 'مثال: فراولة، أسود...',
+                          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12),
+                          isDense: true,
+                        ),
+                        onChanged: (v) => _barcodeItems[index]['variant_label'] = v,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          // زر الحذف
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.red),
-            onPressed: () => setState(() => _barcodeItems.removeAt(index)),
+          const SizedBox(height: 10),
+          // Price override (optional)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Text('سعر خاص لهذا المتغير', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600, fontSize: 11)),
+                  const SizedBox(width: 4),
+                  Text('(اختياري - سيُعتمد سعر البيع الأساسي إذا تُرك فارغاً)', style: TextStyle(fontSize: 10, color: Colors.grey[400])),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Container(
+                decoration: BoxDecoration(
+                  color: kInputFillColor,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.withOpacity(0.15)),
+                ),
+                child: TextField(
+                  controller: priceController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    hintText: 'مثال: 15,000',
+                    hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12),
+                    isDense: true,
+                    suffixText: 'د.ع',
+                    suffixStyle: TextStyle(fontSize: 11, color: Colors.grey[500], fontWeight: FontWeight.bold),
+                  ),
+                  onChanged: (v) => _barcodeItems[index]['sell_price'] = _parse(v),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  /// بناء محتوى التبويب المختار بنعومة وانسيابية
+  Widget _buildSelectedTabContent(int extraPricesCount) {
+    if (_selectedAdvancedTab == 0) {
+      // Tab 0: الأسعار الإضافية
+      return KeyedSubtree(
+        key: const ValueKey('tab_prices'),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEEF2FF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF4F46E5).withOpacity(0.15)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.lightbulb_outline_rounded, color: Color(0xFF4F46E5), size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'حدد أسعاراً خاصة لكل فئة من زبائنك لسرعة وسهولة اختيار السعر المناسب في الفاتورة.',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF3730A3), fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildPriceFieldCard(
+                    title: 'سعر مفرد 2',
+                    subtitle: 'سعر بديل للتجزئة',
+                    icon: Icons.storefront_outlined,
+                    color: const Color(0xFF4F46E5),
+                    controller: _price2Controller,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildPriceFieldCard(
+                    title: 'سعر منزل',
+                    subtitle: 'سعر التوصيل للمنازل',
+                    icon: Icons.home_outlined,
+                    color: const Color(0xFFD97706),
+                    controller: _price3Controller,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildPriceFieldCard(
+                    title: 'سعر جملة',
+                    subtitle: 'سعر المحلات والمتاجر',
+                    icon: Icons.inventory_2_outlined,
+                    color: const Color(0xFF059669),
+                    controller: _price4Controller,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildPriceFieldCard(
+                    title: 'سعر جملة 2',
+                    subtitle: 'كبار العملاء / VIP',
+                    icon: Icons.workspace_premium_outlined,
+                    color: const Color(0xFF0284C7),
+                    controller: _price5Controller,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildPriceFieldCard(
+              title: 'سعر أخرى / خاص',
+              subtitle: 'عروض أو تسعيرة خاصة',
+              icon: Icons.stars_outlined,
+              color: const Color(0xFF7C3AED),
+              controller: _price6Controller,
+            ),
+          ],
+        ),
+      );
+    } else if (_selectedAdvancedTab == 1) {
+      // Tab 1: باركودات متعددة
+      return KeyedSubtree(
+        key: const ValueKey('tab_barcodes'),
+        child: Column(
+          children: [
+            if (_barcodeItems.isEmpty) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFFDBA74).withOpacity(0.4)),
+                ),
+                child: Column(
+                  children: [
+                    Icon(Icons.qr_code_scanner_rounded, size: 32, color: const Color(0xFFEA580C).withOpacity(0.8)),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'لا توجد باركودات إضافية حالياً',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF9A3412)),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'أضف باركوداً لكل نكهة أو لون أو حجم إضافي لنفس المنتج لتسهيل قراءتها عند البيع.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              for (int i = 0; i < _barcodeItems.length; i++)
+                _buildBarcodeRow(i),
+              const SizedBox(height: 6),
+            ],
+
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _barcodeItems.add({
+                    'barcode': '',
+                    'variant_label': '',
+                    'cost_price': null,
+                    'sell_price': null,
+                  });
+                });
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFEA580C).withOpacity(0.35), width: 1.5),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.add_circle_outline_rounded, color: Color(0xFFEA580C), size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'إضافة باركود لمتغير جديد (نكهة / لون / حجم)',
+                      style: TextStyle(color: Color(0xFFEA580C), fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // Tab 2: تعبئة ووحدات كبرى
+      return KeyedSubtree(
+        key: const ValueKey('tab_hierarchy'),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFECFDF5),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF059669).withOpacity(0.25)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF059669).withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.all_inbox_rounded, color: Color(0xFF059669), size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Text('الوحدة الأساسية (الصغرى): ', style: TextStyle(fontSize: 12, color: Color(0xFF065F46))),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF059669),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                _baseUnitNameController.text.trim().isEmpty ? 'قطعة' : _baseUnitNameController.text.trim(),
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'كل المستويات في الأسفل هي عبوات أكبر تحتوي على مضاعفات من هذه الوحدة.',
+                          style: TextStyle(color: Colors.grey[600], fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            if (_hierarchyItems.isEmpty) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0FDF4),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFF86EFAC).withOpacity(0.4)),
+                ),
+                child: Column(
+                  children: [
+                    Icon(Icons.account_tree_outlined, size: 32, color: const Color(0xFF059669).withOpacity(0.8)),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'لا توجد وحدات كبرى مضافة حالياً',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF065F46)),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'إذا كان هذا المنتج يُباع بكراتين، طرود، أو بكجات، أضف مستوى تعبئة لضبط الحسابات والبيع السريع.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              for (int i = 0; i < _hierarchyItems.length; i++)
+                _buildHierarchyNode(
+                  index: i,
+                ),
+              const SizedBox(height: 6),
+            ],
+
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _hierarchyItems.add({
+                    'unit_name': '',
+                    'contains_qty': 10.0,
+                    'price': 0.0,
+                    'barcode': ''
+                  });
+                });
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF059669).withOpacity(0.35), width: 1.5),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.add_circle_outline_rounded, color: Color(0xFF059669), size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'إضافة مستوى تعبئة جديد (مثال: كرتون / باكيت)',
+                      style: TextStyle(color: Color(0xFF059669), fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   Future<void> _saveProduct() async {
@@ -556,6 +1206,15 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
 
     String? unitHierarchyJson = finalHierarchy.isNotEmpty ? json.encode(finalHierarchy) : null;
     String? unitCostsJson = unitCosts.isNotEmpty ? json.encode(unitCosts) : null;
+
+    // 🔍 تشخيص تحويل الوحدات — ماذا يُحفظ فعلاً للمنتج الموزون؟
+    print('🔍 [تشخيص-حفظ-منتج] "${_nameController.text.trim()}"');
+    print('    unit="$baseKey" | isWeighable=$_isWeighable | baseWeight=${_isWeighable ? _parse(_baseWeightController.text) : null}');
+    print('    unitHierarchy=$unitHierarchyJson');
+    print('    unitCosts=$unitCostsJson');
+    if (finalHierarchy.isEmpty) {
+      print('    ⚠️ الهرمية فارغة! لن تظهر وحدات كبرى في الفاتورة — تحقق من "تعبئة وحدات كبرى"');
+    }
 
     final product = Product(
       name: _nameController.text.trim(),
@@ -1103,153 +1762,65 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
 
             const SizedBox(height: 24),
             
-            // --- Collapsible Sections ---
+            // Section 03: خيارات متقدمة (Segmented Capsule Switcher)
+            ModernSectionCard(
+              number: '03',
+              title: 'خيارات متقدمة للمنتج',
+              subtitle: 'الأسعار الخاصة، الباركودات والنكهات، وتعبئة الوحدات الكبرى',
+              child: Builder(
+                builder: (context) {
+                  int extraPricesCount = [_price2Controller, _price3Controller, _price4Controller, _price5Controller, _price6Controller]
+                      .where((c) => c.text.trim().isNotEmpty && c.text.trim() != '0')
+                      .length;
 
-            // 1. أسعار إضافية
-            _buildExpandableSection(
-              title: 'أسعار إضافية',
-              subtitle: 'جملة، نصف جملة، أسعار خاصة...',
-              icon: Icons.price_change_outlined,
-              isExpanded: _showAdditionalPrices,
-              onToggle: () => setState(() => _showAdditionalPrices = !_showAdditionalPrices),
-              child: Column(
-                children: [
-                  Row(
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: ModernTextField(
-                        controller: _price2Controller, 
-                        label: 'سعر مفرد 2', 
-                        hint: 'اختياري',
-                        inputFormatters: [ThousandSeparatorDecimalInputFormatter()]
-                      )),
-                      const SizedBox(width: 12),
-                      Expanded(child: ModernTextField(
-                        controller: _price3Controller, 
-                        label: 'سعر منزل', 
-                        hint: 'اختياري',
-                        inputFormatters: [ThousandSeparatorDecimalInputFormatter()]
-                      )),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(child: ModernTextField(
-                        controller: _price4Controller, 
-                        label: 'سعر جملة', 
-                        hint: 'اختياري',
-                        inputFormatters: [ThousandSeparatorDecimalInputFormatter()]
-                      )),
-                      const SizedBox(width: 12),
-                      Expanded(child: ModernTextField(
-                        controller: _price5Controller, 
-                        label: 'سعر جملة 2', 
-                        hint: 'اختياري',
-                        inputFormatters: [ThousandSeparatorDecimalInputFormatter()]
-                      )),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  ModernTextField(
-                    controller: _price6Controller, 
-                    label: 'سعر أخرى', 
-                    hint: 'اختياري',
-                    inputFormatters: [ThousandSeparatorDecimalInputFormatter()]
-                  ),
-                ],
-              ),
-            ),
-            
-            // 2. باركودات متعددة
-            _buildExpandableSection(
-              title: 'باركودات متعددة',
-              subtitle: 'إضافة باركودات لنكهات أو ألوان مختلفة لنفس المنتج',
-              icon: Icons.qr_code_2_outlined,
-              isExpanded: _showAdditionalBarcodes,
-              onToggle: () => setState(() => _showAdditionalBarcodes = !_showAdditionalBarcodes),
-              child: Column(
-                children: [
-                  for (int i = 0; i < _barcodeItems.length; i++)
-                    _buildBarcodeRow(i),
-                  
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _barcodeItems.add({
-                            'barcode': '',
-                            'variant_label': '',
-                            'cost_price': null,
-                            'sell_price': null,
-                          });
-                        });
-                      },
-                      icon: const Icon(Icons.add),
-                      label: const Text('إضافة باركود جديد'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
-            // 3. وحدات كبرى (Hierarchy)
-            _buildExpandableSection(
-              title: 'تعبئة ووحدات كبرى',
-              subtitle: 'كرتون، صندوق، درزن...',
-              icon: Icons.account_tree_outlined,
-              isExpanded: _showUnitHierarchy,
-              onToggle: () => setState(() => _showUnitHierarchy = !_showUnitHierarchy),
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue.withOpacity(0.2)),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, color: Colors.blue, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'الوحدة الأساسية هي "${_baseUnitNameController.text.isEmpty ? 'قطعة' : _baseUnitNameController.text}"',
-                            style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold),
-                          ),
+                      // Segmented Tab Switcher Bar
+                      Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF1F5F9),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.withOpacity(0.15)),
                         ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  for (int i = 0; i < _hierarchyItems.length; i++) 
-                    _buildHierarchyNode(
-                      index: i,
-                      isRoot: false,
-                    ),
+                        child: Row(
+                          children: [
+                            _buildAdvancedTabButton(
+                              index: 0,
+                              title: 'الأسعار الإضافية',
+                              icon: Icons.price_change_outlined,
+                              activeColor: const Color(0xFF4F46E5),
+                              badgeCount: extraPricesCount,
+                            ),
+                            _buildAdvancedTabButton(
+                              index: 1,
+                              title: 'باركودات ونكهات',
+                              icon: Icons.qr_code_2_outlined,
+                              activeColor: const Color(0xFFEA580C),
+                              badgeCount: _barcodeItems.length,
+                            ),
+                            _buildAdvancedTabButton(
+                              index: 2,
+                              title: 'تعبئة كبرى',
+                              icon: Icons.account_tree_outlined,
+                              activeColor: const Color(0xFF059669),
+                              badgeCount: _hierarchyItems.length,
+                            ),
+                          ],
+                        ),
+                      ),
 
-                  const SizedBox(height: 16),
-                  
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _hierarchyItems.add({
-                            'unit_name': '',
-                            'contains_qty': 10.0,
-                            'price': 0.0,
-                            'barcode': ''
-                          });
-                        });
-                      },
-                      icon: const Icon(Icons.add_link),
-                      label: const Text('إضافة مستوى جديد (مثال: كرتون)'),
-                    ),
-                  ),
-                ],
+                      const SizedBox(height: 18),
+
+                      // Tab Content with AnimatedSwitcher
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: _buildSelectedTabContent(extraPricesCount),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
 

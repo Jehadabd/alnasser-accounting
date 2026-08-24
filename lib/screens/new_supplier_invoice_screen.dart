@@ -16,6 +16,7 @@ import '../services/ensemble_ai_service.dart';
 import '../models/supplier_invoice_item.dart';
 import '../models/attachment.dart';
 import '../services/database_service.dart';
+import '../widgets/camera_barcode_scanner_dialog.dart';
 
 class NewSupplierInvoiceScreen extends StatefulWidget {
   final Supplier supplier;
@@ -637,7 +638,8 @@ class _AddItemDialogState extends State<_AddItemDialog> {
   }
 
   void _searchProducts(String query) {
-    if (query.isEmpty) {
+    final clean = query.trim().toLowerCase();
+    if (clean.isEmpty) {
       setState(() {
         _filteredProducts = [];
       });
@@ -646,10 +648,40 @@ class _AddItemDialogState extends State<_AddItemDialog> {
     
     setState(() {
       _filteredProducts = widget.allProducts
-          .where((p) => p.name.contains(query))
+          .where((p) => p.name.toLowerCase().contains(clean) || (p.barcode != null && p.barcode!.toLowerCase().contains(clean)))
           .take(10)
           .toList();
     });
+  }
+
+  Future<void> _searchAndSelectByBarcode(String barcode) async {
+    final clean = barcode.trim();
+    if (clean.isEmpty) return;
+
+    Product? matched;
+    try {
+      matched = widget.allProducts.firstWhere(
+        (p) => p.barcode != null && p.barcode!.trim().toLowerCase() == clean.toLowerCase(),
+      );
+    } catch (_) {
+      matched = null;
+    }
+
+    if (matched == null) {
+      try {
+        final db = DatabaseService();
+        matched = await db.findProductByBarcode(clean);
+      } catch (e) {
+        debugPrint('Error finding product by barcode: $e');
+      }
+    }
+
+    if (matched != null) {
+      _selectProduct(matched);
+    } else {
+      _productNameCtrl.text = clean;
+      _searchProducts(clean);
+    }
   }
 
   void _selectProduct(Product product) {
@@ -709,14 +741,29 @@ class _AddItemDialogState extends State<_AddItemDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // حقل اسم المنتج مع البحث
+              // حقل اسم المنتج مع البحث والباركود
               TextFormField(
                 controller: _productNameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'اسم المنتج',
-                  hintText: 'ابحث عن منتج...',
+                decoration: InputDecoration(
+                  labelText: 'اسم المنتج أو الباركود',
+                  hintText: 'ابحث بالاسم أو امسح الباركود...',
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.qr_code_scanner, color: Colors.blue),
+                    tooltip: 'مسح الباركود بالكاميرا',
+                    onPressed: () async {
+                      final scanned = await CameraBarcodeScannerDialog.scan(context);
+                      if (scanned != null && scanned.trim().isNotEmpty) {
+                        await _searchAndSelectByBarcode(scanned);
+                      }
+                    },
+                  ),
                 ),
                 onChanged: _searchProducts,
+                onFieldSubmitted: (val) async {
+                  if (val.trim().isNotEmpty) {
+                    await _searchAndSelectByBarcode(val);
+                  }
+                },
                 validator: (v) => (v == null || v.isEmpty) ? 'أدخل اسم المنتج' : null,
               ),
               // نتائج البحث

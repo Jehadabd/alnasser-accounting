@@ -6,6 +6,7 @@ import '../models/product.dart';
 import '../models/category.dart';
 import '../services/database_service.dart';
 import '../widgets/formatters.dart';
+import '../widgets/camera_barcode_scanner_dialog.dart';
 
 // --- VISUAL CONSTANTS (From ProductEntryScreen) ---
 const Color kPrimaryColor = Color(0xFF5D5FEF);
@@ -325,6 +326,79 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
   
   double _parse(String val) => double.tryParse(val.replaceAll(',', '')) ?? 0.0;
 
+  /// 🔍 البحث عن المنتج بالباركود أو الاسم واختياره تلقائياً
+  Future<void> _searchAndSelectByBarcode(String barcode, {TextEditingController? searchController}) async {
+    final clean = barcode.trim();
+    if (clean.isEmpty) return;
+
+    // 1. فحص المنتجات الممررة في الذاكرة بالباركود الأساسي
+    Product? matched;
+    try {
+      matched = widget.existingProducts.firstWhere(
+        (p) => p.barcode != null && p.barcode!.trim().toLowerCase() == clean.toLowerCase(),
+      );
+    } catch (_) {
+      matched = null;
+    }
+
+    // 2. إذا لم يُعثر عليه في الذاكرة، نبحث في قاعدة البيانات (يشمل الباركود الأساسي والباركودات الإضافية)
+    if (matched == null) {
+      try {
+        final db = DatabaseService();
+        matched = await db.findProductByBarcode(clean);
+      } catch (e) {
+        debugPrint('Error finding product by barcode: $e');
+      }
+    }
+
+    // 3. إذا لم يُعثر عليه بالباركود، نبحث بالاسم المطابق
+    if (matched == null) {
+      try {
+        matched = widget.existingProducts.firstWhere(
+          (p) => p.name.toLowerCase() == clean.toLowerCase() || p.name.toLowerCase().contains(clean.toLowerCase()),
+        );
+      } catch (_) {
+        matched = null;
+      }
+    }
+
+    if (matched != null) {
+      // ✅ تم العثور على المنتج: اختياره وملء بياناته
+      setState(() {
+        _selectedExistingProduct = matched;
+        _invoiceUnitController.text = matched!.unit;
+        _invoicePriceController.text = (matched.costPrice ?? 0).toString();
+        if (searchController != null) {
+          searchController.text = matched.name;
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ تم العثور على المنتج: ${matched.name}'),
+            backgroundColor: Colors.green.shade700,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } else {
+      // ❌ غير موجود: الانتقال إلى وضع إنشاء منتج جديد مع ملء الباركود تلقائياً
+      setState(() {
+        _mode = 'create';
+        _barcodeController.text = clean;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('لم يتم العثور على منتج بهذا الباركود ($clean). يمكنك تعريفه الآن.'),
+            backgroundColor: Colors.orange.shade800,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
   /// Called when the base unit changes. If different from invoice unit, auto-creates hierarchy.
   void _onBaseUnitChanged(String newUnit) {
     setState(() {
@@ -458,8 +532,13 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         children: [
           Autocomplete<Product>(
             optionsBuilder: (textEditingValue) {
-               if (textEditingValue.text.isEmpty) return const Iterable<Product>.empty();
-               return widget.existingProducts.where((p) => p.name.toLowerCase().contains(textEditingValue.text.toLowerCase()));
+               final query = textEditingValue.text.trim().toLowerCase();
+               if (query.isEmpty) return const Iterable<Product>.empty();
+               return widget.existingProducts.where((p) {
+                 final matchName = p.name.toLowerCase().contains(query);
+                 final matchBarcode = p.barcode != null && p.barcode!.toLowerCase().contains(query);
+                 return matchName || matchBarcode;
+               });
             },
             displayStringForOption: (p) => p.name,
             onSelected: (product) {
@@ -471,58 +550,49 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
             },
             optionsViewBuilder: (context, onSelected, options) {
               if (options.isEmpty) {
-                 // Show "Create New" option
-                 // We need the text from the field. Since we don't have direct access here easily without controller,
-                 // we can rely on the fact that options are empty implies mismatch.
-                 // Actually, we can assume the user wants to create what they typed.
-                 // We need to capture the text.
-                 return Align(
-                   alignment: Alignment.topLeft,
-                   child: Material(
-                     elevation: 4.0,
-                     child: Container(
-                       width: 400, // Match field width roughly or constraints
-                       color: Colors.white,
-                       child: ListTile(
-                         leading: const Icon(Icons.add_circle, color: Colors.green),
-                         title: const Text('إضافة منتج جديد غير موجود'),
-                         subtitle: const Text('اضغط هنا لتعريف المنتج فوراً'),
-                         onTap: () {
-                           // Trigger creation mode
-                           setState(() {
-                             _mode = 'create';
-                             // We don't have the text easily here? 
-                             // We can get it from the field controller if we passed one?
-                             // We are using fieldViewBuilder below, so we have access to the controller via a variable if we hoist it?
-                             // Optimization: The fieldViewBuilder controller is managed by Autocomplete if we don't provide one?
-                             // No, we passed 'controller' in fieldViewBuilder.
-                             // But we can't access it here easily unless we store it.
-                             // Actually, let's just leave the name blank or rely on the user re-typing since we switch views?
-                             // Better: Use the text from the search field.
-                             // We can't access `textEditingValue.text` here directly?
-                           });
-                         },
-                       ),
-                     ),
-                   ),
-                 );
+                  return Align(
+                    alignment: Alignment.topLeft,
+                    child: Material(
+                      elevation: 4.0,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: 400,
+                        color: Colors.white,
+                        child: ListTile(
+                          leading: const Icon(Icons.add_circle, color: Colors.green),
+                          title: const Text('إضافة منتج جديد غير موجود'),
+                          subtitle: const Text('اضغط هنا لتعريف المنتج فوراً'),
+                          onTap: () {
+                            setState(() {
+                              _mode = 'create';
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  );
               }
               return Align(
                 alignment: Alignment.topLeft,
                 child: Material(
                   elevation: 4.0,
+                  borderRadius: BorderRadius.circular(12),
                   child: Container(
                     width: 400,
                     color: Colors.white,
-                    constraints: const BoxConstraints(maxHeight: 200),
+                    constraints: const BoxConstraints(maxHeight: 220),
                     child: ListView.builder(
                       padding: EdgeInsets.zero,
                       itemCount: options.length,
                       itemBuilder: (BuildContext context, int index) {
                         final Product option = options.elementAt(index);
                         return ListTile(
-                          title: Text(option.name),
-                          subtitle: Text('${option.unit} - ${option.price1}'),
+                          leading: const Icon(Icons.inventory_2_outlined, color: kPrimaryColor),
+                          title: Text(option.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text(
+                            '${option.unit} - التكلفة: ${option.costPrice ?? option.price1}${option.barcode != null && option.barcode!.isNotEmpty ? " | باركود: ${option.barcode}" : ""}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
                           onTap: () => onSelected(option),
                         );
                       },
@@ -532,47 +602,66 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
               );
             },
             fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-               // Update name controller when text changes so we can use it on 'Create'
-               controller.addListener(() {
-                 if (_mode == 'search') {
-                   // _nameController.text = controller.text; 
-                   // Don't auto-set yet, wait for user to click create
-                 }
-               });
-               
-               // We need to capture the controller to use its text in optionsViewBuilder onTap?
-               // Or just access controller.text in onTap?
-               // optionsViewBuilder is outside this scope.
-               // Workaround: define a variable in State to hold the current search text.
-               
-               return TextField(
-                controller: controller,
-                focusNode: focusNode,
-                autofocus: true,
-                onChanged: (val) {
-                   // Keep a reference to search text for "Create New" logic
-                   _nameController.text = val; 
-                },
-                decoration: InputDecoration(
-                  labelText: 'ابحث عن اسم المنتج...',
-                  prefixIcon: const Icon(Icons.search, color: kPrimaryColor),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                  filled: true,
-                  fillColor: Colors.white,
-                  suffixIcon: Container(
-                    margin: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                    child: IconButton(
-                       icon: const Icon(Icons.add, color: Colors.green),
-                       tooltip: 'منتج جديد',
-                       onPressed: () => setState(() {
-                         _mode = 'create';
-                         _nameController.text = controller.text;
-                       }),
-                    ),
-                  ),
-                ),
-              );
+                return TextField(
+                 controller: controller,
+                 focusNode: focusNode,
+                 autofocus: true,
+                 onSubmitted: (val) async {
+                   onFieldSubmitted();
+                   if (val.trim().isNotEmpty) {
+                     await _searchAndSelectByBarcode(val, searchController: controller);
+                   }
+                 },
+                 onChanged: (val) {
+                    _nameController.text = val; 
+                 },
+                 decoration: InputDecoration(
+                   labelText: 'ابحث عن اسم المنتج أو امسح الباركود...',
+                   prefixIcon: const Icon(Icons.search, color: kPrimaryColor),
+                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                   filled: true,
+                   fillColor: Colors.white,
+                   suffixIcon: Row(
+                     mainAxisSize: MainAxisSize.min,
+                     children: [
+                       // 📷 زر مسح الباركود بالكاميرا (للهواتف والأجهزة اللوحية)
+                       Container(
+                         margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+                         decoration: BoxDecoration(
+                           color: kPrimaryColor.withOpacity(0.1),
+                           borderRadius: BorderRadius.circular(12),
+                         ),
+                         child: IconButton(
+                           icon: const Icon(Icons.qr_code_scanner, color: kPrimaryColor),
+                           tooltip: 'مسح الباركود بالكاميرا',
+                           onPressed: () async {
+                             final scanned = await CameraBarcodeScannerDialog.scan(context);
+                             if (scanned != null && scanned.trim().isNotEmpty) {
+                               await _searchAndSelectByBarcode(scanned, searchController: controller);
+                             }
+                           },
+                         ),
+                       ),
+                       // ➕ زر إنشاء منتج جديد
+                       Container(
+                         margin: const EdgeInsets.only(left: 6, right: 2, top: 4, bottom: 4),
+                         decoration: BoxDecoration(
+                           color: Colors.green.withOpacity(0.1),
+                           borderRadius: BorderRadius.circular(12),
+                         ),
+                         child: IconButton(
+                            icon: const Icon(Icons.add, color: Colors.green),
+                            tooltip: 'منتج جديد',
+                            onPressed: () => setState(() {
+                              _mode = 'create';
+                              _nameController.text = controller.text;
+                            }),
+                         ),
+                       ),
+                     ],
+                   ),
+                 ),
+               );
             },
           ),
           const Spacer(),
@@ -908,8 +997,22 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                         ],
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    ModernTextField(controller: _barcodeController, label: 'الباركود الأساسي', suffixIcon: const Icon(Icons.qr_code_scanner)),
+                    ModernTextField(
+                      controller: _barcodeController,
+                      label: 'الباركود الأساسي',
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.qr_code_scanner, color: kPrimaryColor),
+                        tooltip: 'مسح الباركود بالكاميرا',
+                        onPressed: () async {
+                          final scanned = await CameraBarcodeScannerDialog.scan(context);
+                          if (scanned != null && scanned.trim().isNotEmpty) {
+                            setState(() {
+                              _barcodeController.text = scanned.trim();
+                            });
+                          }
+                        },
+                      ),
+                    ),
                   ],
                 ),
              ),

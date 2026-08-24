@@ -90,6 +90,30 @@ class FirebaseSyncSecuritySettings {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_autoDeleteDaysKey, days);
   }
+
+  static const String _customerConflictPolicyKey = 'firebase_sync_customer_conflict_policy';
+
+  /// الحصول على سياسة معالجة تعارض حذف العملاء
+  static Future<CustomerConflictPolicy> getCustomerConflictPolicy() async {
+    final prefs = await SharedPreferences.getInstance();
+    final val = prefs.getString(_customerConflictPolicyKey);
+    if (val == 'strictDelete') {
+      return CustomerConflictPolicy.strictDelete;
+    }
+    return CustomerConflictPolicy.smartReactivate; // الافتراضي
+  }
+
+  /// تعيين سياسة معالجة تعارض حذف العملاء
+  static Future<void> setCustomerConflictPolicy(CustomerConflictPolicy policy) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_customerConflictPolicyKey, policy.name);
+  }
+}
+
+/// سياسة معالجة المعاملات لعميل محذوف عند المزامنة
+enum CustomerConflictPolicy {
+  smartReactivate, // تنشيط ذكي بالمعاملات الجديدة فقط
+  strictDelete,    // حذف صارم (الحذف يلغي أي معاملة أوفلاين)
 }
 
 /// إعدادات المزامنة عبر Firebase

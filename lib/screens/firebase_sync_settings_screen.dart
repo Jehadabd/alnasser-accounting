@@ -36,6 +36,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
   int _maxTransactionAgeDays = 30;
   int _autoDeleteDays = 90;
   bool _postSyncVerification = true;
+  CustomerConflictPolicy _customerConflictPolicy = CustomerConflictPolicy.smartReactivate;
   
   // 🔄 حالة تحميل كل زر
   bool _isSyncing = false;
@@ -76,6 +77,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     _maxTransactionAgeDays = await FirebaseSyncSecuritySettings.getMaxTransactionAgeDays();
     _autoDeleteDays = await FirebaseSyncSecuritySettings.getAutoDeleteDays();
     _postSyncVerification = await FirebaseSyncSecuritySettings.isPostSyncVerificationEnabled();
+    _customerConflictPolicy = await FirebaseSyncSecuritySettings.getCustomerConflictPolicy();
     
     // 🆕 تحميل Project ID
     _projectId = await FirebaseCustomConfig.getProjectId();
@@ -239,6 +241,12 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                     // 🔒 بطاقة إعدادات الأمان
                     if (_isEnabled)
                       _buildSecuritySettingsCard(),
+                    
+                    const SizedBox(height: 16),
+
+                    // 🔀 بطاقة سياسة تعارض حذف العملاء
+                    if (_isEnabled)
+                      _buildConflictPolicyCard(),
                     
                     const SizedBox(height: 16),
                     
@@ -907,6 +915,99 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
               },
               activeColor: Colors.green,
               secondary: const Icon(Icons.account_balance_wallet, color: Colors.blue),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 🔀 بطاقة سياسة معالجة تعارض حذف العملاء
+  Widget _buildConflictPolicyCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.alt_route_rounded, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'سياسة تعارض حذف العملاء عند المزامنة',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'تحدد ماذا يحدث إذا حُذف عميل من جهاز، بينما قام جهاز آخر (أثناء انقطاع الإنترنت) بإضافة فاتورة أو دين له:',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            ),
+            const Divider(height: 24),
+            
+            // 🌟 الخيار الأول: التنشيط الذكي
+            RadioListTile<CustomerConflictPolicy>(
+              title: const Text(
+                'إعادة التنشيط الذكي بالمعاملات الجديدة فقط (موصى به)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              subtitle: const Text(
+                'يُعاد تنشيط العميل تلقائياً ويُسجل عليه فقط مبلغ المعاملة الجديدة التي أُنشئت أوفلاين، مع إبقاء ديونه القديمة المحذوفة ملغاة ومصفرة.',
+                style: TextStyle(fontSize: 12),
+              ),
+              value: CustomerConflictPolicy.smartReactivate,
+              groupValue: _customerConflictPolicy,
+              activeColor: Colors.teal,
+              contentPadding: EdgeInsets.zero,
+              secondary: const CircleAvatar(
+                radius: 16,
+                backgroundColor: Color(0xFFE0F2F1),
+                child: Icon(Icons.auto_awesome, color: Colors.teal, size: 18),
+              ),
+              onChanged: (value) async {
+                if (value != null) {
+                  await FirebaseSyncSecuritySettings.setCustomerConflictPolicy(value);
+                  setState(() => _customerConflictPolicy = value);
+                }
+              },
+            ),
+            
+            const SizedBox(height: 8),
+            
+            // 🔒 الخيار الثاني: الحذف الصارم
+            RadioListTile<CustomerConflictPolicy>(
+              title: const Text(
+                'الحذف الصارم (الحذف يلغي أي معاملة أوفلاين)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              subtitle: const Text(
+                'يعتبر قرار الحذف نهائياً وتُلغى أي فاتورة أو حركة أُضيفت للعميل أثناء انقطاع الإنترنت لمنع أي حركة غير مصرح بها.',
+                style: TextStyle(fontSize: 12),
+              ),
+              value: CustomerConflictPolicy.strictDelete,
+              groupValue: _customerConflictPolicy,
+              activeColor: Colors.red.shade700,
+              contentPadding: EdgeInsets.zero,
+              secondary: CircleAvatar(
+                radius: 16,
+                backgroundColor: Colors.red.shade50,
+                child: Icon(Icons.delete_forever, color: Colors.red.shade700, size: 18),
+              ),
+              onChanged: (value) async {
+                if (value != null) {
+                  await FirebaseSyncSecuritySettings.setCustomerConflictPolicy(value);
+                  setState(() => _customerConflictPolicy = value);
+                }
+              },
             ),
           ],
         ),

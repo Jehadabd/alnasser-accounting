@@ -300,7 +300,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
       ),
     );
     double conversionFactor = 1.0;
+    print('🔍 [تشخيص-صف-ودجت] "${_currentItem.productName}" → "$newType" | السعر الحالي: ${_currentItem.appliedPrice}');
     if (product != null) {
+      print('    unit="${product.unit}" | isWeighable=${product.isWeighable} | unitHierarchy=${product.unitHierarchy}');
       if (product.unit == 'piece' && newType != 'قطعة') {
         if (product.unitHierarchy != null &&
             product.unitHierarchy!.isNotEmpty) {
@@ -313,12 +315,17 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                 break;
               }
             }
-          } catch (e) {}
+          } catch (e) {
+            print('    ❌ [تشخيص-صف-ودجت] فشل parse الهرمية: $e');
+          }
         }
       } else if (product.unit == 'meter' && newType == 'لفة') {
         conversionFactor = product.lengthPerUnit ?? 1.0;
+      } else if (newType != 'قطعة') {
+        print('    ⚠️ [تشخيص-صف-ودجت] لا فرع تحويل (unit="${product.unit}" ليست piece/meter) → معامل=1 — سبب خطأ الموزونات');
       }
     }
+    print('    معامل التحويل: $conversionFactor');
     setState(() {
       double newAppliedPrice;
       if ((product?.unit == 'piece' && newType != 'قطعة') ||
@@ -333,6 +340,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         newAppliedPrice = _currentItem.appliedPrice / conversionFactor;
       } else {
         newAppliedPrice = _currentItem.appliedPrice;
+        print('    ✅ [تشخيص-صف-ودجت] السعر بقي بلا تغيير: $newAppliedPrice');
       }
       double quantity = _currentItem.quantityIndividual ??
           _currentItem.quantityLargeUnit ??

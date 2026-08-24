@@ -1244,8 +1244,11 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
         // 🔧 استخدام السعر المدخل مباشرة من الحقل (لأنه تم تحديثه بالفعل عند اختيار الوحدة)
         double finalAppliedPrice = inputPrice;
-        
+
         double baseUnitsPerSelectedUnit = 1.0;
+
+        print('🔍 [تشخيص-إضافة-صنف] "${_selectedProduct!.name}" | الوحدة: "$selectedUnitForItem" | الكمية: $inputQuantity | السعر من الحقل: $inputPrice');
+        print('    unit="${_selectedProduct!.unit}" | isWeighable=${_selectedProduct!.isWeighable} | unitHierarchy=${_selectedProduct!.unitHierarchy}');
 
         // --- حساب معامل التحويل (للمخزون فقط) ---
         if (_selectedProduct!.unit == 'piece' && selectedUnitForItem != 'قطعة') {
@@ -1296,7 +1299,11 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           }
         } else if (_selectedProduct!.unit == 'meter' && selectedUnitForItem == 'لفة') {
           baseUnitsPerSelectedUnit = _selectedProduct!.lengthPerUnit ?? 1.0;
+        } else if (selectedUnitForItem != 'قطعة' && selectedUnitForItem != _selectedProduct!.translatedUnit) {
+          print('    ⚠️ [تشخيص-إضافة-صنف] وحدة غير أساسية بلا معامل تحويل! '
+              'unit="${_selectedProduct!.unit}" ليست piece/meter → المخزون سيُخصم $inputQuantity فقط (بدل المضاعف)');
         }
+        print('    معامل التحويل للمخزون: $baseUnitsPerSelectedUnit');
 
         final double totalBaseUnitsSold = inputQuantity * baseUnitsPerSelectedUnit;
 
@@ -2725,6 +2732,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         }
         print('DEBUG: product.unitHierarchy = \u001b[32m${product.unitHierarchy}\u001b[0m');
         print('DEBUG: currentUnitOptions = \u001b[36m$currentUnitOptions\u001b[0m');
+        // 🔍 تشخيص تحويل الوحدات — لماذا قد لا يتغير السعر للموزونات
+        print('🔍 [تشخيص-اختيار-منتج] "${product.name}" (id=${product.id})');
+        print('    unit="${product.unit}" | isWeighable=${product.isWeighable} | baseWeight=${product.baseWeight}');
+        print('    unitHierarchy=${product.unitHierarchy}');
+        print('    الوحدات المتاحة: $currentUnitOptions | المحددة: $selectedUnitForItem');
+        print('    price1=${product.price1} | costPrice=${product.costPrice}');
         double? newPriceLevel;
         switch (_selectedListType) {
           case 'مفرد':
@@ -3439,7 +3452,14 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                                                 if (isNumeric) {
                                                     return await DatabaseService().searchProductsByIdPrefix(query);
                                                 } else {
-                                                    return await SmartSearchService.instance.smartSearch(query);
+                                                    final currentNames = invoiceItems
+                                                        .where((it) => it.productName.trim().isNotEmpty)
+                                                        .map((it) => it.productName.trim())
+                                                        .toList();
+                                                    return await SmartSearchService.instance.smartSearch(
+                                                      query,
+                                                      currentInvoiceProductNames: currentNames,
+                                                    );
                                                 }
                                             },
                                             displayStringForOption: (Product p) => p.name,
@@ -3449,13 +3469,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                                                     child: Material(
                                                         elevation: 8,
                                                         borderRadius: BorderRadius.circular(12),
+                                                        // 🔧 اللون على الـ Material نفسه — DecoratedBox فوقه
+                                                        // كان يحجب خلفية ListTile ورشّ الحبر (assertion)
+                                                        color: Colors.white,
                                                         child: Container(
                                                             width: constraints.maxWidth,
                                                             constraints: const BoxConstraints(maxHeight: 300),
-                                                            decoration: BoxDecoration(
-                                                                color: Colors.white,
-                                                                borderRadius: BorderRadius.circular(12),
-                                                            ),
                                                             child: ListView.builder(
                                                                 shrinkWrap: true,
                                                                 itemCount: options.length,
@@ -3596,8 +3615,11 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                                             child: Text(unit, style: const TextStyle(fontSize: 14)),
                                         ))
                                         .toList(),
-                                    onChanged: _isEntryLocked ? null : (value) { 
+                                    onChanged: _isEntryLocked ? null : (value) {
                                         if (value != null) {
+                                            print('🔍 [تشخيص-تغيير-وحدة-شريط] "$value" '
+                                                '(السابقة: $selectedUnitForItem) للمنتج: ${_selectedProduct?.name}');
+                                            print('    السعر قبل التغيير: ${_priceController.text}');
                                             setState(() {
                                                 selectedUnitForItem = value;
                                                 if (_selectedProduct != null) {
@@ -3933,6 +3955,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           );
           if (smartResult != null && smartResult.price > 0) {
             basePrice = smartResult.price;
+            print('    🧠 [تشخيص-تحديث-سعر] التسعير الذكي استبدل السعر الأساسي: ${smartResult.price} (سيُضرب بالمضاعف إن وُجد)');
           }
         } catch (_) {}
       }
@@ -3940,18 +3963,25 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       if (basePrice == null || basePrice <= 0) {
           _priceController.clear();
           _selectedPriceLevel = null;
+          print('🔍 [تشخيص-تحديث-سعر] لا سعر أساسي — تم تفريغ الحقل (basePrice=$basePrice)');
           return;
       }
-      
+
+      // 🔍 تشخيص تحويل الوحدات — قرار السعر بوحدة "$selectedUnitForItem"
+      print('🔍 [تشخيص-تحديث-سعر] "${product.name}" | unit="${product.unit}" | الوحدة المختارة: "$selectedUnitForItem"');
+      print('    basePrice=$basePrice (قائمة: $_selectedListType) | translatedUnit="${product.translatedUnit}"');
+      print('    unitHierarchy=${product.unitHierarchy != null && product.unitHierarchy!.isNotEmpty ? "موجودة (${product.unitHierarchy!.length} حرف)" : "فارغة/عدم"}');
+
       // 🔧 Fix 2: حساب السعر بناءً على الوحدة المختارة
       double finalPrice = basePrice;
-      
+
       // إذا كانت الوحدة المختارة ليست الوحدة الأساسية
       if (selectedUnitForItem != product.translatedUnit && selectedUnitForItem != 'قطعة') {
           // للمتر واللفة
           if (product.unit == 'meter' && selectedUnitForItem == 'لفة') {
               final double lengthPerUnit = product.lengthPerUnit ?? 1.0;
               finalPrice = basePrice * lengthPerUnit;
+              print('    ↪ فرع متر→لفة: ×$lengthPerUnit → $finalPrice');
           }
           // للقطعة مع هرمية الوحدات
           // 🔧 Fix: Robust JSON parsing
@@ -3976,14 +4006,23 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                       }
                   }
                   finalPrice = basePrice * multiplier;
+                  print('    ↪ فرع الهرمية: مضاعف=$multiplier → السعر=$finalPrice');
               } catch (e) {
+                  print('    ↪ ❌ فشل حساب الهرمية: $e (السعر بقي $finalPrice)');
                   print('خطأ في حساب السعر الهيراركي: $e');
               }
+          } else {
+              // 🔍 هذا هو الفرع المشبوه: وحدة غير أساسية لكن لا meter ولا piece
+              print('    ↪ ⚠️ لا فرع تحويل: unit="${product.unit}" ليست piece/meter '
+                  '→ السعر بقي كما هو ($finalPrice) — هذا سبب خطأ الموزونات');
           }
+      } else {
+          print('    ↪ الوحدة المختارة هي الأساسية — السعر بلا تحويل: $finalPrice');
       }
-      
+
       _priceController.text = formatNumber(finalPrice);
       _selectedPriceLevel = finalPrice;
+      print('    ✅ السعر النهائي المكتوب في الحقل: $finalPrice');
   }
 
   @override
@@ -4593,6 +4632,12 @@ const SizedBox(width: 120),
                             key: ValueKey(item.uniqueId),
                             item: item,
                             index: index,
+                            getCurrentInvoiceProductNames: () {
+                              return invoiceItems
+                                  .where((it) => it.productName.trim().isNotEmpty && it.uniqueId != item.uniqueId)
+                                  .map((it) => it.productName.trim())
+                                  .toList();
+                            },
                             onItemUpdated: (updatedItem) {
                                 if (invoiceToManage != null && !isViewOnly) {
                                   hasUnsavedChanges = true;
@@ -4803,15 +4848,19 @@ const SizedBox(width: 120),
                         },
                       ),
                       if (productSuggestions.isNotEmpty)
-                        Container(
-                          constraints: const BoxConstraints(maxHeight: 180),
-                          margin: const EdgeInsets.only(top: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            border: Border.all(color: Colors.grey.shade300),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: ListView.builder(
+                        // 🔧 اللون على Material بدل DecoratedBox فوقه (assertion ListTile)
+                        Material(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(6),
+                          clipBehavior: Clip.antiAlias,
+                          child: Container(
+                            constraints: const BoxConstraints(maxHeight: 180),
+                            margin: const EdgeInsets.only(top: 6),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: ListView.builder(
                             shrinkWrap: true,
                             physics: const ClampingScrollPhysics(),
                             itemCount: productSuggestions.length,
@@ -4830,6 +4879,7 @@ const SizedBox(width: 120),
                                 },
                               );
                             },
+                          ),
                           ),
                         ),
                       const SizedBox(height: 8),
@@ -4950,6 +5000,7 @@ class EditableInvoiceItemRow extends StatefulWidget {
   final String? currentCustomerPhone; // هاتف العميل لتحسين المطابقة
   final VoidCallback? onPriceSubmitted; // جديد: للانتقال إلى الصف التالي عند الضغط على Enter في السعر
   final bool allowNegativeStock; // جديد: للسماح بالبيع بالسالب أو منعه
+  final List<String> Function()? getCurrentInvoiceProductNames; // المنتجات الحالية لخفض أولويتها في البحث
 
   const EditableInvoiceItemRow({
     Key? key,
@@ -4968,6 +5019,7 @@ class EditableInvoiceItemRow extends StatefulWidget {
     this.currentCustomerPhone,
     this.onPriceSubmitted, // جديد: للانتقال إلى الصف التالي
     this.allowNegativeStock = false, // القيمة الافتراضية
+    this.getCurrentInvoiceProductNames,
   }) : super(key: key);
 
   @override
@@ -5491,6 +5543,8 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   }
 
   Future<void> _updateSaleType(String newType) async {
+    print('🔍 [تشخيص-صف-تغيير-وحدة] "${_currentItem.productName}" → "$newType" '
+        '(السابقة: ${_currentItem.saleType} | السعر الحالي: ${_currentItem.appliedPrice})');
     Product? product = widget.allProducts.firstWhere(
       (p) => p.name == _currentItem.productName,
       orElse: () => Product(
@@ -5505,6 +5559,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     );
     double conversionFactor = 1.0;
     if (product != null) {
+      print('🔍 [تشخيص-صف] unit="${product.unit}" | unitHierarchy=${product.unitHierarchy} | isWeighable=${product.isWeighable}');
       if (product.unit == 'piece' && newType != 'قطعة') {
         if (product.unitHierarchy != null &&
             product.unitHierarchy!.isNotEmpty) {
@@ -5521,8 +5576,11 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         }
       } else if (product.unit == 'meter' && newType == 'لفة') {
         conversionFactor = product.lengthPerUnit ?? 1.0;
+      } else if (newType != 'قطعة') {
+        print('    ⚠️ [تشخيص-صف] لا فرع تحويل: unit="${product.unit}" ليست piece/mتر → معامل=1 (سبب خطأ الموزونات)');
       }
     }
+    print('    معامل التحويل المحسوب: $conversionFactor');
 
     // 🧠 استشارة محرك التسعير الذكي لنوع البيع المحدد
     double newAppliedPrice = 0.0;
@@ -5544,6 +5602,11 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         if (smartResult != null && smartResult.price > 0) {
           newAppliedPrice = smartResult.price;
           smartPriceFound = true;
+          final double baseForCalc = _currentItem.appliedPrice > 0
+              ? _currentItem.appliedPrice
+              : (product?.unitPrice ?? 0.0);
+          print('    🧠 [تشخيص-صف] التسعير الذكي طغى على التحويل! سعره=${smartResult.price} '
+              '(التحويل الحسابي كان سيعطي: ${baseForCalc * conversionFactor})');
         }
       } catch (_) {}
     }
@@ -5580,6 +5643,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         quantityLargeUnit:
             (newType != 'قطعة' && newType != 'متر') ? quantity : null,
       );
+      print('    ✅ [تشخيص-صف] السعر الجديد: $newAppliedPrice | المجموع: ${quantity * newAppliedPrice} | smartPriceUsed=$smartPriceFound');
       _quantityController.text = quantity.toString();
       // لا تفرض ".00" أثناء التحرير؛ اظهر فواصل فقط
       _priceController.text =
@@ -5809,9 +5873,11 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                             return const Iterable<Product>.empty();
                           }
                           try {
-                            // 🧠 استخدام البحث الذكي
+                            // 🧠 استخدام البحث الذكي مع تمرير قائمة المنتجات الحالية لخفض أولويتها
+                            final currentNames = widget.getCurrentInvoiceProductNames?.call();
                             return await SmartSearchService.instance.smartSearch(
                               textEditingValue.text,
+                              currentInvoiceProductNames: currentNames,
                             );
                           } catch (e) {
                             print('Error in smart search: $e');
@@ -6267,11 +6333,13 @@ class _ProductAutoScrollListViewState extends State<_ProductAutoScrollListView> 
         
         return Container(
           decoration: BoxDecoration(
-            color: isHighlighted ? Colors.blue.shade50 : null,
+            // 🔧 اللون انتقل إلى tileColor — DecoratedBox الملون فوق ListTile
+            // كان يخفي رشّ الحبر (assertion)
             border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
           ),
           child: ListTile(
             dense: true,
+            tileColor: isHighlighted ? Colors.blue.shade50 : null,
             visualDensity: VisualDensity.compact,
             title: Text(
               product.name,

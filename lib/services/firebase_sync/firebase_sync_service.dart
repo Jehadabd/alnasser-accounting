@@ -26,6 +26,7 @@ import 'reconciliation_service.dart'; // 🧮 المطابقة بين الأجه
 import 'armored_reconciliation_service.dart'; // 🛡️ المطابقة المحصّنة مغلقة الحلقة
 import 'live_match_service.dart'; // 📡 مطابقة حية جهاز↔جهاز
 import 'smart_pipe_cleanup_service.dart'; // 🧹 الحذف الذكي بشرط قراءة الجميع
+import 'match_verdict_service.dart'; // ⚖️ بثّ قرارات المطابقة للمجموعة
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../sync/sync_validation.dart';
 import '../sync/sync_security.dart';
@@ -104,6 +105,7 @@ class FirebaseSyncService {
   FirebaseSyncCoordinator? _coordinator;
   SyncOperationTracker? _operationTracker;
   TransactionAckService? _ackService;
+  final MatchVerdictService _verdictService = MatchVerdictService(); // ⚖️
   SyncCrashRecoveryService? _crashRecovery; // 🛡️ WAL للحماية من الانقطاع
   SyncWatchdog? _watchdog; // 🛡️ نظام المراقبة الاحتياطي
   
@@ -365,6 +367,13 @@ class FirebaseSyncService {
           deviceName: await _getDeviceName(),
         );
       }
+
+      // ⚖️ تشغيل مستمع قرارات المطابقة (انتشار إصلاح المطابقة لكل الأجهزة)
+      try {
+        await _verdictService.start();
+      } catch (e) {
+        print('⚠️ تعذّر تشغيل مستمع قرارات المطابقة: $e');
+      }
       
       // 🛡️ تهيئة خدمة الحماية من الانقطاع (WAL)
       if (_crashRecovery == null) {
@@ -426,6 +435,13 @@ class FirebaseSyncService {
           await _syncPendingChanges();
         } catch (e) {
           print('⚠️ خطأ في المزامنة الخلفية الأولية: $e');
+        }
+        // 🔄 سحب كامل إدمبوتنت بعد رفع المعلق: يضمن وصول كل ما فات هذا
+        // الجهاز أثناء إيقافه مهما كان سبب فواته من المستمعين اللحظيين.
+        try {
+          await performFullCatchUp();
+        } catch (e) {
+          print('⚠️ خطأ في السحب الكامل عند التشغيل: $e');
         }
       });
       
@@ -721,7 +737,14 @@ class FirebaseSyncService {
       
       // مزامنة التغييرات المعلقة
       await _syncPendingChanges();
-      
+
+      // 🔄 سحب كامل إدمبوتنت: كل ما فات أثناء الانقطاع
+      try {
+        await performFullCatchUp();
+      } catch (e) {
+        print('⚠️ خطأ في السحب الكامل بعد عودة الاتصال: $e');
+      }
+
       // إعادة تشغيل الـ listeners
       if (!_isListening) {
         await _startListening();
@@ -1036,6 +1059,19 @@ class FirebaseSyncService {
     
     // 🗑️ إذا كان العميل محدداً كـ محذوف في البيانات الواردة
     if (sanitizedData['isDeleted'] == true || data['is_deleted'] == 1) {
+      final conflictPolicy = await FirebaseSyncSecuritySettings.getCustomerConflictPolicy();
+      if (conflictPolicy == CustomerConflictPolicy.smartReactivate) {
+        final db = await _db.database;
+        final newOfflineTx = await db.rawQuery('''
+          SELECT t.id FROM transactions t
+          JOIN customers c ON c.id = t.customer_id
+          WHERE c.sync_uuid = ? AND (t.is_deleted IS NULL OR t.is_deleted = 0) AND t.is_created_by_me = 1
+        ''', [syncUuid]);
+        if (newOfflineTx.isNotEmpty) {
+          print('🌟 [FirebaseSyncService] الإبقاء على العميل $syncUuid نشطاً لوجود ${newOfflineTx.length} معاملات محلية جديدة');
+          return;
+        }
+      }
       await _deleteLocalCustomer(syncUuid);
       return;
     }
@@ -1221,7 +1257,7 @@ class FirebaseSyncService {
     // البحث عن العميل
     final customerResult = await db.query(
       'customers',
-      columns: ['id', 'name', 'current_total_debt'],
+      columns: ['id', 'name', 'current_total_debt', 'is_deleted'],
       where: 'sync_uuid = ?',
       whereArgs: [customerSyncUuid],
     );
@@ -1239,6 +1275,29 @@ class FirebaseSyncService {
     final localCustomerId = customerResult.first['id'] as int;
     final customerName = customerResult.first['name'] as String? ?? 'غير معروف';
     final currentBalance = (customerResult.first['current_total_debt'] as num?)?.toDouble() ?? 0.0;
+    final isCustomerDeleted = ((customerResult.first['is_deleted'] as int?) ?? 0) == 1;
+    final isTxDeleted = (data['isDeleted'] == true || data['is_deleted'] == 1);
+
+    // 🛡️ معالجة سياسة تعارض حذف العملاء
+    if (isCustomerDeleted && !isTxDeleted) {
+      final conflictPolicy = await FirebaseSyncSecuritySettings.getCustomerConflictPolicy();
+      if (conflictPolicy == CustomerConflictPolicy.smartReactivate) {
+        print('🌟 [FirebaseSyncService] إعادة تنشيط ذكي للعميل: $customerName (ID: $localCustomerId) لوجود معاملة جديدة واردة أثناء انقطاع الاتصال!');
+        await db.update(
+          'customers',
+          {
+            'is_deleted': 0,
+            'last_modified_at': DateTime.now().toIso8601String(),
+          },
+          where: 'id = ?',
+          whereArgs: [localCustomerId],
+        );
+        _syncEventController.add('إعادة تنشيط العميل: $customerName لوجود معاملة جديدة');
+      } else if (conflictPolicy == CustomerConflictPolicy.strictDelete) {
+        print('🔒 [FirebaseSyncService] تم رفض معاملة لعميل محذوف حسب سياسة الحذف الصارم: $syncUuid');
+        return;
+      }
+    }
     
     // 1️⃣ التحقق من وجود المعاملة بـ transaction_uuid
     final existingByUuid = await db.query(
@@ -1524,6 +1583,12 @@ class FirebaseSyncService {
         senderDeviceId: senderDeviceId,
       );
     }
+
+    // ⚖️ هل على هذه المعاملة قرار إبطال معلّق (وصل القرار قبل معاملته)؟
+    // نفّذه فوراً — يضمن التقارب مهما كان ترتيب الوصول.
+    try {
+      await _verdictService.applyPendingVerdictsFor(syncUuid);
+    } catch (_) {}
     
     // 🔟 طباعة تفاصيل المعاملة للتدقيق
     final typeLabel = amountChanged >= 0 ? 'إضافة دين' : 'تسديد';
@@ -2091,6 +2156,68 @@ class FirebaseSyncService {
   /// للعميل التالي إلا بعد التأكد أن العميل الحالي رُفع هو ومعاملاته كلها.
   /// هذا يمنع «عاصفة الرفع» (نفس المعاملة تُرفع من 3 مصادر) ويضمن ترتيبًا
   /// منطقيًا: العميل دائمًا يصل قبل معاملاته إلى الجهاز الآخر.
+  /// 🔄 سحب كامل عند التشغيل (Catch-Up) — ضمان تقارب لا يعتمد على المستمعين.
+  ///
+  /// المستمعون اللحظيون يعالجون docChanges فقط؛ أي مستند فاتتهم (تطبيق قديم
+  /// على جهاز آخر، جدولة الشبكة، إعادة تشغيل) لا يعالج لاحقاً أبداً.
+  /// هذه الدالة تسحب كل عملاء ومعاملات السحابة عند الإقلاع وتطبقها
+  /// إدمبوتنت — فأي جهاز يعود للعمل يصل للحقيقة كاملة مهما غاب.
+  /// التطبيق آمن: موجود بالـ UUID يُهمل، والرصيد يُشتق من المجموع.
+  Future<void> performFullCatchUp() async {
+    if (!_isInitialized || _groupId == null || _firestore == null) return;
+
+    print('🔄 [Catch-Up] بدء السحب الكامل عند التشغيل...');
+
+    // 1️⃣ العملاء أولاً (المعاملات تتيمة بدون عملائها)
+    try {
+      final custSnap = await _firestore!.collection('customers').get().timeout(
+            const Duration(seconds: 60),
+          );
+      int appliedCust = 0;
+      for (final doc in custSnap.docs) {
+        final data = doc.data();
+        if (data['deviceId'] == _deviceId) continue; // من صنعي — عندي نسخة أصلية
+        try {
+          await _applyCustomerChange(doc.id, data);
+          appliedCust++;
+        } catch (e) {
+          print('⚠️ [Catch-Up] فشل تطبيق عميل ${doc.id}: $e');
+        }
+      }
+      print('✅ [Catch-Up] العملاء: فُحص ${custSnap.docs.length}، طُبّق/تُحقّق $appliedCust');
+    } catch (e) {
+      print('❌ [Catch-Up] فشل سحب العملاء: $e');
+    }
+
+    // 2️⃣ المعاملات
+    try {
+      final txSnap = await _firestore!.collection('transactions').get().timeout(
+            const Duration(seconds: 120),
+          );
+      int appliedTx = 0;
+      for (final doc in txSnap.docs) {
+        final data = doc.data();
+        if (data['deviceId'] == _deviceId) continue;
+        try {
+          await _applyTransactionChange(doc.id, data);
+          appliedTx++;
+        } catch (e) {
+          print('⚠️ [Catch-Up] فشل تطبيق معاملة ${doc.id}: $e');
+        }
+      }
+      print('✅ [Catch-Up] المعاملات: فُحص ${txSnap.docs.length}، طُبّق/تُحقّق $appliedTx');
+    } catch (e) {
+      print('❌ [Catch-Up] فشل سحب المعاملات: $e');
+    }
+
+    print('✅ [Catch-Up] اكتمل السحب الكامل');
+
+    // ⚖️ بعد السحب الكامل: نفّذ أي قرارات إبطال معلّقة وصلت معاملاتها
+    try {
+      await _verdictService.processPendingVerdicts();
+    } catch (_) {}
+  }
+
   /// 🚀 رفع فوري لعميل محدد ومعاملاته المعلقة (يُستدعى لحظة إنشاء/تعديل العميل).
   ///
   /// قبل هذه الدالة كان الإنشاء يُخزَّن محلياً فقط، والرفع ينتظر الدورة

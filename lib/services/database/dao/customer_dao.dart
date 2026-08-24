@@ -4,12 +4,18 @@
 import 'package:sqflite/sqflite.dart';
 import '../../../models/customer.dart';
 import '../core/database_helpers.dart';
+import '../../../services/firebase_sync/uuid_helper.dart';
+import '../../../services/sync/sync_security.dart';
 
 /// DAO للعملاء - عمليات CRUD الأساسية
 class CustomerDao {
   final Future<Database> Function() getDatabase;
 
   CustomerDao({required this.getDatabase});
+
+  /// 🆔 توليد sync_uuid فريد للعميل (نفس نمط الإصلاح الشامل)
+  static String newCustomerUuid() =>
+      UuidHelper.sanitizeId('cust_${SyncSecurity.generateUuid()}');
 
   /// إضافة عميل جديد
   /// ═══════════════════════════════════════════════════════════════════
@@ -19,45 +25,63 @@ class CustomerDao {
     final db = await getDatabase();
     
     return await db.transaction((txn) async {
+      // 🆔 هوية مزامنة فورية للعميل الجديد:
+      // بدونها يبقى sync_uuid فارغاً فلا يراه أي مسار رفع أبداً
+      // (كان هذا سبب عدم وصول العملاء الجدد للأجهزة الأخرى).
+      final customerMap = customer.toMap();
+      if ((customerMap['sync_uuid'] as String?)?.isEmpty != false) {
+        customerMap['sync_uuid'] = newCustomerUuid();
+      }
+      // 🏷️ هذا الجهاز هو المنشئ — شرط ملكية الرفع
+      customerMap['is_created_by_me'] = 1;
+
       // 🛡️ التحقق من وجود عميل محذوف سابقاً بنفس الاسم ورقم الهاتف لإعادة تنشيطه بدلاً من تضارب القيد الفريد
       final normalizedQuery = DatabaseHelpers.normalizeArabic(customer.name.trim());
       final existingRows = await txn.rawQuery('''
-        SELECT * FROM customers 
-        WHERE (name = ? OR name = ?) 
+        SELECT * FROM customers
+        WHERE (name = ? OR name = ?)
           AND (phone = ? OR (phone IS NULL AND ? IS NULL))
         LIMIT 1
       ''', [customer.name.trim(), normalizedQuery, customer.phone, customer.phone]);
-      
+
       int customerId;
       if (existingRows.isNotEmpty) {
         final existingId = existingRows.first['id'] as int;
         final isDeleted = ((existingRows.first['is_deleted'] as int?) ?? 0) == 1;
         if (isDeleted) {
-          // إعادة تنشيط العميل المحذوف وتحديث بياناته
+          // إعادة تنشيط العميل المحذوف وتحديث بياناته (مع الحفاظ على هويته الأصلية)
+          final oldSyncUuid = existingRows.first['sync_uuid'] as String?;
           final updatedCustomer = customer.copyWith(
             id: existingId,
             isDeleted: false,
             lastModifiedAt: DateTime.now(),
+            syncUuid: oldSyncUuid ?? (customerMap['sync_uuid'] as String),
           );
+          final updateMap = updatedCustomer.toMap();
+          updateMap['is_created_by_me'] = existingRows.first['is_created_by_me'];
+          updateMap['last_modified_at'] = DateTime.now().toIso8601String();
           await txn.update(
             'customers',
-            updatedCustomer.toMap(),
+            updateMap,
             where: 'id = ?',
             whereArgs: [existingId],
           );
           customerId = existingId;
         } else {
-          customerId = await txn.insert('customers', customer.toMap());
+          customerId = await txn.insert('customers', customerMap);
         }
       } else {
-        customerId = await txn.insert('customers', customer.toMap());
+        customerId = await txn.insert('customers', customerMap);
       }
-      
+
       // إذا كان هناك دين مبدئي، أضف معاملة تلقائية
       if (customer.currentTotalDebt > 0) {
         final now = DateTime.now();
+        final txUuid = UuidHelper.newTransactionUuid();
         await txn.insert('transactions', {
           'customer_id': customerId,
+          'transaction_uuid': txUuid, // 🆔 هوية فورية — لا ننتظر backfill الإقلاع
+          'sync_uuid': txUuid,
           'transaction_date': now.toIso8601String(),
           'amount_changed': customer.currentTotalDebt,
           'new_balance_after_transaction': customer.currentTotalDebt,
@@ -67,11 +91,13 @@ class CustomerDao {
           'created_at': now.toIso8601String(),
           'invoice_id': null,
           'is_deleted': 0,
+          'is_created_by_me': 1, // 🏷️ ملكية الرفع لهذا الجهاز
+          'is_uploaded': 0,
         });
-        
+
         print('✅ تم إضافة معاملة الدين المبدئي: ${customer.currentTotalDebt} دينار للعميل: ${customer.name}');
       }
-      
+
       return customerId;
     });
   }

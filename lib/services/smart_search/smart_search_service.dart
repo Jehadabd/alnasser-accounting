@@ -318,16 +318,17 @@ class SmartSearchService {
     // استخراج "عائلة" المنتجات المضافة (الكلمات الأولى)
     final addedProductFamilies = _extractProductFamilies(_sessionContext.addedProductNames);
     
-    // تحضير قائمة المنتجات الموجودة في الفاتورة للتحقق الدقيق
-    final Set<String> invoiceProductNamesLower;
-    if (currentInvoiceProductNames != null) {
-      invoiceProductNamesLower = currentInvoiceProductNames
-          .map((n) => n.toLowerCase().trim())
+    // تحضير قائمة المنتجات الموجودة في الفاتورة للتحقق الدقيق مع التطبيع
+    final Set<String> invoiceProductNamesNormalized;
+    if (currentInvoiceProductNames != null && currentInvoiceProductNames.isNotEmpty) {
+      invoiceProductNamesNormalized = currentInvoiceProductNames
+          .map((n) => normalizeForNameMatch(n))
           .where((n) => n.isNotEmpty)
           .toSet();
     } else {
-      invoiceProductNamesLower = _sessionContext.addedProductNames
-          .map((n) => n.toLowerCase().trim())
+      invoiceProductNamesNormalized = _sessionContext.addedProductNames
+          .map((n) => normalizeForNameMatch(n))
+          .where((n) => n.isNotEmpty)
           .toSet();
     }
     
@@ -352,8 +353,9 @@ class SmartSearchService {
       final product = products[i];
       double score = 0;
       
+      final productNameNormalized = normalizeForNameMatch(product.name);
+      final isInCurrentInvoice = invoiceProductNamesNormalized.contains(productNameNormalized);
       final productNameLower = product.name.toLowerCase().trim();
-      final isInCurrentInvoice = invoiceProductNamesLower.contains(productNameLower);
       
       // استخدام انقسام بسيط للنصوص أسرع من ال Regex
       final productWords = productNameLower.split(' ').where((w) => w.isNotEmpty).toList();
@@ -381,7 +383,7 @@ class SmartSearchService {
       // ═══════════════════════════════════════════════════════════════════
       // 2. نقاط الماركة الكاملة (100 نقطة)
       // ═══════════════════════════════════════════════════════════════════
-      final productNameNormalized = _normalizeForBrandMatch(product.name);
+      final productNameForBrand = _normalizeForBrandMatch(product.name);
       bool fullBrandMatch = false;
       bool partialBrandMatch = false;
       
@@ -390,7 +392,7 @@ class SmartSearchService {
       
       for (int bIdx = 0; bIdx < normalizedDetectedBrands.length; bIdx++) {
         final brandNormalized = normalizedDetectedBrands[bIdx];
-        if (productNameNormalized.contains(brandNormalized)) {
+        if (productNameForBrand.contains(brandNormalized)) {
           score += 100;
           fullBrandMatch = true;
           break;
@@ -559,6 +561,21 @@ class SmartSearchService {
     return scoredProducts.map((sp) => sp.product).toList();
   }
   
+  /// تطبيع اسم المنتج لمطابقة الفاتورة وإلغاء الفروقات الشكلية في الحروف العربية
+  static String normalizeForNameMatch(String text) {
+    return text
+        .trim()
+        .toLowerCase()
+        .replaceAll('أ', 'ا')
+        .replaceAll('إ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ٱ', 'ا')
+        .replaceAll('ة', 'ه')
+        .replaceAll('ى', 'ي')
+        .replaceAll('ـ', '') // تطويل
+        .replaceAll(RegExp(r'\s+'), ' '); // دمج المسافات
+  }
+
   /// 🆕 تطبيع النص لمطابقة الماركات (إزالة الفراغات وتوحيد الأحرف)
   /// مثال: "نيو فنار ابيض" -> "نيوفنارابيض"
   /// هذا يسمح بمطابقة "نيو فنار ابيض" مع "نيوفنار ابيض" أو "نيو فنارابيض"
