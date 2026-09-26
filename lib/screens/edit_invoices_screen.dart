@@ -1,5 +1,6 @@
 // screens/edit_invoices_screen.dart
 // screens/edit_invoices_screen.dart
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
@@ -10,6 +11,7 @@ import '../services/database_service.dart'; // Added for DatabaseService
 import '../models/product.dart'; // Added for Product model
 import '../models/invoice_adjustment.dart'; // Added for InvoiceAdjustment model
 import 'package:share_plus/share_plus.dart';
+import 'package:printing/printing.dart'; // 🌐 مشاركة وطباعة الويب
 import 'package:pdf/widgets.dart' as pw;
 import 'package:flutter/services.dart' show rootBundle;
 import 'dart:io';
@@ -562,13 +564,27 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
                                       ],
                                     ),
                                     onTap: () async {
+                                      // 🛡️ اقرأ الفاتورة من قاعدة البيانات قبل فتحها للتعديل.
+                                      // كائن القائمة قد يكون قديماً (حُمّل قبل تعديل سابق)،
+                                      // وشاشة الفاتورة تعتمد عليه كمرجع للحالة السابقة.
+                                      Invoice freshInvoice = invoice;
+                                      try {
+                                        if (invoice.id != null) {
+                                          final loaded = await DatabaseService()
+                                              .getInvoiceById(invoice.id!);
+                                          if (loaded != null) freshInvoice = loaded;
+                                        }
+                                      } catch (e) {
+                                        debugPrint('تعذّر تحديث الفاتورة قبل الفتح: $e');
+                                      }
+                                      if (!context.mounted) return;
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
                                           builder: (context) =>
                                               CreateInvoiceScreen(
-                                            existingInvoice: invoice,
-                                            isViewOnly: invoice.status == 'محفوظة' || !invoice.isCreatedByMe, // الفواتير المحفوظة أو المستوردة للعرض فقط
+                                            existingInvoice: freshInvoice,
+                                            isViewOnly: freshInvoice.status == 'محفوظة' || !freshInvoice.isCreatedByMe, // الفواتير المحفوظة أو المستوردة للعرض فقط
                                           ),
                                         ),
                                       ).then((_) {
@@ -641,6 +657,17 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
       final safeCustomerName = invoice.customerName.replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');
       final formattedDate = DateFormat('yyyy-MM-dd').format(invoice.invoiceDate);
       final fileName = '${safeCustomerName}_$formattedDate.pdf';
+
+      // 🌐 الويب: مشاركة وتنزيل PDF مباشرة عبر المتصفح دون مجلدات مؤقتة
+      if (kIsWeb) {
+        final bytes = await doc.save();
+        await Printing.sharePdf(
+          bytes: bytes,
+          filename: fileName,
+        );
+        return;
+      }
+
       final directory = Directory('${Platform.environment['USERPROFILE']}/Documents/invoices');
       if (!await directory.exists()) {
         await directory.create(recursive: true);

@@ -12,10 +12,10 @@ import '../models/invoice_input_data.dart';
 import '../models/invoice_item.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
+import '../services/database/business/invoice_debt_reconciler.dart';
 import '../services/smart_search/smart_search.dart';
 import '../services/auth_service.dart';
 import '../services/invoice_settings_service.dart';
-import '../utils/inventory_helpers.dart';
 import 'package:sqflite/sqflite.dart';
 
 class InvoiceValidationResult {
@@ -236,8 +236,13 @@ class InvoiceController {
     
     final currentCustomerDebt = oldCustomer.currentTotalDebt;
     
-    // Calculate Old Debt
-    final oldRemaining = oldInvoice.totalAmount - oldInvoice.amountPaidOnInvoice;
+    // 🛡️ الدين القديم = ما هو مسجّل فعلاً في المعاملات، لا ما تفترضه الفاتورة.
+    // (كانت الحسبة السابقة تفترض تطابقهما — وهو بالضبط ما قد يكون منحرفاً)
+    final oldRemaining = await InvoiceDebtReconciler.recordedContribution(
+      await _db.database,
+      oldInvoice.id!,
+      oldCustomerId,
+    );
     
     // Calculate New Total
     final completeItems = data.invoiceItems.where(_isInvoiceItemComplete).toList();
@@ -536,13 +541,28 @@ class InvoiceController {
 
         int invoiceId;
         final invoiceMap = invoice.toMap();
+        // 🛡️ النسخة تُبنى على الأكبر بين نسخة الشاشة ونسخة الصف: التسوية أو
+        // تعديل سابق قد يكونان رفعاها، والبناء على نسخة الشاشة وحدها يعيد
+        // رقماً سبق رفعه فتتجاهل الأجهزة الأخرى هذا التعديل.
+        int? baseVersion = data.invoiceToManage?.version;
+        final existingId = data.invoiceToManage?.id;
+        if (!data.isNewInvoice && existingId != null) {
+          final vr = await txn.query('invoices',
+              columns: ['version'], where: 'id = ?', whereArgs: [existingId], limit: 1);
+          final dbVersion =
+              vr.isEmpty ? null : (vr.first['version'] as num?)?.toInt();
+          if (dbVersion != null &&
+              (baseVersion == null || dbVersion > baseVersion)) {
+            baseVersion = dbVersion;
+          }
+        }
         await DatabaseService.stampInvoiceForSync(
           invoiceMap,
           isNew: data.isNewInvoice,
-          currentVersion: data.invoiceToManage?.version,
+          currentVersion: baseVersion,
         );
-        // نحتفظ بـ UUID بعد الختم لربطه بالمعاملة دون إعادة استعلام (قد يرجع null على بعض الأجهزة).
-        final stampedInvoiceUuid = invoiceMap['invoice_uuid'] as String?;
+        // ملاحظة: ربط المعاملة بـ invoice_uuid صار من مسؤولية
+        // InvoiceDebtReconciler الذي يقرأه من صف الفاتورة مباشرة.
 
         if (data.isNewInvoice) {
           invoiceId = await txn.insert('invoices', invoiceMap);
@@ -606,336 +626,46 @@ class InvoiceController {
           throw Exception('لا يمكن حفظ الفاتورة بدون أصناف مكتملة. تأكد من إدخال اسم المنتج والكمية والسعر ونوع البيع.');
         }
 
-        // ═══════════════════════════════════════════════════════════════════════════
-        // Stock Delta Logic (Reverse Old, Apply New)
-        // ═══════════════════════════════════════════════════════════════════════════
-        if (!data.isNewInvoice) {
-           // 1. Fetch old items to reverse their stock impact
-           final oldItemsMaps = await txn.query('invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
-           final oldItems = oldItemsMaps.map((m) => InvoiceItem.fromMap(m)).toList();
-           
-           // Reverse: Add back old quantities to stock
-           await InventoryHelpers.adjustStockForItems(txn, oldItems, isAddition: true);
-        }
-
+        // 📦 المخزون: حذف البنود القديمة وإدراج الجديدة يعيد حساب الكمية
+        //    تلقائياً (دفتر المخزون — مشغّلات SQLite). كان هنا «إرجاع القديم ثم
+        //    خصم الجديد» بكود التطبيق فوق مشغّلين يفعلان الشيء نفسه: ضعف الفرق
+        //    لبنود القطعة/المتر.
         await txn.delete('invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
         
-        // 2. Insert new items and deduct their stock impact
-        final List<InvoiceItem> itemsToAdjustStock = [];
+        // 2. Insert new items (stock follows automatically)
         final batch = txn.batch();
         int savedItemsCount = 0;
         for (var itemMap in itemsToInsert) {
           batch.insert('invoice_items', itemMap);
-          itemsToAdjustStock.add(InvoiceItem.fromMap(itemMap));
           savedItemsCount++;
         }
         await batch.commit(noResult: true);
 
-        // Apply: Deduct new quantities from stock
-        print('DEBUG_INVOICE: Items sent to Stock Adjustment:');
-        for (var i in itemsToAdjustStock) {
-           print('DEBUG_INVOICE: Item: ${i.productName}, ID: ${i.productId}, Qty(L): ${i.quantityLargeUnit}, Qty(I): ${i.quantityIndividual}');
-        }
-        await InventoryHelpers.adjustStockForItems(txn, itemsToAdjustStock, isAddition: false);
-        
+
         if (savedItemsCount == 0 && !data.isNewInvoice) {
           throw Exception('فشل حفظ أصناف الفاتورة. يرجى المحاولة مرة أخرى.');
         }
 
         // ═══════════════════════════════════════════════════════════════════════════
-        // Debt Logic
+        // 🛡️ الحارس المحاسبي — قاعدة واحدة تحل محل الحالات الخمس السابقة
         // ═══════════════════════════════════════════════════════════════════════════
-        
-        if (!data.isNewInvoice) {
-          // We need the OLD invoice state to compare.
-          // Since we are inside a new transaction, we can't reliably query the 'invoices' table 
-          // for the OLD state because we just updated it above!
-          // Critically, `data.invoiceToManage` (or rather its SNAPSHOT passed in data) holds the old state.
-          // In the mixin code, `widget.existingInvoice` was used.
-          // Here, we must ensure `data.invoiceToManage` refers to the ORIGINAL invoice state if it's an edit.
-          // If `data.invoiceToManage` was modified in UI (e.g. status changed in memory), we might have an issue.
-          // However, typically `invoiceToManage` passed to `saveInvoice` IS the object being edited.
-          // To be perfectly safe, we should have fetched the old invoice BEFORE the transaction started 
-          // (which we did in `validateDebtChange...` but that scope is lost).
-          // BUT: `txn.update` happened above. So the DB is dirty.
-          // SOLUTION: We should use `data.existingInvoice` if we add it to input, OR
-          // rely on the fact that `data.invoiceToManage` passed from UI *should be* the one we loaded initially?
-          // NO, `invoiceToManage` in UI is mutable.
-          // The UI MUST pass the *original* invoice as a separate field if it wants accurate diffs.
-          // Let's add `existingInvoice` to `InvoiceInputData`?
-          // Or, better: fetch it at the start of `saveInvoice` before modifying DB.
-          // I will duplicate the fetch at the top of `saveInvoice`.
-        }
-        
-        // Wait, I can't fetch it at the top because I am not in a transaction yet?
-        // No, I can fetch it before the `txn.update`.
-        // Let's refactor: fetch old invoice logic INSIDE existing validaton or separate.
-        // Actually, the mixin used `widget.existingInvoice`.
-        // I will assume `data.invoiceToManage` might be the modified one.
-        // I should probably fetch the invoice from DB *before* the update line:
-        // `await txn.update('invoices'...)`
-        
-        // Let's look at the Debt Logic block again.
-        // It heavily relies on `widget.existingInvoice`.
-        // If I fetch it inside `txn` *before* update, I get the old state.
-        // BUT, `validateDebtChange` assumes `widget.existingInvoice` is available.
-        // I will require `originalInvoice` in `InvoiceInputData` for edit operations.
-        // `data.invoiceToManage` is the *current* state (which might be the same ref strictly, but let's see).
-        // Actually, in `CreateInvoiceScreen`, `invoiceToManage` is the mutable one. `widget.existingInvoice` is the immutable original.
-        // So `data.invoiceToManage` in InputData should probably be `widget.existingInvoice` (the original) 
-        // OR `data` should have a separate `originalInvoice` field.
-        // Let's go with `invoiceToManage` in InputData = `widget.existingInvoice` (The original).
-        // And the *new* values are passed in `customerName`, `totalAmount` etc.
-        // So `data.invoiceToManage` == Old Invoice.
-        
-        // Let's verify `InvoiceInputData` logic above:
-        // `InvoiceInputData` has `invoiceToManage`.
-        // In `saveInvoice` I use `data.invoiceToManage` as the source of ID and old state.
-        // So yes, `data.invoiceToManage` should be the ORIGINAL invoice.
-        
-        if (!data.isNewInvoice) {
-          final oldInvoice = data.invoiceToManage!;
-          final oldPaymentType = oldInvoice.paymentType;
-          final oldCustomerId = oldInvoice.customerId;
-          final newCustomerId = customer?.id;
-          final newRemaining = totalAmount - paid;
-          
-          double currentDebtFromTx = 0.0;
-          if (oldCustomerId != null) {
-            final txSum = await txn.rawQuery(
-              'SELECT COALESCE(SUM(amount_changed), 0) as total FROM transactions WHERE invoice_id = ?',
-              [invoiceId]
-            );
-            currentDebtFromTx = (txSum.first['total'] as num?)?.toDouble() ?? 0.0;
-            
-            // integrity check omitted for brevity but logic is preserved in main flow
-          }
-          
-          // Case 1: Debt -> Cash
-          if (oldPaymentType == 'دين' && data.paymentType == 'نقد' && oldCustomerId != null) {
-            if (currentDebtFromTx.abs() > 0.001) {
-              final oldCustomerMaps = await txn.query('customers', where: 'id = ?', whereArgs: [oldCustomerId]);
-              if (oldCustomerMaps.isNotEmpty) {
-                final oldCustomer = Customer.fromMap(oldCustomerMaps.first);
-                final balanceBefore = oldCustomer.currentTotalDebt;
-                final balanceAfter = balanceBefore - currentDebtFromTx;
-                
-                await txn.update('customers', {
-                  'current_total_debt': balanceAfter,
-                  'current_total_debt_cents': (balanceAfter * 100).round(),
-                  'last_modified_at': DateTime.now().toIso8601String(),
-                }, where: 'id = ?', whereArgs: [oldCustomerId]);
-                
-                final txUuid = const Uuid().v4();
-                await txn.insert('transactions', {
-                  'customer_id': oldCustomerId,
-                  'transaction_date': DateTime.now().toIso8601String(),
-                  'amount_changed': -currentDebtFromTx,
-                  'balance_before_transaction': balanceBefore,
-                  'new_balance_after_transaction': balanceAfter,
-                  'transaction_type': 'invoice_payment_type_change',
-                  'description': 'إلغاء دين فاتورة رقم $invoiceId (تحويل لنقد)',
-                  'invoice_id': invoiceId,
-                  'transaction_uuid': txUuid,
-                  'sync_uuid': txUuid,
-                  'invoice_sync_uuid': stampedInvoiceUuid,
-                  'is_created_by_me': 1,
-                  'is_uploaded': 0,
-                  'created_at': DateTime.now().toIso8601String(),
-                });
-              }
-            }
-          }
-          
-          // Case 2: Cash -> Debt
-          else if (oldPaymentType == 'نقد' && data.paymentType == 'دين' && customer != null) {
-             if (newRemaining > 0.001) {
-              final freshCustomerMaps = await txn.query('customers', where: 'id = ?', whereArgs: [customer.id]);
-              if (freshCustomerMaps.isEmpty) {
-                throw Exception('العميل غير موجود في قاعدة البيانات');
-              }
-              final freshCustomer = Customer.fromMap(freshCustomerMaps.first);
-              final balanceBefore = freshCustomer.currentTotalDebt;
-              final balanceAfter = balanceBefore + newRemaining;
-              
-              await txn.update('customers', {
-                'current_total_debt': balanceAfter,
-                'current_total_debt_cents': (balanceAfter * 100).round(),
-                'last_modified_at': DateTime.now().toIso8601String(),
-              }, where: 'id = ?', whereArgs: [customer.id]);
-              
-              final txUuid = const Uuid().v4();
-              await txn.insert('transactions', {
-                'customer_id': customer.id,
-                'transaction_date': DateTime.now().toIso8601String(),
-                'amount_changed': newRemaining,
-                'balance_before_transaction': balanceBefore,
-                'new_balance_after_transaction': balanceAfter,
-                'transaction_type': 'invoice_payment_type_change',
-                'description': 'إضافة دين فاتورة رقم $invoiceId (تحويل من نقد)',
-                'invoice_id': invoiceId,
-                'transaction_uuid': txUuid,
-                'sync_uuid': txUuid,
-                'invoice_sync_uuid': stampedInvoiceUuid,
-                'is_created_by_me': 1,
-                'is_uploaded': 0,
-                'created_at': DateTime.now().toIso8601String(),
-              });
-            }
-          }
-          
-          // Case 3: Customer Change in Debt Invoice
-          else if (oldPaymentType == 'دين' && data.paymentType == 'دين' && 
-                   oldCustomerId != null && newCustomerId != null && 
-                   oldCustomerId != newCustomerId) {
-            
-            final invSyncUuid3 = stampedInvoiceUuid;
-                
-            // 3.1 Deduct form old
-            if (currentDebtFromTx.abs() > 0.001) {
-              final oldCustomerMaps = await txn.query('customers', where: 'id = ?', whereArgs: [oldCustomerId]);
-              if (oldCustomerMaps.isNotEmpty) {
-                final oldCustomer = Customer.fromMap(oldCustomerMaps.first);
-                final oldBalanceBefore = oldCustomer.currentTotalDebt;
-                final oldBalanceAfter = oldBalanceBefore - currentDebtFromTx;
-                
-                await txn.update('customers', {
-                  'current_total_debt': oldBalanceAfter,
-                  'current_total_debt_cents': (oldBalanceAfter * 100).round(),
-                  'last_modified_at': DateTime.now().toIso8601String(),
-                }, where: 'id = ?', whereArgs: [oldCustomerId]);
-                
-                final txUuid1 = const Uuid().v4();
-                await txn.insert('transactions', {
-                  'customer_id': oldCustomerId,
-                  'transaction_date': DateTime.now().toIso8601String(),
-                  'amount_changed': -currentDebtFromTx,
-                  'balance_before_transaction': oldBalanceBefore,
-                  'new_balance_after_transaction': oldBalanceAfter,
-                  'transaction_type': 'invoice_customer_change',
-                  'description': 'نقل دين فاتورة رقم $invoiceId إلى عميل آخر',
-                  'invoice_id': invoiceId,
-                  'transaction_uuid': txUuid1,
-                  'sync_uuid': txUuid1,
-                  'invoice_sync_uuid': invSyncUuid3,
-                  'is_created_by_me': 1,
-                  'is_uploaded': 0,
-                  'created_at': DateTime.now().toIso8601String(),
-                });
-              }
-            }
-            
-            // 3.2 Add to new
-            if (newRemaining > 0.001 && customer != null) {
-               final newCustomerMaps = await txn.query('customers', where: 'id = ?', whereArgs: [newCustomerId]);
-              if (newCustomerMaps.isNotEmpty) {
-                final newCustomer = Customer.fromMap(newCustomerMaps.first);
-                final newBalanceBefore = newCustomer.currentTotalDebt;
-                final newBalanceAfter = newBalanceBefore + newRemaining;
-                
-                await txn.update('customers', {
-                  'current_total_debt': newBalanceAfter,
-                  'current_total_debt_cents': (newBalanceAfter * 100).round(),
-                  'last_modified_at': DateTime.now().toIso8601String(),
-                }, where: 'id = ?', whereArgs: [newCustomerId]);
-                
-                final txUuid2 = const Uuid().v4();
-                await txn.insert('transactions', {
-                  'customer_id': newCustomerId,
-                  'transaction_date': DateTime.now().toIso8601String(),
-                  'amount_changed': newRemaining,
-                  'balance_before_transaction': newBalanceBefore,
-                  'new_balance_after_transaction': newBalanceAfter,
-                  'transaction_type': 'invoice_customer_change',
-                  'description': 'استلام دين فاتورة رقم $invoiceId من عميل آخر',
-                  'invoice_id': invoiceId,
-                  'transaction_uuid': txUuid2,
-                  'sync_uuid': txUuid2,
-                  'invoice_sync_uuid': invSyncUuid3,
-                  'is_created_by_me': 1,
-                  'is_uploaded': 0,
-                  'created_at': DateTime.now().toIso8601String(),
-                });
-              }
-            }
-          }
-          
-          // Case 4: Edit Debt Invoice (Same Customer)
-          else if (oldPaymentType == 'دين' && data.paymentType == 'دين' && customer != null &&
-                   (oldCustomerId == newCustomerId || oldCustomerId == null)) {
-            final debtChange = newRemaining - currentDebtFromTx;
-            
-            if (debtChange.abs() > 0.001) {
-              final customerMaps = await txn.query('customers', where: 'id = ?', whereArgs: [customer.id]);
-              final currentCustomer = Customer.fromMap(customerMaps.first);
-              final balanceBefore = currentCustomer.currentTotalDebt;
-              final balanceAfter = balanceBefore + debtChange;
-              
-              await txn.update('customers', {
-                'current_total_debt': balanceAfter,
-                'current_total_debt_cents': (balanceAfter * 100).round(),
-                'last_modified_at': DateTime.now().toIso8601String(),
-              }, where: 'id = ?', whereArgs: [customer.id]);
-              
-              final txUuid = const Uuid().v4();
-              await txn.insert('transactions', {
-                'customer_id': customer.id,
-                'transaction_date': DateTime.now().toIso8601String(),
-                'amount_changed': debtChange,
-                'balance_before_transaction': balanceBefore,
-                'new_balance_after_transaction': balanceAfter,
-                'transaction_type': 'invoice_edit',
-                'description': 'تعديل فاتورة دين رقم $invoiceId',
-                'invoice_id': invoiceId,
-                'transaction_uuid': txUuid,
-                'sync_uuid': txUuid,
-                'invoice_sync_uuid': stampedInvoiceUuid,
-                'is_created_by_me': 1,
-                'is_uploaded': 0,
-                'created_at': DateTime.now().toIso8601String(),
-              });
-            }
-          }
-        }
-        
-        // Case 5: New Invoice Debt
-        else if (data.isNewInvoice && customer != null && data.paymentType == 'دين') {
-           final newRemaining = totalAmount - paid;
-          
-          if (newRemaining > 0.001) {
-             final freshCustomerMaps = await txn.query('customers', where: 'id = ?', whereArgs: [customer.id]);
-            if (freshCustomerMaps.isEmpty) {
-              throw Exception('العميل غير موجود في قاعدة البيانات');
-            }
-            final freshCustomer = Customer.fromMap(freshCustomerMaps.first);
-            final balanceBefore = freshCustomer.currentTotalDebt;
-            final balanceAfter = balanceBefore + newRemaining;
-            
-            await txn.update('customers', {
-              'current_total_debt': balanceAfter,
-              'current_total_debt_cents': (balanceAfter * 100).round(),
-              'last_modified_at': DateTime.now().toIso8601String(),
-            }, where: 'id = ?', whereArgs: [customer.id]);
-            
-            final txUuid = const Uuid().v4();
-            await txn.insert('transactions', {
-              'customer_id': customer.id,
-              'transaction_date': DateTime.now().toIso8601String(),
-              'amount_changed': newRemaining,
-              'balance_before_transaction': balanceBefore,
-              'new_balance_after_transaction': balanceAfter,
-              'transaction_type': 'invoice_debt',
-              'description': 'دين فاتورة جديدة رقم $invoiceId',
-              'invoice_id': invoiceId,
-              'transaction_uuid': txUuid,
-              'sync_uuid': txUuid,
-              'invoice_sync_uuid': stampedInvoiceUuid,
-              'is_created_by_me': 1,
-              'is_uploaded': 0,
-              'created_at': DateTime.now().toIso8601String(),
-            });
-          }
-        }
+        //
+        // مساهمة الفاتورة في الدين = الإجمالي − المسدد (لفواتير الدين)، وصفر للنقد.
+        //
+        // كان هنا خمس حالات منفصلة (نقد←دين، دين←نقد، تغيير العميل، تعديل فاتورة
+        // دين، فاتورة جديدة) يختار بينها الكود بالنظر إلى
+        // data.invoiceToManage.paymentType — وهو كائن من ذاكرة الشاشة قد يكون
+        // قديماً. وكانت الحالة 2 تراكمية: تضيف الدين كاملاً في كل مرة تدخلها،
+        // فضغطتا حفظ متتاليتان كانتا تضاعفان دين العميل.
+        //
+        // البديل دالة واحدة تقرأ الفاتورة من قاعدة البيانات (لا من الذاكرة)
+        // وهي إدمبوتنت: تشغيلها مرة أو عشر مرات يعطي النتيجة نفسها.
+        await InvoiceDebtReconciler.reconcileInvoice(
+          txn,
+          invoiceId,
+          createMissing: true,
+          reason: data.isNewInvoice ? 'دين فاتورة جديدة' : 'تعديل فاتورة',
+        );
 
         final maps = await txn
             .query('invoices', where: 'id = ?', whereArgs: [invoiceId]);

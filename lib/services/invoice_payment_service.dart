@@ -3,8 +3,6 @@ import '../models/invoice_item.dart';
 import 'package:flutter/material.dart';
 import '../models/invoice.dart';
 import '../services/database_service.dart';
-import '../models/transaction.dart';
-import 'package:uuid/uuid.dart';
 
 class InvoicePaymentService {
   // دالة تنسيق الأرقام مع فواصل كل ثلاث خانات
@@ -109,35 +107,12 @@ class InvoicePaymentService {
         await db.updateInstaller(updatedInstaller);
       }
     }
-    if (updatedInvoice.paymentType == 'دين' &&
-        updatedInvoice.customerId != null &&
-        value > 0) {
-      final customer = await db.getCustomerById(updatedInvoice.customerId!);
-      if (customer != null) {
-        final newDebt =
-            (customer.currentTotalDebt - value).clamp(0.0, double.infinity);
-        final updatedCustomer = customer.copyWith(
-          currentTotalDebt: newDebt,
-          lastModifiedAt: DateTime.now(),
-        );
-        await db.updateCustomer(updatedCustomer);
-        final txUuid = const Uuid().v4();
-        await db.insertTransaction(
-          DebtTransaction(
-            id: null,
-            customerId: customer.id!,
-            invoiceId: updatedInvoice.id!,
-            amountChanged: -value,
-            transactionDate: DateTime.now(),
-            newBalanceAfterTransaction: newDebt,
-            transactionNote: 'تسديد راجع على الفاتورة رقم ${updatedInvoice.id}',
-            transactionType: 'return_payment',
-            createdAt: DateTime.now(),
-            transactionUuid: txUuid,
-          ),
-        );
-      }
-    }
+    // ⚠️ حُذف هنا خصم مزدوج للدين.
+    //
+    // كان الكود يستدعي updateCustomer (فيكتب الرصيد مباشرة) ثم insertTransaction
+    // (الذي يُعدّل الرصيد مرة أخرى) — أي خصم القيمة مرتين، أو رمي استثناء
+    // «خطأ أمني حرج» من التحقق الصارم داخل insertTransaction.
+    // الراجع يُسجَّل اليوم كتسوية على الفاتورة، ويتولّى الحارس المحاسبي أثرها.
     final updatedInvoiceFromDb = await db.getInvoiceById(invoiceToManage.id!);
     setInvoiceToManage(updatedInvoiceFromDb);
     setIsViewOnly(true);

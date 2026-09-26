@@ -60,6 +60,9 @@ class CustomerDao {
           final updateMap = updatedCustomer.toMap();
           updateMap['is_created_by_me'] = existingRows.first['is_created_by_me'];
           updateMap['last_modified_at'] = DateTime.now().toIso8601String();
+          // 🛡️ إعادة تنشيط صريحة: تُرفع isDeleted=false مرة واحدة لتلغي شاهد الحذف
+          final prevTomb = (existingRows.first['tombstoned'] as int?) ?? 0;
+          updateMap['tombstoned'] = (prevTomb == 1 || prevTomb == 2) ? 3 : 0;
           await txn.update(
             'customers',
             updateMap,
@@ -177,7 +180,7 @@ class CustomerDao {
         SELECT c.*
         FROM customers c
         WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
-          AND EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1)
+          AND (COALESCE(c.current_total_debt, 0) != 0 OR EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1))
         ORDER BY ${orderBy.replaceAll("'", "")}
       ''');
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
@@ -200,17 +203,28 @@ class CustomerDao {
     final db = await getDatabase();
     try {
       final List<dynamic> args = [];
-      String whereClause = '''
-        (c.is_deleted IS NULL OR c.is_deleted = 0)
-        AND EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1)
-      ''';
+      String whereClause = '(c.is_deleted IS NULL OR c.is_deleted = 0)';
 
-      // بحث في SQL على الاسم والهاتف (بدل فلترة الذاكرة)
-      if (searchQuery.isNotEmpty) {
-        whereClause += ' AND (c.name LIKE ? OR COALESCE(c.phone, "") LIKE ?)';
-        final sq = '%$searchQuery%';
-        args.add(sq);
-        args.add(sq);
+      final trimmedQuery = searchQuery.trim();
+      if (trimmedQuery.isEmpty) {
+        whereClause += '''
+          AND (COALESCE(c.current_total_debt, 0) != 0 OR EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1))
+        ''';
+      } else {
+        final normalized = DatabaseHelpers.normalizeArabic(trimmedQuery);
+        final sqOriginal = '%$trimmedQuery%';
+        final sqNormalized = '%$normalized%';
+
+        whereClause += '''
+          AND (
+            c.name LIKE ? 
+            OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.name, 'أ', 'ا'), 'إ', 'ا'), 'آ', 'ا'), 'ة', 'ه'), 'ى', 'ي'), 'ؤ', 'و') LIKE ?
+            OR COALESCE(c.phone, '') LIKE ?
+          )
+        ''';
+        args.add(sqOriginal);
+        args.add(sqNormalized);
+        args.add(sqOriginal);
       }
 
       final safeOrderBy = orderBy.replaceAll("'", "");
@@ -316,8 +330,14 @@ class CustomerDao {
     return null;
   }
 
-  /// تحديث عميل
-  Future<int> updateCustomer(Customer customer) async {
+  /// تحديث عميل.
+  ///
+  /// 🛡️ [updateBalance] افتراضياً `false`: لا تُكتب أعمدة الرصيد
+  /// (`current_total_debt`) من الكائن الممرَّر، لأنه قد يكون نسخة قديمة من
+  /// الذاكرة فيُعيد رصيد العميل إلى الخلف. الرصيد ملك لمنظومة المعاملات وحدها
+  /// ([InvoiceDebtReconciler] و[TransactionDao])، ولا يُكتب من هنا إلا بطلب
+  /// صريح كزر «اعتمد المجموع» أو الإصلاح المتعمَّد.
+  Future<int> updateCustomer(Customer customer, {bool updateBalance = false}) async {
     final db = await getDatabase();
     
     // 🔄 تتبع المزامنة: جلب البيانات القديمة قبل التحديث
@@ -333,9 +353,15 @@ class CustomerDao {
       print('⚠️ تحذير: فشل جلب بيانات العميل القديمة: $e');
     }
     
+    final Map<String, dynamic> values = customer.toMap();
+    if (!updateBalance) {
+      values.remove('current_total_debt');
+      values.remove('current_total_debt_cents');
+    }
+
     final result = await db.update(
       'customers',
-      customer.toMap(),
+      values,
       where: 'id = ?',
       whereArgs: [customer.id],
     );
@@ -350,21 +376,26 @@ class CustomerDao {
     try {
       return await db.transaction((txn) async {
         // 1) وضع علامة الحذف على المعاملات المرتبطة بالعميل (Soft Delete)
+        // is_uploaded = 0 لكل معاملة (حتى معاملات الأجهزة الأخرى): محرك
+        // المزامنة يرفع لكل واحدة «شاهد حذف» فيُبطلها كل جهاز كما أُبطلت هنا.
         await txn.update(
           'transactions',
           {
             'is_deleted': 1,
             'is_uploaded': 0,
+            'restored_mark': 0,
           },
-          where: 'customer_id = ?',
+          where: 'customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
           whereArgs: [id],
         );
-        
+
         // 2) وضع علامة الحذف على العميل (Soft Delete) وتصفير رصيد الدين
+        //    tombstoned = 2: حذف محلي بانتظار رفع شاهده إلى السحابة.
         final result = await txn.update(
           'customers',
           {
             'is_deleted': 1,
+            'tombstoned': 2,
             'current_total_debt': 0.0,
             'current_total_debt_cents': 0,
             'last_modified_at': now,

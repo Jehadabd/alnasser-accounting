@@ -3047,12 +3047,18 @@ class ReportsService {
       
       // جلب السناب شوتس للفواتير النقدية التي حدث عليها تعديل في هذه الفترة
       // نقوم بجلب created_at للفاتورة الأصلية أيضاً للتحقق من شرط الاستثناء
+      // 🗜️ نجلب سلسلة لقطات الفاتورة كاملة لا اللقطات الواقعة في الفترة فقط:
+      // بعد منع اللقطات المكررة قد تكون «الحالة قبل التعديل» لقطة أقدم من الفترة،
+      // وبدونها يضيع المرتجع. نحتسب لاحقاً الانتقالات التي وقعت داخل الفترة فقط.
       final snapshots = await db.rawQuery('''
         SELECT s.*, i.customer_name, i.created_at as invoice_created_at
         FROM invoice_snapshots s
         JOIN invoices i ON s.invoice_id = i.id
-        WHERE DATE(s.created_at) >= ? AND DATE(s.created_at) <= ?
-        AND i.payment_type = 'نقد'
+        WHERE i.payment_type = 'نقد'
+        AND s.invoice_id IN (
+          SELECT invoice_id FROM invoice_snapshots
+          WHERE DATE(created_at) >= ? AND DATE(created_at) <= ?
+        )
         ORDER BY s.invoice_id, s.created_at ASC
       ''', [startStr, endStr]);
       
@@ -3088,7 +3094,13 @@ class ReportsService {
           final current = invoiceSnapshots[i];
           final next = invoiceSnapshots[i+1];
           
-          if (current['snapshot_type'] == 'before_edit' && next['snapshot_type'] == 'after_edit') {
+          // 🗜️ لا نعتمد على أنواع اللقطات (before_edit / after_edit): اللقطة
+          // المطابقة لسابقتها لم تعد تُكتب، فقد تأتي after_edit بلا before_edit.
+          // كل انتقال بين لقطتين متتاليتين هو تعديل، ويُحتسب إن وقع داخل الفترة.
+          final nextCreated = (next['created_at'] as String?) ?? '';
+          final nextDay =
+              nextCreated.length >= 10 ? nextCreated.substring(0, 10) : nextCreated;
+          if (nextDay.compareTo(startStr) >= 0 && nextDay.compareTo(endStr) <= 0) {
             final oldTotal = (current['total_amount'] as num?)?.toDouble() ?? 0.0;
             final newTotal = (next['total_amount'] as num?)?.toDouble() ?? 0.0;
             
@@ -3118,12 +3130,15 @@ class ReportsService {
 
     // جلب كل اللقطات في الفترة المحددة
     // نحتاج اللقطات من نوع before_edit و after_edit
+    // 🗜️ سلسلة اللقطات كاملة للفواتير التي عُدّلت في الفترة (انظر _getSnapshotReturns)
     final snapshots = await db.rawQuery('''
       SELECT s.*
       FROM invoice_snapshots s
       JOIN invoices i ON s.invoice_id = i.id
-      WHERE s.created_at >= ? AND s.created_at <= ?
-        AND s.snapshot_type IN ('before_edit', 'after_edit')
+      WHERE s.invoice_id IN (
+          SELECT invoice_id FROM invoice_snapshots
+          WHERE created_at >= ? AND created_at <= ?
+        )
         $_deviceFilter
       ORDER BY s.invoice_id ASC, s.created_at ASC
     ''', [startStr, endStr]);
@@ -3145,8 +3160,11 @@ class ReportsService {
         final current = invoiceSnapshots[i];
         final next = invoiceSnapshots[i+1];
 
-        // البحث عن زوج: قبل التعديل -> بعد التعديل (أو لقطتين متتاليتين)
-        if (current['snapshot_type'] == 'before_edit' && next['snapshot_type'] == 'after_edit') {
+        // 🗜️ كل انتقال بين لقطتين متتاليتين هو تعديل (أنواع اللقطات لم تعد
+        // مضمونة بعد منع التكرار)، ويُحتسب إن وقعت اللقطة الناتجة داخل الفترة.
+        final nextCreated = (next['created_at'] as String?) ?? '';
+        if (nextCreated.compareTo(startStr) >= 0 &&
+            nextCreated.compareTo(endStr) <= 0) {
            _processReturnPair(current, next, returns);
         }
       }

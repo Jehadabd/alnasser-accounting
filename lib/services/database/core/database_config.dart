@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 
 /// إعدادات قاعدة البيانات
 class DatabaseConfig {
@@ -14,12 +15,16 @@ class DatabaseConfig {
 
   /// الحصول على مسار قاعدة البيانات
   static Future<String> getDatabasePath() async {
+    // 🌐 الويب: المسار افتراضي — المحرك (IndexedDB) يتجاهله ولا يلمس ملفات
+    if (kIsWeb) return databaseName;
     final dir = await getApplicationSupportDirectory();
     return join(dir.path, databaseName);
   }
 
   /// ترحيل قاعدة البيانات من المسار القديم إذا لزم الأمر
   static Future<void> migrateFromOldPath() async {
+    // 🌐 الويب: لا نظام ملفات — لا ترحيل
+    if (kIsWeb) return;
     final dir = await getApplicationSupportDirectory();
     final newPath = join(dir.path, databaseName);
     final oldPath = join(await getDatabasesPath(), databaseName);
@@ -56,7 +61,11 @@ class DatabaseConfig {
     // Temp Store in Memory: تسريع العمليات المؤقتة
     await db.rawQuery('PRAGMA temp_store = MEMORY');
     
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    if (kIsWeb) {
+      // 🌐 الويب (WASM): إعدادات متحفظة — mmap/WAL بلا معنى في المتصفح
+      await db.rawQuery('PRAGMA mmap_size = 268435456');
+      await db.rawQuery('PRAGMA cache_size = -16000');
+    } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       // Memory-mapped I/O للكمبيوتر والديسكتوب
       await db.rawQuery('PRAGMA mmap_size = 30000000000');
       await db.rawQuery('PRAGMA cache_size = -200000');

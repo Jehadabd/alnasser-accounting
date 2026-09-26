@@ -1,5 +1,6 @@
 // screens/commercial_statement_screen.dart
 // شاشة كشف الحساب التجاري
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'dart:io';
@@ -431,6 +432,18 @@ class _CommercialStatementScreenState extends State<CommercialStatementScreen> {
       );
 
       if (mounted) Navigator.pop(context);
+
+      // 🌐 الويب: مشاركة وتنزيل كشف الحساب التجاري مباشرة وتجنب Platform
+      if (kIsWeb) {
+        final safeCustomerName = widget.customer.name.replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');
+        final formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+        final fileName = 'كشف_تجاري_${safeCustomerName}_$formattedDate.pdf';
+        await Printing.sharePdf(
+          bytes: pdf,
+          filename: fileName,
+        );
+        return;
+      }
 
       if (Platform.isWindows) {
         final safeCustomerName = widget.customer.name.replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');

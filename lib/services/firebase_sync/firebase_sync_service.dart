@@ -8,10 +8,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fauth; // 🔐 Firebase Auth
 
 import '../database_service.dart';
 import '../database/core/database_helpers.dart';
+import '../database/business/customer_visibility.dart';
 import 'firebase_sync_config.dart';
 import 'firebase_sync_coordinator.dart';
 import 'firebase_auth_service.dart';
@@ -22,12 +24,16 @@ import 'sync_watchdog.dart'; // 🛡️ نظام المراقبة الاحتيا
 import 'firebase_sync_helper.dart'; // Helper for Watchdog initialization
 import 'invoice_sync_service.dart'; // 🧾 مزامنة الفواتير
 import 'product_sync_service.dart'; // 📦 مزامنة المنتجات
+import 'stock_movement_sync_service.dart'; // 📦 دفتر المخزون المشترك
 import 'reconciliation_service.dart'; // 🧮 المطابقة بين الأجهزة
 import 'armored_reconciliation_service.dart'; // 🛡️ المطابقة المحصّنة مغلقة الحلقة
 import 'live_match_service.dart'; // 📡 مطابقة حية جهاز↔جهاز
 import 'smart_pipe_cleanup_service.dart'; // 🧹 الحذف الذكي بشرط قراءة الجميع
 import 'match_verdict_service.dart'; // ⚖️ بثّ قرارات المطابقة للمجموعة
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
+import 'sync_diagnostics.dart'; // 🩺 تشخيص المصادقة/المزامنة
+import 'web_auth_clear.dart'; // 🧹 تنظيف مخزن جلسة الويب التالف
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb, visibleForTesting;
+import 'package:flutter/widgets.dart' show AppLifecycleListener; // 🌅 خطاف العودة للحياة
 import '../sync/sync_validation.dart';
 import '../sync/sync_security.dart';
 import '../../models/transaction.dart'; // Import DebtTransaction model
@@ -141,10 +147,24 @@ class FirebaseSyncService {
   // 🔐 إعدادات الأمان
   String? _groupSecretKey; // مفتاح المجموعة للتوقيع
   String? _groupSecret; // 🔐 المفتاح السري للمجموعة (للتحقق في Firestore Rules)
+  // 🛡️ الحد القديم (120/دقيقة، 1000/ساعة) كان يجعل رفع يوم عمل أوفلاين
+  // (1500 معاملة) يستغرق أكثر من ساعة، ويُشلّ الرفع كله ساعةً عند أي عاصفة.
+  // والعملية المحجوبة كانت تُعاد كـ«نجاح» فتُحذف من طابور الإعادة.
   final SyncRateLimiter _rateLimiter = SyncRateLimiter(
-    maxOperationsPerMinute: 120, // 🔧 تقليل الحد لتقليل الحمل على النظام
-    maxOperationsPerHour: 1000,  // 🔧 تقليل الحد الساعي
+    maxOperationsPerMinute: 600,
+    maxOperationsPerHour: 20000,
   );
+
+  // 🛡️ وضع الاستعادة: قاعدة البيانات استُعيدت من نسخة احتياطية. لا نرفع
+  // شيئاً منها حتى نطلب ما فاتها من الأجهزة الأخرى ونقارن نسخنا بالسحابة.
+  bool _recoveryMode = false;
+  bool _bootstrapping = false;
+
+  /// تمهيد جهاز جديد بدأ ولم يكتمل (لا مستجيب/انقطاع): تعيده الدورة الخلفية.
+  /// كان يُعاد عند التشغيل التالي للتطبيق فقط، وحتى ذلك الحين ينقص الجهازَ
+  /// كلُّ ما نظّفه SmartPipe من السحابة.
+  bool _bootstrapIncomplete = false;
+  bool get isRecovering => _recoveryMode;
   
   // Listeners
   StreamSubscription<QuerySnapshot>? _customersListener;
@@ -240,12 +260,21 @@ class FirebaseSyncService {
   /// الاستقبال الإدمبوتنت بدل أن تُدرج بطريق جانبي.
   Future<void> applyRemoteTransaction(
       String syncUuid, Map<String, dynamic> data) async {
+    // نفس توجيه المستمع: مستندي أنا يُعالَج كمستندي (لا يُدرَج كمعاملة جهاز آخر)
+    if (data['deviceId'] == _deviceId) {
+      await _handleOwnTxDoc(syncUuid, data);
+      return;
+    }
     await _applyTransactionChange(syncUuid, data);
   }
 
   /// تطبيق وثيقة عميل وردت من السحابة — نفس مسار الاستقبال المعتاد.
   Future<void> applyRemoteCustomer(
       String syncUuid, Map<String, dynamic> data) async {
+    if (data['deviceId'] == _deviceId) {
+      await _handleOwnCustomerDoc(syncUuid, data);
+      return;
+    }
     await _applyCustomerChange(syncUuid, data);
   }
   /// ═══════════════════════════════════════════════════════════════════════
@@ -253,7 +282,28 @@ class FirebaseSyncService {
   /// ═══════════════════════════════════════════════════════════════════════
   
   /// تهيئة خدمة المزامنة
+  /// تهيئة جارية: استدعاء ثانٍ أثناءها يعيد نفس العملية.
+  Future<bool>? _initInFlight;
+
+  /// 🛡️ لا تهيئتان متوازيتان. التهيئة قد تطول (رفع معلّق أثناء انقطاع
+  /// الشبكة)، وعودة الاتصال أو مؤقت إعادة المحاولة كانا يبدآن تهيئة ثانية
+  /// فوقها: مستمعون وخدمات مزدوجة تعالج نفس المستند مرتين في آن واحد
+  /// (اختبار الكود الحقيقي: test/sync_harness).
   Future<bool> initialize({
+    void Function(double progress, String message)? onProgress,
+  }) {
+    if (_isInitialized) {
+      onProgress?.call(1.0, 'تم التهيئة مسبقاً');
+      return Future.value(true);
+    }
+    final inFlight = _initInFlight;
+    if (inFlight != null) return inFlight;
+    final f = _initializeImpl(onProgress: onProgress);
+    _initInFlight = f;
+    return f.whenComplete(() => _initInFlight = null);
+  }
+
+  Future<bool> _initializeImpl({
     void Function(double progress, String message)? onProgress,
   }) async {
     if (_isInitialized) {
@@ -270,34 +320,27 @@ class FirebaseSyncService {
       return false;
     }
 
-    // 🌐 بدء مراقبة الاتصال مبكراً (حتى لو فشلت التهيئة)
-    _startConnectivityMonitoring();
+      // 🌐 بدء مراقبة الاتصال مبكراً (حتى لو فشلت التهيئة)
+      _startConnectivityMonitoring();
+      // 🌅 خطاف العودة للتطبيق (iOS/PWA: إنعاش فوري بعد القفل/الخلفية)
+      _startLifecycleHook();
     
     try {
-      // 🔐 التحقق من المصادقة أولاً
-      onProgress?.call(0.05, 'جاري التحقق من المصادقة...');
-      final authService = FirebaseAuthService();
-      if (!authService.isAuthenticated) {
-        print('⚠️ المستخدم غير مصادق عليه - جاري تسجيل الدخول...');
-        try {
-          final uid = await authService.signInAnonymously();
-          if (uid == null) {
-            print('❌ فشل تسجيل الدخول - لا يمكن المزامنة (ستتم إعادة المحاولة)');
-            _updateStatus(FirebaseSyncStatus.offline);
-            _errorController.add('فشل المصادقة المجهولة');
-            _initFailureRetryable = true; // 🔄 فشل مؤقت غالباً - أعد المحاولة دورياً
-            _scheduleInitRetry();
-            return false;
-          }
-        } catch (authErr) {
-          _updateStatus(FirebaseSyncStatus.error);
-          _errorController.add('خطأ مصادقة: $authErr');
-          _initFailureRetryable = true; // 🔄 فشل مؤقت غالباً - أعد المحاولة دورياً
-          _scheduleInitRetry();
-          return false;
-        }
+      // 🚪 Auth-Gate الصارم: لا مستمعي Firestore ولا أي اتصال قبل توكن ناجح.
+      // (الفحص اللحظي السابق isAuthenticated كان السباق المسبب لفشل PWA:
+      // currentUser=null لبرهة في iOS رغم جلسة قائمة في IndexedDB).
+      onProgress?.call(0.05, 'بوابة المصادقة: انتظار جلسة صالحة...');
+      final gateOk = await _waitForValidAuthToken();
+      if (!gateOk) {
+        print('❌ [AuthGate] تعذّر تأمين جلسة مصادقة - لا مزامنة الآن');
+        SyncDiagnostics.log('auth', 'بوابة المصادقة رفضت المرور — إعادة محاولة مجدولة');
+        _updateStatus(FirebaseSyncStatus.offline);
+        _errorController.add('فشل المصادقة: تعذر تأمين جلسة صالحة (ستتم إعادة المحاولة)');
+        _initFailureRetryable = true;
+        _scheduleInitRetry();
+        return false;
       }
-      print('✅ المصادقة ناجحة: ${authService.uid}');
+      print('✅ [AuthGate] المصادقة مؤمّنة بتوكن حي: ${fauth.FirebaseAuth.instance.currentUser?.uid}');
       
       // التحقق من الإعدادات
       onProgress?.call(0.1, 'جاري التحقق من الإعدادات...');
@@ -317,6 +360,9 @@ class FirebaseSyncService {
       // بادئة الجهاز داخل المعرّفات الجديدة: تجعل التصادم بين جهازين مستحيلاً
       // حتى قبل الاعتماد على العشوائية.
       if (_deviceId != null) UuidHelper.configureDevice(_deviceId!);
+
+      // 🛡️ هل استُعيدت قاعدة البيانات من نسخة احتياطية منذ آخر تشغيل؟
+      await _loadRecoveryState();
       
       // تهيئة Firestore
       _firestore = FirebaseFirestore.instance;
@@ -335,14 +381,26 @@ class FirebaseSyncService {
                defaultTargetPlatform == TargetPlatform.macOS);
 
           // 🔒 على Desktop نعطّل persistence لأنها كانت تقتل كل كتابة بـ
-          // TimeoutException. على Mobile/Web نفعّلها لدعم الـ offline.
+          // TimeoutException.
+          //
+          // 🌐 وعلى الويب نعطّلها أيضاً: تفتح قاعدة IndexedDB ثانية (إلى جانب
+          // مخزن جلسة المصادقة) وتأخذ «عقد ملكية» عليها. وiOS يقتل الـ PWA بلا
+          // إغلاق نظيف، فيبقى سجل المالك من الجلسة السابقة ويتعذّر انتزاع
+          // العقد عند التشغيل التالي — وهو أحد سببَي فشل المزامنة من المرة
+          // الثانية فصاعداً على الآيفون.
+          //
+          // ولا نخسر شيئاً بتعطيلها: التخزين المحلي هنا SQLite (WASM) وليس
+          // ذاكرة Firestore المؤقتة. فـ Firestore على الويب يعمل من الشبكة
+          // مباشرةً، وهو المطلوب تماماً من المزامنة.
+          final usePersistence = !isDesktop && !kIsWeb;
+
           _firestore!.settings = Settings(
-            persistenceEnabled: !isDesktop,
+            persistenceEnabled: usePersistence,
             cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
           );
           _firestoreSettingsApplied = true;
-          print('⚙️ إعدادات Firestore: persistenceEnabled=${!isDesktop} '
-              '(${isDesktop ? "Desktop — معطّلة لحل تعليق الكتابة" : "Mobile/Web — مفعّلة لدعم offline"})');
+          print('⚙️ إعدادات Firestore: persistenceEnabled=$usePersistence '
+              '(${kIsWeb ? "Web — معطّلة لتفادي تعليق IndexedDB على iOS/PWA" : isDesktop ? "Desktop — معطّلة لحل تعليق الكتابة" : "Mobile — مفعّلة لدعم offline"})');
         } catch (e) {
           print('⚠️ تعذّر ضبط إعدادات Firestore (قد تكون مُطبّقة): $e');
         }
@@ -481,6 +539,13 @@ class FirebaseSyncService {
         print('⚠️ تعذّر بدء مزامنة المنتجات: $e');
       }
 
+      // 📦 حركات المخزون (شراء، تعديل يدوي، رصيد افتتاحي) — بعد الكتالوج
+      try {
+        await StockMovementSyncService().start();
+      } catch (e) {
+        print('⚠️ تعذّر بدء مزامنة حركات المخزون: $e');
+      }
+
       // 🔄 سحب كامل إدمبوتنت بعد رفع كل المعلق (معاملات + فواتير + منتجات):
       // يضمن وصول كل ما فات هذا الجهاز أثناء إيقافه مهما كان سبب فواته من
       // المستمعين اللحظيين.
@@ -506,6 +571,17 @@ class FirebaseSyncService {
       } catch (e) {
         print('⚠️ خطأ/تأخير في تسجيل الجهاز بالسحابة: $e');
       }
+
+      // 🆕 الاستماع لطلبات الأجهزة الجديدة (هذا الجهاز قد يكون هو المُجيب)
+      try {
+        await startBootstrapResponder();
+      } catch (e) {
+        print('⚠️ تعذّر بدء الاستماع لطلبات التمهيد: $e');
+      }
+
+      // 🆕 وإن كنتُ أنا الجهاز الجديد، أطلب دفتر المجموعة.
+      // يعمل في الخلفية حتى لا يحجز إقلاع التطبيق عشر دقائق.
+      unawaited(ensureNewDeviceBootstrap());
       
       // 📱 بدء مؤقت نبضة القلب
       _startHeartbeat();
@@ -519,6 +595,22 @@ class FirebaseSyncService {
       _initRetryTimer?.cancel(); // ✅ نجحت التهيئة - لا حاجة لإعادة المحاولة
       _initRetryTimer = null;
       _updateStatus(FirebaseSyncStatus.online);
+
+      // 🛡️ رفع المعلّق والسحب الكامل فعلياً: الاستدعاءان أعلاه (قبل
+      // _isInitialized = true) كانا يعودان فوراً دون عمل، فتعديلات أوفلاين لا
+      // تُرفع عند الإقلاع، وشواهد الحذف التي فاتت المستمع لا تُسحب.
+      unawaited(() async {
+        try {
+          await _syncPendingChanges();
+        } catch (e) {
+          print('⚠️ رفع المعلّق بعد التهيئة: $e');
+        }
+        try {
+          await performFullCatchUp();
+        } catch (e) {
+          print('⚠️ السحب الكامل بعد التهيئة: $e');
+        }
+      }());
 
       // 🧮 الاستماع لطلبات المطابقة + التدقيق التلقائي عند سكون النظام.
       try {
@@ -592,6 +684,8 @@ class FirebaseSyncService {
     ReconciliationService().dispose(); // 🧮 إيقاف خدمة المطابقة
     LiveMatchService().dispose(); // 📡 إيقاف المطابقة الحية
     await _stopListening();
+    await _bootstrapRequestListener?.cancel(); // 🆕 إيقاف الاستماع لطلبات التمهيد
+    _bootstrapRequestListener = null;
     _connectivityListener?.cancel();
     _operationTracker?.dispose(); // 🔄 إيقاف تتبع العمليات
     _ackService?.dispose(); // 📬 إيقاف خدمة التأكيد
@@ -635,6 +729,12 @@ class FirebaseSyncService {
     _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
       if (_status == FirebaseSyncStatus.online) {
         updateDeviceHeartbeat();
+        // 🩺 فحص صحة المصادقة كل نبضة: جلسة ساقطة تُستعاد فوراً
+        // (يغطي انتهاء التوكن أثناء الجلسة على PWA)
+        if (fauth.FirebaseAuth.instance.currentUser == null) {
+          SyncDiagnostics.log('auth', 'سقوط الجلسة أثناء التشغيل — استعادة فورية');
+          unawaited(_recoverFromAuthFailure());
+        }
       }
     });
   }
@@ -664,6 +764,15 @@ class FirebaseSyncService {
   }
   
   /// تنفيذ المزامنة الخلفية (خفيفة - لا تؤثر على الأداء)
+  /// للاختبار فقط (test/sync_harness): يشغّل دورة المزامنة الخلفية فوراً
+  /// بدل انتظار مؤقت العشر دقائق. نفس الدالة التي يستدعيها المؤقت.
+  @visibleForTesting
+  Future<void> debugRunBackgroundCycle() => _performBackgroundSync();
+
+  /// للاختبار: تمهيد جهاز جديد/مستعيد جارٍ الآن (ينتظر إعادة بثّ الأجهزة).
+  @visibleForTesting
+  bool get debugBootstrapping => _bootstrapping;
+
   Future<void> _performBackgroundSync() async {
     if (!_isInitialized || _groupId == null || _isSyncing) return;
     
@@ -704,7 +813,19 @@ class FirebaseSyncService {
       
       // 3️⃣ معالجة المعاملات اليتيمة القديمة (أكثر من 5 دقائق)
       await _retryOldOrphans();
-      
+
+      // 3️⃣.أ 🛡️ وضع الاستعادة أو تمهيد جهاز جديد لم يكتمل؟ أعد المحاولة
+      if (_recoveryMode || _bootstrapIncomplete) {
+        await ensureNewDeviceBootstrap();
+      }
+
+      // 3️⃣.ب 🛡️ كل ما يملكه هذا الجهاز ولم يُرفع — أياً كان منشئ العميل.
+      //      كانت هذه المسارات تقتصر على «عملاء أنشأتُهم» أو على المنسق،
+      //      فتعديل معاملة على عميل جهاز آخر لم يُرفع أبداً.
+      await _uploadAllOwnedPending();
+      await _syncPendingChanges();
+      await StockMovementSyncService().uploadPending();
+
       // 4️⃣ تنظيف البيانات القديمة (مرة واحدة يومياً)
       await _periodicCleanup();
       
@@ -779,8 +900,8 @@ class FirebaseSyncService {
         await _crashRecovery!.cleanupCompletedOperations(keepDays: 7);
       }
       
-      // تنظيف ACKs القديمة
-      await _ackService?.cleanupOldAcks();
+      // 🛡️ لا تنظيف تلقائي للإقرارات: هي دليل المطابقة المحصّنة على أن
+      // المعاملة كانت في السحابة (الزر اليدوي في الإعدادات باقٍ).
       
       // تنظيف سجلات العمليات
       await _operationTracker?.cleanupOldLogs();
@@ -790,6 +911,184 @@ class FirebaseSyncService {
       print('⚠️ خطأ في التنظيف الدوري: $e');
     }
   }
+  /// 🩺 الشفاء الذاتي من فشل المصادقة على الويب/PWA:
+  /// مستمعو Firestore يموتون بصمت عند رفض التوكن (جلسة مجهولة منتهية).
+  /// هنا: إعادة مصادقة مجهولة ثم إعادة تشغيل المستمعين — فتُقام القيامة.
+  Future<void> _recoverFromAuthFailure() async {
+    if (_isRecoveringFromAuth) return;
+    _isRecoveringFromAuth = true;
+    try {
+      print('🩺 [AuthRecovery] خطأ مصادقة — محاولة الشفاء الذاتي...');
+      SyncDiagnostics.log('auth', 'خطأ في مستمعي المزامنة — شفاء ذاتي جارٍ...');
+      try {
+        await fauth.FirebaseAuth.instance.signOut();
+      } catch (_) {}
+      final fresh = await fauth.FirebaseAuth.instance.signInAnonymously();
+      SyncDiagnostics.log('auth', '✅ جلسة مجهولة جديدة بعد الشفاء: ${fresh.user?.uid}');
+      print('🩺 [AuthRecovery] جلسة مجهولة جديدة: ${fresh.user?.uid}');
+      await _stopListening();
+      await _startListening().timeout(const Duration(seconds: 30));
+      SyncDiagnostics.log('listener', '✅ المستمعون عادوا للعمل بعد الشفاء');
+      print('🩺 [AuthRecovery] المستمعون عادوا للعمل ✅');
+    } catch (e) {
+      SyncDiagnostics.logAuth(e);
+      print('🩺 [AuthRecovery] فشل الشفاء: $e — ستُعاد المحاولة مع دورة المراقبة');
+    } finally {
+      _isRecoveringFromAuth = false;
+    }
+  }
+
+  bool _isRecoveringFromAuth = false;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🚪 Auth-Gate: انتظار جلسة حقيقية + توكن مُتحقق منه — لا اتصال قبله.
+  // ═══════════════════════════════════════════════════════════════════════════
+  Future<bool> _waitForValidAuthToken() async {
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        // 1) انتظار استرجاع الجلسة (غير متزامن على الويب/PWA)
+        fauth.User? user;
+        try {
+          user = await fauth.FirebaseAuth.instance.authStateChanges()
+              .first
+              .timeout(const Duration(seconds: 8));
+        } catch (e) {
+          final raw = e.toString();
+          SyncDiagnostics.log('auth', '[بوابة/استرجاع الجلسة] $raw');
+
+          // 🔀 مسار بديل عند فشل interop للبث (TypeError في السفاري):
+          // استعلام دوري مباشر عن currentUser — يتجاوز القناة المتعثرة.
+          if (raw.toLowerCase().contains('typeerror')) {
+            SyncDiagnostics.log('auth', 'تبديل إلى المسار البديل لاسترجاع الجلسة...');
+            for (var i = 0; i < 8; i++) {
+              await Future.delayed(const Duration(seconds: 1));
+              try {
+                user = fauth.FirebaseAuth.instance.currentUser;
+              } catch (_) {}
+              if (user != null) break;
+            }
+          }
+          user ??= fauth.FirebaseAuth.instance.currentUser;
+        }
+
+        // 🌐 لا جلسة بعد انقضاء المهلة على الويب ⇒ الاسترجاع متعلّق لا غائب
+        // (عطل WebKit: indexedDB.open لا يُطلق أي حدث بعد إقلاع بارد لـ PWA).
+        // ندع المخزن جانباً ونكمل بذاكرة فقط، وإلا فشل التسجيل المجهول أيضاً
+        // لأنه يحتاج الكتابة في نفس المخزن المتعلّق.
+        if (kIsWeb && user == null) {
+          SyncDiagnostics.log('auth',
+              'البوابة: تعليق في استرجاع الجلسة — المتابعة بذاكرة فقط');
+          try {
+            await clearWebAuthStorage();
+          } catch (_) {}
+          try {
+            await fauth.FirebaseAuth.instance
+                .setPersistence(fauth.Persistence.NONE);
+          } catch (_) {}
+        }
+
+        // 2) لا جلسة → تسجيل مجهول
+        if (user == null) {
+          user = (await fauth.FirebaseAuth.instance.signInAnonymously()).user;
+        }
+
+        // 3) التحقيق الحقيقي: توكن قابل للتجديد
+        await user!.getIdToken(true).timeout(const Duration(seconds: 20));
+        return true;
+      } catch (e) {
+        final raw = e.toString();
+        print('🚪 [AuthGate] محاولة $attempt فشلت: $raw');
+        SyncDiagnostics.log('auth', 'بوابة المصادقة — محاولة $attempt/3: $raw');
+
+        // 🧹 شفاء TypeError على الويب: جلسة تالفة في IndexedDB —
+        // نظّف المخزن وسيُعاد التسجيل المجهول على قاعدة نظيفة.
+        if (kIsWeb && raw.toLowerCase().contains('typeerror')) {
+          SyncDiagnostics.log('auth',
+              'اكتشاف تلف مخزن الجلسة في المتصفح — تنظيف وإعادة تسجيل...');
+          try {
+            await fauth.FirebaseAuth.instance.signOut();
+          } catch (_) {}
+          await clearWebAuthStorage();
+          try {
+            final fresh = await fauth.FirebaseAuth.instance.signInAnonymously();
+            await fresh.user!.getIdToken(true)
+                .timeout(const Duration(seconds: 20));
+            SyncDiagnostics.log('auth', '✅ شُفيت الجلسة بعد تنظيف المخزن');
+            return true;
+          } catch (e2) {
+            SyncDiagnostics.log('auth', 'بعد التنظيف ما زال الفشل: $e2');
+          }
+        }
+
+        if (attempt < 3) {
+          // تفريغ جلسة ميتة والبدء من جديد
+          try {
+            await fauth.FirebaseAuth.instance.signOut();
+          } catch (_) {}
+          await Future.delayed(Duration(seconds: attempt * 2));
+        }
+      }
+    }
+    SyncDiagnostics.log('auth', 'بوابة المصادقة: فشلت كل المحاولات');
+    return false;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🌅 خطاف العودة للحياة: iOS/PWA يجمّد المؤقتات بالخلفية ويقطع الاتصالات
+  // عند القفل — هذا الفحص الفوري عند العودة يمسك اللحظة قبل أي مستخدم.
+  // ═══════════════════════════════════════════════════════════════════════════
+  AppLifecycleListener? _lifecycleListener;
+
+  void _startLifecycleHook() {
+    if (_lifecycleListener != null) return;
+    // 🛡️ خارج الخيط الرئيسي (مهام workmanager الخلفية، واختبار الأجهزة
+    // الوهمية في test/sync_harness) لا توجد بيئة واجهة، فيرمي المنشئ استثناءً
+    // كان يُسقط التهيئة كلها. الخطاف تحسين للعودة من الخلفية، لا شرط للمزامنة.
+    try {
+      _lifecycleListener = AppLifecycleListener(onResume: () {
+        _onAppResumed();
+      });
+    } catch (e) {
+      print('⚠️ لا بيئة واجهة لخطاف العودة للتطبيق (خيط خلفي؟): $e');
+    }
+  }
+
+  Future<void> _onAppResumed() async {
+    if (!_isInitialized) return;
+    try {
+      // جلسة ساقطة أو توكن ميت → إنعاش فوري
+      final user = fauth.FirebaseAuth.instance.currentUser;
+      bool tokenOk = false;
+      if (user != null) {
+        try {
+          await user.getIdToken().timeout(const Duration(seconds: 10));
+          tokenOk = true;
+        } catch (_) {}
+      }
+      if (!tokenOk) {
+        SyncDiagnostics.log('auth', '🔄 عودة للتطبيق والجلسة ميتة — إنعاش فوري');
+        await _recoverFromAuthFailure();
+        return;
+      }
+      // جلسة سليمة لكن المستمعين ماتوا بالخلفية → إعادة تشغيلهم
+      if (!_isListening) {
+        SyncDiagnostics.log('listener', '🔄 عودة للتطبيق والمستمعون متوقفون — إعادة تشغيل');
+        await _startListening().timeout(const Duration(seconds: 30));
+      }
+    } catch (e) {
+      SyncDiagnostics.log('auth', 'خطأ في فحص العودة: $e');
+    }
+  }
+
+  /// واجهة عامة للتشخيص اليدوي: هل المستمعون أحياء؟
+  bool get isListeningNow => _isListening;
+
+  /// واجهة عامة: إنعاش فوري (يستدعيه زر التشخيص والإصلاح).
+  Future<void> recoverNow() async {
+    await _recoverFromAuthFailure();
+    await performFullCatchUp();
+  }
+
   Future<void> _onConnectionRestored() async {
     _updateStatus(FirebaseSyncStatus.syncing);
     
@@ -869,15 +1168,23 @@ class FirebaseSyncService {
         .snapshots()
         .listen(
           _onCustomersChanged,
-          onError: (e) => print('❌ خطأ في استماع العملاء: $e'),
+          onError: (e) {
+            print('❌ خطأ في استماع العملاء: $e');
+            SyncDiagnostics.logListener(e);
+            unawaited(_recoverFromAuthFailure());
+          },
         );
-    
+
     // الاستماع لتغييرات المعاملات
     _transactionsListener = transactionsQuery
         .snapshots()
         .listen(
-          _onTransactionsChanged, 
-          onError: (e) => print('❌ خطأ في استماع المعاملات: $e'),
+          _onTransactionsChanged,
+          onError: (e) {
+            print('❌ خطأ في استماع المعاملات: $e');
+            SyncDiagnostics.logListener(e);
+            unawaited(_recoverFromAuthFailure());
+          },
         );
     
     _isListening = true;
@@ -997,31 +1304,28 @@ class FirebaseSyncService {
       
       final syncUuid = change.doc.id;
       final sourceDeviceId = data['deviceId'] as String?;
-      
-      // تجاهل التغييرات من نفس الجهاز
+
+      // 🛡️ اختفاء المستند من السحابة (تنظيف/«حذف قاعدة البيانات السحابية»)
+      // ليس أمر حذف. كان هذا الفرع يحذف العميل ومعاملاته محلياً على كل جهاز
+      // عند مسح السحابة (المحاكاة: سيناريو 17). الحذف الحقيقي = isDeleted.
+      if (change.type == DocumentChangeType.removed) continue;
+
+      // مستند آخر كاتب له هو أنا: قد يحمل شاهد حذف كتبه غيري ودُمج فيه،
+      // أو عميلاً فقدتُه باستعادة نسخة احتياطية قديمة.
       if (sourceDeviceId == _deviceId) {
-         // print('⏭️ تجاهل عميل من نفس الجهاز: $syncUuid'); 
-         continue;
+        try {
+          await _handleOwnCustomerDoc(syncUuid, data);
+        } catch (e) {
+          print('⚠️ مستند عميل ذاتي $syncUuid: $e');
+        }
+        continue;
       }
-      
+
       print('📥 استلام تغيير عميل من جهاز آخر: $syncUuid (نوع: ${change.type})');
       print('   - الجهاز المصدر: $sourceDeviceId');
-      
+
       try {
-        switch (change.type) {
-          case DocumentChangeType.added:
-            print('   ✨ جاري إضافة عميل جديد...');
-            await _applyCustomerChange(syncUuid, data);
-            break;
-          case DocumentChangeType.modified:
-             print('   📝 جاري تحديث عميل...');
-            await _applyCustomerChange(syncUuid, data);
-            break;
-          case DocumentChangeType.removed:
-            print('   🗑️ جاري حذف عميل...');
-            await _deleteLocalCustomer(syncUuid);
-            break;
-        }
+        await _applyCustomerChange(syncUuid, data);
       } catch (e) {
         print('❌ خطأ في تطبيق تغيير العميل $syncUuid: $e');
       }
@@ -1032,12 +1336,11 @@ class FirebaseSyncService {
       await mergeDuplicateCustomersByName();
       final db = await _db.database;
       final nowStr = DateTime.now().toIso8601String();
-      final syncState = await db.query('sync_state', limit: 1);
-      if (syncState.isNotEmpty) {
-        await db.update('sync_state', {'last_sync_at': nowStr}, where: 'id = 1');
-      } else {
-        await db.insert('sync_state', {'id': 1, 'last_sync_at': nowStr});
-      }
+      // 🛡️ إدراج ذرّي: مستمعا العملاء والمعاملات يصلان هنا معاً، و«اقرأ ثم
+      // أدرج» كان يرمي UNIQUE constraint failed: sync_state.id (اختبار الكود الحقيقي)
+      await db.rawInsert(
+          'INSERT OR IGNORE INTO sync_state (id, last_sync_at) VALUES (1, ?)', [nowStr]);
+      await db.update('sync_state', {'last_sync_at': nowStr}, where: 'id = 1');
     }
   }
   
@@ -1063,8 +1366,15 @@ class FirebaseSyncService {
       final syncUuid = change.doc.id;
       final sourceDeviceId = data['deviceId'] as String?;
 
-      // تجاهل التغييرات من نفس الجهاز (بصمت)
+      // مستندي أنا: قد يحمل شاهد حذف دُمج فيه، أو معاملة فقدتُها باستعادة نسخة
       if (sourceDeviceId == _deviceId) {
+        if (change.type != DocumentChangeType.removed) {
+          try {
+            await _handleOwnTxDoc(syncUuid, data);
+          } catch (e) {
+            print('⚠️ مستند معاملة ذاتي $syncUuid: $e');
+          }
+        }
         continue;
       }
       fromOthers++;
@@ -1093,12 +1403,11 @@ class FirebaseSyncService {
     if (snapshot.docChanges.isNotEmpty) {
       final db = await _db.database;
       final nowStr = DateTime.now().toIso8601String();
-      final syncState = await db.query('sync_state', limit: 1);
-      if (syncState.isNotEmpty) {
-        await db.update('sync_state', {'last_sync_at': nowStr}, where: 'id = 1');
-      } else {
-        await db.insert('sync_state', {'id': 1, 'last_sync_at': nowStr});
-      }
+      // 🛡️ إدراج ذرّي: مستمعا العملاء والمعاملات يصلان هنا معاً، و«اقرأ ثم
+      // أدرج» كان يرمي UNIQUE constraint failed: sync_state.id (اختبار الكود الحقيقي)
+      await db.rawInsert(
+          'INSERT OR IGNORE INTO sync_state (id, last_sync_at) VALUES (1, ?)', [nowStr]);
+      await db.update('sync_state', {'last_sync_at': nowStr}, where: 'id = 1');
     }
   }
 
@@ -1106,69 +1415,55 @@ class FirebaseSyncService {
   /// 🔒 مهم: لا نحدث current_total_debt من البيانات البعيدة!
   /// الرصيد يُحسب دائماً من مجموع المعاملات المحلية
   Future<void> _applyCustomerChange(String syncUuid, Map<String, dynamic> data) async {
-    // 🔐 التحقق من صحة البيانات الواردة
+    final isTombstone = data['isDeleted'] == true || data['is_deleted'] == 1;
+
+    // 🔐 التحقق من صحة البيانات الواردة (شاهد الحذف القديم قد يخلو من الاسم)
     final validation = SyncValidation.validateFirebaseCustomerData(data);
-    if (!validation.isValid) {
+    if (!validation.isValid && !isTombstone) {
       print('❌ رفض بيانات عميل غير صالحة: ${validation.errors.join(', ')}');
       return;
     }
-    if (validation.warnings.isNotEmpty) {
-      print('⚠️ تحذيرات في بيانات العميل: ${validation.warnings.join(', ')}');
-    }
-    
-    // 🔐 التحقق من التوقيع إذا كان موجوداً (تحذير فقط - لا رفض)
-    final signature = data['signature'] as String?;
-    final originDeviceId = data['originDeviceId'] as String?;
-    if (signature != null && _groupSecretKey != null && originDeviceId != null) {
-      final dataToVerify = '$syncUuid|$originDeviceId|${data['checksum'] ?? ''}';
-      if (!SyncSecurity.verifySignature(dataToVerify, signature, _groupSecretKey!)) {
-        // تحذير فقط - لا نرفض البيانات لأن المفتاح قد يكون مختلفاً بين الأجهزة
-        print('⚠️ تحذير: توقيع العميل غير متطابق (قد يكون من جهاز آخر): $syncUuid');
-      }
-    }
-    
+
+    // 🔐 التوقيع (يُفرض فقط في الوضع الصارم بسرّ مشترك)
+    if (!await _verifyIncomingSignature(syncUuid, data, isCustomer: true)) return;
+
     // 🔐 تنظيف البيانات من المحتوى الخطر
     final sanitizedData = SyncValidation.sanitizeMap(data);
-    
-    // 🗑️ إذا كان العميل محدداً كـ محذوف في البيانات الواردة
-    if (sanitizedData['isDeleted'] == true || data['is_deleted'] == 1) {
-      final conflictPolicy = await FirebaseSyncSecuritySettings.getCustomerConflictPolicy();
-      if (conflictPolicy == CustomerConflictPolicy.smartReactivate) {
-        final db = await _db.database;
-        final newOfflineTx = await db.rawQuery('''
-          SELECT t.id FROM transactions t
-          JOIN customers c ON c.id = t.customer_id
-          WHERE c.sync_uuid = ? AND (t.is_deleted IS NULL OR t.is_deleted = 0) AND t.is_created_by_me = 1
-        ''', [syncUuid]);
-        if (newOfflineTx.isNotEmpty) {
-          print('🌟 [FirebaseSyncService] الإبقاء على العميل $syncUuid نشطاً لوجود ${newOfflineTx.length} معاملات محلية جديدة');
-          return;
-        }
-      }
-      await _deleteLocalCustomer(syncUuid);
+
+    // 🗑️ شاهد حذف: لا نحذف المعاملات هنا ولا نعيد الرفع (كان ذلك يرتد بين
+    // الأجهزة بلا نهاية: ~1000 كتابة/دقيقة حتى يُستنفد حد المعدل — سيناريو 15).
+    // المعاملات تُبطَل بشواهدها الخاصة التي يرفعها الجهاز الحاذف.
+    if (isTombstone) {
+      await _applyCustomerTombstone(syncUuid, sanitizedData);
       return;
     }
-    
+
     final db = await _db.database;
-    
+
     // التحقق من وجود العميل محلياً بـ sync_uuid
     final existing = await db.query(
       'customers',
       where: 'sync_uuid = ?',
       whereArgs: [syncUuid],
+      limit: 1,
     );
     if (existing.isEmpty) {
-      // 🎯 لم يُعثر عليه بـ sync_uuid: ابحث أولاً عن عميل موجود بنفس الاسم محلياً لتفادي تكرار العملاء!
       final incomingName = SyncValidation.sanitizeString(sanitizedData['name']?.toString() ?? '').trim();
       final normIncomingName = DatabaseHelpers.normalizeArabic(incomingName);
 
-      final activeCustomers = await db.query(
+      // 🛡️ الربط بالاسم مسموح فقط مع سجل محلي قديم لم يُعطَ هوية مزامنة قط.
+      //
+      // كان الكود يربط أي عميل محلي بنفس الاسم ويستبدل sync_uuid الخاص به.
+      // فـ«محمد علي» الذي أنشأه D1 و«محمد علي» آخر أنشأه D2 كانا يُدمجان،
+      // وتُكتب هوية أحدهما فوق الآخر، فتتيتّم معاملاته إلى الأبد (سيناريو 12).
+      // الاسم ليس هوية؛ sync_uuid هو الهوية الوحيدة.
+      final legacyCandidates = await db.query(
         'customers',
-        where: 'is_deleted IS NULL OR is_deleted = 0',
+        where: "(is_deleted IS NULL OR is_deleted = 0) AND (sync_uuid IS NULL OR sync_uuid = '')",
       );
 
       Map<String, dynamic>? matchedCustomer;
-      for (final c in activeCustomers) {
+      for (final c in legacyCandidates) {
         final cName = (c['name'] as String? ?? '').trim();
         final cNorm = DatabaseHelpers.normalizeArabic(cName);
         if (cName == incomingName || (normIncomingName.isNotEmpty && cNorm == normIncomingName)) {
@@ -1178,9 +1473,8 @@ class FirebaseSyncService {
       }
 
       if (matchedCustomer != null) {
-        // 🔗 تم العثور على عميل محلي موجود بنفس الاسم! ربطه بدلاً من إنشاء عميل مكرر!
         final matchedId = matchedCustomer['id'] as int;
-        print('🔗 [FirebaseSyncService] مطابقة عميل بالاسم: $incomingName (ID: $matchedId) -> ربط بـ sync_uuid: $syncUuid');
+        print('🔗 [FirebaseSyncService] ربط سجل قديم بلا هوية: $incomingName (ID: $matchedId) -> $syncUuid');
 
         await db.update(
           'customers',
@@ -1203,82 +1497,408 @@ class FirebaseSyncService {
         );
         await _coordinator!.markFirebaseSynced('customer', syncUuid);
 
-        // 👻 معالجة المعاملات اليتيمة بـ syncUuid
         await _processOrphans(matchedId, syncUuid);
         await _verifyAndRepairCustomerBalance(matchedId);
+        await _applyCustomerVisibility(matchedId);
 
         _syncEventController.add('ربط عميل: $incomingName');
         return;
       }
 
-      // عميل جديد - إضافته
-      // 🔒 مهم: نضيف العميل برصيد 0، والرصيد سيُحسب من المعاملات لاحقاً
-      await db.insert('customers', {
-        'name': incomingName,
-        'phone': sanitizedData['phone'],
-        'current_total_debt': 0.0, // 🔒 نبدأ بصفر، المعاملات ستحدد الرصيد
-        'general_note': sanitizedData['generalNote'],
-        'address': sanitizedData['address'],
-        'created_at': sanitizedData['createdAt'],
-        'last_modified_at': sanitizedData['lastModifiedAt'],
-        'audio_note_path': sanitizedData['audioNotePath'],
-        'sync_uuid': syncUuid,
-        'is_deleted': sanitizedData['isDeleted'] == true ? 1 : 0,
-        'synced_at': DateTime.now().toIso8601String(),
-        'is_created_by_me': 0,
-      });
-      
-      // 🔒 تسجيل في المنسق (مستلم من Firebase)
+      // عميل جديد — برصيد 0، والرصيد يُشتق من المعاملات
+      final newCustomerId = await _insertReceivedCustomer(db, syncUuid, sanitizedData, incomingName);
+
       await _coordinator!.registerOperation(
         entityType: 'customer',
         syncUuid: syncUuid,
         source: SyncSource.firebase,
       );
       await _coordinator!.markFirebaseSynced('customer', syncUuid);
-      
+
       print('✅ تم إضافة عميل جديد بنجاح من Firebase: ${data['name']}');
       print('   - Sync UUID: $syncUuid');
-      
+
+      // 🧮 خزّن البصمة الحسابية الواردة ليُحاكَم عليها بعد اكتمال المزامنة
+      await _rememberExpectation(syncUuid, data);
+
       // 👻 معالجة المعاملات اليتيمة أولاً (قبل الإشعار!)
-      final newCustomerId = await db.query('customers', columns: ['id'], where: 'sync_uuid = ?', whereArgs: [syncUuid]);
-      if (newCustomerId.isNotEmpty) {
-          await _processOrphans(newCustomerId.first['id'] as int, syncUuid);
-      }
-      // 🔔 الإشعار بعد اكتمال كل شيء (العميل + معاملاته)
+      await _processOrphans(newCustomerId, syncUuid);
+      await _applyCustomerVisibility(newCustomerId);
       _syncEventController.add('عميل جديد: ${data['name']}');
-      
     } else {
       // 🔒 عميل موجود - تحديث البيانات الوصفية فقط (بدون الرصيد!)
       final localData = existing.first;
       final customerId = localData['id'] as int;
       final localBalance = (localData['current_total_debt'] as num?)?.toDouble() ?? 0.0;
-      
-      // 🔒 تحديث البيانات الوصفية فقط (الاسم، الهاتف، العنوان، الملاحظات)
-      // لا نحدث current_total_debt أبداً من البيانات البعيدة!
-      await db.update(
-        'customers',
-        {
-          'name': data['name'] ?? localData['name'],
-          'phone': data['phone'] ?? localData['phone'],
-          // 🔒 لا نحدث current_total_debt - يبقى كما هو
-          'general_note': data['generalNote'] ?? localData['general_note'],
-          'address': data['address'] ?? localData['address'],
-          'last_modified_at': data['lastModifiedAt'] ?? DateTime.now().toIso8601String(),
-          'audio_note_path': data['audioNotePath'] ?? localData['audio_note_path'],
-          'synced_at': DateTime.now().toIso8601String(),
-          'is_created_by_me': 0,
-          // 🔒 لا نحذف العميل من البيانات البعيدة
-        },
-        where: 'sync_uuid = ?',
-        whereArgs: [syncUuid],
-      );
-      
+
+      final values = <String, Object?>{
+        'name': data['name'] ?? localData['name'],
+        'phone': data['phone'] ?? localData['phone'],
+        // 🔒 لا نحدث current_total_debt - يبقى كما هو
+        'general_note': data['generalNote'] ?? localData['general_note'],
+        'address': data['address'] ?? localData['address'],
+        'last_modified_at': data['lastModifiedAt'] ?? DateTime.now().toIso8601String(),
+        'audio_note_path': data['audioNotePath'] ?? localData['audio_note_path'],
+        'synced_at': DateTime.now().toIso8601String(),
+        // 🛡️ لا نمسّ is_created_by_me: كان يُصفَّر هنا فيفقد الجهاز المنشئ
+        // ملكية عميله كلما رفع جهاز آخر وثيقته (فاتورة من D2 لعميل D1 مثلاً)،
+        // فتتوقف مسارات رفعه الفوري لذلك العميل (سيناريو 37).
+      };
+      // إعادة تنشيط صريحة من جهاز آخر (isDeleted=false تُكتب فقط عند التنشيط)
+      final localTomb = (localData['tombstoned'] as int?) ?? 0;
+      if (data['isDeleted'] == false && localTomb == 1) {
+        values['tombstoned'] = 0;
+      }
+
+      try {
+        await db.update('customers', values, where: 'sync_uuid = ?', whereArgs: [syncUuid]);
+      } on DatabaseException catch (e) {
+        // UNIQUE(name, phone) مع عميل آخر مستقل: نميّز الهاتف بمحرف غير مرئي
+        if (e.isUniqueConstraintError()) {
+          values['phone'] = await _uniquePhoneFor(
+              db, values['name']?.toString() ?? '', values['phone']?.toString(), excludeId: customerId);
+          await db.update('customers', values, where: 'sync_uuid = ?', whereArgs: [syncUuid]);
+        } else {
+          rethrow;
+        }
+      }
+      await _applyCustomerVisibility(customerId);
+
+      // 🧮 خزّن البصمة الحسابية الواردة ليُحاكَم عليها بعد اكتمال المزامنة
+      await _rememberExpectation(syncUuid, data);
+
       print('✅ تم تحديث بيانات العميل (بدون الرصيد): ${data['name']}');
       print('   📊 الرصيد المحلي محفوظ: $localBalance');
       _syncEventController.add('تحديث عميل: ${data['name']}');
     }
   }
-  
+
+  /// يُدرج عميلاً وارداً. قيد UNIQUE(name, phone) قديم في المخطط كان يُفشل
+  /// إدراج عميل مستقل يحمل نفس الاسم والهاتف (أُنشئ على جهازين، أو اسم عميل
+  /// محذوف)، فتتيتّم معاملاته للأبد (سيناريوهات 38، 39). الهوية هي sync_uuid،
+  /// فنُبقي العميلين منفصلين ونميّز الهاتف بمحرف عرض صفري (لا يُرى).
+  Future<int> _insertReceivedCustomer(
+    Database db,
+    String syncUuid,
+    Map<String, dynamic> data,
+    String name,
+  ) async {
+    final row = <String, Object?>{
+      'name': name,
+      'phone': data['phone'],
+      'current_total_debt': 0.0, // 🔒 نبدأ بصفر، المعاملات ستحدد الرصيد
+      'general_note': data['generalNote'],
+      'address': data['address'],
+      'created_at': data['createdAt'],
+      'last_modified_at': data['lastModifiedAt'],
+      'audio_note_path': data['audioNotePath'],
+      'sync_uuid': syncUuid,
+      'is_deleted': 0,
+      'synced_at': DateTime.now().toIso8601String(),
+      'is_created_by_me': 0,
+    };
+    try {
+      return await db.insert('customers', row);
+    } on DatabaseException catch (e) {
+      if (!e.isUniqueConstraintError()) rethrow;
+      // 🛡️ سباق: مسار آخر (حزمة فاتورة، مطابقة…) أدرج نفس العميل للتو —
+      // القيد الفريد على sync_uuid يمنع النسخة الثانية، فنعتمد الموجودة.
+      final same = await db.query('customers',
+          columns: ['id'], where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
+      if (same.isNotEmpty) return same.first['id'] as int;
+      row['phone'] = await _uniquePhoneFor(db, name, data['phone']?.toString());
+      print('🛡️ عميل مستقل بنفس الاسم والهاتف ($name) — أُبقي منفصلاً بهويته $syncUuid');
+      return await db.insert('customers', row);
+    }
+  }
+
+  Future<String> _uniquePhoneFor(Database db, String name, String? phone, {int? excludeId}) async {
+    var candidate = phone ?? '';
+    for (var k = 1; k <= 20; k++) {
+      candidate = '${phone ?? ''}${'​' * k}';
+      final clash = await db.query(
+        'customers',
+        columns: ['id'],
+        where: excludeId == null ? 'name = ? AND phone = ?' : 'name = ? AND phone = ? AND id != ?',
+        whereArgs: excludeId == null ? [name, candidate] : [name, candidate, excludeId],
+        limit: 1,
+      );
+      if (clash.isEmpty) break;
+    }
+    return candidate;
+  }
+
+  /// 🗑️ شاهد حذف عميل وارد.
+  ///
+  /// القاعدة: العميل مخفي إذا وُسم محذوفاً ولم تبقَ له معاملة نشطة. لا نحذف
+  /// معاملاته هنا — يبطلها الجهاز الحاذف بشاهد لكل معاملة كان يعرفها، فيصل كل
+  /// جهاز إلى نفس المجموعة المُبطَلة بالضبط. ما سُجّل أوفلاين على جهاز لم يعلم
+  /// بالحذف يبقى نشطاً ويُعيد العميل للظهور (إعادة تنشيط ذكي متسقة — سيناريو 41).
+  Future<void> _applyCustomerTombstone(String syncUuid, Map<String, dynamic> data) async {
+    final db = await _db.database;
+    final rows = await db.query('customers',
+        columns: ['id', 'tombstoned'], where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
+    int customerId;
+    if (rows.isEmpty) {
+      final name = (data['name']?.toString() ?? '').trim();
+      customerId = await _insertReceivedCustomer(db, syncUuid, data, name.isEmpty ? 'عميل محذوف' : name);
+      await _coordinator!.registerOperation(
+        entityType: 'customer',
+        syncUuid: syncUuid,
+        source: SyncSource.firebase,
+      );
+      await _coordinator!.markFirebaseSynced('customer', syncUuid);
+    } else {
+      customerId = rows.first['id'] as int;
+      final tomb = (rows.first['tombstoned'] as int?) ?? 0;
+      if (tomb == 3) {
+        // تنشيطي المحلي لم يُرفع بعد — نسختي أحدث من هذا الشاهد
+        return;
+      }
+    }
+
+    await db.update(
+      'customers',
+      {'tombstoned': 1, 'synced_at': DateTime.now().toIso8601String()},
+      where: 'id = ? AND (tombstoned IS NULL OR tombstoned != 2)',
+      whereArgs: [customerId],
+    );
+
+    // سياسة الحذف الصارم: المالك يُبطل كل معاملاته هو على العميل ويرفع شواهدها
+    try {
+      final policy = await FirebaseSyncSecuritySettings.getCustomerConflictPolicy();
+      if (policy == CustomerConflictPolicy.strictDelete) {
+        await db.update(
+          'transactions',
+          {'is_deleted': 1, 'is_uploaded': 0, 'restored_mark': 0},
+          where: 'customer_id = ? AND (is_created_by_me = 1 OR is_created_by_me IS NULL) '
+              'AND (is_deleted IS NULL OR is_deleted = 0)',
+          whereArgs: [customerId],
+        );
+      }
+    } catch (e) {
+      print('⚠️ سياسة الحذف الصارم: $e');
+    }
+
+    await _rebuildCustomerBalances(customerId);
+    await _applyCustomerVisibility(customerId);
+    _customerUpdatedController.add(syncUuid);
+    _syncEventController.add('حذف عميل من جهاز آخر');
+  }
+
+  /// مستند عميل آخر كاتب له هو هذا الجهاز.
+  Future<void> _handleOwnCustomerDoc(String syncUuid, Map<String, dynamic> data) async {
+    final db = await _db.database;
+    final rows = await db.query('customers',
+        columns: ['id', 'tombstoned'], where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
+    final isTomb = data['isDeleted'] == true || data['is_deleted'] == 1;
+    if (rows.isNotEmpty) {
+      // شاهد حذف كتبه جهاز آخر ثم دُمج رفعي أنا فوقه (merge يُبقي isDeleted)
+      if (isTomb && ((rows.first['tombstoned'] as int?) ?? 0) == 0) {
+        await _applyCustomerTombstone(syncUuid, SyncValidation.sanitizeMap(data));
+      }
+      return;
+    }
+    // عميلي أنا مفقود محلياً: قاعدة استُعيدت من نسخة قديمة
+    final name = SyncValidation.sanitizeString(data['name']?.toString() ?? '').trim();
+    if (name.isEmpty || isTomb) return;
+    final id = await _insertReceivedCustomer(db, syncUuid, SyncValidation.sanitizeMap(data), name);
+    await db.update('customers', {'is_created_by_me': 1}, where: 'id = ?', whereArgs: [id]);
+    await _coordinator!.registerOperation(
+      entityType: 'customer',
+      syncUuid: syncUuid,
+      source: SyncSource.firebase,
+    );
+    await _coordinator!.markFirebaseSynced('customer', syncUuid);
+    await _processOrphans(id, syncUuid);
+    print('♻️ استُعيد عميلي المفقود محلياً من السحابة: $name');
+  }
+
+  /// 🛡️ قاعدة الظهور الوحيدة: العميل مخفي ⇔ موسوم بالحذف ولا معاملة نشطة له.
+  /// دالة حتمية على حالة متقاربة، فتصل كل الأجهزة لنفس النتيجة مهما كان الترتيب.
+  Future<void> _applyCustomerVisibility(int customerId) async {
+    try {
+      final db = await _db.database;
+      await CustomerVisibility.apply(db, customerId);
+    } catch (e) {
+      print('⚠️ _applyCustomerVisibility: $e');
+    }
+  }
+
+  /// إعادة بناء السلسلة التراكمية + الرصيد من مجموع المعاملات.
+  Future<void> _rebuildCustomerBalances(int customerId) async {
+    try {
+      final dbService = DatabaseService();
+      await dbService.recalculateCustomerTransactionBalances(customerId);
+      await dbService.recalculateAndApplyCustomerDebt(customerId);
+    } catch (e) {
+      print('⚠️ _rebuildCustomerBalances($customerId): $e');
+      await _verifyAndRepairCustomerBalance(customerId);
+    }
+  }
+
+  /// وقت الخادم (uploadedAt) بالملّي ثانية — إصدار المستند.
+  int? _serverMillis(dynamic v) {
+    if (v is Timestamp) return v.millisecondsSinceEpoch;
+    if (v is DateTime) return v.millisecondsSinceEpoch;
+    if (v is String) return DateTime.tryParse(v)?.millisecondsSinceEpoch;
+    return null;
+  }
+
+  Future<void> _sendAckFor(String syncUuid, Map<String, dynamic> data) async {
+    final senderDeviceId = data['originDeviceId'] as String? ?? data['deviceId'] as String?;
+    if (senderDeviceId != null && senderDeviceId != _deviceId) {
+      await _ackService?.sendAck(
+        transactionUuid: syncUuid,
+        senderDeviceId: senderDeviceId,
+      );
+    }
+  }
+
+  /// مستند معاملة آخر كاتب له هو هذا الجهاز.
+  Future<void> _handleOwnTxDoc(String syncUuid, Map<String, dynamic> data) async {
+    final db = await _db.database;
+    final isDel = data['isDeleted'] == true || data['is_deleted'] == 1;
+    final rows = await db.query('transactions',
+        where: 'transaction_uuid = ?', whereArgs: [syncUuid], limit: 1);
+    if (rows.isNotEmpty) {
+      final loc = rows.first;
+      final cid = loc['customer_id'] as int;
+      final locDeleted = ((loc['is_deleted'] as int?) ?? 0) == 1;
+      // شاهد حذف (حذف عميل على جهاز آخر) دُمج في مستندي — الحذف نهائي
+      if (isDel && !locDeleted) {
+        await db.update('transactions', {'is_deleted': 1, 'is_uploaded': 1},
+            where: 'id = ?', whereArgs: [loc['id']]);
+        await _rebuildCustomerBalances(cid);
+        await _applyCustomerVisibility(cid);
+        return;
+      }
+      // 🛡️ معاملتي محفوظة هنا «كمعاملة جهاز آخر» (وصلت من كشف مطابقة أو
+      // إعادة بثّ بعد استعادة نسخة احتياطية): لا يطبّق عليها أي مسار نسخةَ
+      // السحابة الأحدث. نسترد ملكيتها ونأخذ نسخة السحابة إن لم تكن أقدم.
+      if (!locDeleted && !isDel && ((loc['is_created_by_me'] as int?) ?? 1) == 0) {
+        final inVer = _serverMillis(data['uploadedAt']);
+        final locVer = (loc['remote_ver'] as num?)?.toInt();
+        if (inVer == null || locVer == null || inVer >= locVer) {
+          await db.update(
+            'transactions',
+            {
+              'amount_changed': (data['amountChanged'] as num?)?.toDouble() ??
+                  loc['amount_changed'],
+              'transaction_type': data['transactionType'] ?? loc['transaction_type'],
+              'transaction_note': data['transactionNote'] ?? loc['transaction_note'],
+              'is_created_by_me': 1,
+              'origin_device_id': _deviceId,
+              'is_uploaded': 1,
+              'restored_mark': 0,
+              'remote_ver': inVer,
+              'last_uploaded_at': data['lastModifiedAt']?.toString(),
+            },
+            where: 'id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+            whereArgs: [loc['id']],
+          );
+          await _rebuildCustomerBalances(cid);
+          await _applyCustomerVisibility(cid);
+          print('♻️ استُردّت ملكية معاملتي $syncUuid بنسخة السحابة');
+        }
+        return;
+      }
+      // 🛡️ وضع الاستعادة: ما رفعتُه بعد أخذ النسخة الاحتياطية يلغي ما فيها
+      // (حتى تعديلاً «بانتظار الرفع» داخلها)، ما لم يُعدَّل الصف بعد الاستعادة.
+      // وخارج وضع الاستعادة: صفّي بلا تعديل معلّق، ومستندي أحدث من آخر رفع
+      // أعرفه (كلا الوقتين من ساعتي أنا) = تعديل رفعتُه قبل أن تُستعاد نسخة
+      // أقدم. يُؤخذ بدل أن يبقى الصف القديم ثم يُفرض على الكل كـ «نسختي»
+      // (استعادة انتهت قبل أن يصل كل شيء — اختبار الكود الحقيقي).
+      final restoredRow =
+          _recoveryMode && ((loc['restored_mark'] as int?) ?? 0) == 1;
+      final locPending = ((loc['is_uploaded'] as int?) ?? 0) == 0;
+      // صف فاتورة: حزمة الفاتورة مرجعه لا مستند المعاملة (نسخة قديمة منه قد
+      // تبقى في مجموعة transactions من إصدارات سابقة — سيناريو 18).
+      final locInv = (loc['invoice_sync_uuid'] as String?) ?? '';
+      final locUpKnown = (loc['last_uploaded_at']?.toString() ?? '').isNotEmpty;
+      if (!locDeleted &&
+          !isDel &&
+          (restoredRow || (!locPending && locInv.isEmpty && locUpKnown))) {
+        final docMod = data['lastModifiedAt']?.toString() ?? '';
+        final locUp = loc['last_uploaded_at']?.toString() ?? '';
+        if (docMod.compareTo(locUp) > 0) {
+          await db.update(
+            'transactions',
+            {
+              'amount_changed': (data['amountChanged'] as num?)?.toDouble() ?? 0.0,
+              'transaction_type': data['transactionType'] ?? loc['transaction_type'],
+              'transaction_note': data['transactionNote'] ?? loc['transaction_note'],
+              'last_uploaded_at': docMod,
+              'is_uploaded': 1,
+            },
+            // مشروط: لا كتابة فوق حذف أو تعديل تمّ هنا بعد القراءة
+            where: restoredRow
+                ? 'id = ? AND (is_deleted IS NULL OR is_deleted = 0) AND restored_mark = 1'
+                : 'id = ? AND (is_deleted IS NULL OR is_deleted = 0) AND is_uploaded = 1',
+            whereArgs: [loc['id']],
+          );
+          await _rebuildCustomerBalances(cid);
+          await _applyCustomerVisibility(cid);
+        } else if (!restoredRow &&
+            docMod.compareTo(locUp) < 0 &&
+            (((data['amountChanged'] as num?)?.toDouble() ?? 0.0) -
+                        ((loc['amount_changed'] as num?)?.toDouble() ?? 0.0))
+                    .abs() >
+                0.01) {
+          // 🛡️ في السحابة نسخة من معاملتي أقدم من آخر ما رفعتُ (إعادة بثّ من
+          // جهاز متأخر): أعيد رفع نسختي لتصحّحها عند الجميع.
+          await db.update('transactions', {'is_uploaded': 0},
+              where: 'id = ?', whereArgs: [loc['id']]);
+        }
+      }
+      return;
+    }
+
+    // معاملتي مفقودة محلياً: استُعيدت قاعدة قديمة — تُستعاد كمعاملة أملكها
+    final cs = data['customerSyncUuid'] as String?;
+    if (cs == null || cs.isEmpty) return;
+    final cust = await db.query('customers',
+        columns: ['id'], where: 'sync_uuid = ?', whereArgs: [cs], limit: 1);
+    if (cust.isEmpty) {
+      await _addToOrphans(syncUuid, data);
+      return;
+    }
+    final inv = (data['invoiceSyncUuid'] ?? data['invoice_sync_uuid'])?.toString();
+    if (inv != null && inv.isNotEmpty) {
+      final hasInv = await db.query('invoices',
+          columns: ['id'], where: 'invoice_uuid = ?', whereArgs: [inv], limit: 1);
+      if (hasInv.isNotEmpty) return; // حزمة الفاتورة هي المرجع
+    }
+    final cid = cust.first['id'] as int;
+    final amount = (data['amountChanged'] as num?)?.toDouble() ?? 0.0;
+    await db.insert('transactions', {
+      'customer_id': cid,
+      'transaction_date': data['transactionDate'] ?? DateTime.now().toIso8601String(),
+      'amount_changed': amount,
+      'transaction_note': data['transactionNote'],
+      'transaction_type': data['transactionType'] ?? (amount >= 0 ? 'manual_debt' : 'manual_payment'),
+      'description': data['description'],
+      'created_at': data['createdAt'] ?? DateTime.now().toIso8601String(),
+      'is_created_by_me': 1,
+      'is_uploaded': 1,
+      'sync_uuid': syncUuid,
+      'transaction_uuid': syncUuid,
+      'invoice_sync_uuid': inv,
+      'is_deleted': isDel ? 1 : 0,
+      'origin_device_id': _deviceId,
+      'last_uploaded_at': data['lastModifiedAt']?.toString(),
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    await _coordinator?.registerOperation(
+      entityType: 'transaction',
+      syncUuid: syncUuid,
+      source: SyncSource.local,
+    );
+    await _coordinator?.markFirebaseSynced('transaction', syncUuid);
+    await _rebuildCustomerBalances(cid);
+    await _applyCustomerVisibility(cid);
+    print('♻️ استُعيدت معاملتي المفقودة محلياً من السحابة: $syncUuid');
+  }
+
   /// تطبيق تغيير معاملة من Firebase على قاعدة البيانات المحلية
   /// 🔄 تعمل بنفس طريقة Google Drive Sync:
   /// - تضيف المعاملة كمعاملة منفصلة
@@ -1292,32 +1912,34 @@ class FirebaseSyncService {
       print('❌ رفض بيانات معاملة غير صالحة: ${validation.errors.join(', ')}');
       return;
     }
-    
-    // 🔒 التحقق من رفض المعاملات القديمة (إذا كان مفعلاً)
-    final rejectOldTransactions = await FirebaseSyncSecuritySettings.isRejectOldTransactionsEnabled();
-    if (rejectOldTransactions) {
-      final transactionDateStr = data['transactionDate'] as String?;
-      if (transactionDateStr != null) {
-        try {
-          final transactionDate = DateTime.parse(transactionDateStr);
+
+    // 🔐 التوقيع (يُفرض فقط في الوضع الصارم بسرّ مشترك)
+    if (!await _verifyIncomingSignature(syncUuid, data)) return;
+
+    // 🛡️ «رفض المعاملات القديمة» صار تنبيهاً فقط.
+    //
+    // الرفض بالعمر لا يمكن أن يكون آمناً: جهاز غاب 40 يوماً يجد معاملات
+    // رُفعت قبل 40 يوماً فيرفضها — فيبقى رصيده ناقصاً إلى الأبد (سيناريو 10).
+    // والتكرار أصلاً مستحيل بفضل المعرّف الفريد، فالرفض لا يحمي من شيء.
+    try {
+      if (await FirebaseSyncSecuritySettings.isRejectOldTransactionsEnabled()) {
+        final measured = _serverMillis(data['uploadedAt'] ?? data['uploaded_at']);
+        if (measured != null) {
           final maxAgeDays = await FirebaseSyncSecuritySettings.getMaxTransactionAgeDays();
-          final cutoffDate = DateTime.now().subtract(Duration(days: maxAgeDays));
-          
-          if (transactionDate.isBefore(cutoffDate)) {
-            final age = DateTime.now().difference(transactionDate).inDays;
-            print('🚫 رفض معاملة قديمة ($age يوم): $syncUuid');
-            print('   📅 تاريخ المعاملة: $transactionDateStr');
-            print('   ⏰ الحد الأقصى: $maxAgeDays يوم');
-            return;
+          final age = DateTime.now()
+              .difference(DateTime.fromMillisecondsSinceEpoch(measured))
+              .inDays;
+          if (age > maxAgeDays) {
+            SyncDiagnostics.log('sync',
+                'معاملة $syncUuid رُفعت قبل $age يوم (الحد $maxAgeDays) — قُبلت '
+                'لأن رفضها يُسقط معاملة حقيقية لجهاز عائد من غياب');
           }
-        } catch (e) {
-          print('⚠️ خطأ في تحليل تاريخ المعاملة: $e');
         }
       }
-    }
-    
+    } catch (_) {}
+
     final db = await _db.database;
-    
+
     // الحصول على customer_id المحلي من sync_uuid
     final customerSyncUuid = data['customerSyncUuid'] as String?;
     if (customerSyncUuid == null) {
@@ -1326,59 +1948,53 @@ class FirebaseSyncService {
       print('   - ID: $syncUuid');
       return;
     }
-    
+
     // البحث عن العميل
     final customerResult = await db.query(
       'customers',
       columns: ['id', 'name', 'current_total_debt', 'is_deleted'],
       where: 'sync_uuid = ?',
       whereArgs: [customerSyncUuid],
+      limit: 1,
     );
-    
+
     if (customerResult.isEmpty) {
       // 👻 العميل غير موجود - إضافة للطابور
-      print('⏳ معاملة مؤقتة (بانتظار بيانات العميل)');
-      print('   - العميل غير موجود بعد في القاعدة المحلية');
-      print('   - ID: $syncUuid');
-      print('   👉 تم حفظها في قائمة الانتظار لحين وصول بيانات العميل');
+      print('⏳ معاملة مؤقتة (بانتظار بيانات العميل): $syncUuid');
       await _addToOrphans(syncUuid, data);
       return;
     }
-    
+
     final localCustomerId = customerResult.first['id'] as int;
     final customerName = customerResult.first['name'] as String? ?? 'غير معروف';
     final currentBalance = (customerResult.first['current_total_debt'] as num?)?.toDouble() ?? 0.0;
-    final isCustomerDeleted = ((customerResult.first['is_deleted'] as int?) ?? 0) == 1;
     final isTxDeleted = (data['isDeleted'] == true || data['is_deleted'] == 1);
 
-    // 🛡️ معالجة سياسة تعارض حذف العملاء
-    if (isCustomerDeleted && !isTxDeleted) {
-      final conflictPolicy = await FirebaseSyncSecuritySettings.getCustomerConflictPolicy();
-      if (conflictPolicy == CustomerConflictPolicy.smartReactivate) {
-        print('🌟 [FirebaseSyncService] إعادة تنشيط ذكي للعميل: $customerName (ID: $localCustomerId) لوجود معاملة جديدة واردة أثناء انقطاع الاتصال!');
-        await db.update(
-          'customers',
-          {
-            'is_deleted': 0,
-            'last_modified_at': DateTime.now().toIso8601String(),
-          },
-          where: 'id = ?',
-          whereArgs: [localCustomerId],
-        );
-        _syncEventController.add('إعادة تنشيط العميل: $customerName لوجود معاملة جديدة');
-      } else if (conflictPolicy == CustomerConflictPolicy.strictDelete) {
-        print('🔒 [FirebaseSyncService] تم رفض معاملة لعميل محذوف حسب سياسة الحذف الصارم: $syncUuid');
-        return;
-      }
+    // 🛡️ معاملة فاتورة نشطة: حزمة الفاتورة هي المرجع الوحيد.
+    // نسخة قديمة منها في مجموعة transactions (رُفعت قبل تحويل الفاتورة لنقد)
+    // كانت تُعيد الدين الوهمي عند كل سحب كامل/إعادة تشغيل (سيناريو 18).
+    // شاهد الحذف (حذف العميل) يُطبَّق دائماً.
+    final incomingInvUuid = (data['invoiceSyncUuid'] ?? data['invoice_sync_uuid'])?.toString();
+    if (!isTxDeleted && incomingInvUuid != null && incomingInvUuid.isNotEmpty) {
+      final inv = await db.query('invoices',
+          columns: ['id'], where: 'invoice_uuid = ?', whereArgs: [incomingInvUuid], limit: 1);
+      if (inv.isNotEmpty) return;
     }
-    
+
+    // 🛡️ إصدار المستند = وقت الخادم عند آخر كتابة. لقطة سحب كامل أو تدقيق
+    // قُرئت قبل ثوانٍ ثم طُبّقت بعد وصول نسخة أحدث عبر المستمع كانت تكتب
+    // الرقم القديم فوق الجديد.
+    final int? incomingVer = _serverMillis(data['uploadedAt']);
+    final String? incomingModified = data['lastModifiedAt']?.toString();
+
     // 1️⃣ التحقق من وجود المعاملة بـ transaction_uuid
     final existingByUuid = await db.query(
       'transactions',
       where: 'transaction_uuid = ?',
       whereArgs: [syncUuid],
+      limit: 1,
     );
-    
+
     // البيانات الواردة
     final amountChanged = (data['amountChanged'] as num?)?.toDouble() ?? 0.0;
     final transactionDate = data['transactionDate'] as String?;
@@ -1389,132 +2005,129 @@ class FirebaseSyncService {
     }
 
     if (existingByUuid.isNotEmpty) {
-      // ✅ المعاملة موجودة - نتحقق هل تحتاج تحديث؟
       final existingTx = existingByUuid.first;
-      final currentAmount = (existingTx['amount_changed'] as num?)?.toDouble() ?? 0.0;
-      final currentType = existingTx['transaction_type'] as String?;
-      final currentNote = existingTx['transaction_note'] as String? ?? '';
-      
-      // هل هناك اختلاف جوهري؟
-      bool needsUpdate = (currentAmount - amountChanged).abs() > 0.01 || 
-                         currentType != transactionType ||
-                         currentNote != transactionNote;
+      final txId = existingTx['id'] as int;
+      final existingCustomerId = existingTx['customer_id'] as int;
 
-      if (needsUpdate) {
-        print('🔄 تحديث معاملة واردة من المزامنة: $syncUuid');
-        print('   💰 المبلغ: $currentAmount -> $amountChanged');
-        print('   🏷️ النوع: $currentType -> $transactionType');
-        
-        // 🔒 إصلاح أمني حرج: التحقق من مطابقة العميل
-        final txCustomerId = existingTx['customer_id'] as int;
-        final txCustomerCheck = await db.query(
-          'customers',
-          columns: ['sync_uuid', 'name'],
-          where: 'id = ?',
-          whereArgs: [txCustomerId],
-        );
-        
-        if (txCustomerCheck.isEmpty) {
-          print('❌ الحاسوب رفض قراءة المعاملة! ⛔');
-          print('   - السبب: العميل المرتبط غير موجود');
-          print('   - معرف العميل المحلي: $txCustomerId');
-          return;
-        }
-        
-        final txCustomerSyncUuid = txCustomerCheck.first['sync_uuid'] as String?;
-        if (txCustomerSyncUuid != customerSyncUuid) {
-          print('❌ الحاسوب رفض قراءة المعاملة! ⛔');
-          print('   - السبب: عدم تطابق العميل (خطأ حرج!)');
-          print('   - المتوقع (من Firebase): $customerSyncUuid');
-          print('   - الموجود (محلياً): $txCustomerSyncUuid');
-          print('   - المعاملة: $syncUuid');
-          return;
-        }
-        
-        // ⚠️ مهم جداً: استخدام DatabaseService لإعادة حساب كل شيء بشكل صحيح
-        final dbService = DatabaseService();
-        
-        // تحديث المعاملة باستخدام DatabaseService (لإعادة حساب الأرصدة)
-        final txId = existingTx['id'] as int;
-        final existingTransaction = await dbService.getTransactionById(txId);
-        
-        if (existingTransaction != null) {
-          // إنشاء نسخة محدثة من المعاملة
-          final updatedTransaction = DebtTransaction(
-            id: existingTransaction.id,
-            customerId: existingTransaction.customerId,
-            transactionDate: transactionDate != null ? DateTime.parse(transactionDate) : existingTransaction.transactionDate,
-            amountChanged: amountChanged,
-            balanceBeforeTransaction: existingTransaction.balanceBeforeTransaction, // سيتم إعادة حسابه
-            newBalanceAfterTransaction: existingTransaction.newBalanceAfterTransaction, // سيتم إعادة حسابه
-            
-            transactionNote: transactionNote,
-            transactionType: transactionType,
-            description: data['description'] as String?,
-            createdAt: existingTransaction.createdAt,
-            audioNotePath: data['audioNotePath'] as String?,
-            isCreatedByMe: existingTransaction.isCreatedByMe,
-            isUploaded: existingTransaction.isUploaded,
-            transactionUuid: existingTransaction.transactionUuid,
-            invoiceId: existingTransaction.invoiceId,
-          );
-          
-          // استخدام updateManualTransaction لإعادة حساب كل شيء بشكل صحيح.
-          // fromSync يتجاوز حارس الملكية: هذا تحديث وصل من صاحب السجل نفسه.
-          await dbService.updateManualTransaction(updatedTransaction,
-              fromSync: true);
-          
-          // 🛡️ إصلاح جذري لمشكلة عدم تناسق الأرصدة:
-          // إجبار النظام على إعادة حساب تسلسل الأرصدة بالكامل + الرصيد النهائي
-          // هذا يضمن أنه حتى لو تغير التاريخ أو الترتيب، الأرصدة ستكون صحيحة 100%
-          print('🔄 جاري إعادة حساب تسلسل الأرصدة للعميل ${existingTransaction.customerId}...');
-          await dbService.recalculateCustomerTransactionBalances(existingTransaction.customerId);
-          await dbService.recalculateAndApplyCustomerDebt(existingTransaction.customerId);
-          
-          // 🔒 التحقق من سلامة الرصيد بعد التحديث
-          final updatedCustomer = await dbService.getCustomerById(existingTransaction.customerId);
-          if (updatedCustomer != null) {
-            final newBalance = updatedCustomer.currentTotalDebt;           
-            // فحص الأرصدة غير المنطقية
-            if (newBalance.abs() > 10000000) {
-              print('⚠️ تحذير: رصيد غير منطقي بعد التحديث!');
-              print('   - العميل: ${updatedCustomer.name}');
-              print('   - الرصيد الجديد: $newBalance');
-            }
-            
-            // فحص التغير المفاجئ
-            final balanceChange = (newBalance - currentBalance).abs();
-            if (balanceChange > 100000) {
-              print('⚠️ تحذير: تغير كبير في الرصيد!');
-              print('   - العميل: ${updatedCustomer.name}');
-              print('   - التغير: $balanceChange');
-            }
+      final localVer = (existingTx['remote_ver'] as num?)?.toInt();
+      if (incomingVer != null && localVer != null && incomingVer < localVer) {
+        return; // نسخة أقدم مما طُبّق
+      }
+      if (incomingVer != null && (localVer == null || incomingVer > localVer)) {
+        // نسجّل أحدث إصدار رأيناه حتى لو تطابق المحتوى، وإلا تسللت نسخة أقدم بعده
+        await db.update('transactions',
+            {'remote_ver': incomingVer, 'remote_modified_at': incomingModified},
+            where: 'id = ?', whereArgs: [txId]);
+      }
+
+      final isMine = (existingTx['is_created_by_me'] as int?) != 0;
+      final localDeleted = ((existingTx['is_deleted'] as int?) ?? 0) == 1;
+      final currentAmount = (existingTx['amount_changed'] as num?)?.toDouble() ?? 0.0;
+
+      if (isMine) {
+        // 🛡️ صاحب المعاملة: لا يقبل من غيره إلا شاهد الحذف (حذف العميل).
+        // أي نسخة أخرى مختلفة (إعادة بث قديمة، كتابة جهاز آخر) لا تُطبَّق،
+        // بل تُعاد نسختي للرفع لتصحح السحابة.
+        if (isTxDeleted && !localDeleted) {
+          await db.update('transactions', {'is_deleted': 1, 'is_uploaded': 1},
+              where: 'id = ?', whereArgs: [txId]);
+          await _rebuildCustomerBalances(existingCustomerId);
+          await _applyCustomerVisibility(existingCustomerId);
+          await _sendAckFor(syncUuid, data);
+          _customerUpdatedController.add(customerSyncUuid);
+        } else if (!isTxDeleted && !localDeleted && (currentAmount - amountChanged).abs() > 0.01) {
+          // 🛡️ لكن إن لم يكن عندي تعديل معلّق والمستند يحمل وقت تعديل (بساعتي،
+          // تحفظه إعادة البث) أحدث من آخر رفع أعرفه: هو تعديلي أنا قبل استعادة
+          // نسخة احتياطية — نأخذه. رفع صفي القديم فوقه كان يمحوه من كل الأجهزة.
+          final locPending = ((existingTx['is_uploaded'] as int?) ?? 0) == 0;
+          final docMod = incomingModified ?? '';
+          final locUp = existingTx['last_uploaded_at']?.toString() ?? '';
+          final locInv = (existingTx['invoice_sync_uuid'] as String?) ?? '';
+          if (!locPending &&
+              locInv.isEmpty &&
+              locUp.isNotEmpty &&
+              docMod.compareTo(locUp) > 0) {
+            await db.update(
+              'transactions',
+              {
+                'amount_changed': amountChanged,
+                'transaction_type': transactionType,
+                'transaction_note': transactionNote,
+                'last_uploaded_at': docMod,
+                'is_uploaded': 1,
+              },
+              // مشروط: لا كتابة فوق حذف تمّ هنا بعد القراءة (شاهده بانتظار الرفع)
+              where: 'id = ? AND (is_deleted IS NULL OR is_deleted = 0) AND is_uploaded = 1',
+              whereArgs: [txId],
+            );
+            await _rebuildCustomerBalances(existingCustomerId);
+            await _applyCustomerVisibility(existingCustomerId);
+            _customerUpdatedController.add(customerSyncUuid);
+          } else {
+            await db.update('transactions', {'is_uploaded': 0},
+                where: 'id = ?', whereArgs: [txId]);
           }
         }
-        
-        print('═══════════════════════════════════════════════════════════════════');
-        print('📥 تم استلام وتطبيق **تحديث** لمعاملة موجودة! 🔄✅');
-        print('   - العميل: $customerName');
-        print('   - المبلغ: $currentAmount ⬅️ تغير إلى: $amountChanged');
-        print('   - الملاحظة: $transactionNote');
-        print('   - ID: $syncUuid');
-        print('═══════════════════════════════════════════════════════════════════');
-        
-        _syncEventController.add('تحديث معاملة: $customerName');
-      } else {
-        print('⏭️ المعاملة موجودة ومطابقة تماماً (تم تجاهل التحديث)');
-        print('   - ID: $syncUuid');
+        return;
       }
+
+      // 🛡️ الحذف نهائي: لا نُحيي معاملة محذوفة بمستند نشط
+      if (localDeleted) return;
+
+
+      final currentType = existingTx['transaction_type'] as String?;
+      final currentNote = existingTx['transaction_note'] as String? ?? '';
+      final needsUpdate = (currentAmount - amountChanged).abs() > 0.01 ||
+          currentType != transactionType ||
+          currentNote != transactionNote ||
+          isTxDeleted;
+      if (!needsUpdate) return;
+
+      // 🔒 التحقق من مطابقة العميل
+      final txCustomerCheck = await db.query(
+        'customers',
+        columns: ['sync_uuid'],
+        where: 'id = ?',
+        whereArgs: [existingCustomerId],
+        limit: 1,
+      );
+      if (txCustomerCheck.isEmpty ||
+          txCustomerCheck.first['sync_uuid'] != customerSyncUuid) {
+        print('❌ رُفض تحديث معاملة $syncUuid: عدم تطابق العميل');
+        return;
+      }
+
+      // 🛡️ مشروط: الصف قُرئ نشطاً أعلاه، لكن حذف العميل على هذا الجهاز قد
+      // يكتمل بين القراءة وهذه الكتابة. كانت تكتب is_deleted = 0 و is_uploaded = 1
+      // فوق الحذف: تُحيي المعاملة، ويضيع شاهد حذفها قبل رفعه — فيبقى دينها
+      // على كل الأجهزة (اختبار الكود الحقيقي). الحذف نهائي: لا كتابة فوقه.
+      final updated = await db.update(
+        'transactions',
+        {
+          'amount_changed': amountChanged,
+          'transaction_note': transactionNote,
+          'transaction_type': transactionType,
+          'description': data['description'],
+          'transaction_date': transactionDate ?? existingTx['transaction_date'],
+          if (isTxDeleted) 'is_deleted': 1,
+          'is_uploaded': 1,
+        },
+        where: 'id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+        whereArgs: [txId],
+      );
+      if (updated == 0) return; // حُذفت هنا أثناء المعالجة
+      await _rebuildCustomerBalances(existingCustomerId);
+      await _applyCustomerVisibility(existingCustomerId);
+      await _sendAckFor(syncUuid, data);
+
+      print('📥 طُبّق تحديث معاملة $syncUuid للعميل $customerName: '
+          '$currentAmount → ${isTxDeleted ? "محذوفة" : amountChanged}');
+      _syncEventController.add('تحديث معاملة: $customerName');
+      _customerUpdatedController.add(customerSyncUuid);
       return;
     }
-    
-    // 2️⃣ تبنّي السجلات التاريخية اليتيمة فقط.
-    //
-    // الهوية الآن هي sync_uuid وحده: كل معاملة تُولّد معرّفها لحظة إنشائها،
-    // فالمعاملة الواردة إمّا معروفة بمعرّفها (عولجت أعلاه) أو جديدة تماماً.
-    // الاستثناء الوحيد سجلات قديمة أُنشئت قبل هذا النظام على الجهازين معاً
-    // وبقيت بلا معرّف؛ نربطها بدل أن نضاعفها. الشرط `sync_uuid IS NULL` أساسي:
-    // بدونه يمكن أن نسرق هوية معاملة أخرى لها معرّفها الخاص بالفعل.
+
+    // 2️⃣ تبنّي السجلات التاريخية اليتيمة فقط (بلا معرّف).
     if (transactionDate != null) {
       final orphanMatch = await db.query(
         'transactions',
@@ -1538,55 +2151,32 @@ class FirebaseSyncService {
         return;
       }
     }
-    
+
     // 3️⃣ التحقق من صحة المبلغ
     if (amountChanged.abs() > 1000000000) {
-      print('❌ الحاسوب رفض قراءة المعاملة! ⛔');
-      print('   - السبب: مبلغ غير منطقي (أكبر من مليار)');
-      print('   - المبلغ: $amountChanged');
-      print('   - ID: $syncUuid');
+      print('❌ رُفضت معاملة $syncUuid: مبلغ غير منطقي ($amountChanged)');
       return;
     }
-    
-    // 4️⃣ حساب الرصيد الجديد (مثل Google Drive Sync)
-    final newBalance = currentBalance + amountChanged;
-    
+
     // 5️⃣ إعداد ملاحظة المعاملة مع علامة "من المزامنة"
     String finalNote = transactionNote;
     if (!finalNote.contains('من المزامنة') && !finalNote.contains('من جهاز آخر')) {
-      finalNote = finalNote.isEmpty 
-          ? '🔄 من المزامنة (Firebase)' 
+      finalNote = finalNote.isEmpty
+          ? '🔄 من المزامنة (Firebase)'
           : '$finalNote\n🔄 من المزامنة (Firebase)';
     }
-    
-    // 6️⃣ تحديد نوع المعاملة
-    // المتغير transactionType تم تحديده في الأعلى
-    if (transactionType.isEmpty) {
-      // تحديد النوع من المبلغ
-      transactionType = amountChanged >= 0 ? 'manual_debt' : 'manual_payment';
-    }
-    
+
     // 7️⃣ إدراج المعاملة الجديدة وتحديث الرصيد — ذرياً.
-    //
-    // 🔒 هنا يتحقق الاستقبال الإدمبوتنت: نُعيد فحص المعرّف داخل المعاملة نفسها
-    // قبل الإدراج، فلو وصلت نفس المعاملة مرتين (إعادة بث، أو خطأ برمجي أنشأ
-    // نسختين بنفس المعرّف) تُقبل الأولى وتُرفض الثانية دون أن يتحرك الرصيد.
-    // ضمّ الإدراج وتحديث الرصيد في معاملة واحدة يمنع أيضاً بقاء رصيد مُحدَّث
-    // لمعاملة لم تُدرج، أو العكس.
     final applied = await db.transaction<double?>((txn) async {
-      final incomingInvUuid = data['invoiceSyncUuid'] ?? data['invoice_sync_uuid'];
       final alreadyThere = await txn.query(
         'transactions',
         columns: ['id'],
-        where: 'transaction_uuid = ? OR (invoice_sync_uuid = ? AND invoice_sync_uuid IS NOT NULL AND invoice_sync_uuid != "")',
-        whereArgs: [syncUuid, incomingInvUuid ?? '___NONE___'],
+        where: 'transaction_uuid = ? OR sync_uuid = ?',
+        whereArgs: [syncUuid, syncUuid],
         limit: 1,
       );
-      if (alreadyThere.isNotEmpty) return null; // مرفوضة تكراراً (موجودة مسبقاً أو مرتبطة بالفاتورة)
+      if (alreadyThere.isNotEmpty) return null; // موجودة مسبقاً بنفس المعرّف
 
-      // 🔒 الرصيد يُقرأ داخل المعاملة، لا من اللقطة التي أُخذت قبلها.
-      // القراءة الخارجية تفتح نافذة "التحديث الضائع": لو حُفظت معاملة محلية
-      // بين القراءة والكتابة، لكتبنا فوق رصيدها بقيمة قديمة واختلّ الرصيد.
       final balanceBefore = await _sumTransactions(txn, localCustomerId);
 
       await txn.insert(
@@ -1596,7 +2186,7 @@ class FirebaseSyncService {
           'transaction_date': transactionDate ?? DateTime.now().toIso8601String(),
           'amount_changed': amountChanged,
           'balance_before_transaction': balanceBefore,
-          'new_balance_after_transaction': balanceBefore + amountChanged,
+          'new_balance_after_transaction': balanceBefore + (isTxDeleted ? 0.0 : amountChanged),
           'transaction_note': finalNote,
           'transaction_type': transactionType,
           'description': data['description'],
@@ -1606,14 +2196,16 @@ class FirebaseSyncService {
           'is_uploaded': 1, // 🔒 تعليمها كمرفوعة لتجنب إعادة رفعها
           'sync_uuid': syncUuid,
           'transaction_uuid': syncUuid,
-          'invoice_sync_uuid': data['invoiceSyncUuid'] ?? data['invoice_sync_uuid'],
-          'is_deleted': 0, // 🔒 لا نحذف المعاملات القادمة من المزامنة
+          'invoice_sync_uuid': incomingInvUuid,
+          // 🛡️ شاهد حذف لمعاملة لم تصلنا نسختها النشطة: تُسجَّل محذوفة
+          'is_deleted': isTxDeleted ? 1 : 0,
+          'origin_device_id': data['originDeviceId'] ?? data['deviceId'],
+          'remote_ver': incomingVer,
+          'remote_modified_at': incomingModified,
         },
       );
 
       // 8️⃣ الرصيد = مجموع المعاملات، لا رصيد سابق + مبلغ.
-      // الاشتقاق من المجموع يجعل النتيجة مستقلة عن ترتيب الوصول، فجهاز استقبل
-      // المعاملات بترتيب مختلف يصل إلى نفس الرصيد بالضبط.
       final authoritativeBalance = await _sumTransactions(txn, localCustomerId);
       await txn.update(
         'customers',
@@ -1625,21 +2217,17 @@ class FirebaseSyncService {
         where: 'id = ?',
         whereArgs: [localCustomerId],
       );
-      return authoritativeBalance; // الرصيد الفعلي بعد الإدراج
+      return authoritativeBalance;
     });
 
     if (applied == null) {
       print('🚫 رُفضت معاملة واردة بمعرّف موجود مسبقاً: $syncUuid');
-      print('   - لم يُمسّ رصيد العميل $customerName');
       return;
     }
 
-    // 🧮 الرصيد الفعلي المُعتمد = ما خُزّن فعلًا في قاعدة البيانات.
-    // نتجنّب استخدام `currentBalance + amountChanged` لأنه قد يكذب في حال سباق
-    // (معاملتان وصلتا معًا قبل تحديث القراءة الخارجية). المعروض للمستخدم =
-    // المخزن في القاعدة، بأخذ المعاملة الأخيرة كمرجع للحساب والتحقق.
     final authoritativeBalance = applied;
-    
+    await _applyCustomerVisibility(localCustomerId);
+
     // 9️⃣ تسجيل في المنسق
     await _coordinator!.registerOperation(
       entityType: 'transaction',
@@ -1647,38 +2235,19 @@ class FirebaseSyncService {
       source: SyncSource.firebase,
     );
     await _coordinator!.markFirebaseSynced('transaction', syncUuid);
-    
-    //  طإرسال تأكيد استلام (ACK) للجهاز المرسل
-    final senderDeviceId = data['originDeviceId'] as String? ?? data['deviceId'] as String?;
-    if (senderDeviceId != null && senderDeviceId != _deviceId) {
-      await _ackService!.sendAck(
-        transactionUuid: syncUuid,
-        senderDeviceId: senderDeviceId,
-      );
-    }
 
-    // ⚖️ هل على هذه المعاملة قرار إبطال معلّق (وصل القرار قبل معاملته)؟
-    // نفّذه فوراً — يضمن التقارب مهما كان ترتيب الوصول.
-    try {
-      await _verdictService.applyPendingVerdictsFor(syncUuid);
-    } catch (_) {}
-    
-    // 🔟 طباعة تفاصيل المعاملة للتدقيق
+    // 📬 إرسال تأكيد استلام (ACK) للجهاز المرسل
+    await _sendAckFor(syncUuid, data);
+
+    // ⚖️ لم تعد قرارات الإبطال عن بُعد تُطبَّق (انظر MatchVerdictService).
+
     final typeLabel = amountChanged >= 0 ? 'إضافة دين' : 'تسديد';
-    print('═══════════════════════════════════════════════════════════════════');
-    print('📥 تم استلام وقراءة معاملة جديدة بنجاح! ✅');
-    print('   - العميل: $customerName (ID: $localCustomerId)');
-    print('   - النوع: $typeLabel');
-    print('   - المبلغ: ${amountChanged.abs()}');
-    print('   - الرصيد قبل: $currentBalance');
-    print('   - الرصيد بعد: $authoritativeBalance');
-    print('   - من جهاز: $senderDeviceId');
-    print('═══════════════════════════════════════════════════════════════════');
+    print('📥 معاملة واردة: $typeLabel ${amountChanged.abs()} — $customerName '
+        '(الرصيد $currentBalance → $authoritativeBalance)${isTxDeleted ? " [محذوفة]" : ""}');
 
     _syncEventController.add('معاملة جديدة: $typeLabel ${amountChanged.abs()} - $customerName');
 
     // 🔄 إرسال إشعار لتحديث الواجهة فوراً.
-    // 🔒 newBalance هنا = الرصيد الفعلي المخزّن، لا قيمة محسوبة بمعزل عن القاعدة.
     _transactionReceivedController.add({
       'customerId': localCustomerId,
       'customerSyncUuid': customerSyncUuid,
@@ -1689,15 +2258,11 @@ class FirebaseSyncService {
       'transactionType': transactionType,
       'transactionDate': transactionDate,
     });
-    
+
     // إشعار بتحديث العميل
     _customerUpdatedController.add(customerSyncUuid);
 
-    // 🛡️ شباك الأمان الحسابي (بليون بالمئة): بعد كل معاملة واردة نتأكد أن
-    // الرصيد المخزّن = مجموع المعاملات تمامًا. لو انحرف لأي سبب (خطأ برمجي
-    // نادر، إعادة بث مزدوجة، انقطاع في منتصف معاملة...) نُصحّحه فورًا هنا
-    // قبل أن يراه المستخدم. هذا مستقل عن منطق الإدراج، فيتحقق حتى لو كان
-    // الإدراج صحيحًا — فائض أمان لا يضر.
+    // 🛡️ شباك الأمان الحسابي
     await _verifyAndRepairCustomerBalance(localCustomerId);
   }
 
@@ -1706,6 +2271,269 @@ class FirebaseSyncService {
   /// يُستدعى بعد كل معاملة واردة. لو وُجد فرق > 0.01 يُصحّح الرصيد المخزّن
   /// ويُسجّل الإنذار للتدقيق. هذه الطبقة الأخيرة هي ما يرفع الموثوقية المحاسبية
   /// إلى مستوى "لا يمكن أن يختل الرصيد أبدًا" — حتى لو فشل منطق أعلى منها.
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🧮 كاشف الانحراف الحسابي بين الأجهزة
+  //
+  // المبدأ: لا يُكتب رصيد عميل أبداً من الشبكة. الرصيد يُشتقّ محلياً من
+  // مجموع المعاملات وحده. لكن كل جهاز يرفع مع العميل «بصمة حسابية»:
+  // مجموع المعاملات وعددها كما يراها هو. فإذا اكتملت دورة مزامنة وبقي
+  // ما لديّ مخالفاً لما لدى غيري، لم يعد الانحراف قابلاً للمرور صامتاً —
+  // يُسجَّل، ويُبلَّغ به المستخدم، ويُعاد بناء الرصيد من المعاملات.
+  //
+  // لماذا جدول منفصل يُنشأ عند الطلب؟ لأن الاعتماد على ترقية مخطط
+  // قاعدة البيانات يجعل الكاشف نفسه عرضة للسقوط في الأجهزة القديمة،
+  // والكاشف الذي قد يغيب لا قيمة له.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  bool _expectationTableReady = false;
+
+  Future<void> _ensureExpectationTable(DatabaseExecutor db) async {
+    if (_expectationTableReady) return;
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS sync_balance_expectations (
+          sync_uuid TEXT PRIMARY KEY,
+          expected_balance REAL,
+          expected_tx_count INTEGER,
+          expected_fingerprint TEXT,
+          expected_by_device TEXT,
+          recorded_at TEXT,
+          diff_value REAL,
+          diff_since TEXT,
+          diff_strikes INTEGER DEFAULT 0
+        )
+      ''');
+      // أعمدة الضربات قد تغيب في جهاز أنشأ الجدول بنسخة أقدم
+      for (final col in const [
+        'diff_value REAL',
+        'diff_since TEXT',
+        'diff_strikes INTEGER DEFAULT 0',
+      ]) {
+        try {
+          await db.execute('ALTER TABLE sync_balance_expectations ADD COLUMN $col');
+        } catch (_) {/* موجود سلفاً */}
+      }
+      _expectationTableReady = true;
+    } catch (e) {
+      print('⚠️ _ensureExpectationTable: $e');
+    }
+  }
+
+  /// يحسب البصمة الحسابية لعميل من المعاملات المحلية (مصدر الحقيقة الوحيد).
+  Future<Map<String, dynamic>> _computeCustomerExpectation(String syncUuid) async {
+    try {
+      final db = await _db.database;
+      final rows = await db.rawQuery('''
+        SELECT
+          COALESCE(SUM(t.amount_changed), 0) AS total,
+          COUNT(t.id) AS cnt
+        FROM customers c
+        LEFT JOIN transactions t
+          ON t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+        WHERE c.sync_uuid = ?
+      ''', [syncUuid]);
+      if (rows.isEmpty) {
+        return {'balance': null, 'count': null, 'fingerprint': null};
+      }
+      final total = (rows.first['total'] as num?)?.toDouble() ?? 0.0;
+      final cnt = (rows.first['cnt'] as num?)?.toInt() ?? 0;
+      return {
+        'balance': double.parse(total.toStringAsFixed(2)),
+        'count': cnt,
+        'fingerprint': '${total.toStringAsFixed(2)}|$cnt',
+      };
+    } catch (e) {
+      print('⚠️ _computeCustomerExpectation: $e');
+      return {'balance': null, 'count': null, 'fingerprint': null};
+    }
+  }
+
+  /// يخزّن البصمة الواردة من جهاز آخر — دون أن يمسّ أي رصيد.
+  Future<void> _rememberExpectation(String syncUuid, Map<String, dynamic> data) async {
+    final raw = data['expectedBalance'];
+    if (raw is! num) return; // جهاز بنسخة أقدم لا يرسل بصمة — لا شيء لنقارنه
+    try {
+      final db = await _db.database;
+      await _ensureExpectationTable(db);
+      if (!_expectationTableReady) return;
+      await db.insert(
+        'sync_balance_expectations',
+        {
+          'sync_uuid': syncUuid,
+          'expected_balance': raw.toDouble(),
+          'expected_tx_count': (data['expectedTxCount'] as num?)?.toInt(),
+          'expected_fingerprint': data['expectedFingerprint']?.toString(),
+          'expected_by_device': data['expectedByDevice']?.toString() ??
+              data['originDeviceId']?.toString(),
+          'recorded_at': DateTime.now().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (e) {
+      print('⚠️ _rememberExpectation: $e');
+    }
+  }
+
+  /// 🔍 يُستدعى بعد اكتمال دورة المزامنة (تنزيل ثم رفع).
+  /// يقارن كل بصمة واردة بما لدى هذا الجهاز فعلياً، ويُبلّغ عن كل فرق.
+  /// لا يكتب أي رصيد من الشبكة؛ غاية إصلاحه أن يعيد اشتقاق الرصيد من
+  /// المعاملات المحلية — وهو حساب، لا استيراد.
+  Future<Map<String, dynamic>> verifyExpectedBalances({bool repair = true}) async {
+    final List<Map<String, dynamic>> divergences = [];
+    int checked = 0;
+    try {
+      final db = await _db.database;
+      await _ensureExpectationTable(db);
+      if (!_expectationTableReady) {
+        return {'checked': 0, 'divergences': divergences};
+      }
+
+      final rows = await db.rawQuery('''
+        SELECT
+          e.sync_uuid              AS uuid,
+          e.expected_balance       AS expected,
+          e.expected_tx_count      AS expected_count,
+          e.expected_by_device     AS by_device,
+          e.recorded_at            AS recorded_at,
+          e.diff_value             AS prev_diff,
+          e.diff_since             AS diff_since,
+          e.diff_strikes           AS strikes,
+          c.id                     AS cid,
+          c.name                   AS name,
+          c.current_total_debt     AS stored,
+          COALESCE((SELECT SUM(t.amount_changed) FROM transactions t
+                    WHERE t.customer_id = c.id
+                      AND (t.is_deleted IS NULL OR t.is_deleted = 0)), 0) AS computed,
+          COALESCE((SELECT COUNT(t.id) FROM transactions t
+                    WHERE t.customer_id = c.id
+                      AND (t.is_deleted IS NULL OR t.is_deleted = 0)), 0) AS cnt,
+          COALESCE((SELECT COUNT(t.id) FROM transactions t
+                    WHERE t.customer_id = c.id
+                      AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+                      AND (t.is_uploaded IS NULL OR t.is_uploaded = 0)), 0) AS pending,
+          (SELECT MAX(COALESCE(t.created_at, t.transaction_date)) FROM transactions t
+                    WHERE t.customer_id = c.id
+                      AND (t.is_deleted IS NULL OR t.is_deleted = 0)) AS newest_tx
+        FROM sync_balance_expectations e
+        JOIN customers c ON c.sync_uuid = e.sync_uuid
+        WHERE (c.is_deleted IS NULL OR c.is_deleted = 0)
+      ''');
+
+      final String nowIso = DateTime.now().toIso8601String();
+
+      for (final r in rows) {
+        checked++;
+        final expected = (r['expected'] as num?)?.toDouble();
+        if (expected == null) continue;
+        final computed = (r['computed'] as num?)?.toDouble() ?? 0.0;
+        final stored = (r['stored'] as num?)?.toDouble() ?? 0.0;
+        final cid = r['cid'] as int;
+        final uuid = r['uuid'] as String;
+
+        // ① انحراف داخلي: المخزَّن ≠ مجموع معاملاتي. خطأ محلي صِرف،
+        //    وإصلاحه اشتقاقٌ من معاملاتي لا استيرادٌ من الشبكة — فيُصلَح فوراً.
+        if (repair && (stored - computed).abs() > 0.01) {
+          await db.update(
+            'customers',
+            {
+              'current_total_debt': computed,
+              'last_modified_at': nowIso,
+            },
+            where: 'id = ?',
+            whereArgs: [cid],
+          );
+          SyncDiagnostics.log('sync',
+              'تصحيح داخلي: العميل ${r['name']} كان $stored والصحيح $computed');
+        }
+
+        final diff = computed - expected;
+
+        // ② تطابق: امسح أي ضربات سابقة.
+        if (diff.abs() <= 0.01) {
+          if (((r['strikes'] as num?)?.toInt() ?? 0) > 0) {
+            await db.update('sync_balance_expectations',
+                {'diff_value': null, 'diff_since': null, 'diff_strikes': 0},
+                where: 'sync_uuid = ?', whereArgs: [uuid]);
+          }
+          continue;
+        }
+
+        // ③ حارسان يمنعان الإنذار الكاذب — الفرق هنا متوقَّع لا مَرَضيّ:
+        //    (أ) عندي معاملات لم تُرفع بعد، فمن الطبيعي ألّا يراها الآخر.
+        //    (ب) بصمة الآخر أقدم من أحدث معاملة عندي، أي أنها قديمة أصلاً.
+        final pending = (r['pending'] as num?)?.toInt() ?? 0;
+        if (pending > 0) continue;
+
+        final recordedAt = DateTime.tryParse((r['recorded_at'] ?? '').toString());
+        final newestTx = DateTime.tryParse((r['newest_tx'] ?? '').toString());
+        if (recordedAt != null && newestTx != null && newestTx.isAfter(recordedAt)) {
+          continue; // بصمة متجاوَزة زمنياً — لا معنى لمقارنتها
+        }
+
+        // ④ ضربتان قبل الصراخ: فرقٌ عابر يزول في الدورة التالية،
+        //    والباقي بعد دورتين انحرافٌ حقيقي يستحق أن يُقال.
+        final prevDiff = (r['prev_diff'] as num?)?.toDouble();
+        final sameAsBefore = prevDiff != null && (prevDiff - diff).abs() <= 0.01;
+        final strikes = sameAsBefore
+            ? (((r['strikes'] as num?)?.toInt() ?? 0) + 1)
+            : 1;
+
+        await db.update(
+            'sync_balance_expectations',
+            {
+              'diff_value': diff,
+              'diff_since': sameAsBefore
+                  ? ((r['diff_since'] ?? nowIso).toString())
+                  : nowIso,
+              'diff_strikes': strikes,
+            },
+            where: 'sync_uuid = ?',
+            whereArgs: [uuid]);
+
+        if (strikes < 2) {
+          print('🔎 فرق مبدئي للعميل ${r['name']}: $diff — '
+              'بانتظار دورة أخرى قبل الحكم');
+          continue;
+        }
+
+        // ⑤ انحراف مؤكَّد. لا يُصلَح هنا: إصلاحه يعني تصديق رقمٍ لم أرَ
+        //    معاملاته. يُسجَّل ويُبلَّغ ليُحسم بزر المطابقة أو بقرار بشري.
+        final entry = <String, dynamic>{
+          'syncUuid': uuid,
+          'customerId': cid,
+          'name': r['name'],
+          'localSum': computed,
+          'remoteExpected': expected,
+          'difference': diff,
+          'localTxCount': (r['cnt'] as num?)?.toInt() ?? 0,
+          'remoteTxCount': (r['expected_count'] as num?)?.toInt(),
+          'reportedBy': r['by_device'],
+          'since': r['diff_since'],
+          'strikes': strikes,
+        };
+        divergences.add(entry);
+        print('🚨🧮 انحراف مؤكَّد بين الأجهزة — ${r['name']}: '
+            'عندي $computed، وعند ${r['by_device']} $expected '
+            '(الفرق $diff، مستمر منذ ${r['diff_since']})');
+        SyncDiagnostics.log('sync',
+            'انحراف مؤكَّد للعميل ${r['name']} ($uuid): '
+            'محلي=$computed (${entry['localTxCount']} معاملة) '
+            'بعيد=$expected (${entry['remoteTxCount']} معاملة) '
+            'الفرق=$diff — لم يُكتب أي رصيد من الشبكة؛ استخدم زر المطابقة.');
+      }
+
+      if (divergences.isNotEmpty) {
+        _syncEventController.add(
+            '🚨 ${divergences.length} عميل بأرصدة مختلفة بين الأجهزة — راجع سجل المزامنة');
+      } else if (checked > 0) {
+        print('✅ 🧮 تطابق حسابي: $checked عميل فُحِصوا، صفر انحراف مؤكَّد');
+      }
+    } catch (e) {
+      print('⚠️ verifyExpectedBalances: $e');
+    }
+    return {'checked': checked, 'divergences': divergences};
+  }
+
   Future<void> _verifyAndRepairCustomerBalance(int customerId) async {
     try {
       final db = await _db.database;
@@ -1756,13 +2584,31 @@ class FirebaseSyncService {
       }
 
       for (final entry in grouped.entries) {
-        final list = entry.value;
+        // 🛡️ لا ندمج هويتين مزامنتين مختلفتين أبداً. الدمج المحلي ينقل معاملات
+        // هوية إلى أخرى على هذا الجهاز وحده، فتختلف أرصدة كل عميل بين الأجهزة
+        // (المحاكاة: سيناريو 13). ندمج فقط السجلات المحلية القديمة التي لم
+        // تُعطَ هوية مزامنة قط، في سجل واحد (ذي هوية إن وُجد).
+        final withId = entry.value
+            .where((c) => (c['sync_uuid'] as String? ?? '').isNotEmpty)
+            .toList();
+        final legacy = entry.value
+            .where((c) => (c['sync_uuid'] as String? ?? '').isEmpty)
+            .toList();
+        if (legacy.isEmpty) continue;
+        final list = <Map<String, dynamic>>[
+          ...legacy,
+          if (withId.isNotEmpty) withId.first,
+        ];
         if (list.length <= 1) continue; // لا يوجد تكرار
 
         print('🧹 [FirebaseSyncService] اكتشاف ${list.length} عميل مكرر باسم: "${list.first['name']}" -> جاري الدمج والتنظيف...');
 
         // اختيار العميل الرئيسي: نفضل الذي أُنكئ محلياً أولاً أو أقدم ID
         list.sort((a, b) {
+          // السجل ذو الهوية (إن وُجد) هو الأساس دائماً، فلا تضيع هويته
+          final aHasId = (a['sync_uuid'] as String? ?? '').isNotEmpty ? 1 : 0;
+          final bHasId = (b['sync_uuid'] as String? ?? '').isNotEmpty ? 1 : 0;
+          if (aHasId != bHasId) return bHasId.compareTo(aHasId);
           final aCreatedByMe = (a['is_created_by_me'] as int?) ?? 0;
           final bCreatedByMe = (b['is_created_by_me'] as int?) ?? 0;
           if (aCreatedByMe != bCreatedByMe) return bCreatedByMe.compareTo(aCreatedByMe);
@@ -1775,6 +2621,42 @@ class FirebaseSyncService {
         final duplicateIds = <int>[];
         for (int i = 1; i < list.length; i++) {
           duplicateIds.add(list[i]['id'] as int);
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // 🛡️ لا نجمع دفترين ماليين لمجرد تطابق الاسم
+        // ═══════════════════════════════════════════════════════════════
+        //
+        // «اسمان متطابقان = شخص واحد» معيار لا يصح في سوق يتكرر فيه الاسم.
+        // وكان الدمج تلقائياً عند كل بدء مزامنة، وبحذف نهائي (db.delete)
+        // لا رجعة فيه.
+        //
+        // القاعدة الآمنة: نُدمج فقط حين يكون واحد على الأكثر يملك حركة
+        // مالية — وهذه حالة التكرار الحقيقية (أُدخل العميل مرتين). أما
+        // سجلّان لكل منهما معاملاته فقد يكونان شخصين، والدمج يخلط ديونهما
+        // بلا رجعة. تلك تُترك لقرار إنسان.
+        int ledgersWithHistory = 0;
+        final Map<int, int> txCounts = {};
+        for (final c in list) {
+          final cid = c['id'] as int;
+          final r = await db.rawQuery(
+            'SELECT COUNT(*) AS n FROM transactions '
+            'WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+            [cid],
+          );
+          final n = (r.first['n'] as num?)?.toInt() ?? 0;
+          txCounts[cid] = n;
+          if (n > 0) ledgersWithHistory++;
+        }
+
+        if (ledgersWithHistory > 1) {
+          print('🛑 [FirebaseSyncService] تخطّي دمج «${list.first['name']}»: '
+              '$ledgersWithHistory سجلات تحمل معاملات — قد يكونون أشخاصاً '
+              'مختلفين بنفس الاسم. يحتاج قرار المستخدم.');
+          _syncEventController.add(
+              'تنبيه: عميلان بالاسم «${list.first['name']}» ولكلٍّ معاملاته — '
+              'لم يُدمجا تلقائياً');
+          continue; // لا دمج
         }
 
         for (final dupId in duplicateIds) {
@@ -1794,9 +2676,14 @@ class FirebaseSyncService {
             whereArgs: [dupId],
           );
 
-          // 3) حذف الصف المكرر
-          await db.delete(
+          // 3) 🛡️ حذف منطقي لا نهائي: الصف يبقى للتدقيق ويمكن استرجاعه
+          await db.update(
             'customers',
+            {
+              'is_deleted': 1,
+              'current_total_debt': 0.0,
+              'last_modified_at': DateTime.now().toIso8601String(),
+            },
             where: 'id = ?',
             whereArgs: [dupId],
           );
@@ -1867,23 +2754,18 @@ class FirebaseSyncService {
   
   /// رفع عميل جديد أو محدث
   /// يرجع true عند النجاح (أو عند تخطي مقصود)، و false عند فشل الرفع
+  ///
+  /// 🛡️ يقرأ الصف الحالي من القاعدة دائماً — ما يُمرَّر (من طابور الإعادة أو
+  /// WAL أو الشاشات) قد يكون لقطة قديمة.
   Future<bool> uploadCustomer(Map<String, dynamic> customerData) async {
     if (!_isInitialized || _groupId == null) return true;
-    
-    //  التحقق  من Rate Limiting
-    if (!_rateLimiter.canProceed()) {
-      final waitTime = _rateLimiter.getWaitTime();
-      print('⏳ تجاوز حد العمليات، انتظر ${waitTime?.inSeconds ?? 0} ثانية');
-      return true;
-    }
-    
-    // 🔒 التحقق من صحة البيانات
-    if (!_validateCustomerData(customerData)) {
-      print('❌ بيانات العميل غير صالحة - تم تخطي الرفع');
-      return true;
-    }
-    
-    final syncUuid = customerData['sync_uuid'] as String;
+    // 🛡️ أوفلاين: لا ننتظر مهلة 60 ثانية تحبس القفل — المعلّق يُلتقط عند العودة
+    if (_status == FirebaseSyncStatus.offline) return false;
+    // 🛡️ وضع الاستعادة: لا رفع من نسخة احتياطية قبل مقارنتها بالسحابة
+    if (_recoveryMode) return false;
+
+    final syncUuid = customerData['sync_uuid'] as String?;
+    if (syncUuid == null || syncUuid.isEmpty) return true;
 
     // 🛡️ نفس الحماية المطبّقة على المعاملات: معرّف غير صالح يُسقط التطبيق أصلياً
     if (!SyncSecurity.isValidDocumentId(syncUuid)) {
@@ -1891,101 +2773,105 @@ class FirebaseSyncService {
       return true;
     }
 
-    // 🔒 التحقق من أن العملية ليست قيد الرفع حالياً
-    if (_uploadLocks['customer_$syncUuid'] == true) {
-      print('⏳ العميل قيد الرفع حالياً: $syncUuid');
-      return true;
-    }
-    
-    // 🔒 التحقق من أنها لم تُرفع مسبقاً
-    final alreadySynced = await _coordinator!.isFirebaseSynced('customer', syncUuid);
-    
-    // 🔍 تشخيص دقيق: لماذا قد يتم تخطي الرفع؟
-    if (alreadySynced) {
-      // 🔄 الإصلاح: التحقق من تاريخ المزامنة الأخيرة
-      // إذا كان last_modified_at أحدث من synced_at، يجب إعادة رفع العميل
-      final lastModified = customerData['last_modified_at'] as String?;
-      final syncedAt = customerData['synced_at'] as String?;
-      
-      bool needsReupload = false;
-      if (lastModified != null && syncedAt != null) {
-        try {
-          final lastModDate = DateTime.parse(lastModified);
-          final syncedDate = DateTime.parse(syncedAt);
-          if (lastModDate.isAfter(syncedDate)) {
-            needsReupload = true;
-            print('⚠️ العميل تم تعديله بعد آخر مزامنة - جاري إعادة الرفع: $syncUuid');
-          }
-        } catch (e) {
-          // في حالة خطأ في التحليل، نعيد الرفع للتأكد
-          needsReupload = true;
-        }
-      } else if (syncedAt == null) {
-        // لم تتم مزامنته من قبل
-        needsReupload = true;
-      }
-      
-      if (!needsReupload) {
-        print('⏭️ العميل مرفوع ومحدث: $syncUuid');
+    // 🔒 القفل يُؤخذ قبل أي await (الفحص ثم الانتظار ثم الأخذ كان يسمح برفعين متوازيين)
+    final lockKey = 'customer_$syncUuid';
+    if (_uploadLocks[lockKey] == true) return true;
+    _uploadLocks[lockKey] = true;
+
+    String? walOperationId;
+    Map<String, dynamic> row = customerData;
+    try {
+      final db = await _db.database;
+      final fresh = await db.query('customers',
+          where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
+      if (fresh.isEmpty) return true;
+      row = Map<String, dynamic>.from(fresh.first);
+
+      if (!_validateCustomerData(row)) {
+        print('❌ بيانات العميل غير صالحة - تم تخطي الرفع');
         return true;
       }
-      // نستمر في الرفع إذا needsReupload = true
-    }
-    
-    print('🚀 بدء رفع العميل إلى Firebase: ${customerData['name']} ($syncUuid)');
-    
-    _uploadLocks['customer_$syncUuid'] = true;
-    _rateLimiter.recordOperation();
-    
-    // 🛡️ تسجيل في WAL قبل الرفع
-    String? walOperationId;
-    if (_crashRecovery != null) {
-      walOperationId = await _crashRecovery!.beginOperation(
-        type: 'customer',
-        action: 'create',
-        syncUuid: syncUuid,
-        data: customerData,
-      );
-      await _crashRecovery!.markUploading(walOperationId);
-    }
-    
-    try {
-      // حساب checksum للتحقق من التغييرات
-      final checksum = _calculateChecksum(customerData);
-      
-      // 🔐 حساب التوقيع
-      String? signature;
-      if (_groupSecretKey != null) {
-        final dataToSign = '$syncUuid|$_deviceId|$checksum';
-        signature = SyncSecurity.signData(dataToSign, _groupSecretKey!);
+
+      final tomb = (row['tombstoned'] as int?) ?? 0;
+      final pendingTomb = tomb == 2 || tomb == 3;
+      final isMine = (row['is_created_by_me'] as int?) != 0;
+      // 🛡️ وثيقة العميل يرفعها منشئه وحده. غيره كان يرفعها (فاتورة لعميل جهاز
+      // آخر مثلاً) فيسرق منها deviceId ويُفقد المنشئ ملكيته. الاستثناء: شاهد
+      // حذف أو إعادة تنشيط قام بهما هذا الجهاز.
+      if (!isMine && !pendingTomb) return true;
+
+      if (!pendingTomb && await _coordinator!.isFirebaseSynced('customer', syncUuid)) {
+        final lastModified = row['last_modified_at'] as String?;
+        final syncedAt = row['synced_at'] as String?;
+        bool needsReupload = false;
+        if (lastModified != null && syncedAt != null) {
+          final lm = DateTime.tryParse(lastModified);
+          final sa = DateTime.tryParse(syncedAt);
+          needsReupload = lm == null || sa == null || lm.isAfter(sa);
+        } else if (syncedAt == null) {
+          needsReupload = true;
+        }
+        if (!needsReupload) return true;
       }
-      
-      final bool isDeleted = ((customerData['is_deleted'] as int?) ?? 0) == 1;
+
+      // 🔧 Rate limiting: المحجوب «فشل» يُعاد لاحقاً، لا «نجاح» يُسقط العملية
+      if (!_rateLimiter.canProceed()) return false;
+      _rateLimiter.recordOperation();
+
+      // 🛡️ تسجيل في WAL قبل الرفع
+      if (_crashRecovery != null) {
+        walOperationId = await _crashRecovery!.beginOperation(
+          type: 'customer',
+          action: 'create',
+          syncUuid: syncUuid,
+          data: row,
+        );
+        await _crashRecovery!.markUploading(walOperationId);
+      }
+
+      final checksum = _calculateChecksum(row);
+      final bool isDeleted = tomb == 2 || ((row['is_deleted'] as int?) ?? 0) == 1;
       final now = DateTime.now();
+      final Map<String, dynamic> expectation =
+          await _computeCustomerExpectation(syncUuid);
+
+      final doc = <String, dynamic>{
+        'syncUuid': syncUuid,
+        'name': row['name'],
+        'phone': row['phone'],
+        'currentTotalDebt': isDeleted ? 0.0 : row['current_total_debt'],
+        'expectedBalance': isDeleted ? 0.0 : expectation['balance'],
+        'expectedTxCount': expectation['count'],
+        'expectedFingerprint': expectation['fingerprint'],
+        'expectedByDevice': _deviceId,
+        'generalNote': row['general_note'],
+        'address': row['address'],
+        'createdAt': row['created_at'],
+        'lastModifiedAt': row['last_modified_at'] ?? now.toIso8601String(),
+        'audioNotePath': row['audio_note_path'],
+        'deviceId': _deviceId,
+        'originDeviceId': _deviceId, // 🔍 للتتبع والتدقيق
+        'checksum': checksum,
+        'uploadedAt': FieldValue.serverTimestamp(),
+      };
+      // 🛡️ isDeleted يُكتب فقط عند حذف أو إعادة تنشيط صريحين: رفعٌ عادي بـ
+      // merge لا يمحو شاهد حذف كتبه جهاز آخر في الوقت نفسه.
+      if (tomb == 2) {
+        doc['isDeleted'] = true;
+        doc['is_deleted'] = 1;
+        doc['deletedAt'] = now.toIso8601String();
+      } else if (tomb == 3) {
+        doc['isDeleted'] = false;
+        doc['is_deleted'] = 0;
+      }
+      doc['signature'] = _signDoc(syncUuid, doc, isCustomer: true);
+
       await _firestore!
           .collection('customers')
           .doc(syncUuid)
-          .set({
-            'syncUuid': syncUuid,
-            'name': customerData['name'],
-            'phone': customerData['phone'],
-            'currentTotalDebt': isDeleted ? 0.0 : customerData['current_total_debt'],
-            'generalNote': customerData['general_note'],
-            'address': customerData['address'],
-            'createdAt': customerData['created_at'],
-            'lastModifiedAt': customerData['last_modified_at'] ?? now.toIso8601String(),
-            'audioNotePath': customerData['audio_note_path'],
-            'isDeleted': isDeleted,
-            'is_deleted': isDeleted ? 1 : 0,
-            'deviceId': _deviceId,
-            'originDeviceId': _deviceId, // 🔍 للتتبع والتدقيق
-            'checksum': checksum,
-            'signature': signature, // 🔐 التوقيع
-            'groupSecret': _groupSecret, // 🔐 المفتاح السري للتحقق
-            'uploadedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
-      
-      // 🔒 تسجيل في المنسق
+          .set(doc, SetOptions(merge: true))
+          .timeout(const Duration(seconds: 60));
+
       await _coordinator!.registerOperation(
         entityType: 'customer',
         syncUuid: syncUuid,
@@ -1993,185 +2879,171 @@ class FirebaseSyncService {
         checksum: checksum,
       );
       await _coordinator!.markFirebaseSynced('customer', syncUuid);
-      
-      // 📝 تحديث قاعدة البيانات لتسجيل الرفع
-      final db = await _db.database;
-      await db.execute('UPDATE customers SET synced_at = ? WHERE sync_uuid = ?', [now.toIso8601String(), syncUuid]);
-        
-      // 🔄 تتبع العملية (للتحديثات)
-      await _operationTracker!.trackCreate(
+
+      await db.update('customers', {'synced_at': now.toIso8601String()},
+          where: 'sync_uuid = ?', whereArgs: [syncUuid]);
+      if (tomb == 2) {
+        await db.update('customers', {'tombstoned': 1},
+            where: 'sync_uuid = ? AND tombstoned = 2', whereArgs: [syncUuid]);
+      } else if (tomb == 3) {
+        await db.update('customers', {'tombstoned': 0},
+            where: 'sync_uuid = ? AND tombstoned = 3', whereArgs: [syncUuid]);
+      }
+
+      await _operationTracker?.trackCreate(
         syncUuid: syncUuid,
         entityType: 'customer',
-        data: customerData,
+        data: row,
       );
-      
-      // 🛡️ تعليم العملية كمكتملة في WAL
+
       if (walOperationId != null && _crashRecovery != null) {
         await _crashRecovery!.markSynced(walOperationId);
       }
-      
-      print('☁️ تم رفع العميل بنجاح إلى الفاير بيس! 🚀');
-      print('   - الاسم: ${customerData['name']}');
-      print('   - ID: $syncUuid');
-      
+
+      print('☁️ رُفع العميل: ${row['name']} ($syncUuid)${tomb == 2 ? " [شاهد حذف]" : ""}');
       return true;
-      
     } catch (e) {
-      print('❌ فشل رفع العميل للفاير بيس! حاول مرة أخرى.');
-      print('   - الخطأ: $e');
-      
-      // 🛡️ تسجيل الفشل في WAL
+      print('❌ فشل رفع العميل $syncUuid: $e');
       if (walOperationId != null && _crashRecovery != null) {
         await _crashRecovery!.markFailed(walOperationId, e.toString());
       }
-      // 🔄 إضافة للـ Retry Queue
       await _addToRetryQueue(_RetryOperation(
         type: 'customer',
         syncUuid: syncUuid,
-        data: customerData,
+        data: row,
         retryCount: 0,
         nextRetryTime: DateTime.now().add(_baseRetryDelay),
       ));
       return false;
     } finally {
-      _uploadLocks.remove('customer_$syncUuid');
+      _uploadLocks.remove(lockKey);
     }
   }
-  
+
+  /// بصمة الحقول المالية لمعاملة — للمقارنة قبل الرفع وبعده (CAS).
+  String _txFingerprint(Map<String, dynamic> t) =>
+      '${(t['amount_changed'] as num?)?.toDouble()}|${t['transaction_type']}|'
+      '${t['is_deleted'] ?? 0}|${t['customer_id']}|${t['transaction_note']}|${t['invoice_sync_uuid']}';
+
   /// رفع معاملة جديدة أو محدثة
   /// يرجع true عند النجاح (أو عند تخطي مقصود)، و false عند فشل الرفع
   ///
   /// [force] يعيد الرفع حتى لو كانت معلّمة محلياً كمرفوعة — للمطابقة فقط.
-  /// لا يتجاوز أبداً قيد الملكية: معاملات المزامنة (`is_created_by_me = 0`)
-  /// تُرفض في كل المسارات بما فيها الرفع الشامل والرفع القسري.
+  ///
+  /// 🛡️ ضمانات:
+  ///   • تُقرأ المعاملة من القاعدة لحظة الرفع (طابور الإعادة وWAL يحملان لقطات
+  ///     قديمة كانت تُرفع فوق نسخة أحدث — سيناريو 09).
+  ///   • CAS: لا تُعلَّم «مرفوعة» إلا إن لم تتغير منذ قراءتها؛ وإلا تبقى معلّقة.
+  ///   • لا تُرفع معاملة جهاز آخر أبداً — إلا شاهد حذف ناتج عن حذف عميل هنا.
+  ///   • معاملة فاتورة نشطة لا تُرفع هنا: تسافر داخل حزمة الفاتورة وحدها.
   Future<bool> uploadTransaction(
     Map<String, dynamic> txData,
     String customerSyncUuid, {
     bool force = false,
   }) async {
     if (!_isInitialized || _groupId == null) return true;
-    
-    // 🔒 حديد: لا تُرفع معاملة أتت من المزامنة بأي طريق كان.
-    // NULL يُعامل كـ «من هذا الجهاز» للتوافق مع السجلات القديمة فقط.
-    final isCreatedByMe = txData['is_created_by_me'];
-    if (isCreatedByMe != null && isCreatedByMe == 0) {
-      print('🚫 رُفض رفع معاملة ليست من إنشاء هذا الجهاز: ${txData['transaction_uuid']}');
-      return true; // تخطٍ مقصود — ليس فشلاً يُعاد
-    }
-    
-    // 🔧 التحقق من Rate Limiting
-    if (!_rateLimiter.canProceed()) {
-      final waitTime = _rateLimiter.getWaitTime();
-      print('⏳ تجاوز حد العمليات، انتظر ${waitTime?.inSeconds ?? 0} ثانية');
-      return true;
-    }
-    
-    // 🔒 التحقق من صحة البيانات
-    if (!_validateTransactionData(txData)) {
-      print('❌ بيانات المعاملة غير صالحة - تم تخطي الرفع');
-      return true;
-    }
-    
-    final syncUuid = txData['transaction_uuid'] as String;
+    if (_status == FirebaseSyncStatus.offline) return false;
+    if (_recoveryMode) return false;
+
+    final syncUuid = (txData['transaction_uuid'] as String?) ?? '';
+    if (syncUuid.isEmpty) return true;
 
     // 🛡️ معرّف غير صالح (يحتوي فاصل مسار مثلاً) يُنهي التطبيق داخل مكتبة Firestore
-    // الأصلية قبل أن يصل الخطأ إلى Dart، لذا نوقفه هنا. الإصلاح الفعلي يتم في
-    // DatabaseService.sanitizeLegacyTransactionUuids عند بدء التشغيل.
     if (!SyncSecurity.isValidDocumentId(syncUuid)) {
       print('❌ تخطي رفع معاملة بمعرّف غير صالح لـ Firestore: $syncUuid');
       return true;
     }
 
-    // 🔒 التحقق من أن العملية ليست قيد الرفع حالياً
-    if (_uploadLocks['transaction_$syncUuid'] == true) {
-      print('⏳ المعاملة قيد الرفع حالياً: $syncUuid');
-      return true;
-    }    // 🔒 التحقق من أنها لم تُرفع مسبقاً
-    final lastSyncTime = await _coordinator!.getLastSyncTime('transaction', syncUuid);  // ⚠️ المعاملات في قاعدة البيانات المحلية لا تحتوي على حقل updated_at (في النسخة الحالية)
-    // لذلك إذا كانت مسجلة في المنسق أنها مرفوعة، نتحقق من الحالة المحلية الفعلية
-    if (!force && lastSyncTime != null) {
-      // 🔄 الإصلاح: إذا كانت is_uploaded = 0 محلياً، يجب إعادة رفعها!
-      // لأن تسجيل المنسق قد يكون خاطئاً (سجل قبل فشل الرفع الفعلي)
-      if (txData['is_uploaded'] != 1) {
-        print('⚠️ المعاملة مسجلة في المنسق كمرفوعة لكن is_uploaded=0 - جاري إعادة الرفع: $syncUuid');
-        // لا نرجع هنا، نستمر في الرفع
-      } else {
-        print('⏭️ المعاملة مرفوعة فعلاً (المنسق + المحلي متطابقان): $syncUuid');
+    // 🔒 القفل قبل أي await
+    final lockKey = 'transaction_$syncUuid';
+    if (_uploadLocks[lockKey] == true) return true;
+    _uploadLocks[lockKey] = true;
+
+    String? walOperationId;
+    Map<String, dynamic> tx = Map<String, dynamic>.from(txData);
+    String custUuid = customerSyncUuid;
+    try {
+      final db = await _db.database;
+      final rows = await db.rawQuery(
+        'SELECT t.*, c.sync_uuid AS _customer_sync_uuid FROM transactions t '
+        'LEFT JOIN customers c ON c.id = t.customer_id '
+        'WHERE t.transaction_uuid = ? LIMIT 1',
+        [syncUuid],
+      );
+      if (rows.isEmpty) return true;
+      tx = Map<String, dynamic>.from(rows.first);
+      final cs = tx.remove('_customer_sync_uuid') as String?;
+      if (cs != null && cs.isNotEmpty) custUuid = cs;
+
+      final isMine = (tx['is_created_by_me'] as int?) != 0; // NULL = قديم = من هذا الجهاز
+      final isTxDeleted = ((tx['is_deleted'] as int?) ?? 0) == 1;
+      if (!isMine && !isTxDeleted) {
+        return true; // تخطٍ مقصود — ليس فشلاً يُعاد
+      }
+      if (!force && (tx['is_uploaded'] as int?) == 1) return true;
+
+      final invUuid = tx['invoice_sync_uuid'] as String?;
+      if (!isTxDeleted && invUuid != null && invUuid.isNotEmpty) {
+        return true; // حزمة الفاتورة هي القناة الوحيدة لمعاملات الفواتير
+      }
+
+      if (!_validateTransactionData(tx)) {
+        print('❌ بيانات المعاملة غير صالحة - تم تخطي الرفع');
         return true;
       }
-    }
-    
-      
-    // 🔒 التحقق من عدم وجود معاملة مكررة
-    final isDuplicate = await _coordinator!.isDuplicateTransaction(
-      customerId: txData['customer_id'] as int,
-      transactionDate: txData['transaction_date'] as String,
-      amount: (txData['amount_changed'] as num).toDouble(),
-      transactionType: txData['transaction_type'] as String? ?? 'debt',
-    );
-    
-    // لا نتخطى إذا كانت مكررة، لكن نسجل تحذير
-    if (isDuplicate) {
-      print('⚠️ تحذير: معاملة قد تكون مكررة: $syncUuid');
-    }
-    
-    _uploadLocks['transaction_$syncUuid'] = true;
-    _rateLimiter.recordOperation();
-    
-    // 🛡️ تسجيل في WAL قبل الرفع
-    String? walOperationId;
-    if (_crashRecovery != null) {
-      final walData = Map<String, dynamic>.from(txData);
-      walData['customer_sync_uuid'] = customerSyncUuid;
-      walOperationId = await _crashRecovery!.beginOperation(
-        type: 'transaction',
-        action: 'create',
-        syncUuid: syncUuid,
-        data: walData,
-      );
-      await _crashRecovery!.markUploading(walOperationId);
-    }
-    
-    try {
-      // حساب checksum للتحقق من التغييرات
-      final checksum = _calculateChecksum(txData);
-      
-      // 🔐 حساب التوقيع
-      String? signature;
-      if (_groupSecretKey != null) {
-        final dataToSign = '$syncUuid|$_deviceId|$checksum';
-        signature = SyncSecurity.signData(dataToSign, _groupSecretKey!);
+
+      if (!_rateLimiter.canProceed()) return false;
+      _rateLimiter.recordOperation();
+
+      // 🛡️ تسجيل في WAL قبل الرفع
+      if (_crashRecovery != null) {
+        final walData = Map<String, dynamic>.from(tx);
+        walData['customer_sync_uuid'] = custUuid;
+        walOperationId = await _crashRecovery!.beginOperation(
+          type: 'transaction',
+          action: 'create',
+          syncUuid: syncUuid,
+          data: walData,
+        );
+        await _crashRecovery!.markUploading(walOperationId);
       }
-      
-      final bool isTxDeleted = ((txData['is_deleted'] as int?) ?? 0) == 1;
+
+      final sentFingerprint = _txFingerprint(tx);
+      final checksum = _calculateChecksum(tx);
+      final nowIso = DateTime.now().toIso8601String();
+      final doc = <String, dynamic>{
+        'syncUuid': syncUuid,
+        'customerSyncUuid': custUuid,
+        'invoiceSyncUuid': tx['invoice_sync_uuid'],
+        'transactionDate': tx['transaction_date'],
+        'amountChanged': tx['amount_changed'],
+        'balanceBeforeTransaction': tx['balance_before_transaction'],
+        'newBalanceAfterTransaction': tx['new_balance_after_transaction'],
+        'transactionNote': tx['transaction_note'],
+        'transactionType': tx['transaction_type'],
+        'description': tx['description'],
+        'createdAt': tx['created_at'],
+        'lastModifiedAt': nowIso,
+        'audioNotePath': tx['audio_note_path'],
+        'deviceId': _deviceId,
+        'originDeviceId': isMine ? _deviceId : (tx['origin_device_id'] ?? _deviceId),
+        'checksum': checksum,
+        'uploadedAt': FieldValue.serverTimestamp(),
+      };
+      // 🛡️ لا نكتب isDeleted=false أبداً: تعديل يُرفع (merge) بعد شاهد حذف
+      // كتبه جهاز حذف العميل لا يجوز أن «يُحيي» المعاملة. الحذف نهائي.
+      if (isTxDeleted) {
+        doc['isDeleted'] = true;
+        doc['is_deleted'] = 1;
+      }
+      doc['signature'] = _signDoc(syncUuid, doc);
+
       await _firestore!
           .collection('transactions')
           .doc(syncUuid)
-          .set({
-            'syncUuid': syncUuid,
-            'customerSyncUuid': customerSyncUuid,
-            'invoiceSyncUuid': txData['invoice_sync_uuid'],
-            'transactionDate': txData['transaction_date'],
-            'amountChanged': txData['amount_changed'],
-            'balanceBeforeTransaction': txData['balance_before_transaction'],
-            'newBalanceAfterTransaction': txData['new_balance_after_transaction'],
-            'transactionNote': txData['transaction_note'],
-            'transactionType': txData['transaction_type'],
-            'description': txData['description'],
-            'createdAt': txData['created_at'],
-            'lastModifiedAt': DateTime.now().toIso8601String(),
-            'audioNotePath': txData['audio_note_path'],
-            'isDeleted': isTxDeleted,
-            'is_deleted': isTxDeleted ? 1 : 0,
-            'deviceId': _deviceId,
-            'originDeviceId': _deviceId, // 🔍 للتتبع والتدقيق
-            'checksum': checksum,
-            'signature': signature, // 🔐 التوقيع
-            'groupSecret': _groupSecret, // 🔐 المفتاح السري للتحقق
-            'uploadedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
-      
-      // 🔒 تسجيل في المنسق وتحديث قاعدة البيانات
+          .set(doc, SetOptions(merge: true))
+          .timeout(const Duration(seconds: 60));
+
       await _coordinator!.registerOperation(
         entityType: 'transaction',
         syncUuid: syncUuid,
@@ -2179,32 +3051,31 @@ class FirebaseSyncService {
         checksum: checksum,
       );
       await _coordinator!.markFirebaseSynced('transaction', syncUuid);
-      
-      // 📝 تحديث قاعدة البيانات لتسجيل الرفع
-      final db = await _db.database;
-      await db.execute('UPDATE transactions SET is_uploaded = 1 WHERE transaction_uuid = ?', [syncUuid]);
-      
-      print('☁️ تم رفع المعاملة بنجاح إلى الفاير بيس! 🚀');
-      print('   - ID: $syncUuid');
-      print('   - المبلغ: ${txData['amountChanged'] ?? txData['amount_changed']}');
-      
-      // 🛡️ تعليم العملية كمكتملة في WAL
+
+      // 🛡️ CAS: «مرفوعة» فقط إن لم تتغير المعاملة أثناء الرفع
+      final cur = await db.query('transactions',
+          where: 'transaction_uuid = ?', whereArgs: [syncUuid], limit: 1);
+      if (cur.isNotEmpty) {
+        if (_txFingerprint(cur.first) == sentFingerprint) {
+          await db.update('transactions', {'is_uploaded': 1, 'last_uploaded_at': nowIso},
+              where: 'transaction_uuid = ?', whereArgs: [syncUuid]);
+        } else {
+          await db.update('transactions', {'is_uploaded': 0},
+              where: 'transaction_uuid = ?', whereArgs: [syncUuid]);
+        }
+      }
+
       if (walOperationId != null && _crashRecovery != null) {
         await _crashRecovery!.markSynced(walOperationId);
       }
-      
       return true;
     } catch (e) {
-      print('❌ فشل رفع المعاملة: $e');
-      
-      // 🛡️ تسجيل الفشل في WAL
+      print('❌ فشل رفع المعاملة $syncUuid: $e');
       if (walOperationId != null && _crashRecovery != null) {
         await _crashRecovery!.markFailed(walOperationId, e.toString());
       }
-      
-      // 🔄 إضافة للـ Retry Queue
-      final retryData = Map<String, dynamic>.from(txData);
-      retryData['customer_sync_uuid'] = customerSyncUuid;
+      final retryData = Map<String, dynamic>.from(tx);
+      retryData['customer_sync_uuid'] = custUuid;
       await _addToRetryQueue(_RetryOperation(
         type: 'transaction',
         syncUuid: syncUuid,
@@ -2214,10 +3085,74 @@ class FirebaseSyncService {
       ));
       return false;
     } finally {
-      _uploadLocks.remove('transaction_$syncUuid');
+      _uploadLocks.remove(lockKey);
     }
   }
-  
+
+  /// شرط SQL لـ«معاملة يجب أن يرفعها هذا الجهاز»: أملكها ولم تُرفع (بما فيها
+  /// المحذوفة = شاهد حذف)، أو معاملة غيري أبطلها حذفي أنا للعميل.
+  /// معاملات الفواتير النشطة مستثناة: تسافر داخل حزمة الفاتورة.
+  static const String _ownedPendingWhere =
+      "t.transaction_uuid IS NOT NULL AND t.transaction_uuid != '' "
+      "AND (t.is_uploaded = 0 OR t.is_uploaded IS NULL) "
+      "AND ((t.is_created_by_me = 1 OR t.is_created_by_me IS NULL) "
+      "     OR (t.is_created_by_me = 0 AND t.is_deleted = 1)) "
+      "AND (t.invoice_sync_uuid IS NULL OR t.invoice_sync_uuid = '' OR t.is_deleted = 1)";
+
+  /// 🛡️ يرفع كل ما يجب أن يرفعه هذا الجهاز — مهما كان منشئ العميل ومهما قال
+  /// المنسق. (Watchdog كان يتخطى أي معاملة سبق رفعها مرة، فالتعديلات اللاحقة
+  /// عليها لا تُرفع أبداً إلا لعملاء أنشأهم هذا الجهاز.)
+  Future<int> uploadAllOwnedPending({int? limit}) => _uploadAllOwnedPending(limit: limit);
+
+  Future<int> _uploadAllOwnedPending({int? limit}) async {
+    if (!_isInitialized || _groupId == null || _recoveryMode) return 0;
+    if (_status == FirebaseSyncStatus.offline) return 0;
+    final db = await _db.database;
+    final rows = await db.rawQuery('''
+      SELECT t.*, c.sync_uuid AS customer_sync_uuid
+      FROM transactions t
+      JOIN customers c ON c.id = t.customer_id
+      WHERE c.sync_uuid IS NOT NULL AND c.sync_uuid != '' AND $_ownedPendingWhere
+      ORDER BY t.transaction_date ASC, t.id ASC
+      ${limit != null ? 'LIMIT $limit' : ''}
+    ''');
+    int ok = 0;
+    for (final r in rows) {
+      final cs = r['customer_sync_uuid'] as String;
+      try {
+        if (await uploadTransaction(Map<String, dynamic>.from(r), cs)) ok++;
+      } catch (e) {
+        print('⚠️ رفع معلّق ${r['transaction_uuid']}: $e');
+      }
+    }
+    return ok;
+  }
+
+  /// 🗑️ رفع حذف عميل فوراً: شاهد العميل + شاهد لكل معاملة كانت معروفة هنا
+  /// (حتى معاملات الأجهزة الأخرى، ومعاملات الفواتير). كل جهاز يُبطل بالضبط ما
+  /// أبطله هذا الجهاز، وما سُجّل أوفلاين بعد الحذف يبقى ويعيد تنشيط العميل.
+  Future<void> syncCustomerDeletionNow(int customerId) async {
+    if (!_isInitialized || _groupId == null) return;
+    try {
+      final db = await _db.database;
+      final rows = await db.query('customers', where: 'id = ?', whereArgs: [customerId], limit: 1);
+      if (rows.isEmpty) return;
+      final c = rows.first;
+      final cs = c['sync_uuid'] as String?;
+      if (cs == null || cs.isEmpty) return;
+      await uploadCustomer(c);
+      final pend = await db.rawQuery(
+        'SELECT t.* FROM transactions t WHERE t.customer_id = ? AND $_ownedPendingWhere',
+        [customerId],
+      );
+      for (final t in pend) {
+        await uploadTransaction(Map<String, dynamic>.from(t), cs);
+      }
+    } catch (e) {
+      print('⚠️ رفع حذف العميل $customerId: $e (ستتكفل به المزامنة الخلفية)');
+    }
+  }
+
   /// ═══════════════════════════════════════════════════════════════════════
   /// مزامنة البيانات المعلقة
   /// ═══════════════════════════════════════════════════════════════════════
@@ -2249,8 +3184,12 @@ class FirebaseSyncService {
       int appliedCust = 0;
       for (final doc in custSnap.docs) {
         final data = doc.data();
-        if (data['deviceId'] == _deviceId) continue; // من صنعي — عندي نسخة أصلية
         try {
+          if (data['deviceId'] == _deviceId) {
+            // مستندي: قد يحمل شاهد حذف مدموجاً، أو عميلاً فقدتُه باستعادة نسخة
+            await _handleOwnCustomerDoc(doc.id, data);
+            continue;
+          }
           await _applyCustomerChange(doc.id, data);
           appliedCust++;
         } catch (e) {
@@ -2262,7 +3201,8 @@ class FirebaseSyncService {
       print('❌ [Catch-Up] فشل سحب العملاء: $e');
     }
 
-    // 2️⃣ المعاملات
+    // 2️⃣ المعاملات (كل مستند يحمل إصداره uploadedAt، فلا تُطبَّق نسخة أقدم
+    // مما وصل عبر المستمع أثناء هذه الدورة الطويلة)
     try {
       final txSnap = await _firestore!.collection('transactions').get().timeout(
             const Duration(seconds: 120),
@@ -2270,8 +3210,11 @@ class FirebaseSyncService {
       int appliedTx = 0;
       for (final doc in txSnap.docs) {
         final data = doc.data();
-        if (data['deviceId'] == _deviceId) continue;
         try {
+          if (data['deviceId'] == _deviceId) {
+            await _handleOwnTxDoc(doc.id, data);
+            continue;
+          }
           await _applyTransactionChange(doc.id, data);
           appliedTx++;
         } catch (e) {
@@ -2283,62 +3226,61 @@ class FirebaseSyncService {
       print('❌ [Catch-Up] فشل سحب المعاملات: $e');
     }
 
-    print('✅ [Catch-Up] اكتمل السحب الكامل');
-
-    // ⚖️ بعد السحب الكامل: نفّذ أي قرارات إبطال معلّقة وصلت معاملاتها
+    // 3️⃣ حركات المخزون (المستمع يلتقط الجديد؛ هذا لما فاته)
     try {
-      await _verdictService.processPendingVerdicts();
-    } catch (_) {}
+      final n = await StockMovementSyncService().downloadAll();
+      if (n > 0) print('✅ [Catch-Up] حركات مخزون: طُبّق $n');
+    } catch (e) {
+      print('❌ [Catch-Up] فشل سحب حركات المخزون: $e');
+    }
+
+    print('✅ [Catch-Up] اكتمل السحب الكامل');
+    // ⚖️ قرارات الإبطال عن بُعد لم تعد تُطبَّق (انظر MatchVerdictService).
   }
 
   /// 🚀 رفع فوري لعميل محدد ومعاملاته المعلقة (يُستدعى لحظة إنشاء/تعديل العميل).
   ///
-  /// قبل هذه الدالة كان الإنشاء يُخزَّن محلياً فقط، والرفع ينتظر الدورة
-  /// الخلفية (10 دقائق) أو الـ watchdog (30 ثانية) — فإذا أُغلق التطبيق
-  /// بسرعة بعد الإضافة بقي العميل محلياً ولم يصل لبقية الأجهزة.
-  /// المنطق نفسه كتلة _syncPendingChanges: العميل أولاً ثم معاملاته.
+  /// 🛡️ لعميل أنشأه جهاز آخر: لا نرفع وثيقته (يرفعها منشئه)، لكن نرفع
+  /// معاملاتي المعلّقة عليه. كانت هذه الدالة تعود فوراً لعملاء الأجهزة الأخرى،
+  /// فتعديلات معاملاتي عليهم لا تُرفع أبداً (سيناريو 33).
   Future<void> syncCustomerNow(int customerId) async {
     if (!_isInitialized || _groupId == null) return;
 
     try {
       final db = await _db.database;
-      final rows = await db.query(
-        'customers',
-        where: 'id = ? AND sync_uuid IS NOT NULL AND sync_uuid != \'\' '
-            'AND (is_deleted IS NULL OR is_deleted = 0) '
-            'AND (is_created_by_me = 1 OR is_created_by_me IS NULL)',
-        whereArgs: [customerId],
-        limit: 1,
-      );
+      final rows = await db.query('customers',
+          where: 'id = ?', whereArgs: [customerId], limit: 1);
       if (rows.isEmpty) return;
-
       final customer = rows.first;
-      final customerSyncUuid = customer['sync_uuid'] as String;
+      final customerSyncUuid = customer['sync_uuid'] as String?;
+      if (customerSyncUuid == null || customerSyncUuid.isEmpty) return;
 
-      final customerOk = await uploadCustomer(customer);
-      if (!customerOk) return;
+      final isMine = (customer['is_created_by_me'] as int?) != 0;
+      final tomb = (customer['tombstoned'] as int?) ?? 0;
+      final isDeleted = ((customer['is_deleted'] as int?) ?? 0) == 1;
+      if ((isMine && !isDeleted) || tomb == 2 || tomb == 3) {
+        final customerOk = await uploadCustomer(customer);
+        if (!customerOk) return;
+      }
 
-      final pendingTx = await db.query(
-        'transactions',
-        where: 'customer_id = ? AND transaction_uuid IS NOT NULL AND transaction_uuid != \'\' '
-            'AND (is_deleted IS NULL OR is_deleted = 0) '
-            'AND (is_uploaded = 0 OR is_uploaded IS NULL) '
-            'AND (is_created_by_me = 1 OR is_created_by_me IS NULL)',
-        whereArgs: [customerId],
-        orderBy: 'transaction_date ASC, id ASC',
+      final pendingTx = await db.rawQuery(
+        'SELECT t.* FROM transactions t WHERE t.customer_id = ? AND $_ownedPendingWhere '
+        'ORDER BY t.transaction_date ASC, t.id ASC',
+        [customerId],
       );
 
       for (final tx in pendingTx) {
         try {
-          await uploadTransaction(tx, customerSyncUuid);
+          await uploadTransaction(Map<String, dynamic>.from(tx), customerSyncUuid);
         } catch (e) {
           print('⚠️ [رفع فوري] فشل رفع معاملة ${tx['transaction_uuid']}: $e '
               '(ستُعاد تلقائياً)');
         }
       }
 
-      print('🚀 [رفع فوري] اكتمل رفع العميل "${customer['name']}" '
-          'و${pendingTx.length} معاملة');
+      if (pendingTx.isNotEmpty) {
+        print('🚀 [رفع فوري] العميل "${customer['name']}": ${pendingTx.length} معاملة');
+      }
     } catch (e) {
       print('⚠️ [رفع فوري] فشل رفع العميل $customerId: $e (ستتكفل به المزامنة الخلفية)');
     }
@@ -2348,18 +3290,22 @@ class FirebaseSyncService {
     void Function(double progress, String message)? onProgress,
   }) async {
     if (!_isInitialized || _groupId == null) return;
+    if (_recoveryMode) return; // وضع الاستعادة: الرفع بعد اكتمال المقارنة
 
-    print('🔄 جاري مزامنة التغييرات المعلقة (عميل-بعميل)...');
+    print('🔄 جاري مزامنة التغييرات المعلقة...');
 
     final db = await _db.database;
 
-    // 🎯 جلب العملاء الذين أنشأهم هذا الجهاز ويحتاجون رفعًا أو إعادة رفع.
+    // 🎯 وثائق العملاء: ما أنشأه هذا الجهاز وتغيّر، + كل شاهد حذف/تنشيط محلي
+    // بانتظار الرفع (حتى لعملاء أجهزة أخرى).
     final customers = await db.query(
       'customers',
       where:
-          "sync_uuid IS NOT NULL AND sync_uuid != '' AND (is_deleted IS NULL OR is_deleted = 0) "
-          "AND (synced_at IS NULL OR last_modified_at > synced_at) "
-          "AND (is_created_by_me = 1 OR is_created_by_me IS NULL)",
+          "sync_uuid IS NOT NULL AND sync_uuid != '' AND ("
+          "  ((is_deleted IS NULL OR is_deleted = 0) "
+          "   AND (synced_at IS NULL OR last_modified_at > synced_at) "
+          "   AND (is_created_by_me = 1 OR is_created_by_me IS NULL)) "
+          "  OR tombstoned IN (2, 3))",
       orderBy: 'id ASC',
     );
 
@@ -2367,67 +3313,31 @@ class FirebaseSyncService {
     var processedCustomers = 0;
 
     for (final customer in customers) {
-      final customerSyncUuid = customer['sync_uuid'] as String?;
-      final customerId = customer['id'] as int;
       final customerName = customer['name'] as String? ?? '';
-
-      // 1️⃣ رفع العميل أولًا والتحقق من نجاحه. لا نرفع معاملاته إن فشل رفع العميل،
-      // لأن معاملة بدون عميلها تُخزَّن يتيمة على الجهاز الآخر.
-      bool customerOk = false;
       try {
-        customerOk = await uploadCustomer(customer);
+        await uploadCustomer(customer);
       } catch (e) {
         print('⚠️ فشل رفع العميل $customerName: $e');
       }
-      if (!customerOk) {
-        processedCustomers++;
-        continue; // نحاول مع العميل التالي؛ المعاملات تبقى معلّقة (is_uploaded=0).
-      }
-
-      // 2️⃣ رفع جميع معاملات هذا العميل (من إنشاء هذا الجهاز) التي لم تُرفع.
-      final pendingTx = await db.query(
-        'transactions',
-        where:
-            "customer_id = ? AND transaction_uuid IS NOT NULL AND transaction_uuid != '' "
-            "AND (is_deleted IS NULL OR is_deleted = 0) "
-            "AND (is_uploaded = 0 OR is_uploaded IS NULL) "
-            "AND (is_created_by_me = 1 OR is_created_by_me IS NULL)",
-        whereArgs: [customerId],
-        orderBy: 'transaction_date ASC, id ASC',
-      );
-
-      int txFailed = 0;
-      for (final tx in pendingTx) {
-        try {
-          final ok = await uploadTransaction(tx, customerSyncUuid!);
-          if (!ok) txFailed++;
-        } catch (e) {
-          txFailed++;
-          print('⚠️ فشل رفع معاملة ${tx['transaction_uuid']}: $e');
-        }
-      }
-
-      if (txFailed == 0 && pendingTx.isNotEmpty) {
-        print('✅ اكتمل رفع كتلة العميل "$customerName": '
-            '${pendingTx.length} معاملة');
-      } else if (txFailed > 0) {
-        print('⚠️ العميل "$customerName": فشل رفع $txFailed معاملة '
-            '(ستُعاد محاولتها تلقائيًا)');
-      }
-
       processedCustomers++;
       if (totalCustomers > 0 && onProgress != null) {
-        final p = (processedCustomers / totalCustomers) * 0.85;
-        onProgress(p, 'رفع $customerName ومعاملاته '
-            '($processedCustomers/$totalCustomers)...');
+        final p = (processedCustomers / totalCustomers) * 0.5;
+        onProgress(p, 'رفع العملاء ($processedCustomers/$totalCustomers)...');
       }
     }
+
+    // 🛡️ كل معاملة يجب أن يرفعها هذا الجهاز — بغض النظر عن منشئ العميل.
+    // (معاملة وصلت قبل عميلها لا تضيع: الجهاز المستقبل يحفظها يتيمة.)
+    onProgress?.call(0.5, 'رفع المعاملات المعلّقة...');
+    final uploaded = await _uploadAllOwnedPending();
+    if (uploaded > 0) print('✅ رُفعت $uploaded معاملة معلّقة');
 
     // 3️⃣ رفع الفواتير والمنتجات غير المرفوعة (85-100%).
     onProgress?.call(0.85, 'جاري رفع الفواتير والمنتجات...');
     try {
       await InvoiceSyncService().syncPendingInvoices();
       await ProductSyncService().syncPendingProducts();
+      await StockMovementSyncService().uploadPending();
     } catch (e) {
       print('⚠️ فشل رفع الفواتير/المنتجات المعلقة: $e');
     }
@@ -2538,6 +3448,17 @@ class FirebaseSyncService {
       
       // 3. التحقق من سلامة البيانات (90%)
       onProgress?.call(0.90, 'جاري التحقق من سلامة البيانات...');
+
+      // 🧮 محاكمة البصمات الحسابية الواردة بعد أن استقرّ التنزيل والرفع معاً.
+      // قبل هذه النقطة الفروق طبيعية (وصل العميل ولمّا تصل معاملاته)؛ بعدها
+      // كل فرق باقٍ هو انحراف حقيقي يستحق أن يُقال.
+      final expectationReport = await verifyExpectedBalances();
+      final divergentList =
+          expectationReport['divergences'] as List<Map<String, dynamic>>;
+      if (divergentList.isNotEmpty) {
+        print('🚨 [performFullSync] ${divergentList.length} انحراف حسابي بين الأجهزة');
+      }
+
       final integrity = await verifyDataIntegrity();
       if (integrity['valid'] != true) {
         print('⚠️ [performFullSync] تحذير: بعض البيانات قد لا تكون متزامنة');
@@ -2596,9 +3517,12 @@ class FirebaseSyncService {
     try {
       print('🔍 [_downloadAllData] محاولة قراءة customers...');
       onProgress?.call(0.0, 'جاري تنزيل العملاء...');
+      // 🛡️ من الخادم لا من ذاكرة Firestore المحلية: على الجوال (persistence
+      // مفعّلة) كان get() بلا إنترنت يعيد نسخة الذاكرة «بنجاح»، فتكتمل
+      // الاستعادة على بيانات قديمة.
       customersSnapshot = await _firestore!
           .collection('customers')
-          .get();
+          .get(const GetOptions(source: Source.server));
       
       totalCustomers = customersSnapshot.docs.length;
       print('✅ [_downloadAllData] تم تنزيل ${totalCustomers} عميل');
@@ -2615,6 +3539,8 @@ class FirebaseSyncService {
       final data = doc.data();
       if (data['deviceId'] != _deviceId) {
         await _applyCustomerChange(doc.id, data);
+      } else {
+        await _handleOwnCustomerDoc(doc.id, data);
       }
       processedCustomers++;
       if (totalCustomers > 0) {
@@ -2626,7 +3552,7 @@ class FirebaseSyncService {
     onProgress?.call(0.5, 'جاري تنزيل المعاملات...');
     final transactionsSnapshot = await _firestore!
         .collection('transactions')
-        .get();
+        .get(const GetOptions(source: Source.server));
 
     final totalTransactions = transactionsSnapshot.docs.length;
     var processedTransactions = 0;
@@ -2635,6 +3561,8 @@ class FirebaseSyncService {
       final data = doc.data();
       if (data['deviceId'] != _deviceId) {
         await _applyTransactionChange(doc.id, data);
+      } else {
+        await _handleOwnTxDoc(doc.id, data);
       }
       processedTransactions++;
       if (totalTransactions > 0) {
@@ -2647,14 +3575,22 @@ class FirebaseSyncService {
     // تفويض كامل لمح محرك الفواتير: كل وثيقة تمرّ عبر مسار الاستقبال الإدمبوتنت
     // الذي يحترم version و creator_device_id، فلا تُكرَّر ولا تُستبدل نسخة أحدث.
     onProgress?.call(0.85, 'جاري تنزيل الفواتير والمنتجات...');
-    try {
-      await InvoiceSyncService().downloadAllInvoices(onProgress: (p, m) {
+    // 🛡️ فشل قراءة الفواتير يُفشل السحب الكامل (كان يُبتلع فتبدو المزامنة
+    // مكتملة وحزم الفواتير لم تُقرأ — وعليه كانت تنتهي الاستعادة).
+    await InvoiceSyncService().downloadAllInvoices(
+      rethrowErrors: true,
+      onProgress: (p, m) {
         onProgress?.call(0.85 + (p * 0.10), m);
-      });
+      },
+    );
+    try {
       await ProductSyncService().downloadAllProducts();
     } catch (e) {
-      print('⚠️ فشل تنزيل الفواتير/المنتجات أثناء المزامنة الشاملة: $e');
+      print('⚠️ فشل تنزيل المنتجات أثناء المزامنة الشاملة: $e');
     }
+    // 📦 حركات المخزون: فشلها يُفشل السحب الكامل (كالفواتير) — الجهاز المستعيد
+    // أو الجديد بلا حركات يحسب كمية خاطئة.
+    await StockMovementSyncService().downloadAll(rethrowErrors: true);
 
     onProgress?.call(1.0, 'تم تنزيل البيانات!');
     print('✅ تم تنزيل البيانات من Firebase');
@@ -2752,10 +3688,14 @@ class FirebaseSyncService {
         where: 'sync_uuid IS NOT NULL AND (is_deleted IS NULL OR is_deleted = 0)',
       );
       
-      // عدد العملاء في Firebase
-      final remoteCustomersCount = await _firestore!
+      // عدد العملاء في Firebase = الكل − شواهد الحذف.
+      // 🛡️ isNotEqualTo يستبعد الوثائق التي لا تحمل الحقل أصلاً، والوثائق
+      // الحية لم تعد تكتب isDeleted:false — فكان العدّ يُسقطها كلها.
+      final remoteCustomersAll =
+          await _firestore!.collection('customers').count().get();
+      final remoteCustomersDel = await _firestore!
           .collection('customers')
-          .where('isDeleted', isNotEqualTo: true)
+          .where('isDeleted', isEqualTo: true)
           .count()
           .get();
       
@@ -2765,18 +3705,21 @@ class FirebaseSyncService {
         where: 'transaction_uuid IS NOT NULL AND (is_deleted IS NULL OR is_deleted = 0)',
       );
       
-      // عدد المعاملات في Firebase
-      final remoteTransactionsCount = await _firestore!
+      // عدد المعاملات في Firebase = الكل − شواهد الحذف
+      final remoteTxAll =
+          await _firestore!.collection('transactions').count().get();
+      final remoteTxDel = await _firestore!
           .collection('transactions')
-          .where('isDeleted', isNotEqualTo: true)
+          .where('isDeleted', isEqualTo: true)
           .count()
           .get();
       
       // التحقق من التطابق
       final localCustomerCount = localCustomers.length;
-      final remoteCustomerCount = remoteCustomersCount.count ?? 0;
+      final remoteCustomerCount =
+          (remoteCustomersAll.count ?? 0) - (remoteCustomersDel.count ?? 0);
       final localTxCount = localTransactions.length;
-      final remoteTxCount = remoteTransactionsCount.count ?? 0;
+      final remoteTxCount = (remoteTxAll.count ?? 0) - (remoteTxDel.count ?? 0);
       
       if (localCustomerCount != remoteCustomerCount) {
         issues.add('عدد العملاء غير متطابق: محلي=$localCustomerCount، سحابي=$remoteCustomerCount');
@@ -2998,6 +3941,402 @@ class FirebaseSyncService {
   /// ═══════════════════════════════════════════════════════════════════════
   
   /// تسجيل هذا الجهاز في المجموعة
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🆕 تمهيد الجهاز الجديد (Bootstrap)
+  //
+  // المشكلة التي يحلّها: التنظيف الذكي يحذف المستند من السحابة متى أقرّ
+  // بقراءته كل جهاز مؤهَّل. فجهاز ينضم بعد ذلك لا يجد شيئاً — ينزّل
+  // العملاء بأرصدة صفرية بلا معاملات. لم يكن لهذا مسار حيّ في الكود:
+  // خدمة التمهيد موجودة كاملة لكن لا أحد يستدعيها، ودالة التنزيل فيها
+  // لا تنزّل شيئاً أصلاً (تقرأ الإحصاءات ثم تُعلن النجاح).
+  //
+  // الحل هنا لا يبني بروتوكولاً جديداً: الجهاز الجديد يعلن حاجته، وجهاز
+  // واحد من المجموعة يعيد بثّ كل دفتره إلى المجموعات المعتادة، فينزّله
+  // الجديد بنفس المسار الإدمبوتنت المُجرَّب. لا مسار استيراد موازٍ،
+  // ولا رصيد يُكتب من الشبكة.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  StreamSubscription? _bootstrapRequestListener;
+  bool _bootstrapResponding = false;
+
+  /// يقرأ علَم الاستعادة (يضبطه DatabaseService بعد استعادة نسخة احتياطية).
+  Future<void> _loadRecoveryState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _recoveryMode = prefs.getBool(DatabaseService.restoredFlagKey) ?? false;
+      if (_recoveryMode && !(prefs.getBool(DatabaseService.restoredRowsMarkedKey) ?? false)) {
+        // استُبدل ملف القاعدة وهي مغلقة (Dropbox): نوسم الصفوف الآن
+        final db = await _db.database;
+        await db.rawUpdate('UPDATE transactions SET restored_mark = 1');
+        await db.rawUpdate('UPDATE invoices SET restored_mark = 1 WHERE is_created_by_me = 1 OR is_created_by_me IS NULL');
+        await prefs.setBool(DatabaseService.restoredRowsMarkedKey, true);
+      }
+      if (_recoveryMode) {
+        print('🛡️ وضع الاستعادة: القاعدة من نسخة احتياطية — الرفع موقوف حتى المقارنة');
+        _syncEventController.add('استعادة نسخة احتياطية: جاري طلب ما فاتها من الأجهزة الأخرى...');
+      }
+    } catch (e) {
+      print('⚠️ _loadRecoveryState: $e');
+    }
+  }
+
+  Future<void> _finishRecovery() async {
+    if (!_recoveryMode) return;
+    try {
+      final db = await _db.database;
+      await db.rawUpdate('UPDATE transactions SET restored_mark = 0 WHERE restored_mark = 1');
+      // فاتورة من النسخة لم تحلّ محلها نسخة سحابية وفيها تغيير معلّق:
+      // نسخة جديدة فوق كل ما سبق رفعه، ثم يُمحى الوسم.
+      await db.rawUpdate('UPDATE invoices SET version = COALESCE(version, 1) + 1 '
+          'WHERE restored_mark = 1 AND is_synced = 0');
+      await db.rawUpdate('UPDATE invoices SET restored_mark = 0 WHERE restored_mark = 1');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(DatabaseService.restoredFlagKey);
+      await prefs.remove(DatabaseService.restoredRowsMarkedKey);
+    } catch (e) {
+      print('⚠️ _finishRecovery: $e');
+    }
+    _recoveryMode = false;
+    print('✅ اكتمل وضع الاستعادة — استُؤنف الرفع');
+    _syncEventController.add('اكتملت استعادة البيانات من الأجهزة الأخرى');
+    unawaited(_syncPendingChanges().catchError((_) {}));
+    unawaited(StockMovementSyncService().uploadPending().catchError((_) => 0));
+}
+
+  /// 🛡️ تنزيل كامل يُبنى عليه إنهاء التمهيد/الاستعادة.
+  ///
+  /// كانت النتيجة تُهمل: performFullSync تعيد false بلا إنترنت، أو إن كانت
+  /// مزامنة أخرى جارية، أو إن فشل سحب المعاملات — وتنزيل الفواتير يبتلع
+  /// أخطاءه أصلاً. فتنتهي الاستعادة على بيانات النسخة الاحتياطية القديمة، ثم
+  /// يعتبرها هذا الجهاز «نسختي المرجعية» فيرفعها فوق التعديلات الأحدث عند
+  /// كل الأجهزة (اختبار الكود الحقيقي: test/sync_harness). الآن: نجاح حقيقي
+  /// أو لا إنهاء، وتعيد الدورة الخلفية المحاولة.
+  Future<bool> _downloadForBootstrap() async {
+    final ok = await performFullSync();
+    if (!ok) {
+      print('⚠️ [Bootstrap] التنزيل الكامل لم يكتمل — لا إنهاء للتمهيد الآن');
+    }
+    return ok;
+  }
+
+  Future<void> _markBootstrapComplete(DocumentReference selfRef) async {
+    await selfRef.set({'bootstrapCompletedAt': DateTime.now().toIso8601String()},
+        SetOptions(merge: true));
+    _bootstrapIncomplete = false;
+    await _finishRecovery();
+  }
+
+  /// يُستدعى بعد تسجيل الجهاز. يطلب إعادة البث إن كان الجهاز جديداً (لم يكمل
+  /// التمهيد قط) أو استُعيدت قاعدته من نسخة احتياطية.
+  ///
+  /// 🛡️ كان الشرط «دفتر غير فارغ ⇒ لست جديداً» فجهاز جديد عليه معاملة محلية
+  /// واحدة (استُخدم أوفلاين قبل تفعيل المزامنة) لا يطلب شيئاً، ولا يحصل أبداً
+  /// على تاريخ نظّفه SmartPipe من السحابة (سيناريو 27). وجهاز استعاد نسخة
+  /// قديمة لم يكن يُكتشف أصلاً (سيناريو 26).
+  Future<void> ensureNewDeviceBootstrap() async {
+    if (_firestore == null || _deviceId == null || _groupId == null) return;
+    if (_bootstrapping) return;
+    _bootstrapping = true;
+    try {
+      // تُستدعى أثناء التهيئة: ننتظر اكتمالها (performFullSync يشترطه)
+      for (var i = 0; i < 180 && !_isInitialized; i++) {
+        await Future.delayed(const Duration(seconds: 1));
+      }
+      if (!_isInitialized) return;
+      // يُمحى عند التأكد من اكتمال التمهيد. قبل القراءة لا بعدها: قراءة فاشلة
+      // (بلا إنترنت عند الإقلاع) كانت تُسقط التمهيد حتى التشغيل التالي.
+      _bootstrapIncomplete = true;
+      final selfRef = _firestore!.collection('devices').doc(_deviceId);
+      final selfDoc = await selfRef.get().timeout(const Duration(seconds: 20));
+      if (selfDoc.data()?['bootstrapCompletedAt'] != null && !_recoveryMode) {
+        _bootstrapIncomplete = false;
+        return;
+      }
+
+      // لا يوجد من يردّ ⇒ هذا أول جهاز في المجموعة، لا شيء ليُستقبل
+      final devices =
+          await _firestore!.collection('devices').get().timeout(const Duration(seconds: 20));
+      final others = devices.docs.where((d) => d.id != _deviceId).length;
+      if (others == 0) {
+        // 🛡️ لا ننهي الاستعادة على تنزيل فاشل (انظر _downloadForBootstrap)
+        if (_recoveryMode && !await _downloadForBootstrap()) return;
+        await _markBootstrapComplete(selfRef);
+        print('🆕 [Bootstrap] أول جهاز في المجموعة — لا حاجة للتمهيد');
+        return;
+      }
+
+      print('🆕 [Bootstrap] طلب إعادة بثّ من $others جهاز '
+          '(${_recoveryMode ? "استعادة نسخة احتياطية" : "جهاز جديد"})');
+      _syncEventController.add('جاري استلام بيانات المجموعة من جهاز آخر...');
+
+      final reqRef = _firestore!.collection('bootstrap_requests').doc(_deviceId);
+      await reqRef.set({
+        'requestedBy': _deviceId,
+        'requestedAt': FieldValue.serverTimestamp(),
+        'requestedAtIso': DateTime.now().toIso8601String(),
+        'status': 'pending',
+      });
+
+      // الانتظار حتى يعلن أحدهم الجاهزية (10 دقائق كحد أقصى)
+      final deadline = DateTime.now().add(const Duration(minutes: 10));
+      String status = 'pending';
+      var lastNudge = DateTime.now();
+      while (DateTime.now().isBefore(deadline)) {
+        await Future.delayed(const Duration(seconds: 10));
+        Map<String, dynamic>? req;
+        try {
+          final snap = await reqRef.get();
+          req = snap.data();
+          status = (req?['status'] as String?) ?? 'pending';
+        } catch (_) {}
+        if (status == 'ready' || status == 'failed') break;
+
+        // 🛡️ طلب لم يلبّه أحد (كل المستجيبين كانوا مشغولين فتخطّوه، ولا حدث
+        // جديد يعيدهم إليه)، أو مستجيب أُغلق تطبيقه أثناء البثّ فبقي الطلب
+        // «قيد التنفيذ» إلى الأبد (اختبار الكود الحقيقي): ننبّه الأجهزة من
+        // جديد. إعادة البثّ إدمبوتنت، فمستجيبان معاً لا يضرّان.
+        final now = DateTime.now();
+        if (now.difference(lastNudge) >= const Duration(seconds: 60)) {
+          final beat = req?['respondingAt'];
+          final responderDead = status == 'in_progress' &&
+              beat is Timestamp &&
+              now.difference(beat.toDate()) > const Duration(minutes: 2);
+          if (status == 'pending' || responderDead) {
+            try {
+              await reqRef.update({
+                'status': 'pending',
+                'nudgedAt': FieldValue.serverTimestamp(),
+              });
+            } catch (_) {}
+            lastNudge = now;
+          }
+        }
+      }
+
+      if (status != 'ready') {
+        print('⚠️ [Bootstrap] لم يستجب أي جهاز خلال المهلة');
+        if (_recoveryMode) {
+          // نكمل الاستعادة من السحابة وحدها ثم نفك حظر الرفع
+          if (!await _downloadForBootstrap()) return;
+          await _markBootstrapComplete(selfRef);
+          return;
+        }
+        SyncDiagnostics.log('sync',
+            'تمهيد الجهاز الجديد لم يكتمل: لا جهاز مستجيب. سيُعاد لاحقاً.');
+        _syncEventController.add(
+            '⚠️ لم يستجب أي جهاز — افتح تطبيقاً على جهاز قديم');
+        return; // يبقى الطلب معلَّقاً ليلتقطه جهاز يستيقظ لاحقاً
+      }
+
+      // نزّل ما أُعيد بثّه بالمسار المعتاد (إدمبوتنت، ولا يكتب رصيداً)
+      if (!await _downloadForBootstrap()) {
+        print('⚠️ [Bootstrap] تعذّر تنزيل ما أُعيد بثّه — يُعاد لاحقاً');
+        return;
+      }
+      await _markBootstrapComplete(selfRef);
+      try {
+        await reqRef.delete();
+      } catch (_) {}
+
+      final db = await _db.database;
+      final after = Sqflite.firstIntValue(await db.rawQuery(
+              'SELECT COUNT(*) FROM transactions '
+              'WHERE (is_deleted IS NULL OR is_deleted = 0)')) ??
+          0;
+      print('✅ [Bootstrap] اكتمل التمهيد: $after معاملة');
+      SyncDiagnostics.log('sync', 'اكتمل تمهيد الجهاز: $after معاملة');
+      _syncEventController.add('تم استلام بيانات المجموعة ($after معاملة)');
+    } catch (e) {
+      print('⚠️ [Bootstrap] فشل التمهيد: $e (يُعاد في الدورة الخلفية)');
+    } finally {
+      _bootstrapping = false;
+    }
+  }
+
+  /// كل جهاز يستمع لطلبات التمهيد ويردّ عليها إن لم يسبقه أحد.
+  Future<void> startBootstrapResponder() async {
+    if (_firestore == null || _deviceId == null) return;
+    await _bootstrapRequestListener?.cancel();
+    _bootstrapRequestListener = _firestore!
+        .collection('bootstrap_requests')
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen((snap) async {
+      for (final doc in snap.docs) {
+        final requester = doc.data()['requestedBy'] as String?;
+        if (requester == null || requester == _deviceId) continue;
+        if (_bootstrapResponding) return;
+        await _serveBootstrapRequest(doc.reference, requester);
+      }
+    }, onError: (e) {
+      print('⚠️ [Bootstrap] خطأ في الاستماع للطلبات: $e');
+    });
+  }
+
+  Future<void> _serveBootstrapRequest(
+      DocumentReference reqRef, String requester) async {
+    // 🛡️ بياناتي من نسخة احتياطية لم تكتمل مقارنتها: إعادة بثّها تكتب نسخاً
+    // قديمة في السحابة بوقت خادم جديد، فتقبلها الأجهزة كأنها الأحدث.
+    if (_recoveryMode) return;
+    // حجز الطلب ذرّياً حتى لا يعيد عشرة أجهزة البثّ معاً
+    try {
+      final claimed = await _firestore!.runTransaction<bool>((txn) async {
+        final snap = await txn.get(reqRef);
+        if (!snap.exists) return false;
+        final data = snap.data() as Map<String, dynamic>?;
+        if ((data?['status'] as String?) != 'pending') return false;
+        txn.update(reqRef, {
+          'status': 'in_progress',
+          'respondingDevice': _deviceId,
+          'respondingAt': FieldValue.serverTimestamp(),
+        });
+        return true;
+      }).timeout(const Duration(seconds: 30));
+      if (!claimed) return;
+    } catch (e) {
+      print('⚠️ [Bootstrap] تعذّر حجز الطلب: $e');
+      return;
+    }
+
+    _bootstrapResponding = true;
+    try {
+      print('📩 [Bootstrap] إعادة بثّ الدفتر كاملاً للجهاز الجديد: $requester');
+      _syncEventController.add('جهاز جديد انضم — جاري إرسال البيانات إليه...');
+      // نبضة كل 30 ثانية: الطالب يعرف أن المستجيب ما زال حياً (دفتر كبير
+      // قد يستغرق دقائق)، ولا يعيد الطلب لغيره إلا إن انقطعت النبضات.
+      var lastBeat = DateTime.now();
+      final stats = await rebroadcastEverything(onProgress: (_, __) {
+        final now = DateTime.now();
+        if (now.difference(lastBeat) < const Duration(seconds: 30)) return;
+        lastBeat = now;
+        unawaited(reqRef
+            .update({'respondingAt': FieldValue.serverTimestamp()})
+            .catchError((_) {}));
+      });
+      await reqRef.update({
+        'status': 'ready',
+        'readyAt': FieldValue.serverTimestamp(),
+        'stats': stats,
+      });
+      print('✅ [Bootstrap] تمّ البثّ: $stats');
+      SyncDiagnostics.log('sync', 'أُعيد بثّ الدفتر لجهاز جديد ($requester): $stats');
+    } catch (e) {
+      print('❌ [Bootstrap] فشل البثّ: $e');
+      // نُعيده معلَّقاً ليحاول جهاز آخر — لا نُسقط الطلب
+      await reqRef.update({'status': 'pending', 'lastError': e.toString()})
+          .catchError((_) {});
+    } finally {
+      _bootstrapResponding = false;
+    }
+  }
+
+  /// إعادة بثّ دفتر المجموعة كما يعرفه هذا الجهاز — للجهاز الجديد أو المستعيد.
+  ///
+  /// 🛡️ قواعد آمنة (المحاكاة: سيناريوهات 26، 27 + الفوضى القاسية):
+  ///   • لا نكتب إلا المستندات **الغائبة** من السحابة (داخل معاملة Firestore):
+  ///     الكتابة فوق مستند موجود قد تُرجع نسخة أحدث إلى أقدم.
+  ///   • كل المعاملات النشطة — لا معاملات هذا الجهاز وحده. كان
+  ///     _forceUploadTransaction يرفض معاملات الأجهزة الأخرى، فلا يستلم الجهاز
+  ///     الجديد بعد التنظيف إلا جزءاً من الدفتر.
+  ///   • المستند يحمل مالكه الأصلي (origin_device_id) وlastModifiedAt الأصلي،
+  ///     فلا يسرق المُجيب ملكية شيء، ويتعرّف المالك (بعد استعادة) على معاملاته.
+  ///   • الفواتير تُعاد عبر قناتها (حزم)، الغائبة فقط.
+  Future<Map<String, dynamic>> rebroadcastEverything(
+      {void Function(double progress, String message)? onProgress}) async {
+    final db = await _db.database;
+    int custOk = 0, txOk = 0, invOk = 0, failed = 0;
+
+    Future<bool> createIfAbsent(String coll, String id, Map<String, dynamic> data) async {
+      final ref = _firestore!.collection(coll).doc(id);
+      return await _firestore!.runTransaction<bool>((txn) async {
+        final snap = await txn.get(ref);
+        if (snap.exists) return false;
+        txn.set(ref, data);
+        return true;
+      }).timeout(const Duration(seconds: 30));
+    }
+
+    final customers = await db.query('customers',
+        where: "sync_uuid IS NOT NULL AND sync_uuid != '' AND (is_deleted IS NULL OR is_deleted = 0)");
+    for (var i = 0; i < customers.length; i++) {
+      final c = customers[i];
+      final uuid = c['sync_uuid'] as String;
+      if (!SyncSecurity.isValidDocumentId(uuid)) continue;
+      try {
+        final mine = (c['is_created_by_me'] as int?) != 0;
+        final doc = <String, dynamic>{
+          'syncUuid': uuid,
+          'name': c['name'],
+          'phone': c['phone'],
+          'generalNote': c['general_note'],
+          'address': c['address'],
+          'createdAt': c['created_at'],
+          'lastModifiedAt': c['last_modified_at'],
+          'deviceId': mine ? _deviceId : 'rebroadcast',
+          'originDeviceId': mine ? _deviceId : 'rebroadcast',
+          'uploadedAt': FieldValue.serverTimestamp(),
+        };
+        doc['signature'] = _signDoc(uuid, doc, isCustomer: true);
+        if (await createIfAbsent('customers', uuid, doc)) custOk++;
+      } catch (_) {
+        failed++;
+      }
+      onProgress?.call(i / (customers.length + 1) * 0.3, 'إرسال العملاء...');
+    }
+
+    final txs = await db.rawQuery('''
+      SELECT t.*, c.sync_uuid AS customer_sync_uuid
+      FROM transactions t JOIN customers c ON c.id = t.customer_id
+      WHERE t.transaction_uuid IS NOT NULL AND t.transaction_uuid != ''
+        AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+        AND (t.invoice_sync_uuid IS NULL OR t.invoice_sync_uuid = '')
+        AND c.sync_uuid IS NOT NULL AND c.sync_uuid != ''
+    ''');
+    for (var i = 0; i < txs.length; i++) {
+      final t = txs[i];
+      final uuid = t['transaction_uuid'] as String;
+      if (!SyncSecurity.isValidDocumentId(uuid)) continue;
+      try {
+        final mine = (t['is_created_by_me'] as int?) != 0;
+        final owner = mine ? _deviceId : ((t['origin_device_id'] as String?) ?? 'rebroadcast');
+        final doc = <String, dynamic>{
+          'syncUuid': uuid,
+          'customerSyncUuid': t['customer_sync_uuid'],
+          'transactionDate': t['transaction_date'],
+          'amountChanged': t['amount_changed'],
+          'transactionNote': t['transaction_note'],
+          'transactionType': t['transaction_type'],
+          'description': t['description'],
+          'createdAt': t['created_at'],
+          'lastModifiedAt': (mine ? t['last_uploaded_at'] : t['remote_modified_at']) ?? t['created_at'],
+          'deviceId': owner,
+          'originDeviceId': owner,
+          'uploadedAt': FieldValue.serverTimestamp(),
+        };
+        doc['signature'] = _signDoc(uuid, doc);
+        if (await createIfAbsent('transactions', uuid, doc)) txOk++;
+      } catch (_) {
+        failed++;
+      }
+      onProgress?.call(0.3 + i / (txs.length + 1) * 0.5, 'إرسال المعاملات...');
+    }
+
+    // الفواتير: حزم الفواتير الغائبة من السحابة (كل الفواتير، لا فواتيري وحدي)
+    try {
+      invOk = await InvoiceSyncService().rebroadcastMissingInvoices();
+    } catch (e) {
+      print('⚠️ [Bootstrap] تعذّر إعادة بثّ الفواتير: $e');
+    }
+
+    onProgress?.call(1.0, 'اكتمل الإرسال');
+    return {
+      'customers': custOk,
+      'transactions': txOk,
+      'invoices': invOk,
+      'failed': failed,
+    };
+  }
+
   Future<void> registerDevice({String? deviceName}) async {
     if (_groupId == null || _deviceId == null || _firestore == null) return;
     
@@ -3018,7 +4357,13 @@ class FirebaseSyncService {
             'isListening': _isListening,
             'syncStatus': _status.name,
             'appVersion': '1.0.0',
-            'groupSecret': _groupSecret,
+            // 🔐 لم يعد السرّ يُكتب نصاً في أي مستند (كان يكشفه لكل من يقرأ)،
+            // بل بصمته فقط لتعرف الأجهزة من يشاركها نفس السرّ.
+            'secretFingerprint': _secretFingerprint(),
+            // 🛡️ جهاز مسجَّل = جهاز مطالَب بالقراءة. لا يُحذف من السحابة
+            // مستند قبل أن يقرأه. البقاء على isNewDevice=true كان يعني
+            // إسقاطه من الحساب وحذف مستندات لم يرها قط.
+            'isNewDevice': false,
           }, SetOptions(merge: true)).catchError((e) {
             print('⚠️ خطأ في تسجيل الجهاز بالسحابة: $e');
           });
@@ -3840,9 +5185,22 @@ class FirebaseSyncService {
       try {
         final data = jsonDecode(orphan['data'] as String) as Map<String, dynamic>;
         final syncUuid = orphan['sync_uuid'] as String;
-        
-        // محاولة تطبيق المعاملة الآن
-        await _applyTransactionChange(syncUuid, data);
+
+        // 🛡️ وصلت المعاملة (بنسخة أحدث) عبر المستمع بعد تخزين اليتيمة —
+        // تطبيق اللقطة المخزّنة الآن كان يكتب رقماً قديماً فوق الجديد.
+        final already = await db.query('transactions',
+            columns: ['id'], where: 'transaction_uuid = ?', whereArgs: [syncUuid], limit: 1);
+        if (already.isNotEmpty) {
+          await db.delete('sync_orphans', where: 'sync_uuid = ?', whereArgs: [syncUuid]);
+          continue;
+        }
+
+        // محاولة تطبيق المعاملة الآن (معاملتي المفقودة بعد استعادة → مسار المالك)
+        if (data['deviceId'] == _deviceId) {
+          await _handleOwnTxDoc(syncUuid, data);
+        } else {
+          await _applyTransactionChange(syncUuid, data);
+        }
         
         // حذف من الطابور بعد النجاح
         await db.delete(
@@ -4165,11 +5523,14 @@ class FirebaseSyncService {
     }
   }
 
-  /// رفع عميل بالقوة (النسخة البسيطة — بدون تحقق سيرفر ثقيل).
-  /// 🔒 أي فشل (timeout أو خطأ شبكة) يُسجَّل في Retry Queue حتى يظهر في
-  /// زر "المعاملات الفاشلة" ويُعاد رفعه تلقائيًا لاحقًا.
+  /// رفع عميل بالقوة (زر «الرفع الشامل»).
+  /// 🛡️ لا يكتب isDeleted إطلاقاً: الرفع الشامل لعملاء نشطين، وكتابة
+  /// isDeleted=false بـ merge كانت «تُحيي» عميلاً حذفه جهاز آخر للتو.
   Future<void> _forceUploadCustomer(Map<String, dynamic> customerData) async {
     if (_groupId == null) return;
+    if (_recoveryMode) {
+      throw Exception('وضع الاستعادة: الرفع موقوف حتى تكتمل مقارنة النسخة المستعادة');
+    }
 
     final syncUuid = customerData['sync_uuid'] as String?;
     if (syncUuid == null || syncUuid.isEmpty) return;
@@ -4184,31 +5545,36 @@ class FirebaseSyncService {
     _rateLimiter.recordOperation();
 
     final checksum = _calculateChecksum(customerData);
-    final bool isCustDeleted = ((customerData['is_deleted'] as int?) ?? 0) == 1;
+    final Map<String, dynamic> custExpectation =
+        await _computeCustomerExpectation(syncUuid);
 
     try {
-      await _firestore!
-          .collection('customers')
-          .doc(syncUuid)
-          .set({
+      final doc = <String, dynamic>{
         'syncUuid': syncUuid,
         'name': customerData['name'],
         'phone': customerData['phone'],
-        'currentTotalDebt': isCustDeleted ? 0.0 : customerData['current_total_debt'],
+        'currentTotalDebt': customerData['current_total_debt'],
+        'expectedBalance': custExpectation['balance'],
+        'expectedTxCount': custExpectation['count'],
+        'expectedFingerprint': custExpectation['fingerprint'],
+        'expectedByDevice': _deviceId,
         'generalNote': customerData['general_note'],
         'address': customerData['address'],
         'createdAt': customerData['created_at'],
         'lastModifiedAt':
             customerData['last_modified_at'] ?? DateTime.now().toIso8601String(),
         'audioNotePath': customerData['audio_note_path'],
-        'isDeleted': isCustDeleted,
-        'is_deleted': isCustDeleted ? 1 : 0,
         'deviceId': _deviceId,
         'originDeviceId': _deviceId,
         'checksum': checksum,
-        'groupSecret': _groupSecret,
         'uploadedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
+      };
+      doc['signature'] = _signDoc(syncUuid, doc, isCustomer: true);
+      await _firestore!
+          .collection('customers')
+          .doc(syncUuid)
+          .set(doc, SetOptions(merge: true))
+          .timeout(const Duration(seconds: 60));
 
       final db = await _db.database;
       await db.rawUpdate(
@@ -4216,8 +5582,6 @@ class FirebaseSyncService {
         [DateTime.now().toIso8601String(), syncUuid],
       );
     } catch (e) {
-      // 🔌 سجّل الفشل في Retry Queue حتى يظهر في "المعاملات الفاشلة" ويُعاد
-      // رفعه تلقائيًا، بدل أن يضيع العميل بصمت.
       await _addToRetryQueue(_RetryOperation(
         type: 'customer',
         syncUuid: syncUuid,
@@ -4230,12 +5594,16 @@ class FirebaseSyncService {
   }
 
   /// رفع معاملة بالقوة — معاملات هذا الجهاز فقط، بلا حذف محلي.
-  /// 🔒 أي فشل يُسجَّل في Retry Queue أيضًا.
+  /// 🛡️ نفس ضمانات uploadTransaction: قراءة حديثة، CAS، لا isDeleted=false،
+  /// ومعاملات الفواتير النشطة تسافر في حزمها.
   Future<void> _forceUploadTransaction(
     Map<String, dynamic> txData,
     String customerSyncUuid,
   ) async {
     if (_groupId == null) return;
+    if (_recoveryMode) {
+      throw Exception('وضع الاستعادة: الرفع موقوف حتى تكتمل مقارنة النسخة المستعادة');
+    }
 
     final syncUuid = txData['transaction_uuid'] as String?;
     if (syncUuid == null || syncUuid.isEmpty) return;
@@ -4244,64 +5612,72 @@ class FirebaseSyncService {
       return;
     }
 
-    final owned = txData['is_created_by_me'];
+    final db = await _db.database;
+    final rows = await db.query('transactions',
+        where: 'transaction_uuid = ?', whereArgs: [syncUuid], limit: 1);
+    if (rows.isEmpty) return;
+    final tx = Map<String, dynamic>.from(rows.first);
+
+    final owned = tx['is_created_by_me'];
     if (owned != null && owned == 0) {
       print('🚫 رُفض رفع معاملة من المزامنة: $syncUuid');
       return;
     }
+    final isTxDeleted = ((tx['is_deleted'] as int?) ?? 0) == 1;
+    final invUuid = tx['invoice_sync_uuid'] as String?;
+    if (!isTxDeleted && invUuid != null && invUuid.isNotEmpty) return;
 
     if (!_rateLimiter.canProceed()) {
       await Future.delayed(const Duration(milliseconds: 100));
     }
     _rateLimiter.recordOperation();
 
-    final checksum = _calculateChecksum(txData);
-    final bool isTxDeleted = ((txData['is_deleted'] as int?) ?? 0) == 1;
+    final checksum = _calculateChecksum(tx);
+    final sentFingerprint = _txFingerprint(tx);
+    final nowIso = DateTime.now().toIso8601String();
 
     try {
-      await _firestore!
-          .collection('transactions')
-          .doc(syncUuid)
-          .set({
+      final doc = <String, dynamic>{
         'syncUuid': syncUuid,
         'customerSyncUuid': customerSyncUuid,
-        'transactionDate': txData['transaction_date'],
-        'amountChanged': txData['amount_changed'],
-        'balanceBeforeTransaction': txData['balance_before_transaction'],
-        'newBalanceAfterTransaction': txData['new_balance_after_transaction'],
-        'transactionNote': txData['transaction_note'],
-        'transactionType': txData['transaction_type'],
-        'description': txData['description'],
-        'createdAt': txData['created_at'],
-        'lastModifiedAt': DateTime.now().toIso8601String(),
-        'audioNotePath': txData['audio_note_path'],
-        'isDeleted': isTxDeleted,
-        'is_deleted': isTxDeleted ? 1 : 0,
+        'invoiceSyncUuid': tx['invoice_sync_uuid'],
+        'transactionDate': tx['transaction_date'],
+        'amountChanged': tx['amount_changed'],
+        'balanceBeforeTransaction': tx['balance_before_transaction'],
+        'newBalanceAfterTransaction': tx['new_balance_after_transaction'],
+        'transactionNote': tx['transaction_note'],
+        'transactionType': tx['transaction_type'],
+        'description': tx['description'],
+        'createdAt': tx['created_at'],
+        'lastModifiedAt': nowIso,
+        'audioNotePath': tx['audio_note_path'],
         'deviceId': _deviceId,
         'originDeviceId': _deviceId,
         'checksum': checksum,
-        'groupSecret': _groupSecret,
         'uploadedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
+      };
+      if (isTxDeleted) {
+        doc['isDeleted'] = true;
+        doc['is_deleted'] = 1;
+      }
+      doc['signature'] = _signDoc(syncUuid, doc);
+      await _firestore!
+          .collection('transactions')
+          .doc(syncUuid)
+          .set(doc, SetOptions(merge: true))
+          .timeout(const Duration(seconds: 60));
 
-      // تعليم محلي فقط — لا حذف ولا تعديل مبلغ.
-      final db = await _db.database;
-      final localId = txData['id'];
-      if (localId is int) {
-        await db.rawUpdate(
-          'UPDATE transactions SET is_uploaded = 1 WHERE id = ?',
-          [localId],
-        );
+      final cur = await db.query('transactions',
+          where: 'transaction_uuid = ?', whereArgs: [syncUuid], limit: 1);
+      if (cur.isNotEmpty && _txFingerprint(cur.first) == sentFingerprint) {
+        await db.update('transactions', {'is_uploaded': 1, 'last_uploaded_at': nowIso},
+            where: 'transaction_uuid = ?', whereArgs: [syncUuid]);
       } else {
-        await db.rawUpdate(
-          'UPDATE transactions SET is_uploaded = 1 WHERE transaction_uuid = ?',
-          [syncUuid],
-        );
+        await db.update('transactions', {'is_uploaded': 0},
+            where: 'transaction_uuid = ?', whereArgs: [syncUuid]);
       }
     } catch (e) {
-      // 🔌 سجّل الفشل في Retry Queue حتى يظهر في "المعاملات الفاشلة" ويُعاد
-      // رفعه تلقائيًا، بدل أن تضيع المعاملة بصمت.
-      final retryData = Map<String, dynamic>.from(txData);
+      final retryData = Map<String, dynamic>.from(tx);
       retryData['customer_sync_uuid'] = customerSyncUuid;
       await _addToRetryQueue(_RetryOperation(
         type: 'transaction',
@@ -4312,6 +5688,82 @@ class FirebaseSyncService {
       ));
       rethrow;
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔐 التوقيع: يغطي الحقول المالية (المبلغ، العميل، الحذف، الكاتب).
+  //
+  // كان التوقيع يغطي (المعرّف|الجهاز|checksum) فقط، والـ checksum لا يمكن
+  // للمستقبِل إعادة حسابه من المستند، فيمكن تغيير المبلغ مع إبقاء التوقيع. وكان
+  // السرّ نفسه يُكتب نصاً في كل مستند (groupSecret)، فمن يقرأ أي مستند يستطيع
+  // التوقيع. الآن: لا سرّ في المستندات، والتحقق الصارم يُفعَّل من الإعدادات بعد
+  // إدخال نفس السرّ على كل الأجهزة (المحاكاة: سيناريو 28).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  String _canonAmount(dynamic v) =>
+      v is num ? v.toDouble().toStringAsFixed(2) : (v?.toString() ?? '');
+
+  String _canonicalFor(String uuid, Map<String, dynamic> d, {bool isCustomer = false}) {
+    final del = d['isDeleted'] == true ? '1' : (d['isDeleted'] == false ? '0' : '');
+    if (isCustomer) {
+      return 'c|$uuid|$del|${d['deviceId'] ?? ''}';
+    }
+    return 't|$uuid|${d['customerSyncUuid'] ?? ''}|${_canonAmount(d['amountChanged'])}|$del|${d['deviceId'] ?? ''}';
+  }
+
+  String? _signDoc(String uuid, Map<String, dynamic> doc, {bool isCustomer = false}) {
+    final key = _groupSecretKey;
+    if (key == null || key.isEmpty) return null;
+    return SyncSecurity.signData(_canonicalFor(uuid, doc, isCustomer: isCustomer), key);
+  }
+
+  String _secretFingerprint() {
+    final key = _groupSecretKey;
+    if (key == null || key.isEmpty) return '';
+    return sha256.convert(utf8.encode('fp|$key')).toString().substring(0, 16);
+  }
+
+  /// أسماء الأجهزة (غير الخارجة عن الخدمة) التي لا تطابق بصمة سرّها سرّ هذا
+  /// الجهاز، أو لم تُحدَّث بعد فلا تنشر بصمة. الوضع الصارم آمن فقط إن كانت فارغة.
+  Future<List<String>> devicesWithMismatchedSecret() async {
+    if (_firestore == null) {
+      throw StateError('المزامنة غير مُهيّأة');
+    }
+    final mine = _secretFingerprint();
+    final snap = await _firestore!
+        .collection('devices')
+        .get(const GetOptions(source: Source.server));
+    final out = <String>[];
+    for (final d in snap.docs) {
+      if (d.id == _deviceId) continue;
+      final data = d.data();
+      if (data['isRetired'] == true) continue;
+      if (mine.isEmpty || data['secretFingerprint'] != mine) {
+        out.add((data['deviceName'] as String?) ?? d.id);
+      }
+    }
+    return out;
+  }
+
+  /// يُرجع false لمستند يجب رفضه. لا رفض إلا في الوضع الصارم (سرّ مشترك مُدخل
+  /// على كل الأجهزة + تفعيل صريح)، وإلا نكتفي بالتسجيل.
+  Future<bool> _verifyIncomingSignature(String uuid, Map<String, dynamic> data,
+      {bool isCustomer = false}) async {
+    bool strict = false;
+    try {
+      strict = await FirebaseSyncSecuritySettings.isStrictSignatureEnabled();
+    } catch (_) {}
+    final key = _groupSecretKey;
+    if (!strict || key == null || key.isEmpty) return true;
+    final sig = data['signature'] as String?;
+    final ok = sig != null &&
+        SyncSecurity.verifySignature(_canonicalFor(uuid, data, isCustomer: isCustomer), sig, key);
+    if (!ok) {
+      print('🛑 رُفض مستند غير موقّع بسرّ المجموعة: $uuid (من ${data['deviceId']})');
+      SyncDiagnostics.log('security',
+          'رُفض مستند غير موقّع: $uuid من ${data['deviceId']} — تحقق من تطابق سرّ المجموعة على كل الأجهزة');
+    }
+    return ok;
   }
 
   /// توافق مع الشاشات التي تنتظر bool.

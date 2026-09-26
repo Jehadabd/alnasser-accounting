@@ -581,38 +581,29 @@ class ReconciliationService {
             .add('جاري التدقيق ($checked/${customers.length})...');
       }
 
-      // الطبقة الأولى رخيصة على الخادم. نستبعد المحذوف صراحةً حتى لا يختلط
-      // برصيدٍ لا يجب أن يُحسب.
-      final query = fs
+      // الطبقة الأولى رخيصة على الخادم: الكل ناقص المحذوف.
+      // 🛡️ المعاملات الحية لا تحمل isDeleted:false (الحذف نهائي ولا يُكتب
+      // «غير محذوف» أبداً)، فالفلتر isDeleted == false كان يعدّ صفراً دائماً.
+      final base = fs
           .collection('transactions')
-          .where('customerSyncUuid', isEqualTo: uuid)
-          .where('isDeleted', isEqualTo: false);
+          .where('customerSyncUuid', isEqualTo: uuid);
 
       int cloudCount;
       double cloudSum;
       try {
-        final agg = await query
+        final all = await base
             .aggregate(count(), sum('amountChanged'))
             .get(source: AggregateSource.server);
-        cloudCount = agg.count ?? 0;
-        cloudSum = agg.getSum('amountChanged')?.toDouble() ?? 0.0;
+        final del = await base
+            .where('isDeleted', isEqualTo: true)
+            .aggregate(count(), sum('amountChanged'))
+            .get(source: AggregateSource.server);
+        cloudCount = (all.count ?? 0) - (del.count ?? 0);
+        cloudSum = (all.getSum('amountChanged')?.toDouble() ?? 0.0) -
+            (del.getSum('amountChanged')?.toDouble() ?? 0.0);
       } catch (e) {
-        // وثائق قديمة بلا حقل isDeleted قد تفشل التجميع المصفّى؛ نعيد
-        // المحاولة بلا فلتر ونصفّي المحذوف يدوياً في الطبقة الثانية.
-        print('⚠️ تجميع مصفّى فشل لـ $name، إعادة بلا فلتر: $e');
-        try {
-          final fallback = fs
-              .collection('transactions')
-              .where('customerSyncUuid', isEqualTo: uuid);
-          final agg = await fallback
-              .aggregate(count(), sum('amountChanged'))
-              .get(source: AggregateSource.server);
-          cloudCount = agg.count ?? 0;
-          cloudSum = agg.getSum('amountChanged')?.toDouble() ?? 0.0;
-        } catch (e2) {
-          print('⚠️ تعذّر تجميع بيانات العميل $name: $e2');
-          continue;
-        }
+        print('⚠️ تعذّر تجميع بيانات العميل $name: $e');
+        continue;
       }
 
       final localCount = localCounts[uuid] ?? 0;
@@ -628,9 +619,13 @@ class ReconciliationService {
           .where('customerSyncUuid', isEqualTo: uuid)
           .get(const GetOptions(source: Source.server));
       final cloudUuids = <String, Map<String, dynamic>>{};
+      final cloudTombstones = <String, Map<String, dynamic>>{};
       for (final doc in cloudDocs.docs) {
         final data = doc.data();
-        if (data['isDeleted'] == true) continue;
+        if (data['isDeleted'] == true) {
+          cloudTombstones[doc.id] = data;
+          continue;
+        }
         cloudUuids[doc.id] = data;
       }
 
@@ -667,6 +662,21 @@ class ReconciliationService {
 
       // ── العلاج: نجلب الناقص ونرفع غير المرفوع، ولا نخترع مبلغاً أبداً ──
       if (repair) {
+        // 🛡️ شاهد حذف في السحابة لمعاملة ما زالت نشطة هنا: فاتنا الحذف.
+        // يُطبَّق عبر مسار الاستقبال (الحذف نهائي). كانت تُعدّ «ناقصة في
+        // السحابة» فيُحاول رفعها — أي إحياؤها.
+        for (final u in missingInCloud.toList()) {
+          final tomb = cloudTombstones[u];
+          if (tomb == null) continue;
+          try {
+            await _sync.applyRemoteTransaction(u, tomb);
+            missingInCloud.remove(u);
+            fetched++;
+          } catch (e) {
+            print('⚠️ تعذّر تطبيق شاهد حذف $u: $e');
+          }
+        }
+
         for (final missing in missingLocally) {
           try {
             await _sync.applyRemoteTransaction(missing, cloudUuids[missing]!);

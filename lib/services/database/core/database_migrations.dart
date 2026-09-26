@@ -5,6 +5,8 @@ import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../dao/product_dao.dart';
 import 'package:alnaser/services/database/core/database_helpers.dart'; // ✅ Explicit import
+import '../dao/audit_dao.dart'; // 🗜️ أدوات تنظيف وضغط اللقطات
+import '../business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 
 /// فئة مسؤولة عن إدارة مخطط قاعدة البيانات والترقيات
 class DatabaseMigrations {
@@ -609,7 +611,7 @@ class DatabaseMigrations {
         END;
       ''');
       await db.execute('''
-        CREATE TRIGGER products_au AFTER UPDATE ON products BEGIN
+        CREATE TRIGGER products_au AFTER UPDATE OF name, unit ON products BEGIN
           INSERT INTO products_fts(products_fts, rowid, name, unit) VALUES('delete', old.id, old.name, old.unit);
           INSERT INTO products_fts(rowid, name, unit) VALUES (new.id, new.name, new.unit);
         END;
@@ -635,8 +637,156 @@ class DatabaseMigrations {
     ''');
   }
 
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🗜️ هجرات تصغير قاعدة البيانات
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// 🧹 حذف بقايا مزامنة Google Drive.
+  /// هذه الجداول طابور رفع محلي لم يعد له كاتب واحد في التطبيق (المزامنة عبر
+  /// Firebase ولها جداولها المستقلة)، ولا معنى له في قاعدة مستعادة على جهاز
+  /// آخر — بل هو ضارّ: جهاز جديد لا يجوز أن يرث طابور رفع جهاز قديم.
+  /// ⚠️ جدول sync_state لا يُمسّ: مزامنة Firebase تستعمله لتاريخ آخر مزامنة.
+  /// تعمل على أي قاعدة: إن وُجدت صفوف حُذفت، وإن لم توجد فلا شيء يحدث.
+  static Future<int> purgeDriveSyncLeftovers(Database db) async {
+    const leftovers = <String>[
+      'sync_operations',
+      'sync_applied_operations',
+      'sync_audit_log',
+    ];
+    int purged = 0;
+    for (final table in leftovers) {
+      try {
+        purged += await db.delete(table);
+      } catch (_) {
+        // الجدول غير موجود على هذه القاعدة
+      }
+    }
+    if (purged > 0) {
+      print('🧹 هجرة: حُذف $purged صفاً من بقايا مزامنة Google Drive');
+    }
+    return purged;
+  }
+
+  /// 🗜️ هجرة تعمل مرة واحدة على اللقطات المخزّنة سابقاً:
+  /// تنظّف حقول الحشو، وتضغط الأصناف، وتحذف اللقطة المطابقة حرفياً لسابقتها.
+  /// المرور على دفعات وبمؤشّر (invoice_id, id) فلا تُحمّل الذاكرة ولا يكسرها الحذف.
+  /// لا تُحذف إلا لقطة لا تحمل أي حالة فريدة، فلا يضيع شيء من التاريخ.
+  static Future<int> compactInvoiceSnapshotsOnce(Database db) async {
+    const flagKey = 'snapshots_compacted_v1';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(flagKey) ?? false) return 0;
+
+      int scanned = 0;
+      int removed = 0;
+      int rewritten = 0;
+
+      int cursorInvoiceId = -1;
+      int cursorId = -1;
+
+      int prevInvoiceId = -1;
+      String prevItemsJson = '';
+      Map<String, Object?> prevRow = <String, Object?>{};
+
+      while (true) {
+        final rows = await db.rawQuery('''
+          SELECT id, invoice_id, customer_name, customer_phone, customer_address,
+                 invoice_date, payment_type, total_amount, discount, amount_paid,
+                 loading_fee, invoice_notes, items_json
+          FROM invoice_snapshots
+          WHERE (invoice_id > ?) OR (invoice_id = ? AND id > ?)
+          ORDER BY invoice_id ASC, id ASC
+          LIMIT 120
+        ''', [cursorInvoiceId, cursorInvoiceId, cursorId]);
+
+        if (rows.isEmpty) break;
+
+        for (final row in rows) {
+          final id = (row['id'] as int?) ?? 0;
+          final invoiceId = (row['invoice_id'] as int?) ?? 0;
+          cursorInvoiceId = invoiceId;
+          cursorId = id;
+          scanned++;
+
+          final itemsJson = AuditDao.buildSnapshotItemsJson(
+              AuditDao.decodeSnapshotItemRows(row['items_json']));
+
+          final bool duplicate = invoiceId == prevInvoiceId &&
+              itemsJson == prevItemsJson &&
+              (row['customer_name'] as String?) ==
+                  (prevRow['customer_name'] as String?) &&
+              (row['customer_phone'] as String?) ==
+                  (prevRow['customer_phone'] as String?) &&
+              (row['customer_address'] as String?) ==
+                  (prevRow['customer_address'] as String?) &&
+              (row['invoice_date'] as String?) ==
+                  (prevRow['invoice_date'] as String?) &&
+              (row['payment_type'] as String?) ==
+                  (prevRow['payment_type'] as String?) &&
+              (row['invoice_notes'] as String?) ==
+                  (prevRow['invoice_notes'] as String?) &&
+              AuditDao.sameSnapshotNum(
+                  row['total_amount'], prevRow['total_amount']) &&
+              AuditDao.sameSnapshotNum(row['discount'], prevRow['discount']) &&
+              AuditDao.sameSnapshotNum(
+                  row['amount_paid'], prevRow['amount_paid']) &&
+              AuditDao.sameSnapshotNum(
+                  row['loading_fee'], prevRow['loading_fee']);
+
+          if (duplicate) {
+            try {
+              await db.delete('invoice_snapshots',
+                  where: 'id = ?', whereArgs: [id]);
+              removed++;
+            } catch (_) {}
+            continue;
+          }
+
+          // اللقطات القديمة مخزّنة نصاً: تُعاد كتابتها منظّفة ومضغوطة مرة واحدة
+          if (row['items_json'] is String) {
+            try {
+              await db.update(
+                'invoice_snapshots',
+                {'items_json': AuditDao.encodeSnapshotItems(itemsJson)},
+                where: 'id = ?',
+                whereArgs: [id],
+              );
+              rewritten++;
+            } catch (_) {}
+          }
+
+          prevInvoiceId = invoiceId;
+          prevItemsJson = itemsJson;
+          prevRow = Map<String, Object?>.from(row)..remove('items_json');
+        }
+      }
+
+      await prefs.setBool(flagKey, true);
+      if (removed > 0 || rewritten > 0) {
+        print(
+            '🗜️ هجرة اللقطات: فُحصت $scanned لقطة — ضُغطت $rewritten وحُذفت $removed مكررة');
+      }
+      return removed + rewritten;
+    } catch (e) {
+      // لا نضع العلامة عند الفشل، فتُعاد المحاولة في التشغيل القادم
+      print('⚠️ هجرة ضغط اللقطات تعذّرت: $e');
+      return 0;
+    }
+  }
+
   /// ضمان وجود جميع الأعمدة المطلوبة في الجداول
   static Future<void> ensureSchema(Database db) async {
+    // 0. 👥 أعمدة العملاء الأساسية المفقودة في قواعد البيانات القديمة
+    //    (تُضاف أولاً حتى لا يمنعها أي خطأ لاحق في هذه الدالة)
+    //    سبب الخطأ: no such column: sync_last_update_at عند حذف عميل
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'sync_uuid', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'is_deleted', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'sync_last_update_at', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'audio_note_path', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'last_modified_at', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'current_total_debt_cents', 'INTEGER DEFAULT 0');
+
     // 1. إصلاح مشكلة price6 (إضافة العمود إذا لم يكن موجوداً)
     await DatabaseHelpers.addColumnIfNotExists(db, 'products', 'price6', 'REAL');
     
@@ -776,6 +926,38 @@ class DatabaseMigrations {
       ''');
     } catch (_) {}
 
+    // 22.ب. 🛡️ أعمدة سلامة المزامنة (محاكاة 10 أجهزة — tools/sync_sim)
+    //   origin_device_id   : الجهاز المالك لمعاملة وصلت من المزامنة.
+    //   remote_ver         : وقت الخادم لآخر نسخة طُبّقت (يمنع تطبيق نسخة أقدم بعد أحدث).
+    //   remote_modified_at : lastModifiedAt كما كتبه المالك (يُعاد بثّه للأجهزة الجديدة).
+    //   last_uploaded_at   : متى رفع هذا الجهاز آخر نسخة من معاملته.
+    //   restored_mark      : صف جاء من نسخة احتياطية مستعادة ولم يُعدَّل بعدها.
+    //   customers.tombstoned: 0 لا شيء، 1 محذوف (شاهد مرفوع أو وارد)،
+    //                         2 حذفٌ محلي بانتظار الرفع، 3 إعادة تنشيط بانتظار الرفع.
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'origin_device_id', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'remote_ver', 'INTEGER');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'remote_modified_at', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'last_uploaded_at', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'restored_mark', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'restored_mark', 'INTEGER DEFAULT 0');
+    //   invoices.owner_device_id: معرّف Firebase للجهاز المالك لفاتورة واردة.
+    //   إعادة البثّ لجهاز جديد/مستعيد تحمله، فيتعرّف المالك على فاتورته.
+    await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'owner_device_id', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'customers', 'tombstoned', 'INTEGER DEFAULT 0');
+    // العملاء المحذوفون قبل هذا العمود: نثبّت وسم حذفهم كي لا تُظهرهم قاعدة
+    // الظهور الجديدة (مخفي ⇔ موسوم ولا معاملات نشطة). آمن التكرار.
+    try {
+      await db.execute(
+          'UPDATE customers SET tombstoned = 1 WHERE is_deleted = 1 AND (tombstoned IS NULL OR tombstoned = 0)');
+    } catch (_) {}
+
+    // 22.ج. 🛡️ هوية العميل فريدة: صف واحد لكل sync_uuid.
+    //   مسارات الاستقبال (مستمع العملاء، حزم الفواتير، المطابقة) تتحقق ثم تُدرج
+    //   دون قيد فريد، فتسابقها يُنشئ صفّين بنفس الهوية: أحدهما عليه المعاملات
+    //   والآخر فارغ برصيد صفر، فيظهر العميل مرتين برصيدين
+    //   (اختبار الكود الحقيقي: test/sync_harness). ندمج أي تكرار موجود ثم نمنعه.
+    await mergeDuplicateCustomerIdentities(db);
+
     // 23. إضافة رقم الفاتورة التجاري المركّب (Surrogate Key + Natural Key pattern)
     //     يبقى id تسلسلياً تقنياً، invoice_number هو الرقم المرئي للمستخدم
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'invoice_number', 'TEXT');
@@ -903,6 +1085,34 @@ class DatabaseMigrations {
     await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'total_debt_iqd_cents', 'INTEGER DEFAULT 0');
     await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'total_debt_usd_cents', 'INTEGER DEFAULT 0');
 
+    // 28.4 🔒 جدول الأقفال — كان يُنشأ في createTables فقط (أي للقواعد الجديدة
+    //      وحدها)، فأي قاعدة بيانات أُنشئت قبل إضافته أو بمخطط آخر تبقى بلا
+    //      جدول أقفال. ولأن كل إدراج معاملة يمرّ على acquireLock، كان ذلك
+    //      يمنع تسجيل أي دين أو تسديد:
+    //      «no such table: resource_locks».
+    //      مكانه الصحيح هنا: ensureSchema تُنفَّذ عند كل فتح.
+    //
+    //      قيد UNIQUE ضروري لا تجميلي: منطق acquireLock يعتمد على فشل
+    //      الإدراج لاكتشاف وجود قفل سابق. بدونه ينجح كل إدراج ويصبح القفل
+    //      بلا أثر — أي حماية وهمية من التعديل المتزامن.
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS resource_locks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            resource_type TEXT NOT NULL,
+            resource_id INTEGER NOT NULL,
+            locked_by_device_id TEXT NOT NULL,
+            locked_by_user_name TEXT,
+            locked_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            UNIQUE(resource_type, resource_id)
+        )
+    ''');
+    await _tryExecQuiet(db,
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_locks_unique ON resource_locks(resource_type, resource_id);');
+
+    // 28.5 🏭 إصلاح مخطط الموردين — انظر _ensureSupplierSchema
+    await _ensureSupplierSchema(db);
+
     // 29. هجرة القيم المالية الحالية إلى أعمدة الأعداد الصحيحة الدقيقة (cents)
     await _migrateFinancialCents(db);
 
@@ -911,6 +1121,163 @@ class DatabaseMigrations {
 
     // 27. التأكد من إعادة بناء جدول FTS والترايغرز بشكل سليم دائماً عند فتح قاعدة البيانات
     await _createFtsTable(db);
+  }
+
+  /// 🏭 إصلاح مخطط الموردين — يُنفَّذ عند كل فتح لقاعدة البيانات.
+  ///
+  /// كان في المشروع تعريفان متعارضان لجدول `suppliers`: واحد هنا (نظام
+  /// المشتريات) وآخر في SuppliersService، وكلاهما `CREATE TABLE IF NOT EXISTS`.
+  /// من ينشئ الجدول أولاً يفرض تعريفه، والآخر يجد جدولاً ينقصه كل ما يحتاجه —
+  /// والخطأ يُبتلع بصمت. النتيجة أن وحدة الموردين لم تكن تعمل إطلاقاً.
+  ///
+  /// هذه الدالة تجعل مخطط نظام المشتريات هو المرجع: تُضيف الأعمدة الناقصة
+  /// لقواعد البيانات القديمة، تنقل القيم من الأسماء القديمة، وتُنشئ الجداول
+  /// الغائبة — بما فيها دفتر حركات المورد الذي يجعل الرصيد قابلاً للتحقق.
+  static Future<void> _ensureSupplierSchema(Database db) async {
+    // 1) أعمدة نظام المشتريات على جدول suppliers
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'name', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'phone', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'address', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'currency', "TEXT NOT NULL DEFAULT 'IQD'");
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'payment_terms', "TEXT DEFAULT 'cash'");
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'credit_days', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'total_debt_iqd', 'REAL NOT NULL DEFAULT 0.0');
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'total_debt_usd', 'REAL NOT NULL DEFAULT 0.0');
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'total_purchases', 'REAL NOT NULL DEFAULT 0.0');
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'current_balance', 'REAL NOT NULL DEFAULT 0.0');
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'total_invoices', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'suppliers', 'total_payments', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'notes', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'updated_at', 'TEXT');
+
+    // 2) نقل القيم من الأسماء القديمة (مخطط SuppliersService) إن وُجدت
+    try {
+      if (await DatabaseHelpers.columnExists(db, 'suppliers', 'company_name')) {
+        await db.execute(
+            "UPDATE suppliers SET name = company_name WHERE (name IS NULL OR name = '') AND company_name IS NOT NULL;");
+      }
+      if (await DatabaseHelpers.columnExists(db, 'suppliers', 'phone_number')) {
+        await db.execute(
+            "UPDATE suppliers SET phone = phone_number WHERE (phone IS NULL OR phone = '') AND phone_number IS NOT NULL;");
+      }
+      if (await DatabaseHelpers.columnExists(db, 'suppliers', 'last_modified_at')) {
+        await db.execute(
+            "UPDATE suppliers SET updated_at = last_modified_at WHERE updated_at IS NULL;");
+      }
+      await db.execute(
+          "UPDATE suppliers SET updated_at = created_at WHERE updated_at IS NULL;");
+      await db.execute("UPDATE suppliers SET name = '' WHERE name IS NULL;");
+    } catch (e) {
+      print('⚠️ نقل أعمدة الموردين القديمة: $e');
+    }
+
+    // 3) جداول نظام المشتريات — تُنشأ إن كانت غائبة
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS purchase_invoices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        invoice_number TEXT NOT NULL,
+        supplier_id INTEGER NOT NULL,
+        total_amount REAL NOT NULL DEFAULT 0.0,
+        paid_amount REAL NOT NULL DEFAULT 0.0,
+        currency TEXT NOT NULL DEFAULT 'IQD',
+        status TEXT NOT NULL DEFAULT 'draft',
+        date TEXT NOT NULL,
+        due_date TEXT,
+        created_by_user_id INTEGER,
+        notes TEXT,
+        last_modified_at TEXT,
+        attachment_path TEXT,
+        delegate_id INTEGER,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS purchase_invoice_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        invoice_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        unit_name TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        unit_price REAL NOT NULL,
+        conversion_factor REAL NOT NULL DEFAULT 1.0,
+        total_price REAL NOT NULL,
+        received_quantity REAL DEFAULT 0.0,
+        FOREIGN KEY (invoice_id) REFERENCES purchase_invoices (id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        payment_number TEXT,
+        receipt_number TEXT,
+        supplier_id INTEGER NOT NULL,
+        invoice_id INTEGER,
+        delegate_id INTEGER,
+        amount REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'IQD',
+        payment_method TEXT NOT NULL DEFAULT 'cash',
+        reference_number TEXT,
+        date TEXT NOT NULL,
+        notes TEXT,
+        created_by_user_id INTEGER,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE CASCADE
+      )
+    ''');
+
+    // 4) 📒 دفتر حركات المورد — الأساس الذي يجعل الرصيد قابلاً للتحقق.
+    //    رصيد المورد = مجموع حركاته لكل عملة، تماماً كسجل ديون العملاء.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplier_id INTEGER NOT NULL,
+        transaction_date TEXT NOT NULL,
+        amount_changed REAL NOT NULL DEFAULT 0.0,
+        currency TEXT NOT NULL DEFAULT 'IQD',
+        balance_before REAL DEFAULT 0.0,
+        balance_after REAL DEFAULT 0.0,
+        transaction_type TEXT,
+        description TEXT,
+        invoice_id INTEGER,
+        payment_id INTEGER,
+        transaction_uuid TEXT,
+        is_deleted INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE CASCADE
+      )
+    ''');
+
+    // 5) عمود created_at للمندوبين: نموذج SupplierDelegate يكتبه، وتعريف
+    //    supplier_delegates في ensureSchema لا يحتوي عليه ⇒ كان الإدراج يفشل.
+    await DatabaseHelpers.addColumnIfNotExists(
+        db, 'supplier_delegates', 'created_at', 'TEXT');
+    await _tryExecQuiet(db,
+        "UPDATE supplier_delegates SET created_at = datetime('now') WHERE created_at IS NULL;");
+
+    await _tryExecQuiet(db,
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_tx_uuid ON supplier_transactions(transaction_uuid);');
+    await _tryExecQuiet(db,
+        'CREATE INDEX IF NOT EXISTS idx_supplier_tx_supplier ON supplier_transactions(supplier_id);');
+    await _tryExecQuiet(db,
+        'CREATE INDEX IF NOT EXISTS idx_supplier_tx_invoice ON supplier_transactions(invoice_id);');
+    await _tryExecQuiet(db,
+        'CREATE INDEX IF NOT EXISTS idx_purchase_invoices_supplier2 ON purchase_invoices(supplier_id);');
+  }
+
+  static Future<void> _tryExecQuiet(Database db, String sql) async {
+    try {
+      await db.execute(sql);
+    } catch (_) {}
   }
 
   /// هجرة وتصحيح القيم المالية إلى أعمدة الأعداد الصحيحة (cents/fils) لضمان الدقة المالية 100%
@@ -936,34 +1303,17 @@ class DatabaseMigrations {
     }
   }
 
-  /// إعداد مشغلات قاعدة البيانات الذرية (Database Triggers) للحفاظ على الاتساق التلقائي دون الاعتماد التام على Dart
+  /// مشغّلات المخزون: دفتر المخزون المشترك (StockLedger).
+  ///
+  /// 🛡️ كان هنا مشغّلان يخصمان quantity_individual عند إدراج بند له product_id
+  /// ويعيدانه عند حذفه — فوق خصم كود التطبيق نفسه (InventoryHelpers): خصم
+  /// مزدوج على الجهاز البائع للبيع بالقطعة/المتر، ومرة واحدة على الأجهزة الأخرى
+  /// (بنودها الواردة بلا product_id) — فتختلف الكمية بين الأجهزة. حلّ محلهما
+  /// حساب الكمية من الدفتر (انظر stock_ledger.dart).
   static Future<void> _setupDatabaseTriggers(Database db) async {
     try {
-      // مشغل لتصحيح التخصيم وتحديث كميات المخزون عند إضافة بند فاتورة جديد
-      await db.execute('DROP TRIGGER IF EXISTS trg_invoice_items_stock_deduct;');
-      await db.execute('''
-        CREATE TRIGGER IF NOT EXISTS trg_invoice_items_stock_deduct
-        AFTER INSERT ON invoice_items
-        WHEN NEW.product_id IS NOT NULL
-        BEGIN
-          UPDATE products
-          SET stock_quantity = stock_quantity - NEW.quantity_individual
-          WHERE id = NEW.product_id;
-        END;
-      ''');
-
-      // مشغل لإعادة المخزون عند حذف بند فاتورة
-      await db.execute('DROP TRIGGER IF EXISTS trg_invoice_items_stock_restore;');
-      await db.execute('''
-        CREATE TRIGGER IF NOT EXISTS trg_invoice_items_stock_restore
-        AFTER DELETE ON invoice_items
-        WHEN OLD.product_id IS NOT NULL
-        BEGIN
-          UPDATE products
-          SET stock_quantity = stock_quantity + OLD.quantity_individual
-          WHERE id = OLD.product_id;
-        END;
-      ''');
+      await StockLedger.ensureSchema(db);
+      await StockLedger.setupTriggers(db);
     } catch (e) {
       print('Setup Database Triggers Error: $e');
     }
@@ -1051,6 +1401,76 @@ class DatabaseMigrations {
     await ensureSchema(db);
   }
   
+  /// 🛡️ يدمج صفوف العملاء التي تحمل نفس sync_uuid في صف واحد، ثم ينشئ قيداً
+  /// فريداً يمنع التكرار. آمن التكرار (يعمل عند كل تشغيل ولا يفعل شيئاً إن لم
+  /// يوجد تكرار). الصف الباقي هو الأقدم؛ تُنقل إليه معاملات وفواتير وسندات قبض
+  /// الصفوف الأخرى، ويُعاد حساب رصيده من مجموع معاملاته.
+  static Future<void> mergeDuplicateCustomerIdentities(DatabaseExecutor db) async {
+    try {
+      final groups = await db.rawQuery('''
+        SELECT sync_uuid AS u, MIN(id) AS keep FROM customers
+        WHERE sync_uuid IS NOT NULL AND sync_uuid != ''
+        GROUP BY sync_uuid HAVING COUNT(*) > 1
+      ''');
+      for (final g in groups) {
+        final uuid = g['u'] as String;
+        final keep = g['keep'] as int;
+        {
+          final rows = await db.query('customers',
+              where: 'sync_uuid = ? AND id != ?', whereArgs: [uuid, keep]);
+          int tomb = 0;
+          bool mine = false;
+          final keepRow = await db.query('customers',
+              columns: ['tombstoned', 'is_created_by_me'], where: 'id = ?', whereArgs: [keep]);
+          if (keepRow.isNotEmpty) {
+            tomb = (keepRow.first['tombstoned'] as int?) ?? 0;
+            mine = ((keepRow.first['is_created_by_me'] as int?) ?? 1) != 0;
+          }
+          for (final r in rows) {
+            final dup = r['id'] as int;
+            await db.update('transactions', {'customer_id': keep},
+                where: 'customer_id = ?', whereArgs: [dup]);
+            await db.update('invoices', {'customer_id': keep},
+                where: 'customer_id = ?', whereArgs: [dup]);
+            try {
+              await db.update('customer_receipt_vouchers', {'customer_id': keep},
+                  where: 'customer_id = ?', whereArgs: [dup]);
+            } catch (_) {}
+            final t = (r['tombstoned'] as int?) ?? 0;
+            if (t > tomb) tomb = t;
+            if (((r['is_created_by_me'] as int?) ?? 1) != 0) mine = true;
+            await db.delete('customers', where: 'id = ?', whereArgs: [dup]);
+          }
+          final sum = await db.rawQuery(
+              'SELECT COALESCE(SUM(amount_changed), 0) AS s, COUNT(*) AS n FROM transactions '
+              'WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+              [keep]);
+          final total = (sum.first['s'] as num?)?.toDouble() ?? 0.0;
+          final active = (sum.first['n'] as num?)?.toInt() ?? 0;
+          await db.update(
+            'customers',
+            {
+              'current_total_debt': total,
+              'tombstoned': tomb,
+              'is_created_by_me': mine ? 1 : 0,
+              // قاعدة الظهور: مخفي ⇔ موسوم بالحذف ولا معاملة نشطة
+              'is_deleted': ((tomb == 1 || tomb == 2) && active == 0) ? 1 : 0,
+            },
+            where: 'id = ?',
+            whereArgs: [keep],
+          );
+        }
+        print('🧹 دُمج ${uuid.substring(0, 12)}…: صفوف مكررة لنفس العميل في صف واحد');
+      }
+      await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_customers_sync_uuid
+        ON customers(sync_uuid) WHERE sync_uuid IS NOT NULL AND sync_uuid != ''
+      ''');
+    } catch (e) {
+      print('⚠️ دمج هويات العملاء المكررة: $e');
+    }
+  }
+
   /// يقوم بتوليد أرقام فواتير (Natural Keys) للفواتير القديمة التي لا تملك رقماً.
   ///
   /// الاستراتيجية:

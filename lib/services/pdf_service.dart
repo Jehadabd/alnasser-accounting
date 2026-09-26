@@ -573,7 +573,7 @@ class PdfService {
     try {
       final db = await DatabaseService().database;
       final rows = await db.rawQuery(
-        'SELECT id, invoice_number FROM invoices WHERE invoice_number IS NOT NULL AND invoice_number != ""',
+        "SELECT id, invoice_number FROM invoices WHERE invoice_number IS NOT NULL AND invoice_number != ''",
       );
       for (final r in rows) {
         final numVal = r['invoice_number'] as String?;

@@ -176,10 +176,13 @@ class TransactionAckService {
         'receiverDeviceId': _deviceId,
         'receiverDeviceName': _deviceName,
         'receivedAt': now.toIso8601String(),
+        // 🛡️ توقيت الخادم: SmartPipe لا يحذف نسخة إلا إن قرأها كل جهاز بعد
+        // رفعها (readAt ≥ uploadedAt). ساعة الجهاز لا تصلح لهذه المقارنة.
+        'readAt': FieldValue.serverTimestamp(),
         'status': status.name,
         'errorMessage': errorMessage,
         'createdAt': DateTime.now().toIso8601String(),
-      });
+      }, SetOptions(merge: true));
 
       print('✅ تم قراءة البيانات في هذا الحاسوب بنجاح! (جاري إعلام المرسل...)');
       print('📤 تم إرسال تأكيد استلام (ACK) للمعاملة: $transactionUuid');

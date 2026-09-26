@@ -102,15 +102,24 @@ class InvoiceSyncCoordinator {
     );
   }
 
-  /// ✅ التأشير على أن الفاتورة تم رفعها بنجاح
-  Future<void> markAsSynced(String invoiceUuid) async {
+  /// ✅ التأشير على أن الفاتورة تم رفعها بنجاح.
+  ///
+  /// 🛡️ [uploadedVersion] = إصدار الحمولة المرفوعة. إن تغيّرت الفاتورة أثناء
+  /// الرفع (تعديل المستخدم أو تسوية الدين ترفع الإصدار) فالنسخة الجديدة لم
+  /// تصل بعد: لا نؤشّرها، فتبقى is_synced = 0 وتُرفع في الدورة التالية.
+  /// تُرجع true فقط إن أُشّرت فعلاً.
+  Future<bool> markAsSynced(String invoiceUuid, {int? uploadedVersion}) async {
     final db = await _dbService.database;
-    await db.update(
+    final n = await db.update(
       'invoices',
       {'is_synced': 1},
-      where: 'invoice_uuid = ?',
-      whereArgs: [invoiceUuid],
+      where: uploadedVersion == null
+          ? 'invoice_uuid = ?'
+          : 'invoice_uuid = ? AND COALESCE(version, 1) = ?',
+      whereArgs:
+          uploadedVersion == null ? [invoiceUuid] : [invoiceUuid, uploadedVersion],
     );
+    return n > 0;
   }
 
   /// 🔢 جلب رقم النسخة (Version) المحلي للفاتورة

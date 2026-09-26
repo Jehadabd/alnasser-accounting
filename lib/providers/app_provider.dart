@@ -52,6 +52,7 @@ class AppProvider with ChangeNotifier {
   bool _hasMoreData = true;
   bool _isFetchingMore = false;
   bool _isLoadingMore = false; // for UI indicator
+  int _searchRequestId = 0;
   Timer? _searchDebounce;
   Timer? _syncRefreshDebounce;
   StreamSubscription<SyncEvent>? _syncEventsSub;
@@ -134,15 +135,38 @@ class AppProvider with ChangeNotifier {
   /// 📄 تحميل صفحة عملاء (Pagination) مع بحث في SQL.
   Future<void> _loadCustomersPage({bool refresh = false}) async {
     if (refresh) {
+      final requestId = ++_searchRequestId;
       _currentPage = 0;
       _hasMoreData = true;
-      _customers.clear();
-      _filteredCustomers.clear();
+
+      try {
+        final orderBy = _sortTypeToSqlOrderBy(_currentSortType);
+        final newCustomers = await _db.getCustomersForDebtRegisterPaginated(
+          limit: _pageSize,
+          offset: 0,
+          searchQuery: _searchQuery,
+          orderBy: orderBy,
+        );
+
+        if (requestId != _searchRequestId) return; // تم طلب بحث أحدث، تجاهل هذا الاستعلام القديم
+
+        _customers.clear();
+        _customers.addAll(newCustomers);
+        _filteredCustomers = List.from(_customers);
+        _hasMoreData = newCustomers.length >= _pageSize;
+        _currentPage = 1;
+        notifyListeners();
+      } catch (e) {
+        print('Error loading customers page (refresh): $e');
+      }
+      return;
     }
+
     if (_isFetchingMore || !_hasMoreData) return;
     _isFetchingMore = true;
 
     try {
+      final requestId = _searchRequestId;
       final orderBy = _sortTypeToSqlOrderBy(_currentSortType);
       final newCustomers = await _db.getCustomersForDebtRegisterPaginated(
         limit: _pageSize,
@@ -150,12 +174,16 @@ class AppProvider with ChangeNotifier {
         searchQuery: _searchQuery,
         orderBy: orderBy,
       );
+
+      if (requestId != _searchRequestId) return; // تم بدء بحث جديد أثناء التصفح
+
       if (newCustomers.length < _pageSize) {
         _hasMoreData = false;
       }
       _customers.addAll(newCustomers);
       _filteredCustomers = List.from(_customers);
       _currentPage++;
+      notifyListeners();
     } catch (e) {
       print('Error loading customers page: $e');
     } finally {
@@ -296,13 +324,25 @@ class AppProvider with ChangeNotifier {
     unawaited(_syncCustomerNow(id));
   }
 
-  Future<void> updateCustomer(Customer customer) async {
-    await _db.updateCustomer(customer);
+  Future<void> updateCustomer(Customer customer, {bool updateBalance = false}) async {
+    await _db.updateCustomer(customer, updateBalance: updateBalance);
+    // 🛡️ اقرأ النسخة المحفوظة فعلاً بدل وضع الكائن الممرَّر في الذاكرة،
+    // وإلا عرضت الواجهة رصيداً لم يُكتب في قاعدة البيانات.
+    Customer stored = customer;
+    if (customer.id != null) {
+      try {
+        final fresh = await _db.getCustomerById(customer.id!);
+        if (fresh != null) stored = fresh;
+      } catch (e) {
+        debugPrint('تعذّر إعادة قراءة العميل بعد التحديث: $e');
+      }
+    }
+
     final index = _customers.indexWhere((c) => c.id == customer.id);
     if (index != -1) {
-      _customers[index] = customer;
+      _customers[index] = stored;
       if (_selectedCustomer?.id == customer.id) {
-        _selectedCustomer = customer;
+        _selectedCustomer = stored;
       }
       _applySearchFilter();
       notifyListeners();
@@ -411,12 +451,11 @@ class AppProvider with ChangeNotifier {
 
   // Search functionality - مع debounce لتفادي إثقال قاعدة البيانات
   void setSearchQuery(String query) {
+    if (_searchQuery == query) return;
     _searchQuery = query;
-    // 📄 debounce 500ms ثم إعادة تحميل من SQL (بدل فلترة الذاكرة)
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 500), () async {
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () async {
       await _loadCustomersPage(refresh: true);
-      notifyListeners();
     });
     notifyListeners();
   }

@@ -91,6 +91,21 @@ class FirebaseSyncSecuritySettings {
     await prefs.setInt(_autoDeleteDaysKey, days);
   }
 
+  static const String _strictSignatureKey = 'firebase_sync_strict_signature';
+
+  /// 🔐 الوضع الصارم للتوقيع: يرفض أي مستند لم يوقَّع بسرّ المجموعة.
+  /// لا يُفعَّل إلا بعد إدخال نفس السرّ على **كل** الأجهزة وتحديثها جميعاً،
+  /// وإلا رُفضت بيانات الأجهزة التي تختلف أسرارها. معطّل افتراضياً.
+  static Future<bool> isStrictSignatureEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_strictSignatureKey) ?? false;
+  }
+
+  static Future<void> setStrictSignatureEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_strictSignatureKey, enabled);
+  }
+
   static const String _customerConflictPolicyKey = 'firebase_sync_customer_conflict_policy';
 
   /// الحصول على سياسة معالجة تعارض حذف العملاء

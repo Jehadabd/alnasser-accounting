@@ -12,7 +12,7 @@ import '../models/supplier.dart';
 import '../models/product.dart';
 import '../services/gemini_service.dart';
 import '../services/suppliers_service.dart';
-import '../services/ensemble_ai_service.dart';
+import '../services/ensemble_ai_service_factory.dart';
 import '../models/supplier_invoice_item.dart';
 import '../models/attachment.dart';
 import '../services/database_service.dart';

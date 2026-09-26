@@ -8,7 +8,6 @@ import '../dao/installer_dao.dart';
 import '../../../models/invoice.dart';
 import '../../../models/invoice_item.dart';
 import '../../../models/transaction.dart';
-import '../../../utils/inventory_helpers.dart';
 import '../../../utils/uuid_helper.dart';
 import '../../invoice_settings_service.dart';
 import 'financial_integrity_guard.dart';
@@ -182,9 +181,8 @@ class InvoiceManager {
 
         }
         
-        // تحديث الكمية في المخزن (إنقاص)
-        await InventoryHelpers.adjustStockForItems(txn, items, isAddition: false);
-        
+        // 📦 الكمية تتبع البنود تلقائياً (دفتر المخزون — مشغّلات SQLite)
+
         // د. معالجة الديون (إذا كانت دين)
         if (invoice.paymentType == 'دين' && invoice.customerId != null && invoice.customerId != 0) {
            // حساب المبلغ المتبقي (الدين)

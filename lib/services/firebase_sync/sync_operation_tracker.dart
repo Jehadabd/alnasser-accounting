@@ -107,7 +107,6 @@ class SyncOperationTracker {
   FirebaseFirestore? _firestore;
   String? _groupId;
   String? _deviceId;
-  String? _groupSecret;
   bool _isInitialized = false;
 
   // مؤقت التنظيف التلقائي
@@ -137,7 +136,6 @@ class SyncOperationTracker {
     _firestore = firestore;
     _groupId = groupId;
     _deviceId = deviceId;
-    _groupSecret = groupSecret;
 
     // إنشاء الجداول المحلية
     await _createLocalTables();
@@ -342,9 +340,8 @@ class SyncOperationTracker {
     final docId = '${operation.syncUuid}_v${operation.version}';
     
     final data = operation.toFirebaseMap();
-    if (_groupSecret != null) {
-      data['groupSecret'] = _groupSecret;
-    }
+    // 🔒 السر لا يُكتب في السحابة: قواعد Firestore لا تطلبه، وكل من يقرأ
+    // المجموعة كان يحصل عليه فيستطيع تزوير توقيعات المعاملات.
 
     await _firestore!
         .collection('sync_operations')

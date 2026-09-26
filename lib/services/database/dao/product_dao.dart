@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../services/firebase_sync/uuid_helper.dart';
+import '../../../services/firebase_sync/firebase_sync_config.dart';
 import '../../../models/product.dart';
 import '../core/database_helpers.dart';
 
@@ -214,6 +215,10 @@ class ProductDao {
     try {
       final productMap = product.toMap();
       productMap['name_norm'] = DatabaseHelpers.normalizeArabic(product.name);
+      // 📦 تعديل بيانات المنتج لا يلمس الكمية: الكمية من دفتر المخزون وحده
+      // (StockLedger). شاشة التعديل تحمل الكمية التي حُمّلت عند فتحها، فبيعٌ
+      // أثناء فتحها كانت تمحوه عند الحفظ. تغيير الكمية: «تعديل المخزون».
+      productMap.remove('stock_quantity');
       
       // إعادة بناء unit_costs إذا تغيرت التكلفة
       try {
@@ -265,7 +270,6 @@ class ProductDao {
           _recordFieldDiff(batchHist, product.id, old, productMap, 'price2', 'السعر 2');
           _recordFieldDiff(batchHist, product.id, old, productMap, 'price3', 'السعر 3');
           _recordFieldDiff(batchHist, product.id, old, productMap, 'cost_price', 'سعر التكلفة');
-          _recordFieldDiff(batchHist, product.id, old, productMap, 'stock_quantity', 'المخزون');
           if (deviceBatch != null) await batchHist.commit(noResult: true);
         }
       } catch (e) {
@@ -316,11 +320,15 @@ class ProductDao {
   }
 
   Future<String> _getDeviceIdStr() async {
+    // 🛡️ معرّف جهاز Firebase (التخزين الآمن) — نفس هوية مزامنة المنتجات.
+    // كان يُقرأ من SharedPreferences حيث لا يُحفظ أصلاً، فيرجع رقم ترقيم
+    // الفواتير (1 افتراضياً على كل جهاز) ولا يُعرف تعديلي «معلّقاً» للرفع.
     try {
-      // استيراد مؤجل لتفادي الاعتماد الدائري مع خدمات المزامنة
+      return await FirebaseSyncConfig.getDeviceId();
+    } catch (_) {}
+    try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getString('firebase_sync_device_id') ??
-          (prefs.getInt('invoice_device_id') ?? 1).toString();
+      return (prefs.getInt('invoice_device_id') ?? 1).toString();
     } catch (_) {
       return 'local';
     }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'dart:convert';
 import '../services/database_service.dart';
+import '../services/database/dao/audit_dao.dart'; // 🗜️ قراءة أصناف اللقطات (مضغوطة أو نصاً)
 
 class InvoiceHistoryScreen extends StatefulWidget {
   final int invoiceId;
@@ -69,7 +70,9 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
           'discount': currentInvoice.discount,
           'amount_paid': currentInvoice.amountPaidOnInvoice,
           'loading_fee': currentInvoice.loadingFee,
-          'items_json': jsonEncode(currentItems.map((i) => i.toMap()).toList()),
+          // نفس التنظيف المطبَّق على اللقطات، فتبقى المقارنة متكافئة
+          'items_json': AuditDao.buildSnapshotItemsJson(
+              currentItems.map((i) => i.toMap()).toList()),
           'created_at': currentInvoice.lastModifiedAt.toIso8601String(),
           'invoice_notes': currentInvoice.notes ?? '',
           'created_by': currentInvoice.createdByUsername, // Assuming invoice has this field now or tracked elsewhere
@@ -218,7 +221,9 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
     }
     
     // مقارنة الأصناف
-    final itemsChanges = _compareItems(before['items_json'] ?? before['items'], after['items_json'] ?? after['items']);
+    final itemsChanges = _compareItems(
+        AuditDao.decodeSnapshotItemRows(before['items_json'] ?? before['items']),
+        AuditDao.decodeSnapshotItemRows(after['items_json'] ?? after['items']));
     if (itemsChanges.isNotEmpty) {
       changes.add({
         'field': 'الأصناف',
@@ -400,7 +405,7 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
     List<dynamic> items = [];
     try {
       if (snapshot['items_json'] != null) {
-        items = jsonDecode(snapshot['items_json']);
+        items = AuditDao.decodeSnapshotItemRows(snapshot['items_json']);
       }
     } catch (e) {
       print('خطأ في تحليل الأصناف: $e');

@@ -8,6 +8,8 @@ import '../models/supplier_payment.dart';
 import '../models/supplier_delegate.dart';
 import '../services/database_service.dart';
 import '../services/settings_manager.dart';
+import '../services/database/business/supplier_debt_reconciler.dart';
+import '../services/database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 
 /// خدمة المشتريات والموردين (Odoo-Style)
 class PurchaseService with ChangeNotifier {
@@ -132,8 +134,11 @@ class PurchaseService with ChangeNotifier {
 
   Future<int> _getNextReceiptNumber() async {
     final db = await _db.database;
-    final result = await db.rawQuery('SELECT MAX(receipt_number) as max_num FROM supplier_payments');
-    final maxNum = result.first['max_num'] as int?;
+    // 🛡️ receipt_number عمود نصّي؛ قراءته مباشرةً كـ int كانت ترمي استثناءً
+    // عند أول سند. نحوّله صراحةً قبل أخذ الأكبر.
+    final result = await db.rawQuery(
+        'SELECT MAX(CAST(receipt_number AS INTEGER)) as max_num FROM supplier_payments');
+    final maxNum = (result.first['max_num'] as num?)?.toInt();
     return (maxNum ?? 0) + 1;
   }
 
@@ -152,12 +157,18 @@ class PurchaseService with ChangeNotifier {
     }
     
     await db.transaction((txn) async {
-      // 1. Revert Old Effects (if invoice was confirmed)
-      if (oldInvoice.status == 'confirmed') {
+      // 1. عكس أثر المخزون القديم (الدين يتكفّل به الحارس المحاسبي لاحقاً)
+      //    🛡️ الحالة القديمة تُقرأ من قاعدة البيانات لا من الكائن الممرَّر:
+      //    كائن الشاشة قد يكون قديماً، وهذا بالضبط ما ضاعف ديون العملاء سابقاً.
+      final oldRows = await txn.query('purchase_invoices',
+          columns: ['status'], where: 'id = ?', whereArgs: [oldInvoice.id], limit: 1);
+      final String oldStatus =
+          oldRows.isEmpty ? 'draft' : ((oldRows.first['status'] as String?) ?? 'draft');
+
+      if (oldStatus == 'confirmed') {
         for (var item in oldItems) {
           await _reverseProductStock(txn, item);
         }
-        await _reverseSupplierDebtOnInvoice(txn, oldInvoice.supplierId, oldInvoice.totalAmount, oldInvoice.paidAmount, oldInvoice.currency);
       }
       
       // 2. Delete Old Items
@@ -182,8 +193,12 @@ class PurchaseService with ChangeNotifier {
         for (var item in newItems) {
           await _updateProductStockAndCost(txn, item, costingMethod);
         }
-        await _updateSupplierDebtOnInvoice(txn, newInvoice.supplierId, newInvoice.totalAmount, newInvoice.paidAmount, newInvoice.currency);
       }
+
+      // 6. 🛡️ الحارس المحاسبي: مساهمة الفاتورة = الإجمالي − المدفوع (للمؤكدة)
+      //    إدمبوتنت ويقرأ الصف من قاعدة البيانات، فلا عكسٌ ولا تراكم.
+      await SupplierDebtReconciler.reconcileInvoice(txn, oldInvoice.id!,
+          reason: 'تعديل');
     });
     
     notifyListeners();
@@ -202,14 +217,37 @@ class PurchaseService with ChangeNotifier {
       print('Warning: Could not load costingMethod from settings: $e');
     }
     
+    // الحالة المؤكدة تُحسم هنا مرة واحدة، ويُكتب أثرها في الصف نفسه، كي
+    // يقرأها الحارس المحاسبي لاحقاً من قاعدة البيانات لا من معطيات الاستدعاء.
+    final bool nowConfirmed = confirm || invoice.status == 'confirmed';
+
     await db.transaction((txn) async {
       // 1. Insert/Update Invoice
       int invoiceId;
       final invoiceMap = invoice.toMap();
       invoiceMap.remove('id');
+      if (nowConfirmed) invoiceMap['status'] = 'confirmed';
       
       if (invoice.id != null) {
         invoiceId = invoice.id!;
+
+        // 🛡️ عكس أثر المخزون القديم قبل تطبيق الجديد.
+        //    كان هذا المسار يطبّق الأثر الجديد بلا عكس القديم إطلاقاً، فكل
+        //    تعديل لفاتورة مؤكدة كان يُضاعف المخزون والدين.
+        final oldRows = await txn.query('purchase_invoices',
+            columns: ['status'], where: 'id = ?', whereArgs: [invoiceId], limit: 1);
+        final String oldStatus = oldRows.isEmpty
+            ? 'draft'
+            : ((oldRows.first['status'] as String?) ?? 'draft');
+
+        if (oldStatus == 'confirmed') {
+          final oldItemRows = await txn.query('purchase_invoice_items',
+              where: 'invoice_id = ?', whereArgs: [invoiceId]);
+          for (final m in oldItemRows) {
+            await _reverseProductStock(txn, PurchaseInvoiceItem.fromMap(m));
+          }
+        }
+
         await txn.update('purchase_invoices', invoiceMap, where: 'id = ?', whereArgs: [invoiceId]);
         // Delete old items if updating
         await txn.delete('purchase_invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
@@ -226,14 +264,18 @@ class PurchaseService with ChangeNotifier {
         await txn.insert('purchase_invoice_items', itemMap);
       }
 
-      // 3. If Confirmed, Update Stock, Cost, and Debt
-      if (confirm && invoice.status == 'confirmed') {
+      // 3. If Confirmed, Update Stock and Cost
+      if (nowConfirmed) {
         for (var item in items) {
           await _updateProductStockAndCost(txn, item, costingMethod);
         }
-        await _updateSupplierDebtOnInvoice(txn, invoice.supplierId, invoice.totalAmount, invoice.paidAmount, invoice.currency);
-        await _updateSupplierInvoiceCount(txn, invoice.supplierId);
       }
+
+      // 4. 🛡️ الحارس المحاسبي — يتولّى الدين والعدّادات معاً.
+      //    عدّادا total_invoices و total_payments صارا مشتقّين بالعدّ بدل
+      //    عدّاد تراكمي كان يزيد ولا ينقص أبداً.
+      await SupplierDebtReconciler.reconcileInvoice(txn, invoiceId,
+          reason: invoice.id != null ? 'تعديل' : 'حفظ');
     });
 
     notifyListeners();
@@ -301,16 +343,23 @@ class PurchaseService with ChangeNotifier {
     print('💾 DB_UPDATE: Updated unitCosts: $unitCostsJson');
 
     await txn.update(
-      'products', 
+      'products',
       {
-        'stock_quantity': totalQty,
         'cost_price': finalCost,
         'unit_costs': unitCostsJson,
       },
       where: 'id = ?',
       whereArgs: [item.productId],
     );
-    
+
+    // 📦 الكمية: حركة شراء في دفتر المخزون المشترك (تصل لكل الأجهزة؛ بيانات
+    //    المورد نفسها تبقى محلية). كانت تُكتب رقماً مطلقاً على هذا الجهاز وحده.
+    final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
+    if (productUuid != null) {
+      await StockLedger.addMovement(txn,
+          productSyncUuid: productUuid, delta: newQty, kind: 'purchase', note: 'فاتورة شراء');
+    }
+
     print('💾 DB_UPDATE: ✅ Product updated successfully!');
   }
 
@@ -318,83 +367,45 @@ class PurchaseService with ChangeNotifier {
     final List<Map<String, dynamic>> products = await txn.query('products', where: 'id = ?', whereArgs: [item.productId]);
     if (products.isEmpty) return;
     
-    final product = products.first;
-    double currentStock = (product['stock_quantity'] as num?)?.toDouble() ?? 0.0;
-    double oldQty = item.baseQuantity;
-    
-    double newStock = currentStock - oldQty;
-    if (newStock < 0) newStock = 0.0; // Prevent negative stock due to manual edits
-    
-    await txn.update(
-      'products', 
-      {'stock_quantity': newStock},
-      where: 'id = ?',
-      whereArgs: [item.productId],
-    );
+    // 📦 إلغاء أثر فاتورة شراء (تعديلها أو حذفها): حركة عكسية في الدفتر.
+    //    لا حدّ عند الصفر — كان يجعل الكمية تتوقف على ترتيب العمليات.
+    final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
+    if (productUuid == null) return;
+    await StockLedger.addMovement(txn,
+        productSyncUuid: productUuid,
+        delta: -item.baseQuantity,
+        kind: 'purchase_reverse',
+        note: 'إلغاء/تعديل فاتورة شراء');
   }
 
-  Future<void> _updateSupplierDebtOnInvoice(Transaction txn, int supplierId, double totalAmount, double paidAmount, String currency) async {
-    final List<Map<String, dynamic>> suppliers = await txn.query('suppliers', where: 'id = ?', whereArgs: [supplierId]);
-    if (suppliers.isEmpty) return;
+  // ⚠️ حُذفت هنا أربع دوال تراكمية:
+  //   _updateSupplierDebtOnInvoice / _reverseSupplierDebtOnInvoice
+  //   _updateSupplierInvoiceCount  / _updateSupplierPaymentCount
+  //
+  // الأوليان كانتا تزيدان وتنقصان `total_debt_iqd` مباشرةً بمبالغ يمرّرها
+  // المستدعي من كائن قد يكون قديماً — نفس علّة «الحالة 2» التي ضاعفت ديون
+  // العملاء. والأخريان عدّادان يزيدان بواحد ولا ينقصان أبداً.
+  //
+  // البديل: SupplierDebtReconciler — دين المورد = مجموع حركات دفتره،
+  // والعدّادات تُحسب بالعدّ لا بالتراكم.
 
-    double addedDebt = totalAmount - paidAmount;
-    
-    // Update the correct currency debt column
-    if (currency == 'USD') {
-      double currentDebt = (suppliers.first['total_debt_usd'] as num?)?.toDouble() ?? 0.0;
-      await txn.update(
-        'suppliers',
-        {'total_debt_usd': currentDebt + addedDebt},
-        where: 'id = ?',
-        whereArgs: [supplierId],
-      );
-    } else {
-      double currentDebt = (suppliers.first['total_debt_iqd'] as num?)?.toDouble() ?? 0.0;
-      await txn.update(
-        'suppliers',
-        {'total_debt_iqd': currentDebt + addedDebt},
-        where: 'id = ?',
-        whereArgs: [supplierId],
-      );
+  /// كشف حساب المورد: حركاته مرتّبة زمنياً (دين موجب، دفعة سالبة).
+  Future<List<Map<String, dynamic>>> getSupplierLedger(int supplierId) async {
+    final db = await _db.database;
+    // 🛡️ شبكة أمان: وفّق مساهمات الفواتير قبل العرض
+    try {
+      await db.transaction((txn) async {
+        await SupplierDebtReconciler.reconcileSupplierLedger(txn, supplierId,
+            reason: 'عرض كشف الحساب');
+      });
+    } catch (e) {
+      print('⚠️ تعذّرت تسوية دفتر المورد قبل العرض: $e');
     }
-  }
-
-  Future<void> _reverseSupplierDebtOnInvoice(Transaction txn, int supplierId, double totalAmount, double paidAmount, String currency) async {
-    final List<Map<String, dynamic>> suppliers = await txn.query('suppliers', where: 'id = ?', whereArgs: [supplierId]);
-    if (suppliers.isEmpty) return;
-
-    double subtractedDebt = totalAmount - paidAmount;
-    
-    if (currency == 'USD') {
-      double currentDebt = (suppliers.first['total_debt_usd'] as num?)?.toDouble() ?? 0.0;
-      await txn.update(
-        'suppliers',
-        {'total_debt_usd': currentDebt - subtractedDebt},
-        where: 'id = ?',
-        whereArgs: [supplierId],
-      );
-    } else {
-      double currentDebt = (suppliers.first['total_debt_iqd'] as num?)?.toDouble() ?? 0.0;
-      await txn.update(
-        'suppliers',
-        {'total_debt_iqd': currentDebt - subtractedDebt},
-        where: 'id = ?',
-        whereArgs: [supplierId],
-      );
-    }
-  }
-
-  Future<void> _updateSupplierInvoiceCount(Transaction txn, int supplierId) async {
-    await txn.rawUpdate(
-      'UPDATE suppliers SET total_invoices = total_invoices + 1 WHERE id = ?',
-      [supplierId],
-    );
-  }
-
-  Future<void> _updateSupplierPaymentCount(Transaction txn, int supplierId) async {
-    await txn.rawUpdate(
-      'UPDATE suppliers SET total_payments = total_payments + 1 WHERE id = ?',
-      [supplierId],
+    return db.query(
+      'supplier_transactions',
+      where: 'supplier_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+      whereArgs: [supplierId],
+      orderBy: 'transaction_date DESC, id DESC',
     );
   }
 
@@ -428,32 +439,22 @@ class PurchaseService with ChangeNotifier {
       final paymentMap = payment.toMap();
       paymentMap.remove('id');
       paymentMap['receipt_number'] = receiptNumber;
-      await txn.insert('supplier_payments', paymentMap);
+      final paymentId = await txn.insert('supplier_payments', paymentMap);
 
-      // 2. Update Supplier Debt (Decrease based on currency)
-      final List<Map<String, dynamic>> suppliers = await txn.query('suppliers', where: 'id = ?', whereArgs: [payment.supplierId]);
-      if (suppliers.isNotEmpty) {
-        if (payment.currency == 'USD') {
-          double currentDebt = (suppliers.first['total_debt_usd'] as num?)?.toDouble() ?? 0.0;
-          await txn.update(
-            'suppliers',
-            {'total_debt_usd': (currentDebt - payment.amount).clamp(0.0, double.infinity)},
-            where: 'id = ?',
-            whereArgs: [payment.supplierId],
-          );
-        } else {
-          double currentDebt = (suppliers.first['total_debt_iqd'] as num?)?.toDouble() ?? 0.0;
-          await txn.update(
-            'suppliers',
-            {'total_debt_iqd': (currentDebt - payment.amount).clamp(0.0, double.infinity)},
-            where: 'id = ?',
-            whereArgs: [payment.supplierId],
-          );
-        }
-      }
-
-      // 3. Update payment count
-      await _updateSupplierPaymentCount(txn, payment.supplierId);
+      // 2. 🛡️ تُسجَّل الدفعة كحركة في دفتر المورد، والرصيد يُشتق من مجموع
+      //    الحركات. لا `clamp` هنا عمداً: الدفع الزائد كان يُمحى بصمت،
+      //    والصحيح أن يصير رصيداً لنا عند المورد.
+      await SupplierDebtReconciler.recordPayment(
+        txn,
+        paymentId: paymentId,
+        supplierId: payment.supplierId,
+        amount: payment.amount,
+        currency: payment.currency,
+        description: payment.notes == null || payment.notes!.isEmpty
+            ? 'سند دفع رقم $receiptNumber'
+            : 'سند دفع رقم $receiptNumber — ${payment.notes}',
+        date: payment.date.toIso8601String(),
+      );
     });
 
     notifyListeners();

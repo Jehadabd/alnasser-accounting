@@ -1,6 +1,20 @@
 // lib/services/firebase_sync/smart_pipe_cleanup_service.dart
 // Firebase كأنبوب مؤقت: الحذف الذكي بعد قراءة جميع الأجهزة النشطة
 // المنطق: مستند محفوظ محلياً في SQLite → لا داعي لبقائه في Firebase
+//
+// 🛡️ قواعد الأمان (المحاكاة: tools/sync_sim سيناريوهات 29، 30 + الفوضى)
+//   • الإقرار يُحسب فقط إن كان أحدث من نسخة المستند الحالية (readAt ≥ uploadedAt).
+//     كان إقرار قراءة النسخة الأولى يكفي لحذف نسخة معدّلة أو شاهد حذف كُتب
+//     بعدها، فيفوت الجهاز الذي لم يقرأها التعديل أو الحذف إلى الأبد.
+//   • الحذف مشروط داخل معاملة Firestore: إن تغيّرت النسخة بين الفحص والحذف
+//     (شاهد حذف كُتب للتو) لا نحذف.
+//   • لا تُحذف شواهد حذف العملاء ولا الإقرارات: شاهد العميل هو الطريق الوحيد
+//     لجهاز غائب ليعرف بالحذف، والإقرار دليل تعتمده المطابقة المحصّنة.
+//   • ولا تُحذف شواهد حذف المعاملات (isDeleted = true): «كل من يعرفها قرأها»
+//     لا يشمل جهازاً ينضم لاحقاً ولا جهازاً يستعيد نسخة احتياطية أقدم من
+//     الحذف. كلاهما يستلم الدين حياً (من حزمة الفاتورة أو من نسخته) ولا
+//     يصله الحذف من أي طريق آخر: إعادة البثّ للجهاز الجديد لا تحمل إلا
+//     النشط (اختبار الكود الحقيقي: test/sync_harness).
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -161,6 +175,7 @@ class SmartPipeCleanupService {
         ackCollection: 'transaction_acks',
         ackSyncField: 'transactionUuid',
         ackDeviceField: 'receiverDeviceId',
+        keepTombstones: true,
       );
       deletedTx = txResult['deleted'] as int;
       skipped += txResult['skipped'] as int;
@@ -180,11 +195,9 @@ class SmartPipeCleanupService {
       deletedInv = invResult['deleted'] as int;
       skipped += invResult['skipped'] as int;
 
-      // 4. حذف العملاء القديمة المُحذوفة (soft delete)
-      deletedCust = await _cleanupDeletedCustomers(groupId, cutoff);
-
-      // 5. حذف ACKs القديمة التابعة لمستندات محذوفة
-      deletedAcks = await _cleanupOrphanedAcks(groupId);
+      // 4. 🛡️ شواهد حذف العملاء تبقى (انظر رأس الملف) — كانت تُحذف بعد المدة
+      //    دون أي تأكيد قراءة، فيبقى العميل حياً على جهاز غاب أطول منها.
+      // 5. 🛡️ الإقرارات تبقى (انظر رأس الملف).
 
       // 🔒 تم إلغاء الحذف النهائي الأعمى (_runHardTTLCleanup):
       // لا يُمحى أي مستند مهما تقادم إلا إذا قرأته كل الأجهزة المؤهلة أعلاه.
@@ -254,6 +267,7 @@ class SmartPipeCleanupService {
     required String ackCollection,
     required String ackSyncField,
     required String ackDeviceField,
+    bool keepTombstones = false,
   }) async {
     int deleted = 0;
     int skipped = 0;
@@ -278,6 +292,11 @@ class SmartPipeCleanupService {
       for (final doc in snapshot.docs) {
         final data = doc.data();
 
+        // 🛡️ شاهد الحذف دائم (انظر رأس الملف)
+        if (keepTombstones && (data['isDeleted'] == true || data['is_deleted'] == 1)) {
+          continue;
+        }
+
         // 1. التحقق من تجاوز المدة التي ضبطها المستخدم
         final ts = data[timestampField];
         DateTime? uploadedAt;
@@ -296,30 +315,49 @@ class SmartPipeCleanupService {
         // 2. جهاز المُرسل
         final senderId = data[senderField] as String?;
 
-        // 3. جلب ACKs لهذا المستند
+        // 3. جلب ACKs لهذا المستند: أحدث قراءة لكل جهاز
         final acksSnapshot = await _firestore!
             .collection(ackCollection)
             .where(ackSyncField, isEqualTo: doc.id)
             .get();
 
-        final ackedDevices = acksSnapshot.docs
-            .map((a) => a.data()[ackDeviceField] as String? ?? '')
-            .toSet();
+        final readBy = <String, DateTime>{};
+        for (final a in acksSnapshot.docs) {
+          final ad = a.data();
+          final dev = ad[ackDeviceField] as String? ?? '';
+          final at = _ackTime(ad);
+          if (dev.isEmpty || at == null) continue;
+          final prev = readBy[dev];
+          if (prev == null || at.isAfter(prev)) readBy[dev] = at;
+        }
 
-        // 4. التحقق: هل كل جهاز مؤهل (غير المرسل) قرأ المستند؟
+        // 4. التحقق: هل كل جهاز مؤهل (غير المرسل) قرأ *هذه النسخة*؟
         bool allRead = true;
         for (final device in eligibleDevices) {
           if (device == senderId) continue; // المرسل لا يحتاج ACK
-          if (!ackedDevices.contains(device)) {
+          final at = readBy[device];
+          if (at == null || at.isBefore(uploadedAt)) {
             allRead = false;
             break;
           }
         }
 
         if (allRead) {
-          await doc.reference.delete();
-          deleted++;
-          print('🗑️ [SmartPipe] حُذف من $collection: ${doc.id}');
+          // 5. حذف مشروط: فقط إن بقيت النسخة التي فحصناها كما هي
+          final expected = data[timestampField];
+          final removed = await _firestore!.runTransaction<bool>((txn) async {
+            final cur = await txn.get(doc.reference);
+            final cd = cur.data();
+            if (cd == null || cd[timestampField] != expected) return false;
+            txn.delete(doc.reference);
+            return true;
+          });
+          if (removed) {
+            deleted++;
+            print('🗑️ [SmartPipe] حُذف من $collection: ${doc.id}');
+          } else {
+            skipped++;
+          }
         } else {
           skipped++;
         }
@@ -332,71 +370,22 @@ class SmartPipeCleanupService {
     return {'deleted': deleted, 'skipped': skipped};
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // حذف العملاء المُعلَّمين كمحذوفين بعد تأكيد وصولهم
-  // ═══════════════════════════════════════════════════════════════════════
-
-  Future<int> _cleanupDeletedCustomers(String groupId, DateTime cutoff) async {
-    int deleted = 0;
-
-    final snapshot = await _firestore!
-        .collection('customers')
-        .where('isDeleted', isEqualTo: true)
-        .limit(100)
-        .get();
-
-    for (final doc in snapshot.docs) {
-      final data = doc.data();
-      final deletedAtStr = data['deletedAt'] as String?;
-      if (deletedAtStr == null) continue;
-
-      try {
-        final deletedAt = DateTime.parse(deletedAtStr);
-        // احذف إذا مر على الحذف أكثر من grace period
-        if (deletedAt.isBefore(cutoff)) {
-          await doc.reference.delete();
-          deleted++;
-        }
-      } catch (_) {}
+  /// وقت قراءة الإقرار: readAt (توقيت الخادم). الإقرارات القديمة تحمل
+  /// receivedAt بساعة الجهاز فقط؛ نطرح منها هامشاً كي لا تجعلها ساعة متقدمة
+  /// تبدو أحدث من نسخة لم تُقرأ.
+  static DateTime? _ackTime(Map<String, dynamic> ack) {
+    final r = ack['readAt'];
+    if (r is Timestamp) return r.toDate();
+    if (r is String) {
+      final d = DateTime.tryParse(r);
+      if (d != null) return d;
     }
-
-    return deleted;
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // حذف ACKs اليتيمة (تابعة لمستندات محذوفة بالفعل)
-  // ═══════════════════════════════════════════════════════════════════════
-
-  Future<int> _cleanupOrphanedAcks(String groupId) async {
-    int deleted = 0;
-    final cutoff = DateTime.now().subtract(const Duration(days: 60));
-
-    for (final ackColl in ['transaction_acks', 'invoice_read_acks']) {
-      final snapshot = await _firestore!
-          .collection(ackColl)
-          .limit(200)
-          .get();
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final readAtRaw = data['readAt'];
-        DateTime? readAt;
-
-        if (readAtRaw is Timestamp) {
-          readAt = readAtRaw.toDate();
-        } else if (readAtRaw is String) {
-          readAt = DateTime.tryParse(readAtRaw);
-        }
-
-        // احذف ACKs القديمة (أقدم من 60 يوم) — المستند الأصل محذوف بالتأكيد
-        if (readAt != null && readAt.isBefore(cutoff)) {
-          await doc.reference.delete();
-          deleted++;
-        }
-      }
+    final rec = ack['receivedAt'];
+    if (rec is String) {
+      final d = DateTime.tryParse(rec);
+      if (d != null) return d.subtract(const Duration(minutes: 10));
     }
-
-    return deleted;
+    return null;
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -440,7 +429,6 @@ class SmartPipeCleanupService {
         'transactionUuid': syncUuid,
         'receiverDeviceId': deviceId,
         'readAt': FieldValue.serverTimestamp(),
-        'groupSecret': groupSecret,
       }, SetOptions(merge: true));
     } catch (e) {
       // ACK غير حرج — تجاهل الخطأ
@@ -465,7 +453,6 @@ class SmartPipeCleanupService {
         'invoiceUuid': invoiceUuid,
         'deviceId': deviceId,
         'readAt': FieldValue.serverTimestamp(),
-        'groupSecret': groupSecret,
       }, SetOptions(merge: true));
     } catch (e) {
       print('⚠️ [SmartPipe] فشل إرسال invoice ACK: $e');

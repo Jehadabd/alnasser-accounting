@@ -65,13 +65,14 @@ class DiscrepancyResolutionService {
 
       // 2. جلب قائمة UUIDs للمعاملات في Firebase لهذا العميل
       // ملاحظة: هذا قد يكون مكلفاً إذا كان العدد كبيراً، لكننا نفعله عند الطلب فقط
+      // 🛡️ بلا فلتر isNotEqualTo: يستبعد الوثائق التي لا تحمل الحقل (كل الحية)
       final remoteTxDocs = await _firestore
           .collection('transactions')
           .where('customerSyncUuid', isEqualTo: customerSyncUuid)
-          .where('isDeleted', isNotEqualTo: true)
           .get();
 
       final Set<String> remoteUuids = remoteTxDocs.docs
+          .where((doc) => doc.data()['isDeleted'] != true)
           .map((doc) => doc.id)
           .toSet();
 

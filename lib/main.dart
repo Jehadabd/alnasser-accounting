@@ -1,5 +1,6 @@
 // main.dart
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -29,9 +30,10 @@ import 'screens/password_setup_screen.dart';
 import 'screens/general_settings_screen.dart';
 import 'screens/login_screen.dart'; // 👤
 import 'screens/user_management_screen.dart'; // 👤
-import 'services/printing_service_windows.dart';
 import 'services/printing_service.dart';
-import 'services/printing_service_platform_io.dart';
+// 🌐🔀 مصنع الطباعة المشروط: ويب → Web، أندرويد/ويندوز → io كما كان
+// (كان الاستيراد المباشر لـ windows/io يكسر بناء الويب بسبب win32/dart:io)
+import 'services/printing_service_factory.dart';
 import 'services/auth_service.dart'; // 👤
 import 'services/purchase_service.dart'; // 🆕
 import 'services/suppliers_service.dart'; // 🆕 (Fix Provider Error)
@@ -39,12 +41,15 @@ import 'services/license_service.dart'; // 🔐
 import 'screens/license_screen.dart'; // 🔐
 import 'services/alert_service.dart'; // 🔔 Restored
 import 'services/font_manager.dart'; // 🔡 Font management
-import 'services/ensemble_ai_service.dart'; // 🧠 AI Service
+import 'services/ensemble_ai_service_factory.dart'; // 🧠 AI Service (مشروط ويب/أصلي)
 import 'screens/reconciliation_prompt.dart';
+import 'web_db_init.dart'; // 🌐 تهيئة محرك قاعدة البيانات على الويب (مشروط)
 
 import 'package:firebase_core/firebase_core.dart'; // 🆕 Firebase
 import 'package:firebase_auth/firebase_auth.dart'; // 🔐 Firebase Authentication
 import 'services/firebase_sync/firebase_custom_config.dart'; // 🆕 Firebase Config
+import 'services/firebase_sync/sync_diagnostics.dart'; // 🩺 تشخيص المصادقة/المزامنة
+import 'services/firebase_sync/web_auth_clear.dart'; // 🧹 تنظيف مخزن جلسة المتصفح
 
 /// 🔥 مفتاح الملاح العام — يُستخدم من ReconciliationPrompt وغيرها لإظهار
 /// حوارات من خارج شجرة الويدجت.
@@ -60,7 +65,8 @@ void main() async {
   await FontManager.loadArabicFonts();
 
   // إتاحة التحكم باتجاه الشاشة للجوال (أفقي ثابت أو تدوير تلقائي)
-  if (Platform.isAndroid || Platform.isIOS) {
+  // 🌐 الويب: SystemChrome اتجاهات لا معنى لها في المتصفح — تخطَّ
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
     final String storedOrientation = GetStorage().read('screen_orientation') ?? 'landscape';
     if (storedOrientation == 'auto') {
       await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
@@ -74,19 +80,22 @@ void main() async {
 
   // تحميل ملف .env من عدة مواقع محتملة
   bool envLoaded = false;
-  try {
-    // محاولة 1: من مجلد التطبيق الحالي (للـ EXE)
-    final exeDir = Platform.resolvedExecutable;
-    final exePath = exeDir.substring(0, exeDir.lastIndexOf(Platform.pathSeparator));
-    final envFile = File('$exePath${Platform.pathSeparator}.env');
+  // 🌐 الويب: لا نظام ملفات — .env يُحمَّل من assets فقط (المحاولة 2 أدناه)
+  if (!kIsWeb) {
+    try {
+      // محاولة 1: من مجلد التطبيق الحالي (للـ EXE)
+      final exeDir = Platform.resolvedExecutable;
+      final exePath = exeDir.substring(0, exeDir.lastIndexOf(Platform.pathSeparator));
+      final envFile = File('$exePath${Platform.pathSeparator}.env');
 
-    if (await envFile.exists()) {
-      await dotenv.load(fileName: envFile.path);
-      envLoaded = true;
-      print('✅ تم تحميل .env من مجلد التطبيق: ${envFile.path}');
+      if (await envFile.exists()) {
+        await dotenv.load(fileName: envFile.path);
+        envLoaded = true;
+        print('✅ تم تحميل .env من مجلد التطبيق: ${envFile.path}');
+      }
+    } catch (e) {
+      print('⚠️ فشل تحميل .env من مجلد التطبيق: $e');
     }
-  } catch (e) {
-    print('⚠️ فشل تحميل .env من مجلد التطبيق: $e');
   }
 
   // محاولة 2: من المجلد الافتراضي (للتطوير)
@@ -100,9 +109,15 @@ void main() async {
     }
   }
 
-  // تهيئة sqflite_common_ffi على الديسكتوب فقط (ويندوز/لينكس/ماك).
-  // على أندرويد نترك databaseFactory الافتراضية لمكتبة sqflite + sqlite3_flutter_libs (دعم FTS5).
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  // تهيئة محرك قاعدة البيانات حسب المنصة:
+  // 🌐 الويب: SQLite عبر WebAssembly (sqflite_common_ffi_web) — تخزين IndexedDB دائم.
+  // 🖥️ الديسكتوب: sqflite_common_ffi كما كان تماماً.
+  // 📱 أندرويد: الافتراضي (sqflite + sqlite3_flutter_libs بدعم FTS5) كما كان.
+  if (kIsWeb) {
+    // 🌐 يُستورد عبر ملف التهيئة المشروط (web_db_init.dart) — لا يعمل import
+    // الحزمة مباشرة هنا لأنها تكسر بناء المنصات الأخرى.
+    await configureWebDatabase();
+  } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
@@ -123,10 +138,9 @@ void main() async {
   }
 
   // 🪟 تهيئة WindowManager (يحتاجه main_screen للتحكم في إغلاق النافذة).
-  // ملاحظة مهمة: نكتفي بـ ensureInitialized فقط — لا نستخدم waitUntilReadyToShow
-  // لأنها قد تعلّق التطبيق وتمنع ظهور النافذة. Flutter سيعرض النافذة الافتراضية
-  // تلقائياً عند runApp(). هذا يطابق سلوك النسخة الأصلية الشغّالة.
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  // 🌐 الويب: لا نوافذ نظام — تخطَّ.
+  if (!kIsWeb &&
+      (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     try {
       await windowManager.ensureInitialized();
     } catch (e) {
@@ -157,52 +171,105 @@ void main() async {
       // هذا ضروري لأن قواعد Firestore تتطلب: request.auth != null
       try {
         print('🔐 [main.dart] فحص حالة المصادقة...');
-        final currentUser = FirebaseAuth.instance.currentUser;
-        
-        if (currentUser == null) {
-          // لا يوجد مستخدم - قم بتسجيل دخول مجهول
-          print('🔐 [main.dart] لا يوجد مستخدم - محاولة تسجيل الدخول المجهول...');
-          print('🔐 تسجيل دخول مجهول لـ Firebase...');
-          
-          final userCredential = await FirebaseAuth.instance.signInAnonymously();
-          
-          print('✅ [main.dart] تم تسجيل الدخول المجهول بنجاح!');
-          print('✅ [main.dart] User UID: ${userCredential.user?.uid}');
-          print('✅ [main.dart] isAnonymous: ${userCredential.user?.isAnonymous}');
-          print('✅ تم تسجيل الدخول المجهول بنجاح: ${userCredential.user?.uid}');
-          
-          // ✅ فحص Token
+
+        // ═══════════════════════════════════════════════════════════════
+        // 🌐 استرجاع الجلسة على الويب — سلّم تنازل لا نقطة انهيار
+        // ═══════════════════════════════════════════════════════════════
+        //
+        // المشكلة على iOS (PWA مثبَّت على الشاشة الرئيسية):
+        //   • النسخة المستقلة لها مخزن منفصل عن سفاري، فأول تشغيل هو أول
+        //     *كتابة*، والثاني هو أول *قراءة* — ولهذا كانت المزامنة تنجح
+        //     أول مرة وتفشل بعدها بالضبط.
+        //   • وWebKit قد لا يُطلق أي حدث لـ indexedDB.open() بعد إقلاع بارد
+        //     للتطبيق المستقل: لا نجاح ولا فشل ولا blocked — يتعلّق صامتاً.
+        //     فتنقضي المهلة، وتبقى الجلسة null، ثم يفشل التسجيل المجهول
+        //     لأنه يحتاج الكتابة في نفس المخزن المتعلّق ⇒ «فشل الاتصال».
+        //
+        // الحل: المصادقة هنا **مجهولة**، وقواعد Firestore تشترط
+        // `request.auth != null` فقط، ولا مسار وثيقة واحد يعتمد على uid
+        // (كلها syncUuid/deviceId/groupId). فحفظ الجلسة لا يشتري شيئاً.
+        //
+        // لذا: نُبقي LOCAL حيث تعمل (كي لا تتراكم حسابات مجهولة بلا داعٍ)،
+        // وننتقل إلى NONE (ذاكرة فقط) فور تعثّرها — فيصير كل تشغيل يسلك
+        // مسار التشغيل الأول، وهو المسار الذي يعمل.
+        bool webMemoryOnlyAuth = false;
+        if (kIsWeb) {
           try {
-            final token = await userCredential.user?.getIdToken();
-            print('✅ [main.dart] Token موجود وصالح (length: ${token?.length ?? 0})');
+            await FirebaseAuth.instance
+                .setPersistence(Persistence.LOCAL)
+                .timeout(const Duration(seconds: 4));
+            print('🔐 [main.dart] استمرارية الجلسة: LOCAL (IndexedDB)');
           } catch (e) {
-            print('❌ [main.dart] فشل الحصول على Token: $e');
-          }
-          
-        } else {
-          print('✅ [main.dart] مستخدم Firebase موجود بالفعل');
-          print('✅ [main.dart] User UID: ${currentUser.uid}');
-          print('✅ [main.dart] isAnonymous: ${currentUser.isAnonymous}');
-          print('✅ مستخدم Firebase موجود بالفعل: ${currentUser.uid}');
-          
-          // ✅ فحص Token للمستخدم الموجود
-          try {
-            final token = await currentUser.getIdToken();
-            print('✅ [main.dart] Token موجود وصالح (length: ${token?.length ?? 0})');
-          } catch (e) {
-            print('❌ [main.dart] فشل الحصول على Token: $e');
+            webMemoryOnlyAuth = true;
+            SyncDiagnostics.log('auth',
+                'تعذّر تثبيت الجلسة في IndexedDB — التحوّل إلى ذاكرة فقط: $e');
+            try {
+              await FirebaseAuth.instance.setPersistence(Persistence.NONE);
+            } catch (_) {}
           }
         }
-        
+
+        // 🌐 استرجاع الجلسة غير متزامن — انتظر أول بلاغ حقيقي (بمهلة)
+        User? currentUser;
+        if (!webMemoryOnlyAuth) {
+          try {
+            currentUser = await FirebaseAuth.instance.authStateChanges()
+                .first
+                .timeout(const Duration(seconds: 8));
+          } catch (e) {
+            SyncDiagnostics.log('auth', '[main/استرجاع الجلسة] $e');
+            // 🔀 مسار بديل عند فشل بث الجلسة (TypeError في السفاري): استعلام دوري
+            if (e.toString().toLowerCase().contains('typeerror')) {
+              for (var i = 0; i < 8; i++) {
+                await Future.delayed(const Duration(seconds: 1));
+                currentUser = FirebaseAuth.instance.currentUser;
+                if (currentUser != null) break;
+              }
+            }
+            currentUser ??= FirebaseAuth.instance.currentUser;
+
+            // 🌐 ما زالت لا جلسة بعد المهلة ⇒ الاسترجاع متعلّق، لا غائب.
+            // ننظّف المخزن التالف/المتعلّق ونكمل بذاكرة فقط، فلا ننتظره ثانيةً.
+            if (kIsWeb && currentUser == null) {
+              SyncDiagnostics.log('auth',
+                  'تعليق في استرجاع الجلسة — تنظيف المخزن والمتابعة بذاكرة فقط');
+              try {
+                await clearWebAuthStorage();
+              } catch (_) {}
+              try {
+                await FirebaseAuth.instance.setPersistence(Persistence.NONE);
+              } catch (_) {}
+              webMemoryOnlyAuth = true;
+            }
+          }
+        }
+
+        if (currentUser == null) {
+          print('🔐 [main.dart] لا جلسة — تسجيل مجهول (مع إعادة محاولة)...');
+          currentUser = await _signInAnonymouslyWithRetry();
+        } else {
+          print('✅ [main.dart] جلسة موجودة: ${currentUser.uid}');
+          // 🩺 فحص حقيقي: توكن سليم أم مرفوض؟
+          try {
+            await currentUser.getIdToken(true);
+            print('✅ [main.dart] التوكن سليم ومُجدد');
+          } catch (tokenError) {
+            print('⚠️ [main.dart] التوكن غير صالح — جلسة جديدة...');
+            SyncDiagnostics.log('auth',
+                'انتهت صلاحية الجلسة — يجري إنشاء جلسة جديدة تلقائياً');
+            try {
+              await FirebaseAuth.instance.signOut();
+            } catch (_) {}
+            currentUser = await _signInAnonymouslyWithRetry();
+          }
+        }
+
         print('🎉 [main.dart] Firebase Authentication جاهز!');
-        
+
       } catch (authError) {
         print('❌ [main.dart] خطأ في تسجيل الدخول لـ Firebase Auth!');
-        print('❌ [main.dart] Error Type: ${authError.runtimeType}');
         print('❌ [main.dart] Error: $authError');
-        print('⚠️ خطأ في تسجيل الدخول لـ Firebase Auth: $authError');
-        print('💡 تأكد من تفعيل Anonymous Authentication في Firebase Console');
-        print('💡 [main.dart] تحقق من Firebase Console → Authentication → Sign-in method → Anonymous');
+        SyncDiagnostics.logAuth(authError);
       }
       
     } else {
@@ -256,6 +323,28 @@ void main() async {
       print('ℹ️ [main.dart] المزامنة غير مشمولة لهذا الترخيص (${license?.appMode})');
     }
   }
+}
+
+/// 🔐 تسجيل مجهول مع إعادة محاولة تلقائية (3 محاولات بتراخٍ متزايد).
+/// مصادقة Google على الويب/PWA قد تهتز لحظياً (شبكة/تغطية) — الإصرار
+/// يعالج أغلب حالات "أول مرة يفشل ثم ينجح" ويُسجَّل الفشل للتشخيص.
+Future<User?> _signInAnonymouslyWithRetry() async {
+  for (var attempt = 1; attempt <= 3; attempt++) {
+    try {
+      final cred = await FirebaseAuth.instance.signInAnonymously();
+      print('✅ [main.dart] تسجيل مجهول ناجح (محاولة $attempt): ${cred.user?.uid}');
+      return cred.user;
+    } catch (e) {
+      print('❌ [main.dart] محاولة $attempt فشلت: $e');
+      SyncDiagnostics.log('auth', 'محاولة تسجيل $attempt/3 فشلت — $e');
+      if (attempt == 3) {
+        SyncDiagnostics.logAuth(e);
+        rethrow;
+      }
+      await Future.delayed(Duration(seconds: attempt * 3));
+    }
+  }
+  return null;
 }
 
 class MyApp extends StatelessWidget {
@@ -320,26 +409,24 @@ class MyApp extends StatelessWidget {
         ],
         locale: const Locale('ar', 'SA'),
         routes: {
-          '/': (context) => const MainScreen(),
-          '/main': (context) => const MainScreen(),
+          '/': (context) => const _LicenseGuard(child: MainScreen()),
+          '/main': (context) => const _LicenseGuard(child: MainScreen()),
           '/license': (context) => const LicenseScreen(), // 🔐
           '/license_check': (context) => const LicenseCheckScreen(), // 🔐
-          '/password_setup': (context) => const PasswordSetupScreen(),
-          '/login': (context) => const LoginScreen(), // 👤
-          '/user_management': (context) => const UserManagementScreen(), // 👤
-          '/general_settings': (context) => const GeneralSettingsScreen(),
-          // removed font settings route
-
-          '/debt_register': (context) => const HomeScreen(),
-          '/product_entry': (context) => const ProductEntryScreen(),
-          '/create_invoice': (context) => const CreateInvoiceScreen(),
-          '/edit_invoices': (context) => const EditInvoicesScreen(),
-          '/edit_products': (context) => const EditProductsScreen(),
-          '/inventory': (context) => const InventoryScreen(),
-          '/reports': (context) => const ReportsScreen(),
-          '/suppliers': (context) => const SuppliersListScreen(), // 🆕
-          '/ai_chat': (context) => const AIChatScreen(),
-          '/pos': (context) => const POSScreen(),
+          '/password_setup': (context) => const _LicenseGuard(child: PasswordSetupScreen()),
+          '/login': (context) => const _LicenseGuard(child: LoginScreen()), // 👤
+          '/user_management': (context) => const _LicenseGuard(child: UserManagementScreen()), // 👤
+          '/general_settings': (context) => const _LicenseGuard(child: GeneralSettingsScreen()),
+          '/debt_register': (context) => const _LicenseGuard(child: HomeScreen()),
+          '/product_entry': (context) => const _LicenseGuard(child: ProductEntryScreen()),
+          '/create_invoice': (context) => const _LicenseGuard(child: CreateInvoiceScreen()),
+          '/edit_invoices': (context) => const _LicenseGuard(child: EditInvoicesScreen()),
+          '/edit_products': (context) => const _LicenseGuard(child: EditProductsScreen()),
+          '/inventory': (context) => const _LicenseGuard(child: InventoryScreen()),
+          '/reports': (context) => const _LicenseGuard(child: ReportsScreen()),
+          '/suppliers': (context) => const _LicenseGuard(child: SuppliersListScreen()), // 🆕
+          '/ai_chat': (context) => const _LicenseGuard(child: AIChatScreen()),
+          '/pos': (context) => const _LicenseGuard(child: POSScreen()),
         },
         initialRoute: initialRoute,
         navigatorKey: globalNavigatorKey, // ✅ مفتاح الملاح العام
@@ -347,3 +434,42 @@ class MyApp extends StatelessWidget {
     );
   }
 }
+
+/// 🛡️ حارس المسارات المركزي: يمنع فتح أو عرض أي شاشة داخلية إلا بترخيص معتمد وموثّق
+class _LicenseGuard extends StatelessWidget {
+  final Widget child;
+  const _LicenseGuard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final licenseService = LicenseService();
+    if (!licenseService.isLicenseActivated()) {
+      // 🔒 غير مصرح: طرد فوري إلى شاشة الترخيص بدون رسم أي عنصر من الشاشة
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (Navigator.canPop(context)) {
+          Navigator.of(context).pushNamedAndRemoveUntil('/license', (route) => false);
+        } else {
+          Navigator.of(context).pushReplacementNamed('/license');
+        }
+      });
+      return const Scaffold(
+        backgroundColor: Color(0xFFF4F7FB),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.lock_rounded, size: 48, color: Color(0xFF0D47A1)),
+              SizedBox(height: 16),
+              Text(
+                '🔒 يلزم تفعيل الترخيص والمصادقة للوصول إلى النظام',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return child;
+  }
+}
+

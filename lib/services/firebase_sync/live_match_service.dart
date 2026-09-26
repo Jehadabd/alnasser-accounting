@@ -15,7 +15,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../utils/uuid_helper.dart';
 import '../database_service.dart';
-import '../database/core/database_helpers.dart';
 import '../sync/sync_security.dart';
 import 'firebase_sync_service.dart';
 import 'reconciliation_service.dart' show ReconciliationService;
@@ -317,7 +316,18 @@ class LiveMatchService {
     }
 
     // 2) احتياط: قراءة مباشرة من مجموعة devices.
-    return _devices.getOnlineDevices();
+    // 🛡️ بلا إنترنت ترمي القراءة، والمستدعون (recompute …) كثيراً ما يُطلقون
+    // بلا انتظار — فكان خطأً غير ممسوك (اختبار الكود الحقيقي).
+    try {
+      return await _devices.getOnlineDevices();
+    } catch (e) {
+      print('⚠️ المطابقة الحية: تعذّرت قراءة الأجهزة المتصلة: $e');
+      final myId = _myId;
+      return [
+        if (myId != null)
+          {'deviceId': myId, 'deviceName': 'هذا الجهاز', 'isCurrentDevice': true},
+      ];
+    }
   }
 
   /// يبدأ طلب مطابقة حية: يدعو كل الأجهزة الحاضرة، ولا تُفعَّل المقارنة
@@ -781,55 +791,22 @@ class LiveMatchService {
       ownedByCustomer.putIfAbsent(cu, () => []).add(row);
     }
 
-    // 🔍 1) تجميع وتثبيت العملاء المحليين بالاسم المعياري المقاس
-    final localByName = <String, ({String syncUuid, String name, int id, double debt, int txCount, double txSum})>{};
-    for (final c in local.customers) {
-      final normName = DatabaseHelpers.normalizeArabic(c.name);
-      if (!localByName.containsKey(normName)) {
-        localByName[normName] = c;
-      }
-    }
-
-    // 🔍 2) تجميع وتثبيت عملاء الجهاز النظير بالاسم المعياري المقاس
-    final peerByName = <String, ({String name, double debt, int txCount, double txSum, String syncUuid})>{};
-    for (final entry in peer.customers.entries) {
-      final peerCust = entry.value;
-      final normName = DatabaseHelpers.normalizeArabic(peerCust.name);
-      if (!peerByName.containsKey(normName)) {
-        peerByName[normName] = (
-          name: peerCust.name,
-          debt: peerCust.debt,
-          txCount: peerCust.txCount,
-          txSum: peerCust.txSum,
-          syncUuid: entry.key,
-        );
-      } else {
-        final existing = peerByName[normName]!;
-        if (peerCust.debt.abs() > existing.debt.abs()) {
-          peerByName[normName] = (
-            name: peerCust.name,
-            debt: peerCust.debt,
-            txCount: peerCust.txCount,
-            txSum: peerCust.txSum,
-            syncUuid: entry.key,
-          );
-        }
-      }
-    }
-
-    // 🔍 3) تجميع كل الأسماء الفريدة بدون تكرار
-    final allNormNames = <String>{
-      ...localByName.keys,
-      ...peerByName.keys,
+    // 🔍 المطابقة بالهوية (sync_uuid) لا بالاسم.
+    // 🛡️ (المحاكاة: tools/sync_sim) الاسم المعياري يجمع عميلين مختلفين
+    // يحملان نفس الاسم في صف واحد، ويختار من النظير صاحب الدين الأكبر؛ فيظهر
+    // تطابق كاذب أو فرق كاذب، وكان زر «الجهاز الآخر صحيح» يبني عليه تصحيحاً.
+    final localByUuid = <String, ({String syncUuid, String name, int id, double debt, int txCount, double txSum})>{
+      for (final c in local.customers) c.syncUuid: c,
     };
+    final allUuids = <String>{...localByUuid.keys, ...peer.customers.keys};
 
     final matches = <LiveCustomerMatch>[];
-    for (final normName in allNormNames) {
-      final loc = localByName[normName];
-      final rem = peerByName[normName];
+    for (final uuid in allUuids) {
+      final loc = localByUuid[uuid];
+      final rem = peer.customers[uuid];
 
       final name = loc?.name ?? rem?.name ?? 'غير معروف';
-      final syncUuid = loc?.syncUuid ?? rem?.syncUuid ?? '';
+      final syncUuid = uuid;
       final localDebt = loc?.debt ?? 0.0;
       final localCount = loc?.txCount ?? 0;
       final localSum = loc?.txSum ?? 0.0;
@@ -1022,107 +999,43 @@ class LiveMatchService {
     return result;
   }
 
-  /// عندما يكون النظير هو الصحيح: إضافة معاملة تصحيحية فقط (لا حذف).
-  /// الفرق = دين النظير − الدين المحلي، تُسجَّل كمعاملة جديدة يملكها هذا الجهاز.
+  /// عندما يكون النظير هو الصحيح: اسحب ما ينقصني من السحابة واطلب منه إعادة
+  /// رفع ما يملك. لا يُنشئ أي معاملة. يُرجع دائماً 0 (لا معاملات تصحيحية).
+  ///
+  /// 🛡️ (المحاكاة: tools/sync_sim) كانت تُسجَّل هنا معاملة «تصحيح» بفرق الرصيد
+  /// يملكها هذا الجهاز. لكنها تنتشر لكل الأجهزة — ومنها الجهاز الذي كان صحيحاً
+  /// فيختلّ رصيده بنفس الفرق — وحين تصل المعاملة الأصلية المتأخرة التي سبّبت
+  /// الفرق يُحسب المبلغ مرتين. الفرق سببه معاملات لم تصل، فالعلاج إيصالها.
   Future<int> addCorrectiveTransactionsForPeerTruth() async {
     if (!sessionActive) return 0;
-    DatabaseService.blockTransactionDeletes = true;
-    try {
-      final snap = await recompute();
-      int created = 0;
-      final db = await _db.database;
-      for (final c in snap.mismatches) {
-        if (c.localCustomerId <= 0) continue;
-        final diff = c.peerDebt - c.localDebt;
-        if (diff.abs() < 0.01) continue;
-
-        final customerRows = await db.query('customers', columns: ['name'], where: 'id = ?', whereArgs: [c.localCustomerId], limit: 1);
-        final customerName = customerRows.isNotEmpty ? customerRows.first['name'] as String : 'unknown';
-        final now = DateTime.now();
-        final uuid = SyncSecurity.generateTransactionUuid(customerName, diff, now);
-        final nowIso = now.toIso8601String();
-        final newBalance = c.localDebt + diff;
-        await db.insert('transactions', {
-          'customer_id': c.localCustomerId,
-          'amount_changed': diff,
-          'new_balance_after_transaction': newBalance,
-          'transaction_type': 'live_match_adjustment',
-          'transaction_note':
-              'تعديل مطابقة حية مع ${c.peerDeviceName} — لا حذف، تصحيح رصيد فقط',
-          'description': 'تصحيح مطابقة حية',
-          'transaction_date': nowIso,
-          'created_at': nowIso,
-          'last_modified_at': nowIso,
-          'sync_uuid': uuid,
-          'transaction_uuid': uuid,
-          'is_created_by_me': 1,
-          'is_uploaded': 0,
-          'is_deleted': 0,
-        });
-        await db.rawUpdate(
-          'UPDATE customers SET current_total_debt = ?, last_modified_at = ? WHERE id = ?',
-          [newBalance, nowIso, c.localCustomerId],
-        );
-        created++;
-      }
-      await _publishLocalState();
-      await recompute();
-      return created;
-    } finally {
-      DatabaseService.blockTransactionDeletes = false;
-    }
+    final snap = await recompute();
+    final uuids = snap.mismatches
+        .map((c) => c.customerSyncUuid)
+        .where((u) => u.isNotEmpty)
+        .toSet();
+    await _pullFromPeerTruth(uuids);
+    return 0;
   }
 
-  /// عندما تكون بيانات الجهاز الآخر هي الصحيحة لعملاء محددين:
-  /// إضافة معاملة تصحيحية محلياً للعملاء المحددين دون حذف أي بيانات
+  /// مثل [addCorrectiveTransactionsForPeerTruth] لعملاء محددين.
   Future<int> addCorrectiveTransactionsForSelectedPeerTruth(Set<String> selectedUuids) async {
     if (!sessionActive || selectedUuids.isEmpty) return 0;
-    DatabaseService.blockTransactionDeletes = true;
-    try {
-      final snap = await recompute();
-      int created = 0;
-      final db = await _db.database;
-      for (final c in snap.mismatches) {
-        if (!selectedUuids.contains(c.customerSyncUuid)) continue;
-        if (c.localCustomerId <= 0) continue;
-        final diff = c.peerDebt - c.localDebt;
-        if (diff.abs() < 0.01) continue;
+    await _pullFromPeerTruth(selectedUuids);
+    return 0;
+  }
 
-        final customerRows = await db.query('customers', columns: ['name'], where: 'id = ?', whereArgs: [c.localCustomerId], limit: 1);
-        final customerName = customerRows.isNotEmpty ? customerRows.first['name'] as String : 'unknown';
-        final now = DateTime.now();
-        final uuid = SyncSecurity.generateTransactionUuid(customerName, diff, now);
-        final nowIso = now.toIso8601String();
-        final newBalance = c.localDebt + diff;
-        await db.insert('transactions', {
-          'customer_id': c.localCustomerId,
-          'amount_changed': diff,
-          'new_balance_after_transaction': newBalance,
-          'transaction_type': 'live_match_adjustment',
-          'transaction_note':
-              'تعديل مطابقة حية مع ${c.peerDeviceName} (اعتماد الجهاز الآخر كصحيح)',
-          'description': 'تصحيح مطابقة حية',
-          'transaction_date': nowIso,
-          'created_at': nowIso,
-          'last_modified_at': nowIso,
-          'sync_uuid': uuid,
-          'transaction_uuid': uuid,
-          'is_created_by_me': 1,
-          'is_uploaded': 0,
-          'is_deleted': 0,
-        });
-        await db.rawUpdate(
-          'UPDATE customers SET current_total_debt = ?, last_modified_at = ? WHERE id = ?',
-          [newBalance, nowIso, c.localCustomerId],
-        );
-        created++;
-      }
-      await _publishLocalState();
-      await recompute();
-      return created;
-    } finally {
-      DatabaseService.blockTransactionDeletes = false;
+  Future<void> _pullFromPeerTruth(Set<String> customerSyncUuids) async {
+    if (customerSyncUuids.isEmpty) return;
+    _peerNotificationController.add(
+        '📥 جاري سحب ما ينقص هذا الجهاز من السحابة، وطلب إعادة الرفع من الجهاز الآخر...');
+    try {
+      await _sync.performFullCatchUp();
+    } catch (e) {
+      print('⚠️ [LiveMatchService] تعذّر السحب الكامل: $e');
     }
+    await requestPeerToUploadCustomers(customerSyncUuids);
+    await _publishLocalState();
+    await recompute();
   }
 
   /// إعادة رفع واعتماد بيانات هذا الجهاز لعملاء محددين:
@@ -1233,10 +1146,13 @@ class LiveMatchService {
 
       _peerNotificationController.add('📲 جاري رفع معاملات العميل «$customerName» بناءً على طلب الجهاز الآخر...');
 
+      // 🛡️ معاملات هذا الجهاز النشطة فقط: صفوف الأجهزة الأخرى لا نرفعها،
+      // وإعادة شاهد حذف قديم إلى الطابور لا تضيف شيئاً.
       await db.update(
         'transactions',
         {'is_uploaded': 0},
-        where: 'customer_id = ?',
+        where: 'customer_id = ? AND (is_created_by_me = 1 OR is_created_by_me IS NULL) '
+            'AND (is_deleted IS NULL OR is_deleted = 0)',
         whereArgs: [customerId],
       );
 

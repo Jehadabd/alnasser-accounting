@@ -48,6 +48,12 @@ class UuidHelper {
     return 'prod_${micros.toRadixString(36)}_${_devicePrefix}_${_randomBase36(14)}';
   }
 
+  /// معرّف حركة مخزون (شراء، تعديل يدوي...) — مفتاح وثيقة في stock_movements.
+  static String newStockMovementUuid() {
+    final micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return 'mv_${micros.toRadixString(36)}_${_devicePrefix}_${_randomBase36(14)}';
+  }
+
   /// هل المعرّف صالح كمفتاح وثيقة في Firestore؟
   static bool isValidId(String? id) {
     if (id == null || id.isEmpty) return false;

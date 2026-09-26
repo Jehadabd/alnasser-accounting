@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/firebase_sync/firebase_sync_config.dart';
+import '../services/firebase_sync/sync_diagnostics.dart'; // 🩺
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/firebase_sync/firebase_sync_service.dart';
 import 'package:sqflite/sqflite.dart';
@@ -14,6 +15,7 @@ import '../services/firebase_sync/smart_pipe_cleanup_service.dart';
 import '../services/database_service.dart';
 import 'firebase_custom_setup_screen.dart';
 import 'reconciliation_screen.dart';
+import 'web_hosting_guide_screen.dart';
 
 class FirebaseSyncSettingsScreen extends StatefulWidget {
   const FirebaseSyncSettingsScreen({super.key});
@@ -36,6 +38,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
   int _maxTransactionAgeDays = 30;
   int _autoDeleteDays = 90;
   bool _postSyncVerification = true;
+  bool _strictSignature = false;
   CustomerConflictPolicy _customerConflictPolicy = CustomerConflictPolicy.smartReactivate;
   
   // 🔄 حالة تحميل كل زر
@@ -77,6 +80,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     _maxTransactionAgeDays = await FirebaseSyncSecuritySettings.getMaxTransactionAgeDays();
     _autoDeleteDays = await FirebaseSyncSecuritySettings.getAutoDeleteDays();
     _postSyncVerification = await FirebaseSyncSecuritySettings.isPostSyncVerificationEnabled();
+    _strictSignature = await FirebaseSyncSecuritySettings.isStrictSignatureEnabled();
     _customerConflictPolicy = await FirebaseSyncSecuritySettings.getCustomerConflictPolicy();
     
     // 🆕 تحميل Project ID
@@ -361,6 +365,201 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     );
   }
 
+  /// 🩺 عرض بطاقة تشخيص المزامنة والمصادقة — أخطاء واضحة مترجمة
+  Future<void> _showSyncDiagnostics() async {
+    final snap = SyncDiagnostics.snapshot();
+    final events = (snap['recentEvents'] as List).cast<String>().take(12).toList();
+
+    await showDialog(
+      context: context,
+      builder: (context) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Row(children: [
+            Icon(Icons.health_and_safety, color: Colors.redAccent),
+            SizedBox(width: 8),
+            Text('🩺 حالة المزامنة والتشخيص'),
+          ]),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                _diagRow('المنصة', snap['platform'] as String),
+                _diagRow(
+                    'المصادقة', snap['authenticated'] == true
+                        ? '✅ نشطة (${snap['authUid']?.toString().substring(0, 12)}...)'
+                        : '❌ غير نشطة'),
+                if (snap['lastAuthError'] != null)
+                  _diagBlock('آخر خطأ مصادقة', snap['lastAuthError'] as String),
+                if (snap['lastListenerError'] != null)
+                  _diagBlock('آخر خطأ مستمعي المزامنة', snap['lastListenerError'] as String),
+                if (events.isNotEmpty) ...[
+                  const Divider(),
+                  const Text('آخر الأحداث:',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  ...events.map((e) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text(e,
+                            style: const TextStyle(fontSize: 12, height: 1.5)),
+                      )),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('إغلاق'),
+            ),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.build, size: 18),
+              label: const Text('🔧 تشخيص وإصلاح فوري'),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+              onPressed: () => _runInteractiveDiagnosis(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  /// 🔧 تشخيص وإصلاح تفاعلي: خطوات تظهر تباعاً + إنعاش تلقائي
+  Future<void> _runInteractiveDiagnosis(BuildContext ctx) async {
+    Navigator.pop(ctx); // أغلق حوار الحالة السابق
+
+    final steps = <DiagStep>[];
+    StateSetter? dlgSet;
+    await showDialog(
+      context: ctx,
+      barrierDismissible: false,
+      builder: (dialogCtx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Text('🔧 التشخيص والإصلاح الفوري'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: StatefulBuilder(
+              builder: (dialogCtx, setDlg) {
+                dlgSet = setDlg;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: steps.isEmpty
+                      ? [const Center(child: CircularProgressIndicator())]
+                      : steps
+                          .map((st) => Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                        st.detail.isEmpty
+                                            ? Icons.hourglass_top
+                                            : st.ok
+                                                ? Icons.check_circle
+                                                : Icons.cancel,
+                                        color: st.detail.isEmpty
+                                            ? Colors.grey
+                                            : st.ok
+                                                ? Colors.green
+                                                : Colors.red,
+                                        size: 20),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(st.name,
+                                              style: const TextStyle(
+                                                  fontWeight:
+                                                      FontWeight.bold)),
+                                          if (st.detail.isNotEmpty)
+                                            Text(st.detail,
+                                                style: const TextStyle(
+                                                    fontSize: 12,
+                                                    height: 1.4)),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ))
+                          .toList(),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // التنفيذ التدريجي — لا نحظر الحوار (يُحدَّث عبر setState الداخلي)
+    // ignore: use_build_context_synchronously
+    final results = await runFullDiagnosis(
+      onStep: (st) {
+        steps.add(st);
+        try {
+          dlgSet?.call(() {});
+        } catch (_) {}
+      },
+    );
+    try {
+      dlgSet?.call(() {});
+    } catch (_) {}
+
+    // إنعاش فوري إن كانت المصادقة سليمة
+    final authOk = results.length > 1 && results[1].ok;
+    if (authOk) {
+      try {
+        await FirebaseSyncService().recoverNow();
+        steps.add(DiagStep('الإنعاش التلقائي',
+            ok: true, detail: 'مستمعون + سحب كامل أعيد تشغيلهم'));
+      } catch (e) {
+        steps.add(DiagStep('الإنعاش التلقائي', ok: false, detail: '$e'));
+      }
+    }
+  }
+
+  Widget _diagRow(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Text('$label: ', style: const TextStyle(fontWeight: FontWeight.bold)),
+            Expanded(child: Text(value)),
+          ],
+        ),
+      );
+
+  Widget _diagBlock(String title, String body) => Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.shade200),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+            const SizedBox(height: 4),
+            Text(body, style: const TextStyle(fontSize: 12.5, height: 1.6)),
+          ],
+        ),
+      );
+
   Widget _buildSettingsCard() {
     return Container(
       decoration: BoxDecoration(
@@ -605,6 +804,17 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
               isLoading: _isMarkingOldInvoices,
               color: Colors.blueGrey,
               onPressed: _isMarkingOldInvoices ? null : _markOldInvoicesAsSynced,
+            ),
+
+            const SizedBox(height: 8),
+
+            // 4.5 🩺 حالة المزامنة والتشخيص — عرض الأخطاء بوضوح للمستخدم
+            _buildActionButton(
+              icon: Icons.health_and_safety,
+              label: '🩺 حالة المزامنة والتشخيص',
+              isLoading: false,
+              color: Colors.redAccent,
+              onPressed: () => _showSyncDiagnostics(),
             ),
 
             const SizedBox(height: 8),
@@ -916,6 +1126,85 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
               activeColor: Colors.green,
               secondary: const Icon(Icons.account_balance_wallet, color: Colors.blue),
             ),
+
+            const Divider(),
+
+            // 🔐 الوضع الصارم للتوقيع: رفض أي بيانات لم توقَّع بسرّ المجموعة
+            SwitchListTile(
+              title: const Text('رفض البيانات غير الموقّعة (الوضع الصارم)'),
+              subtitle: Text(
+                _strictSignature
+                    ? 'يُرفض أي مستند لم يوقَّع بسرّ المجموعة — يحمي من الكتابة المزوّرة'
+                    : 'تُقبل البيانات غير الموقّعة (للتوافق مع الأجهزة القديمة)',
+              ),
+              value: _strictSignature,
+              onChanged: (value) async {
+                if (value) {
+                  // 🛡️ لا نفعّله إن كان جهاز لا يشارك نفس السرّ: كانت بياناته
+                  // ستُرفض بصمت وتفترق الأرصدة.
+                  List<String> mismatched;
+                  try {
+                    mismatched = await _firebaseSync.devicesWithMismatchedSecret();
+                  } catch (e) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text('تعذّر التحقق من أسرار الأجهزة (يلزم اتصال): $e')));
+                    return;
+                  }
+                  if (mismatched.isNotEmpty) {
+                    if (!mounted) return;
+                    await showDialog<void>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('لا يمكن التفعيل الآن'),
+                        content: Text(
+                          'هذه الأجهزة لا تشارك نفس سرّ المجموعة أو لم تُحدَّث بعد:\n'
+                          '• ${mismatched.join('\n• ')}\n\n'
+                          'أدخل نفس السرّ عليها (إعداد Firebase المخصص) وحدّثها، '
+                          'ثم افتحها مرة واحدة متصلة، ثم أعد المحاولة.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('حسناً'),
+                          ),
+                        ],
+                      ),
+                    );
+                    return;
+                  }
+                  if (!mounted) return;
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('تفعيل الوضع الصارم'),
+                      content: const Text(
+                        'فعّله فقط بعد:\n'
+                        '• تحديث كل الأجهزة إلى هذه النسخة.\n'
+                        '• إدخال نفس سرّ المجموعة على كل الأجهزة.\n\n'
+                        'وإلا ستُرفض بيانات أي جهاز يختلف سرّه، ولن تصل معاملاته '
+                        'إلى هذا الجهاز حتى يُصحَّح السرّ.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('إلغاء'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('تفعيل'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (ok != true) return;
+                }
+                await FirebaseSyncSecuritySettings.setStrictSignatureEnabled(value);
+                if (mounted) setState(() => _strictSignature = value);
+              },
+              activeColor: Colors.green,
+              secondary: const Icon(Icons.verified_user, color: Colors.deepPurple),
+            ),
           ],
         ),
       ),
@@ -1022,8 +1311,8 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Row(
+          children: [
+            const Row(
               children: [
                 Icon(Icons.info, color: Colors.blue),
                 SizedBox(width: 8),
@@ -1036,11 +1325,36 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                 ),
               ],
             ),
-            SizedBox(height: 8),
-            Text('• المزامنة تتم تلقائياً في الخلفية'),
-            Text('• يعمل التطبيق بدون إنترنت ويزامن عند العودة'),
-            Text('• كل مجموعة مستقلة تماماً عن الأخرى'),
-            Text('• تغيير المجموعة يتطلب تأكيد صارم'),
+            const SizedBox(height: 8),
+            const Text('• المزامنة تتم تلقائياً في الخلفية'),
+            const Text('• يعمل التطبيق بدون إنترنت ويزامن عند العودة'),
+            const Text('• كل مجموعة مستقلة تماماً عن الأخرى'),
+            const Text('• تغيير المجموعة يتطلب تأكيد صارم'),
+            const SizedBox(height: 14),
+            const Divider(),
+            const SizedBox(height: 6),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
+                  );
+                },
+                icon: const Icon(Icons.language_rounded, size: 20),
+                label: const Text(
+                  '🌐 دليل واستضافة نسخة المتصفح (Web App)',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0288D1),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
           ],
         ),
       ),

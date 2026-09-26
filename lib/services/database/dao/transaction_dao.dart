@@ -63,29 +63,26 @@ class TransactionDao {
           throw Exception('لم يتم العثور على العميل');
         }
         final customer = Customer.fromMap(customerMaps.first);
-        
-        // 2. جلب آخر معاملة للتحقق من التسلسل
-        final List<Map<String, dynamic>> lastTxRows = await txn.query(
-          'transactions',
-          where: 'customer_id = ?',
-          whereArgs: [transaction.customerId],
-          orderBy: 'transaction_date DESC, id DESC',
-          limit: 1,
-        );
-        
-        double verifiedBalanceBefore = customer.currentTotalDebt;
 
-        // 🔒 التحقق الصارم من سلامة البيانات
-        if (lastTxRows.isNotEmpty) {
-          final lastTx = DebtTransaction.fromMap(lastTxRows.first);
-          final balanceDiff = (verifiedBalanceBefore - (lastTx.newBalanceAfterTransaction ?? 0)).abs();
-          if (balanceDiff > 1.0) {
-            throw Exception(
-              'خطأ أمني حرج: رصيد العميل (${verifiedBalanceBefore.toStringAsFixed(2)}) '
-              'لا يتطابق مع آخر معاملة (${lastTx.newBalanceAfterTransaction?.toStringAsFixed(2)}). '
-              'الفرق: ${balanceDiff.toStringAsFixed(2)} دينار.'
-            );
-          }
+        // 2. 🛡️ الرصيد قبل المعاملة = مجموع المعاملات الفعّالة (مصدر الحقيقة الوحيد).
+        //
+        // كان الكود يقارن الرصيد المخزّن بـ new_balance_after_transaction لآخر
+        // معاملة **بالتاريخ**، ويرمي «خطأ أمني حرج» عند الفرق. لكن المزامنة
+        // تُدرج معاملات قديمة التاريخ (سُجّلت أوفلاين على جهاز آخر) فيصبح
+        // «آخر صف بالتاريخ» غير آخر صف أُدرج، فيختلف الرقمان دون أي تلف —
+        // وكان المستخدم يُمنع من إضافة أي معاملة لهذا العميل.
+        // (المحاكاة: tools/sync_sim سيناريو 40)
+        final sumRows = await txn.rawQuery(
+          'SELECT COALESCE(SUM(amount_changed), 0) AS total FROM transactions '
+          'WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+          [transaction.customerId],
+        );
+        double verifiedBalanceBefore =
+            (sumRows.first['total'] as num?)?.toDouble() ?? 0.0;
+        if ((verifiedBalanceBefore - customer.currentTotalDebt).abs() > 0.01) {
+          print('🛡️ رصيد العميل ${transaction.customerId} المخزّن '
+              '(${customer.currentTotalDebt}) ≠ مجموع معاملاته '
+              '($verifiedBalanceBefore) — اعتُمد المجموع');
         }
         
         // 3. حساب الرصيد الجديد
@@ -285,9 +282,11 @@ class TransactionDao {
         }
 
         // جلب المعاملات السابقة لحساب الرصيد
+        // 🛡️ استبعاد المحذوفة منطقياً: بدونها تدخل مبالغ معاملات محذوفة في
+        // سلسلة الأرصدة التراكمية فتنحرف عن مجموع المعاملات الحقيقي.
         final transactionsRes = await txn.query(
           'transactions',
-          where: 'customer_id = ?',
+          where: 'customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
           whereArgs: [oldTx.customerId],
           orderBy: 'transaction_date ASC, id ASC'
         );
@@ -319,6 +318,8 @@ class TransactionDao {
             'balance_before_transaction': balanceBeforeTransaction,
             // 🔥 is_uploaded: التعديل المحلي يعيد الطابور (0)، المزامنة لا (1)
             'is_uploaded': fromSync ? 1 : 0,
+            // 🛡️ تعديل بعد استعادة نسخة احتياطية = نية جديدة لا تُستبدل بنسخة السحابة
+            if (!fromSync) 'restored_mark': 0,
           },
           where: 'id = ?',
           whereArgs: [updated.id],
@@ -374,7 +375,13 @@ class TransactionDao {
       if (transaction.invoiceId != null) {
         throw Exception('لا يمكن تحويل نوع معاملة مرتبطة بفاتورة');
       }
-      
+
+      // 🛡️ حماية الملكية (كما في التعديل): تحويل معاملة جهاز آخر محلياً كان
+      // يقلب رصيد هذا الجهاز وحده ولا يصل لأي جهاز — تباعد دائم بضعف المبلغ.
+      if (!transaction.isCreatedByMe) {
+        throw Exception('هذه المعاملة أُنشئت على جهاز آخر ولا يمكن تحويلها من هذا الجهاز.');
+      }
+
       final transactions = await getCustomerTransactions(
         transaction.customerId, 
         orderBy: 'transaction_date ASC, id ASC'
@@ -401,6 +408,10 @@ class TransactionDao {
           'transaction_type': newType,
           'new_balance_after_transaction': newBalanceAfter,
           'balance_before_transaction': balanceBeforeTransaction,
+          // 🛡️ بدون هذا لا يُرفع التحويل أبداً: كان الجهاز يعرض −X وبقية
+          // الأجهزة +X إلى الأبد (المحاكاة: سيناريو 32).
+          'is_uploaded': 0,
+          'restored_mark': 0,
         },
         where: 'id = ?',
         whereArgs: [transactionId],

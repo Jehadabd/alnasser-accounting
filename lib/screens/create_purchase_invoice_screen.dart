@@ -13,8 +13,8 @@ import '../models/supplier_delegate.dart';
 import '../services/purchase_service.dart';
 import '../services/database_service.dart';
 import '../widgets/quick_product_creation_dialog.dart';
-import '../services/ocr_service.dart';
-import '../services/ensemble_ai_service.dart'; // ✅ Fixed Import
+import '../services/ocr_service_factory.dart';
+import '../services/ensemble_ai_service_factory.dart';
 import '../models/ocr_invoice_item.dart';
 import 'product_entry_screen.dart';
 

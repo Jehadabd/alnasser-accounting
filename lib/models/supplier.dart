@@ -44,8 +44,11 @@ class Supplier {
   /// الدين الكلي بالعملة المفضلة للمورد
   double get totalDebt => currency == 'USD' ? totalDebtUsd : totalDebtIqd;
 
-  /// هل عليه دين؟
-  bool get hasDebt => currentBalance > 0;
+  /// هل عليه دين؟ (بأي من العملتين)
+  ///
+  /// كانت تعتمد على currentBalance وحده، فمورد عليه دين بالدولار فقط
+  /// كان يظهر وكأن لا دين عليه.
+  bool get hasDebt => totalDebtIqd > 0.01 || totalDebtUsd > 0.01;
 
   Map<String, dynamic> toMap() {
     return {

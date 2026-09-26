@@ -171,6 +171,7 @@ class SyncWatchdog {
           AND c.sync_uuid != ''
           AND (sc.id IS NULL OR sc.firebase_synced = 0 OR sc.firebase_synced IS NULL)
           AND (c.is_deleted IS NULL OR c.is_deleted = 0)
+          AND (c.is_created_by_me = 1 OR c.is_created_by_me IS NULL)
         LIMIT 5
       ''');
       
@@ -203,8 +204,22 @@ class SyncWatchdog {
   
   /// 🔍 البحث عن المعاملات التي لم تُرفع ورفعها
   Future<void> _syncPendingTransactions() async {
+    // 🛡️ الشرط القديم (غير مسجّلة في المنسق) كان يتخطى أي معاملة سبق رفعها
+    // مرة، فتعديلها أو تحويل نوعها أو حذفها لا يُرفع أبداً إلا لعملاء أنشأهم
+    // هذا الجهاز (المحاكاة: سيناريوهات 04، 05، 32، 33). المرجع الآن is_uploaded
+    // وحده، عبر نفس المسار الذي تستخدمه بقية المزامنة.
+    try {
+      final n = await FirebaseSyncService().uploadAllOwnedPending(limit: 200);
+      _transactionsSynced += n;
+    } catch (e) {
+      print('🛡️ SyncWatchdog: خطأ في رفع المعاملات المعلّقة: $e');
+    }
+  }
+
+  // ignore: unused_element
+  Future<void> _syncPendingTransactionsLegacy() async {
     final db = await _db.database;
-    
+
     try {
       // 🔒 قراءة فقط: جلب المعاملات التي لها sync_uuid ولكن ليست في sync_coordination.
       // 🔒 إضافة is_uploaded = 0 (لم تُرفع فعليًا) و is_created_by_me = 1 (من هذا الجهاز).

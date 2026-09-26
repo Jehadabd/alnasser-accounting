@@ -42,6 +42,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
   bool _showScrollToTop = false; // 🔼 للتحكم بظهور زر العودة للأعلى
   AppSettings? _appSettings;
 
@@ -57,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final app = context.read<AppProvider>();
       // تأكد من تصفية البحث الفارغة عند الدخول للشاشة لتجنب بقاء فلتر قديم
+      _searchController.clear();
       app.setSearchQuery('');
       app.initialize();
 
@@ -83,17 +85,13 @@ class _HomeScreenState extends State<HomeScreen> {
         app.loadMoreCustomers();
       }
     }
-    
-    // تحميل المزيد من العملاء عند الوصول للنهاية
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
-      context.read<AppProvider>().loadMoreCustomers();
-    }
   }
 
   @override
   void dispose() {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
   
@@ -477,19 +475,25 @@ class _HomeScreenState extends State<HomeScreen> {
                 Padding(
                   padding: const EdgeInsets.all(24.0), // Consistent padding
                   child: TextFormField(
-                    // Changed to TextFormField for consistent styling
+                    controller: _searchController,
                     decoration: InputDecoration(
-                      hintText: 'ابحث عن عميل...',
-                      prefixIcon: Icon(Icons.search,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .primary), // Themed icon
-                      // Inherits other styles from inputDecorationTheme
+                      hintText: 'ابحث عن عميل بالاسم أو رقم الهاتف...',
+                      prefixIcon: Icon(
+                        Icons.search,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      suffixIcon: provider.searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _searchController.clear();
+                                provider.setSearchQuery('');
+                              },
+                            )
+                          : null,
                     ),
                     onChanged: provider.setSearchQuery,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyLarge, // Themed text style
+                    style: Theme.of(context).textTheme.bodyLarge,
                   ),
                 ),
                 Expanded(

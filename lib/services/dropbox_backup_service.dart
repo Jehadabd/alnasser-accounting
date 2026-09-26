@@ -473,6 +473,9 @@ class DropboxBackupService {
       await currentDb.delete();
       await dbFile.copy(currentDbPath);
 
+      // 🛡️ وضع الاستعادة للمزامنة: لا رفع من نسخة قديمة قبل مقارنتها بالسحابة
+      await DatabaseService.flagDatabaseRestored();
+
       return true;
     } catch (e) {
       debugPrint('❌ خطأ في الاستعادة: $e');

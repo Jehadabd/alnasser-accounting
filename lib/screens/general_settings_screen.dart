@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:flutter/services.dart';
 import 'package:get_storage/get_storage.dart';
 
@@ -8,13 +9,14 @@ import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/widgets/app_side_nav.dart';
 import 'package:alnaser/models/printer_device.dart';
 import 'package:alnaser/services/printing_service.dart';
-import 'package:alnaser/services/printing_service_platform_io.dart';
+import 'package:alnaser/services/printing_service_factory.dart';
 import 'package:alnaser/services/usb_printer_service.dart';
 import 'package:alnaser/services/thermal_receipt_service.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:intl/intl.dart';
 
 import 'package:path_provider/path_provider.dart';
+import 'package:printing/printing.dart'; // 🌐 مشاركة وطباعة الويب
 import '../services/database_service.dart';
 import '../services/password_service.dart';
 import '../services/pdf_service.dart';
@@ -28,6 +30,7 @@ import 'discord_settings_screen.dart'; // 💬 إعدادات Discord
 import 'dropbox_backup_screen.dart'; // ☁️ النسخ الاحتياطي السحابي
 import 'firebase_sync_settings_screen.dart';
 import 'firebase_custom_setup_screen.dart';
+import 'web_hosting_guide_screen.dart'; // 🌐 استضافة الويب
 import 'package:file_picker/file_picker.dart';
 import '../services/license_service.dart';
 
@@ -105,7 +108,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   bool _scanningUsb = false;
   bool _showSideNav = false;
   String _screenOrientation = 'landscape';
-  bool _isSyncAllowed = true;
+  bool _isSyncAllowed = false;
 
   @override
   void initState() {
@@ -118,7 +121,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     
     // تحميل الترخيص والاتجاه
     final storedLicense = LicenseService().getStoredLicense();
-    _isSyncAllowed = storedLicense?.isSyncAllowed ?? true;
+    _isSyncAllowed = storedLicense?.isSyncAllowed ?? false;
     _screenOrientation = GetStorage().read('screen_orientation') ?? 'landscape';
     
     // تحميل الألوان
@@ -1391,9 +1394,11 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            Platform.isAndroid || Platform.isIOS
-                                ? 'لم يتم العثور على طابعات. سيتم استخدام نظام الطباعة الافتراضي للهاتف.'
-                                : 'لم يتم العثور على طابعات في النظام. يرجى التحقق من تعريف الطابعات في الويندوز.',
+                            kIsWeb
+                                ? 'الطباعة المباشرة غير مدعومة على الويب — استخدم مسار PDF من شاشة الفاتورة.'
+                                : Platform.isAndroid || Platform.isIOS
+                                    ? 'لم يتم العثور على طابعات. سيتم استخدام نظام الطباعة الافتراضي للهاتف.'
+                                    : 'لم يتم العثور على طابعات في النظام. يرجى التحقق من تعريف الطابعات في الويندوز.',
                             style: const TextStyle(color: Colors.red),
                           ),
                         ),
@@ -1618,7 +1623,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           ),
 
           // 📱 إعدادات اتجاه الشاشة (الأندرويد والجوال)
-          if (Platform.isAndroid || Platform.isIOS)
+          if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
             _buildSettingsCard(
               icon: Icons.screen_rotation,
               iconColor: Colors.purple,
@@ -1675,6 +1680,19 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                         context,
                         MaterialPageRoute(builder: (context) => const FirebaseCustomSetupScreen()),
                       ).then((_) => _loadSettings());
+                    },
+                  ),
+                  const Divider(height: 1),
+                  _buildActionTile(
+                    icon: Icons.language_rounded,
+                    iconColor: const Color(0xFF0288D1),
+                    title: 'استضافة ورفع نسخة المتصفح (Web App)',
+                    subtitle: 'معالج مصور لرفع متجرك مجاناً وافتتاحه من أي جوال أو جهاز عبر رابط خاص بك',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
+                      );
                     },
                   ),
                 ],
@@ -2768,7 +2786,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       final now = DateTime.now();
       final fileName = 'كشوفات_الحسابات_${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}.pdf';
       
-      if (Platform.isWindows) {
+      if (!kIsWeb && Platform.isWindows) {
         // على Windows: حفظ في مجلد المستندات وفتح للمشاركة
         final directory = Directory('${Platform.environment['USERPROFILE']}/Documents/account_statements');
         if (!await directory.exists()) {
@@ -2790,13 +2808,16 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             ),
           );
         }
+      } else if (kIsWeb) {
+        // 🌐 الويب: تنزيل مباشر عبر المتصفح (لا مجلدات مؤقتة)
+        await _downloadBytesOnWeb(pdfBytes, fileName);
       } else {
         // على الأجهزة الأخرى: استخدام share_plus للمشاركة
         final tempDir = await getTemporaryDirectory();
         final filePath = '${tempDir.path}/$fileName';
         final file = File(filePath);
         await file.writeAsBytes(pdfBytes);
-        
+
         await Share.shareXFiles(
           [XFile(filePath)],
           text: 'كشوفات حسابات العملاء - ${now.year}/${now.month}/${now.day}',
@@ -2810,6 +2831,14 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         );
       }
     }
+  }
+
+  /// 🌐 تنزيل بايتات ملف في المتصفح
+  Future<void> _downloadBytesOnWeb(Uint8List bytes, String fileName) async {
+    await Printing.sharePdf(
+      bytes: bytes,
+      filename: fileName,
+    );
   }
   // 📈 دالة تدريب التسعيرة التلقائي
   Future<void> _trainPricingModel() async {

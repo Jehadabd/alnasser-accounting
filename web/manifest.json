@@ -1,11 +1,11 @@
 {
-    "name": "debt_book",
-    "short_name": "debt_book",
+    "name": "الناصر",
+    "short_name": "الناصر",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0D47A1",
+    "theme_color": "#0D47A1",
+    "description": "تطبيق الناصر لإدارة المتجر والحسابات والمبيعات",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

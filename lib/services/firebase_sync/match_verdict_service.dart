@@ -19,6 +19,15 @@
 //   • استحالة الازدواجية (معرّف مستند حتمي v_{customer}_{tx})
 //   • استحالة ضرر الترتيب (قرارات معلّقة تُنفَّذ عند وصول معاملتها)
 //   • استحالة البندول (الإبطال نهائي — لا إحياء تلقائي، والتعارض إنذار بشري)
+//
+// ⛔ معطّلة (المحاكاة: tools/sync_sim سيناريوهات 22، 24، 27):
+//   القرار يُبطل معاملة على كل الأجهزة لمجرد أن «جهاز الحقيقة» لم يكن يعرفها.
+//   لكن جهاز الحقيقة قد يكون متأخراً فقط: تسديد سُجّل على جهاز ثالث ولم يصله
+//   بعد كان يُمحى من الشبكة كلها، ولا شيء يعيده لأن الإبطال نهائي. وأي جهاز
+//   (أو أي شخص يملك مفاتيح المجموعة) يستطيع كتابة قرار يمحو أي معاملة.
+//   الآن: لا نشر ولا تطبيق. كل جهاز يحكم ببياناته وبالسحابة وحدها
+//   (شواهد الحذف + المطابقة المحصّنة التي لا تُبطل إلا ما لا أثر له).
+//   تبقى الجداول المحلية للأرشيف، وتُهمل القرارات المعلّقة القديمة.
 
 import 'dart:async';
 import 'dart:convert';
@@ -40,6 +49,10 @@ class MatchVerdictService {
       _fsInstance ??= FirebaseFirestore.instance;
 
   final DatabaseService _db = DatabaseService();
+
+  /// ⛔ القرارات عن بُعد معطّلة (انظر رأس الملف).
+  static const bool _publishingEnabled = false;
+
   StreamSubscription? _listener;
   bool _isListening = false;
   String? _myDeviceId;
@@ -56,24 +69,15 @@ class MatchVerdictService {
     _myDeviceId ??= await FirebaseSyncConfig.getDeviceId();
     await _ensureTables();
 
-    // 🔒 استماع شامل بلا فلتر (نفس فلسفة الفواتير): أي قرار فاتنا
-    // تلتقطه الدورة التالية أو السحب الكامل عند الإقلاع.
-    _listener = _fs.collection('match_verdicts').snapshots().listen(
-          (snap) {
-            for (final change in snap.docChanges) {
-              if (change.type == DocumentChangeType.added) {
-                final data = change.doc.data();
-                if (data == null) continue;
-                if (data['applierDeviceId'] == _myDeviceId) continue;
-                unawaited(applyVerdict(change.doc.id, data));
-              }
-            }
-          },
-          onError: (e) => print('⚖️ [Verdict] خطأ في استماع القرارات: $e'),
-        );
+    // ⛔ لا مستمع: القرارات لا تُطبَّق (انظر رأس الملف).
+    // القرارات المعلّقة من نسخ سابقة تُهمل كي لا تُنفَّذ عند وصول معاملتها.
+    try {
+      final db = await _db.database;
+      final n = await db.delete('pending_void_verdicts');
+      if (n > 0) print('⚖️ [Verdict] أُهمل $n قرار إبطال معلّق من نسخة سابقة');
+    } catch (_) {}
 
     _isListening = true;
-    print('⚖️ [Verdict] مستمع قرارات المطابقة فعّال');
   }
 
   void stop() {
@@ -125,6 +129,8 @@ class MatchVerdictService {
     required String truthDeviceId,
     required double referenceBalance,
   }) async {
+    // ⛔ معطّل: لا بثّ لقرارات الإبطال (انظر رأس الملف)
+    if (!_publishingEnabled) return;
     if (voidedRows.isEmpty) return;
     if (_myDeviceId == null) {
       _myDeviceId = await FirebaseSyncConfig.getDeviceId();
@@ -176,6 +182,8 @@ class MatchVerdictService {
   /// يبطل المعاملة المستهدفة محلياً إن وُجدت، أو يعلّق القرار حتى وصولها.
   /// لا يضيف أي مبلغ — الإبطال فقط + إعادة اشتقاق الرصيد من المجموع.
   Future<void> applyVerdict(String docId, Map<String, dynamic> data) async {
+    // ⛔ معطّل: قرار من جهاز آخر لا يُبطل شيئاً هنا (انظر رأس الملف)
+    if (!_publishingEnabled) return;
     final txUuid = data['transactionUuid'] as String?;
     if (txUuid == null || txUuid.isEmpty) return;
 

@@ -1,5 +1,6 @@
 // screens/create_invoice_screen.dart
 // screens/create_invoice_screen.dart
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:flutter/material.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
@@ -31,7 +32,7 @@ import 'dart:async';
 import 'package:provider/provider.dart';
 import 'package:alnaser/providers/app_provider.dart';
 import 'package:alnaser/services/pdf_service.dart';
-import 'package:alnaser/services/printing_service_platform_io.dart';
+import 'package:alnaser/services/printing_service_factory.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
 import 'package:flutter/scheduler.dart';
@@ -1323,6 +1324,23 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           }
           return;
         }
+        // 📦 البيع بلا رصيد كافٍ مسموح (إعداد «السماح بالبيع عند نفاذ الكمية»):
+        //    نكمل البيع وننبّه — المخزن مشترك والكمية قد تصير سالبة.
+        if (_allowNegativeStock &&
+            (_selectedProduct!.stockQuantity ?? 0) < totalBaseUnitsSold &&
+            mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '⚠️ تنبيه: الكمية المتاحة ${_selectedProduct!.stockQuantity ?? 0} أقل من '
+                'المطلوب $totalBaseUnitsSold — سيصبح المخزون سالباً',
+                style: const TextStyle(fontFamily: 'Cairo'),
+              ),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
 
         final double finalItemCostPrice = (_selectedProduct!.costPrice ?? 0) * totalBaseUnitsSold;
         final double finalItemTotal = inputQuantity * finalAppliedPrice;
@@ -1581,6 +1599,16 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         logoImage: logoImage,
         appSettings: appSettings,
       );
+
+      // 🌐 الويب: PDF من الذاكرة مباشرة — فتح نافذة طباعة المتصفح مباشرة
+      if (kIsWeb) {
+        final bytes = await doc.save();
+        await Printing.layoutPdf(
+          onLayout: (PdfPageFormat format) async => bytes,
+          name: 'قائمة_تجهيز_${customerNameController.text.isNotEmpty ? customerNameController.text : "عامة"}.pdf',
+        );
+        return;
+      }
 
       // احفظ ثم افتح للطباعة على ويندوز
       final filePath = await _saveInvoicePdfToTemp(doc, customerNameController.text, selectedDate);
@@ -2948,21 +2976,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     }
   }
 
-  Future<void> _persistPaymentTypeLightweight() async {
-    try {
-      if (invoiceToManage == null || invoiceToManage!.id == null) return;
-      final paid = double.tryParse(paidAmountController.text.replaceAll(',', '')) ?? 0.0;
-      // لا نعدّل البنود هنا؛ فقط نحفظ نوع الدفع والمبلغ المسدد والتاريخ
-      final updated = invoiceToManage!.copyWith(
-        paymentType: paymentType,
-        amountPaidOnInvoice: paid,
-        lastModifiedAt: DateTime.now(),
-      );
-      await db.updateInvoice(updated);
-    } catch (e) {
-      print('light persist payment type error: $e');
-    }
-  }
+  // ⚠️ حُذفت _persistPaymentTypeLightweight.
+  //
+  // كانت تكتب amount_paid_on_invoice في جدول الفواتير بلا أي معاملة دين
+  // مقابلة، فتُحدث فرقاً دائماً بين الفاتورة وسجل الديون. لم تكن مستدعاة من
+  // أي مكان (كود ميت)، لكنها بقيت قنبلة لمن يربطها بزر لاحقاً.
+  // المبلغ المسدد لا يُكتب إلا من saveInvoice، ومعه الحارس المحاسبي.
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 🎨 Helper: بناء صف إجمالي

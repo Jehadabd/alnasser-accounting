@@ -51,11 +51,8 @@ class InvoiceResolutionService {
       invoiceData['items'] = itemsList;
       invoiceData['_uploaded_at'] = FieldValue.serverTimestamp();
       
-      // 🔐 إضافة groupSecret لاجتياز قواعد الحماية (Security Rules) في Firebase
-      final groupSecret = await FirebaseSyncConfig.getGroupSecret();
-      if (groupSecret != null) {
-        invoiceData['groupSecret'] = groupSecret;
-      }
+      // 🔒 لا نكتب groupSecret في السحابة (قواعد Firestore لا تطلبه، وكشفه
+      // يسمح بتزوير توقيعات المعاملات).
       
       // 3. رفعها للفايربيس
       final docRef = collection.doc(uuid);

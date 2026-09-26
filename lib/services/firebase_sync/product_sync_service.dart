@@ -1,7 +1,9 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../database_service.dart';
 import '../database/core/database_helpers.dart';
-import '../invoice_settings_service.dart';
+import '../database/business/stock_ledger.dart';
 import 'firebase_sync_config.dart';
 import 'uuid_helper.dart';
 import '../../models/product.dart';
@@ -13,15 +15,25 @@ class ProductSyncService {
   String? _deviceId;
   bool _isListening = false;
 
+  /// 🛡️ هوية هذا الجهاز = معرّف جهاز Firebase. كانت رقم ترقيم الفواتير
+  /// (افتراضياً 1 على كل جهاز): جهازان بنفس الرقم يعدّ كلٌّ منهما منتجات
+  /// الآخر «منتجاته هو» فيتجاهلها — لا يصل منتج جديد ولا تعديل إطلاقاً.
+  Future<String> _myDeviceId() async =>
+      _deviceId ??= await FirebaseSyncConfig.getDeviceId();
+
+  Set<String>? _productColumns;
+
   Future<void> startSync() async {
     if (_isListening) return;
-    _deviceId = (await InvoiceSettingsService.getInvoiceDeviceId()).toString();
-    
+    await _myDeviceId();
+
     // 1. Upload pending products
-    await syncPendingProducts();
-    
+    // 🛡️ بلا انتظار: بلا إنترنت لا يكتمل set() حتى يعود الاتصال، فكان يحجز
+    // تهيئة المزامنة كلها (نفس خلل رفع الفواتير — 8.9).
+    unawaited(syncPendingProducts());
+
     // 2. Download all remote products to ensure complete local catalog
-    await downloadAllProducts();
+    await downloadAllProducts().timeout(const Duration(seconds: 90), onTimeout: () {});
 
     // 3. Listen for incoming products
     _listenForIncomingProducts();
@@ -31,12 +43,15 @@ class ProductSyncService {
   Future<void> syncPendingProducts() async {
     try {
       final db = await _dbService.database;
-      _deviceId ??= (await InvoiceSettingsService.getInvoiceDeviceId()).toString();
-      
+      final me = await _myDeviceId();
+
+      // 🛡️ المعلّق = ما لم يُرفع أو تغيّر بعد آخر رفع. كان «كل ما آخر من
+      // عدّله أنا» فيُعاد رفع كل منتجات الجهاز عند كل تشغيل.
       final pendingProducts = await db.query(
         'products',
-        where: 'last_synced_at IS NULL OR last_modified_by_device_id = ? OR sync_uuid IS NULL',
-        whereArgs: [_deviceId],
+        where: "last_synced_at IS NULL OR sync_uuid IS NULL OR sync_uuid = '' "
+            'OR (last_modified_by_device_id = ? AND last_modified_at > last_synced_at)',
+        whereArgs: [me],
       );
 
       for (var p in pendingProducts) {
@@ -78,11 +93,13 @@ class ProductSyncService {
         productData = res.first;
       }
       
-      _deviceId ??= (await InvoiceSettingsService.getInvoiceDeviceId()).toString();
+      final me = await _myDeviceId();
 
       final payload = Map<String, dynamic>.from(productData!);
       payload['uploaded_at'] = FieldValue.serverTimestamp();
-      payload['last_modified_by_device_id'] = _deviceId;
+      payload['last_modified_by_device_id'] = me;
+      // الكمية لا تُزامَن من هنا: دفتر المخزون (StockMovementSyncService) هو
+      // المصدر، والمستقبِل يتجاهلها لمنتج قائم. تبقى للمنتج الجديد كقيمة مؤقتة.
       payload['sync_uuid'] = syncUuid;
       
       final productId = productData['id'] as int?;
@@ -110,7 +127,11 @@ class ProductSyncService {
         }
       }
       
-      await _firestore.collection('products').doc(syncUuid).set(payload, SetOptions(merge: true));
+      await _firestore
+          .collection('products')
+          .doc(syncUuid)
+          .set(payload, SetOptions(merge: true))
+          .timeout(const Duration(seconds: 60));
       
       await db.update('products', {'last_synced_at': DateTime.now().toIso8601String()}, where: 'sync_uuid = ?', whereArgs: [syncUuid]);
       print('📦 [ProductSyncService] تم رفع المنتج بنجاح: ${payload['name']} ($syncUuid)');
@@ -137,14 +158,17 @@ class ProductSyncService {
       final syncUuid = data['sync_uuid'] as String?;
       if (syncUuid == null) return;
       
-      _deviceId ??= (await InvoiceSettingsService.getInvoiceDeviceId()).toString();
-      
-      if (data['last_modified_by_device_id'] == _deviceId) {
-        return; // Ignore updates that we created ourselves
+      final db = await _dbService.database;
+
+      // مستندي أنا: نسختي المحلية هي المرجع — إلا إن غاب المنتج هنا (قاعدة
+      // استُعيدت من نسخة احتياطية أقدم منه). كان يُتجاهل دائماً، فلا يعود
+      // منتجي أبداً بعد الاستعادة بينما بنوده وحركاته موجودة (اختبار الكود الحقيقي).
+      if (data['last_modified_by_device_id'] == await _myDeviceId()) {
+        final mine = await db.query('products',
+            columns: ['id'], where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
+        if (mine.isNotEmpty) return;
       }
 
-      final db = await _dbService.database;
-      
       // 1. البحث عن المنتج بـ sync_uuid أولاً
       var existing = await db.query('products', where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
       
@@ -216,13 +240,36 @@ class ProductSyncService {
         }
       }
 
+      // 🛡️ أعمدة هذا الجهاز فقط: عمود زائد من إصدار آخر كان يُفشل الإدراج
+      // كله فلا يصل المنتج أبداً. ووصوله = مُزامَن (لا يُعاد رفعه من هنا).
+      _productColumns ??= (await db.rawQuery('PRAGMA table_info(products)'))
+          .map((c) => c['name'] as String)
+          .toSet();
+      localData.removeWhere((k, _) => !_productColumns!.contains(k));
+      localData['last_synced_at'] = DateTime.now().toIso8601String();
+
       int localProductId;
       if (existing.isNotEmpty) {
         localProductId = existing.first['id'] as int;
-        await db.update('products', localData, where: 'id = ?', whereArgs: [localProductId]);
+        final oldUuid = existing.first['sync_uuid'] as String?;
+        await db.transaction((txn) async {
+          await txn.update('products', localData, where: 'id = ?', whereArgs: [localProductId]);
+          // 📦 طوبق بالاسم فتغيّر معرّفه: بنوده وحركاته تتبعه، ورصيده
+          // الافتتاحي يصير رصيد المعرّف الجديد (أو يُنشأ إن لم يصل بعد)
+          if (oldUuid != null && oldUuid.isNotEmpty && oldUuid != syncUuid) {
+            await StockLedger.rekeyProduct(txn, oldUuid, syncUuid);
+          }
+          await StockLedger.ensureOpenings(txn, onlyUuid: syncUuid, upload: false);
+        });
         print('📦 [ProductSyncService] تم تحديث منتج محلي بالاسم/UUID: ${localData['name']} (ID: $localProductId)');
       } else {
-        localProductId = await db.insert('products', localData);
+        localProductId = await db.transaction((txn) async {
+          final id = await txn.insert('products', localData);
+          // 📦 منتج جديد هنا: رصيد افتتاحي مؤقت محلي (كميته في المستند) لا
+          // يُرفع أبداً — رصيد منشئه يحلّ محله متى وصل (المعرّف واحد).
+          await StockLedger.ensureOpenings(txn, onlyUuid: syncUuid, upload: false);
+          return id;
+        });
         print('📦 [ProductSyncService] تم إضافة منتج جديد من السحابة: ${localData['name']} (سعر: ${localData['unit_price'] ?? localData['price1']}, كمية: ${localData['stock_quantity']})');
       }
       

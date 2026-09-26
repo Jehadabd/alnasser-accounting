@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../../models/invoice.dart';
 import '../../../models/invoice_item.dart';
 import '../../../models/invoice_adjustment.dart';
+import '../business/invoice_debt_reconciler.dart';
 
 class InvoiceDao {
   // دالة للحصول على قاعدة البيانات
@@ -123,12 +124,27 @@ class InvoiceDao {
       throw Exception('لا يمكن تعديل هذه الفاتورة لأنها مستوردة من جهاز آخر.');
     }
     
-    return await db.update(
-      'invoices',
-      invoice.toMap(),
-      where: 'id = ?',
-      whereArgs: [invoice.id],
-    );
+    // 🛡️ رقم النسخة لا ينزل أبداً (المحاكاة: tools/sync_sim).
+    // الكائن القادم من الشاشة قد يحمل نسخة أقدم من الصف (رفعتها التسوية أو
+    // تعديل سابق)، وكتابته كما هو كانت تُنزل النسخة؛ فيأخذ التعديل التالي رقماً
+    // سبق رفعه بمحتوى مختلف، وتتجاهله الأجهزة الأخرى فيبقى دينها القديم.
+    return await db.transaction((txn) async {
+      final cur = await txn.query('invoices',
+          columns: ['version'], where: 'id = ?', whereArgs: [invoice.id], limit: 1);
+      final dbVersion =
+          cur.isEmpty ? 0 : ((cur.first['version'] as num?)?.toInt() ?? 1);
+      final map = invoice.toMap();
+      map['version'] =
+          (dbVersion > invoice.version ? dbVersion : invoice.version) + 1;
+      map['is_synced'] = 0;
+      map['restored_mark'] = 0;
+      return await txn.update(
+        'invoices',
+        map,
+        where: 'id = ?',
+        whereArgs: [invoice.id],
+      );
+    });
   }
 
   // 6️⃣ حذف فاتورة
@@ -180,13 +196,22 @@ class InvoiceDao {
       final id = await txn.insert('invoice_adjustments', map);
       
       // تحديث إجمالي الفاتورة (انعكاس التعديل)
-      // هذا تحديث "محلي" للفاتورة، أما التأثير على دين العميل فيجب أن يتم عبر Manager
       final adjustmentAmount = adj.amountDelta;
       await txn.rawUpdate(
         'UPDATE invoices SET total_amount = total_amount + ? WHERE id = ?',
         [adjustmentAmount, adj.invoiceId]
       );
-      
+
+      // 🛡️ التسوية غيّرت إجمالي الفاتورة، فيجب أن ينعكس ذلك على دين العميل فوراً.
+      // قبل هذا كان التعليق يقول "يجب أن يتم عبر Manager" ولم يكن يُستدعى أحد،
+      // فكانت أول تسوية تُحدث فرقاً دائماً بين الفاتورة وسجل الديون.
+      await InvoiceDebtReconciler.reconcileInvoice(
+        txn,
+        adj.invoiceId,
+        createMissing: true,
+        reason: 'تسوية على الفاتورة',
+      );
+
       return id;
     });
   }

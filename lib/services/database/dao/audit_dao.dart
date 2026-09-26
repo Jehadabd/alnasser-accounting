@@ -3,12 +3,159 @@
 
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:archive/archive.dart'; // 🗜️ ضغط لقطات الفواتير (يعمل على الويب وسطح المكتب)
 
 /// DAO لسجل التدقيق المالي
 class AuditDao {
   final Future<Database> Function() getDatabase;
 
   AuditDao({required this.getDatabase});
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🗜️ تصغير قاعدة البيانات: تنظيف وضغط لقطات الفواتير + سياسة حفظ السجلات
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// حقول تُحذف من نصّ أصناف اللقطة التاريخية فقط (جدول invoice_items الحيّ لا يُمسّ).
+  /// id / invoice_id: معرّفات صفوف لا معنى لها خارج الجدول الحيّ.
+  /// unique_id: مفتاح صفّ مؤقّت للواجهة يُولَّد من الوقت ويُرمى بعد الحفظ.
+  /// product_sync_uuid: تستعمله المزامنة من الجدول الحيّ، واللقطات لا تُرفع إطلاقاً.
+  /// وكلّها نصوص عشوائية لا تنضغط — حذفها أنفع من ضغطها.
+  static const Set<String> kSnapshotDropFields = {
+    'id',
+    'invoice_id',
+    'unique_id',
+    'product_sync_uuid',
+  };
+
+  /// مدة الاحتفاظ بسجل التدقيق المالي وسجل عمليات الفواتير
+  static const int kLogRetentionDays = 365;
+  static DateTime? _lastLogPruneAt;
+
+  /// بناء نصّ أصناف اللقطة بعد التنظيف.
+  /// القيم الفارغة تُحذف أيضاً: غياب الحقل يُقرأ null تماماً كوجوده فارغاً.
+  static String buildSnapshotItemsJson(List<Map<String, dynamic>> rows) {
+    final cleaned = rows.map((row) {
+      final out = <String, dynamic>{};
+      row.forEach((k, v) {
+        if (kSnapshotDropFields.contains(k)) return;
+        if (v == null) return;
+        out[k] = v;
+      });
+      return out;
+    }).toList();
+    return jsonEncode(cleaned);
+  }
+
+  /// ضغط نصّ الأصناف للتخزين (gzip من حزمة archive — تعمل على الويب أيضاً).
+  /// يُخزَّن BLOB داخل عمود معرّف TEXT، وSQLite ذو أنواع ديناميكية فيقبل ذلك
+  /// بلا أي تعديل على المخطط ولا ترقية إصدار.
+  static Uint8List encodeSnapshotItems(String itemsJson) {
+    final raw = utf8.encode(itemsJson);
+    try {
+      final dynamic packed = GZipEncoder().encode(raw);
+      if (packed is List<int> && packed.isNotEmpty) {
+        return Uint8List.fromList(packed);
+      }
+    } catch (e) {
+      print('⚠️ تعذّر ضغط أصناف اللقطة (سيُحفظ نصاً): $e');
+    }
+    return Uint8List.fromList(raw);
+  }
+
+  /// قراءة أصناف اللقطة — تتعامل مع الشكلين معاً:
+  /// لقطة قديمة مخزّنة نصاً، ولقطة جديدة مضغوطة. لا هجرة إجبارية للبيانات القديمة.
+  static String decodeSnapshotItems(dynamic raw) {
+    if (raw == null) return '[]';
+    if (raw is String) return raw.isEmpty ? '[]' : raw;
+    if (raw is List<int>) {
+      try {
+        if (raw.length > 2 && raw[0] == 0x1f && raw[1] == 0x8b) {
+          return utf8.decode(GZipDecoder().decodeBytes(raw));
+        }
+        return utf8.decode(raw);
+      } catch (e) {
+        print('⚠️ تعذّر فكّ ضغط أصناف اللقطة: $e');
+      }
+    }
+    return '[]';
+  }
+
+  /// أصناف اللقطة كصفوف جاهزة للعرض والمقارنة
+  static List<Map<String, dynamic>> decodeSnapshotItemRows(dynamic raw) {
+    try {
+      final dynamic source =
+          (raw is List && raw is! List<int>) ? raw : jsonDecode(decodeSnapshotItems(raw));
+      if (source is List) {
+        return source
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+    } catch (e) {
+      print('⚠️ تعذّرت قراءة أصناف اللقطة: $e');
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  /// مقارنة رقمية متسامحة مع فروق الفاصلة العائمة
+  static bool sameSnapshotNum(Object? a, Object? b) =>
+      (((a as num?)?.toDouble() ?? 0.0) - ((b as num?)?.toDouble() ?? 0.0)).abs() <
+      0.001;
+
+  /// هل حالة الفاتورة الآن مطابقة تماماً لآخر لقطة محفوظة؟
+  /// [last] صفّ آخر لقطة، [invoice] صفّ الفاتورة الحيّ، [itemsJson] الأصناف بعد التنظيف.
+  static bool isSameAsLastSnapshot(
+    Map<String, Object?> last,
+    Map<String, Object?> invoice,
+    String itemsJson,
+  ) {
+    return decodeSnapshotItems(last['items_json']) == itemsJson &&
+        (last['customer_name'] as String?) == (invoice['customer_name'] as String?) &&
+        (last['customer_phone'] as String?) == (invoice['customer_phone'] as String?) &&
+        (last['customer_address'] as String?) == (invoice['customer_address'] as String?) &&
+        (last['invoice_date'] as String?) == (invoice['invoice_date'] as String?) &&
+        (last['payment_type'] as String?) == (invoice['payment_type'] as String?) &&
+        (last['invoice_notes'] as String?) == (invoice['notes'] as String?) &&
+        sameSnapshotNum(last['total_amount'], invoice['total_amount']) &&
+        sameSnapshotNum(last['discount'], invoice['discount']) &&
+        sameSnapshotNum(last['amount_paid'], invoice['amount_paid_on_invoice']) &&
+        sameSnapshotNum(last['loading_fee'], invoice['loading_fee']);
+  }
+
+  /// 🧹 حذف السجلات الأقدم من [kLogRetentionDays] — مرة كل ٦ ساعات كحد أقصى.
+  /// ملفوفة بـ try/catch كاملة فلا تُفشل إدراجاً ناجحاً.
+  Future<void> _pruneOldLogsIfDue(Database db) async {
+    try {
+      final now = DateTime.now();
+      if (_lastLogPruneAt != null &&
+          now.difference(_lastLogPruneAt!).inHours < 6) {
+        return;
+      }
+      _lastLogPruneAt = now;
+      final cutoff = now
+          .subtract(const Duration(days: kLogRetentionDays))
+          .toIso8601String();
+
+      int deletedAudit = 0;
+      int deletedLogs = 0;
+      try {
+        deletedAudit = await db.delete('financial_audit_log',
+            where: 'created_at < ?', whereArgs: [cutoff]);
+      } catch (_) {}
+      try {
+        deletedLogs = await db.delete('invoice_logs',
+            where: 'created_at < ?', whereArgs: [cutoff]);
+      } catch (_) {}
+
+      if (deletedAudit > 0 || deletedLogs > 0) {
+        print(
+            '🧹 تنظيف السجلات: $deletedAudit سجل تدقيق و $deletedLogs سجل فاتورة أقدم من $kLogRetentionDays يوماً');
+      }
+    } catch (e) {
+      print('⚠️ تعذّر تنظيف السجلات القديمة: $e');
+    }
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // دوال سجل التدقيق المالي (Financial Audit Log)
@@ -25,7 +172,7 @@ class AuditDao {
   }) async {
     final db = await getDatabase();
     try {
-      return await db.insert('financial_audit_log', {
+      final insertedId = await db.insert('financial_audit_log', {
         'operation_type': operationType,
         'entity_type': entityType,
         'entity_id': entityId,
@@ -34,6 +181,9 @@ class AuditDao {
         'notes': notes,
         'created_at': DateTime.now().toIso8601String(),
       });
+      // 🧹 سياسة الحفظ: لا ينمو السجل بلا حدّ
+      await _pruneOldLogsIfDue(db);
+      return insertedId;
     } catch (e) {
       print('خطأ في إدراج سجل التدقيق: $e');
       return 0;
@@ -132,9 +282,9 @@ class AuditDao {
       }
       final invoice = invoiceMaps.first;
       
-      // جلب أصناف الفاتورة
+      // جلب أصناف الفاتورة (بعد حذف الحقول الحشو التي لا معنى لها في اللقطة)
       final items = await db.query('invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
-      final itemsJson = jsonEncode(items);
+      final itemsJson = buildSnapshotItemsJson(items);
       
       // حساب رقم النسخة
       final existingSnapshots = await db.query(
@@ -144,6 +294,14 @@ class AuditDao {
         orderBy: 'version_number DESC',
         limit: 1,
       );
+
+      // 🗜️ منع اللقطات المكررة: إن لم يتغيّر شيء عن آخر لقطة فلا نكتب صفاً جديداً.
+      // لا تُتخطّى إلا لقطة مطابقة حرفياً لما هو محفوظ بالفعل، فلا تضيع أي حالة فريدة.
+      if (existingSnapshots.isNotEmpty &&
+          isSameAsLastSnapshot(existingSnapshots.first, invoice, itemsJson)) {
+        return (existingSnapshots.first['id'] as int?) ?? -1;
+      }
+
       final nextVersion = existingSnapshots.isEmpty 
           ? 1 
           : ((existingSnapshots.first['version_number'] as int?) ?? 0) + 1;
@@ -161,7 +319,7 @@ class AuditDao {
         'discount': invoice['discount'],
         'amount_paid': invoice['amount_paid_on_invoice'],
         'loading_fee': invoice['loading_fee'],
-        'items_json': itemsJson,
+        'items_json': encodeSnapshotItems(itemsJson),
         'created_at': DateTime.now().toIso8601String(),
         'notes': notes,
         'invoice_notes': invoice['notes'],
@@ -228,13 +386,16 @@ class AuditDao {
   }) async {
     final db = await getDatabase();
     try {
-      return await db.insert('invoice_logs', {
+      final insertedId = await db.insert('invoice_logs', {
         'invoice_id': invoiceId,
         'action': action,
         'details': details,
         'created_at': DateTime.now().toIso8601String(),
         'created_by': createdBy,
       });
+      // 🧹 سياسة الحفظ نفسها لسجل عمليات الفواتير
+      await _pruneOldLogsIfDue(db);
+      return insertedId;
     } catch (e) {
       print('خطأ في تسجيل عملية الفاتورة: $e');
       return 0;

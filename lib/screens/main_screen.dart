@@ -352,7 +352,23 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     final license = LicenseService().getStoredLicense();
-    final bool isDebtsOnly = license?.isDebtsOnly ?? false;
+    
+    // 🔒 حارس الشاشة: إذا لم يكن هناك ترخيص موثّق، نمنع رسم أي عنصر ونطرد المتصفح فوراً
+    if (license == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pushNamedAndRemoveUntil('/license', (route) => false);
+        }
+      });
+      return const Scaffold(
+        backgroundColor: Color(0xFFF4F7FB),
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    final bool isDebtsOnly = license.isDebtsOnly;
     final screenWidth = MediaQuery.of(context).size.width;
 
     // 📱 حساب عدد الأعسبة ونسبة الحجم استجابياً حسب حجم الشاشة ونوع الترخيص

@@ -3,14 +3,17 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show Random; // 🌐 لبصمة جهاز الويب
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:get_storage/get_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // 🌐 التخزين الدائم للويب
 import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'firebase_sync/firebase_sync_config.dart';
 
 class LicenseService {
-  static const String _apiUrl = 'https://script.google.com/macros/s/AKfycbwWDr3ALJ8jzhqIruH5GYEVbWL_EXRjxGux9Pcz-IwZPhIbv_T2Dsn7p2YGqWxA-7j1pQ/exec';
+  static const String _apiUrl = 'https://script.google.com/macros/s/AKfycbzdk2Fhl_JM1dPotLZal_oAakPndDrRKVli75K_9MyVbMcMNqvXAIUquVA1N6Om3WSqsw/exec';
   
   // مفاتيح التخزين المحلي
   static const String _keyLicense = 'license_data';
@@ -30,13 +33,57 @@ class LicenseService {
   // أقصى مدة للاشتراك المحلي (100 سنة)
   static const int _maxSubscriptionYears = 100;
   
-  final GetStorage _storage = GetStorage();
+  // 🔐 المفتاح السري للتوقيع التشفيري لمنع التلاعب بالترخيص محلياً أو بالمتصفح
+  static const String _licenseSecretSalt = 'AL_NASSER_CRYPT_SIG_v2_987412356_SECRET';
   
-  /// توليد بصمة الجهاز الفريدة
+  final GetStorage _storage = GetStorage();
+
+  /// 🔒 حساب التوقيع الرقمي المشفر للترخيص
+  String _computeLicenseSignature(Map<String, dynamic> data) {
+    final payload = '${data['username']}_${data['deviceId']}_${data['appMode']}_${data['type']}_${data['expires']}_$_licenseSecretSalt';
+    final bytes = utf8.encode(payload);
+    return sha256.convert(bytes).toString();
+  }
+  
+  /// توليد بصمة الجهاز الفريدة وتثبيتها بشكل دائم
   Future<String> generateDeviceId() async {
     try {
+      // 🌐 الويب: تثبيت بصمة الجهاز في الذاكرة الدائمة المزدوجة (SharedPreferences + GetStorage)
+      // لمنع تغيير البصمة نهائياً عند إعادة التفعيل أو تحديث الصفحة
+      if (kIsWeb) {
+        String? stored = _storage.read<String>('web_device_id');
+        if (stored == null || stored.isEmpty) {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            stored = prefs.getString('web_device_id');
+          } catch (_) {}
+        }
+
+        if (stored != null && stored.isNotEmpty) {
+          _storage.write('web_device_id', stored);
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('web_device_id', stored);
+          } catch (_) {}
+          return stored;
+        }
+
+        final newId = sha256
+            .convert(utf8.encode(
+                'web_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1 << 32)}'))
+            .toString()
+            .substring(0, 32);
+
+        await _storage.write('web_device_id', newId);
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('web_device_id', newId);
+        } catch (_) {}
+        return newId;
+      }
+
       final List<String> parts = [];
-      
+
       // اسم الكمبيوتر
       parts.add(Platform.localHostname);
       
@@ -68,7 +115,8 @@ class LicenseService {
       return hash.toString().substring(0, 32); // أول 32 حرف
     } catch (e) {
       // في حالة الخطأ، استخدم معرف بديل
-      final fallback = '${Platform.localHostname}_${DateTime.now().millisecondsSinceEpoch}';
+      final fallback =
+          '${kIsWeb ? "web" : Platform.localHostname}_${DateTime.now().millisecondsSinceEpoch}';
       final bytes = utf8.encode(fallback);
       return sha256.convert(bytes).toString().substring(0, 32);
     }
@@ -82,46 +130,67 @@ class LicenseService {
         return false;
       }
       
-      // تحقق فعلي من الاتصال
+      if (kIsWeb) {
+        // 🌐 على الويب: InternetAddress.lookup غير مدعوم في المتصفح، ويكفي فحص الاتصال
+        return true;
+      }
+
+      // تحقق فعلي من الاتصال للأجهزة الأصلية
       final result = await InternetAddress.lookup('google.com');
       return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
     } catch (e) {
-      return false;
+      return kIsWeb; // على الويب لا نمنع العملية
     }
   }
   
-  /// استدعاء API
+  /// استدعاء API (يدعم GET فائق السرعة للويب و POST للأجهزة الأصلية)
   Future<Map<String, dynamic>> _callApi(Map<String, dynamic> data) async {
     print('🔐 [LICENSE] Calling API...');
     print('🔐 [LICENSE] URL: $_apiUrl');
     print('🔐 [LICENSE] Data: $data');
     
     try {
-      // Google Apps Script يقوم بـ redirect - نحتاج لمعالجته
+      if (kIsWeb) {
+        // 🌐 على الويب: نرسل كـ GET عبر Uri Query Parameters لمنع خطأ 405 وقيود CORS للـ 302 Redirect تماماً
+        final queryParams = data.map((key, value) => MapEntry(key, value.toString()));
+        final uri = Uri.parse(_apiUrl).replace(queryParameters: queryParams);
+        
+        print('🔐 [LICENSE] Sending Web GET request to: $uri');
+        final response = await http.get(uri).timeout(const Duration(seconds: 30));
+        
+        print('🔐 [LICENSE] Web response status: ${response.statusCode}');
+        print('🔐 [LICENSE] Web response body: ${response.body}');
+        
+        if (response.statusCode == 200) {
+          final decoded = jsonDecode(response.body);
+          if (decoded is Map<String, dynamic>) {
+            return decoded;
+          }
+          return {'success': false, 'error': 'INVALID_RESPONSE', 'message': 'استجابة غير صالحة من السيرفر'};
+        } else {
+          return {'success': false, 'error': 'HTTP_${response.statusCode}', 'message': 'خطأ في الاتصال: ${response.statusCode}'};
+        }
+      }
+
+      // 💻 المنصات الأصلية (ويندوز / أندرويد / آيفون):
       final client = http.Client();
       try {
         var request = http.Request('POST', Uri.parse(_apiUrl));
         request.headers['Content-Type'] = 'application/json';
         request.body = jsonEncode(data);
         
-        print('🔐 [LICENSE] Sending request...');
+        print('🔐 [LICENSE] Sending native POST request...');
         var streamedResponse = await client.send(request).timeout(const Duration(seconds: 30));
-        
-        print('🔐 [LICENSE] Initial status: ${streamedResponse.statusCode}');
         
         // معالجة redirects
         var response = await http.Response.fromStream(streamedResponse);
         
-        print('🔐 [LICENSE] Response headers: ${response.headers}');
-        
         // إذا كان redirect، اتبع الرابط الجديد
         if (response.statusCode == 302 || response.statusCode == 301) {
           final redirectUrl = response.headers['location'];
-          print('🔐 [LICENSE] Redirect to: $redirectUrl');
           if (redirectUrl != null) {
             final getResponse = await http.get(Uri.parse(redirectUrl)).timeout(const Duration(seconds: 30));
             response = getResponse;
-            print('🔐 [LICENSE] After redirect status: ${response.statusCode}');
           }
         }
         
@@ -130,10 +199,11 @@ class LicenseService {
         
         if (response.statusCode == 200) {
           final decoded = jsonDecode(response.body);
-          print('🔐 [LICENSE] Decoded response: $decoded');
-          return decoded;
+          if (decoded is Map<String, dynamic>) {
+            return decoded;
+          }
+          return {'success': false, 'error': 'INVALID_RESPONSE', 'message': 'استجابة غير صالحة من السيرفر'};
         } else {
-          print('🔐 [LICENSE] ERROR: HTTP ${response.statusCode}');
           return {'success': false, 'error': 'HTTP_${response.statusCode}', 'message': 'خطأ في الاتصال: ${response.statusCode}'};
         }
       } finally {
@@ -262,9 +332,22 @@ class LicenseService {
         'activatedAt': DateTime.now().toIso8601String(),
       };
       
-      await _storage.write(_keyLicense, jsonEncode(licenseData));
+      // 🔒 إضافة التوقيع الرقمي لمنع التلاعب
+      licenseData['signature'] = _computeLicenseSignature(licenseData);
+      
+      final licenseJson = jsonEncode(licenseData);
+      await _storage.write(_keyLicense, licenseJson);
       await _storage.write(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
       await _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
+
+      if (kIsWeb) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(_keyLicense, licenseJson);
+          await prefs.setInt(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
+          await prefs.setInt(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
+        } catch (_) {}
+      }
       
       // 🚀 تفعيل/تعطيل مفتاح المزامنة أوتوماتيكياً حسب نوع الترخيص عند التفعيل
       await FirebaseSyncConfig.setEnabled(newSyncAllowed);
@@ -275,6 +358,12 @@ class LicenseService {
         if (serverTime != null) {
           final offset = serverTime.difference(DateTime.now()).inSeconds;
           await _storage.write(_keyServerTimeOffset, offset);
+          if (kIsWeb) {
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setInt(_keyServerTimeOffset, offset);
+            } catch (_) {}
+          }
         }
       }
       
@@ -297,13 +386,33 @@ class LicenseService {
     }
   }
   
-  /// جلب بيانات الترخيص المحفوظة
+  /// جلب بيانات الترخيص المحفوظة مع التحقق التشفيري الصارم من عدم التلاعب
   LicenseData? getStoredLicense() {
-    final data = _storage.read(_keyLicense);
+    dynamic data = _storage.read(_keyLicense);
     if (data == null) return null;
     
     try {
-      final map = jsonDecode(data);
+      final decoded = data is String ? jsonDecode(data) : data;
+      if (decoded is! Map) return null;
+      final Map<String, dynamic> map = Map<String, dynamic>.from(decoded);
+      if (map.isEmpty) return null;
+
+      final storedSignature = map['signature'] as String?;
+      final expectedSignature = _computeLicenseSignature(map);
+
+      // 🚨 إذا كان التوقيع غير مطابق (تم التلاعب ببيانات الترخيص في الذاكرة أو المتصفح)
+      if (storedSignature != null && storedSignature != expectedSignature) {
+        print('🚨 [SECURITY_ALERT] تم اكتشاف تلاعب غير مصرح به في بيانات الترخيص! تم إلغاء التفعيل وقفل النظام.');
+        clearLicense();
+        return null;
+      }
+
+      // إذا كان ترخيصاً قديماً بدون ختم، نختمه تشفيرياً
+      if (storedSignature == null) {
+        map['signature'] = expectedSignature;
+        _storage.write(_keyLicense, jsonEncode(map));
+      }
+
       return LicenseData.fromJson(map);
     } catch (e) {
       return null;
@@ -486,9 +595,22 @@ class LicenseService {
         'lastVerified': DateTime.now().toIso8601String(),
       };
       
-      await _storage.write(_keyLicense, jsonEncode(licenseData));
+      // 🔒 إضافة التوقيع الرقمي لمنع التلاعب
+      licenseData['signature'] = _computeLicenseSignature(licenseData);
+      
+      final licenseJson = jsonEncode(licenseData);
+      await _storage.write(_keyLicense, licenseJson);
       await _storage.write(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
       await _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
+
+      if (kIsWeb) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(_keyLicense, licenseJson);
+          await prefs.setInt(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
+          await prefs.setInt(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
+        } catch (_) {}
+      }
 
       // 🚀 تفعيل/تعطيل مفتاح المزامنة أوتوماتيكياً حسب النمط المجلوب من السيرفر
       await FirebaseSyncConfig.setEnabled(newSyncAllowed);
@@ -681,6 +803,15 @@ class LicenseService {
     await _storage.remove(_keyLastCheck);
     await _storage.remove(_keyLastKnownTime);
     await _storage.remove(_keyServerTimeOffset);
+    if (kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_keyLicense);
+        await prefs.remove(_keyLastCheck);
+        await prefs.remove(_keyLastKnownTime);
+        await prefs.remove(_keyServerTimeOffset);
+      } catch (_) {}
+    }
     print('🔐 [LICENSE] License data cleared');
   }
 }

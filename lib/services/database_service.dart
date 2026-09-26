@@ -4,22 +4,24 @@
 
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
+import 'dart:async' show unawaited;
 import '../models/person_data.dart'; // Added import
 
 // Models
 import '../models/customer.dart';
 import '../models/product.dart';
 import '../models/transaction.dart';
-import '../utils/inventory_helpers.dart';
 import '../models/invoice.dart';
 import '../models/app_settings.dart';
 import '../models/invoice_design_settings.dart';
 import 'firebase_sync/product_sync_service.dart';
 import 'firebase_sync/firebase_sync_service.dart';
+import 'firebase_sync/invoice_sync_service.dart';
 import '../models/invoice_item.dart';
 import '../models/invoice_adjustment.dart';
 import '../models/installer.dart';
@@ -42,6 +44,8 @@ import 'database/business/customer_locking.dart';
 import 'database/business/profit_calculator.dart';
 import 'database/business/debt_calculator.dart';
 import 'database/business/invoice_manager.dart';
+import 'database/business/invoice_debt_reconciler.dart'; // 🛡️ الحارس المحاسبي
+import 'database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 import 'database/business/invoice_verification.dart'; // ✅ Added
 import 'database/business/integrity_service.dart'; // ✅ Added
 import 'database/business/financial_integrity_guard.dart'; // ✅ Added - 9-layer guard
@@ -215,6 +219,12 @@ class DatabaseService {
       // النسخة الاحتياطية إن وُجدت، وإلا نحذف الملف التالف وننشئ قاعدة جديدة.
       // هذا يمنع التطبيق من التعليق صامتاً (لا شاشة) عند تلف الـ DB.
       print('⚠️ فشل فتح قاعدة البيانات: $e');
+      // 🌐 الويب: لا ملفات نظام ولا نسخ احتياطية ملفية — أعد المحاولة مباشرة
+      // (IndexedDB يدير التخزين داخلياً في محرك WASM)
+      if (kIsWeb) {
+        _database = await _initDatabase();
+        return _database!;
+      }
       print('🔄 محاولة الاستعادة من النسخة الاحتياطية أو إنشاء قاعدة جديدة...');
       try {
         final path = await DatabaseConfig.getDatabasePath();
@@ -246,10 +256,12 @@ class DatabaseService {
 
   Future<Database> _initDatabase() async {
     final path = await DatabaseConfig.getDatabasePath();
-    // تأكد من وجود المجلد
-    try {
-      await Directory(dirname(path)).create(recursive: true);
-    } catch (_) {}
+    // تأكد من وجود المجلد (أصلي فقط — الويب لا مجلدات)
+    if (!kIsWeb) {
+      try {
+        await Directory(dirname(path)).create(recursive: true);
+      } catch (_) {}
+    }
 
     final db = await openDatabase(
       path,
@@ -270,6 +282,31 @@ class DatabaseService {
        await DatabaseMigrations.ensureSchema(db);
     } catch (e) {
        print('⚠️ Error running ensureSchema: $e');
+    }
+
+    // 📦 دفتر المخزون: ربط البنود القديمة بمنتجاتها + رصيد افتتاحي لكل منتج
+    // (مرة واحدة فعلياً؛ آمن التكرار)
+    try {
+      await StockLedger.migrate(db);
+    } catch (e) {
+      print('⚠️ Error running StockLedger.migrate: $e');
+    }
+
+    // 🗜️ تصغير قاعدة البيانات: بقايا مزامنة Drive + ضغط اللقطات القديمة.
+    // كلاهما يعمل مرة واحدة فعلياً: بعدها لا يجد ما يحذفه أو يضغطه.
+    try {
+      final purgedRows = await DatabaseMigrations.purgeDriveSyncLeftovers(db);
+      final compactedRows = await DatabaseMigrations.compactInvoiceSnapshotsOnce(db);
+      if (purgedRows > 0 || compactedRows > 0) {
+        try {
+          await db.execute('VACUUM');
+          print('🧹 هجرة: أُعيد بناء ملف قاعدة البيانات واستُرجعت المساحة');
+        } catch (e) {
+          print('⚠️ هجرة: تعذّر VACUUM بعد التنظيف: $e');
+        }
+      }
+    } catch (e) {
+      print('⚠️ هجرة تصغير قاعدة البيانات تعذّرت: $e');
     }
 
     try {
@@ -490,9 +527,9 @@ class DatabaseService {
   }
 
   /// 🔒 تحديث زبون - يذهب للهارد مباشرة
-  Future<int> updateCustomer(Customer customer) async {
+  Future<int> updateCustomer(Customer customer, {bool updateBalance = false}) async {
     await database;
-    final result = await _customerDao.updateCustomer(customer);
+    final result = await _customerDao.updateCustomer(customer, updateBalance: updateBalance);
     
     // 🚀 إبطال Cache بعد الكتابة
     invalidateCustomersCache();
@@ -516,15 +553,12 @@ class DatabaseService {
     // 🚀 إبطال Cache بعد الحذف
     invalidateCustomersCache();
     
-    // 📡 مزامنة أمر الحذف المنطقي مع Firebase لإبلاغ باقي الأجهزة
+    // 📡 مزامنة الحذف: شاهد حذف للعميل + شاهد حذف لكل معاملة كانت معروفة هنا.
+    //    (DAO علّم العميل tombstoned=2 والمعاملات is_uploaded=0، فإن فشل الرفع
+    //    الآن التقطته دورات المزامنة لاحقاً — لا يضيع الحذف ولا يرتد.)
     if (syncUuid != null && syncUuid.isNotEmpty) {
       try {
-        final updatedRows = await db.query('customers', where: 'id = ?', whereArgs: [id], limit: 1);
-        if (updatedRows.isNotEmpty) {
-          FirebaseSyncService().uploadCustomer(updatedRows.first);
-        } else {
-          FirebaseSyncService().deleteCustomerFromFirebase(syncUuid);
-        }
+        unawaited(FirebaseSyncService().syncCustomerDeletionNow(id));
       } catch (e) {
         print('⚠️ تعذّر إرسال أمر حذف العميل لـ Firebase: $e');
       }
@@ -590,6 +624,26 @@ class DatabaseService {
   }
   
   Future<List<GroupedTransactionItem>> getGroupedCustomerTransactions(int customerId) async {
+    // 🛡️ شبكة أمان: قبل العرض، وفّق أي فاتورة انحرفت مساهمتها عن
+    // (الإجمالي − المسدد). هذا يُصلح التلف القديم من نفسه عند فتح سجل الديون.
+    //
+    // createMissing: false مقصودة — لا نخترع ديناً لفاتورة ليس لها أي أثر
+    // محاسبي إطلاقاً، فقد تكون سُدّدت نقداً خارج البرنامج. تلك تُعرض في تقرير
+    // منفصل ليقررها المستخدم بنفسه.
+    try {
+      final safetyDb = await database;
+      await safetyDb.transaction((txn) async {
+        await InvoiceDebtReconciler.reconcileCustomerLedger(
+          txn,
+          customerId,
+          createMissing: false,
+          reason: 'عرض سجل الديون',
+        );
+      });
+    } catch (e) {
+      print('⚠️ تعذّرت تسوية دفتر العميل $customerId قبل العرض: $e');
+    }
+
     // 1. جلب جميع معاملات العميل
     final transactions = await _transactionDao.getCustomerTransactions(customerId);
     
@@ -793,6 +847,15 @@ class DatabaseService {
   Future<int> insertProduct(Product product) async {
     await database;
     final result = await _productDao.insertProduct(product);
+
+    // 📦 الكمية الأولى = رصيد افتتاحي في دفتر المخزون (يصل لكل الأجهزة)
+    try {
+      final db = await database;
+      final u = await StockLedger.productSyncUuidForId(db, result);
+      if (u != null) await StockLedger.ensureOpenings(db, onlyUuid: u);
+    } catch (e) {
+      print('⚠️ رصيد افتتاحي للمنتج الجديد: $e');
+    }
     
     // 🚀 إبطال Cache بعد الكتابة
     invalidateProductsCache();
@@ -1067,18 +1130,17 @@ class DatabaseService {
       final currentStock = (productResult.first['stock_quantity'] as num?)?.toDouble() ?? 0.0;
       final newStock = currentStock + quantityChange;
 
-      // 2. التحقق من أن المخزون لن يصبح سالباً
-      if (newStock < 0) {
-        throw Exception('لا يمكن أن يصبح المخزون سالباً');
-      }
-
-      // 3. تحديث المخزون
-      await txn.update(
-        'products',
-        {'stock_quantity': newStock, 'last_modified_at': DateTime.now().toIso8601String()},
-        where: 'id = ?',
-        whereArgs: [productId],
-      );
+      // 2-3. 📦 حركة في دفتر المخزون تصل لكل الأجهزة (كان تحديثاً مباشراً للكمية
+      //      يبقى على هذا الجهاز وحده). السالب مسموح: المخزن مشترك، والبيع
+      //      المتزامن على جهازين قد يتجاوز الرصيد — الحدّ عند الصفر كان يجعل
+      //      النتيجة تتوقف على ترتيب الوصول فتختلف الأجهزة.
+      final productUuid = await StockLedger.productSyncUuidForId(txn, productId);
+      if (productUuid == null) throw Exception('المنتج غير موجود');
+      await StockLedger.addMovement(txn,
+          productSyncUuid: productUuid,
+          delta: quantityChange,
+          kind: 'adjust',
+          note: note ?? (quantityChange >= 0 ? 'إضافة مخزون يدوية' : 'طرح مخزون يدوي'));
 
       // 4. تسجيل التعديل في سجل التدقيق
       await txn.insert('financial_audit_log', {
@@ -1114,8 +1176,9 @@ class DatabaseService {
         print('⚠️ تعذّر تسجيل تعديل المخزون في product_edit_history: $e');
       }
     });
+    invalidateProductsCache();
   }
-  
+
   /// جلب تقرير معاملات العميل (للاستخدام في كشوفات الحسابات PDF)
   Future<List<Map<String, dynamic>>> getCustomerTransactionsReport(int customerId) async {
     // 1. جلب رصيد البداية (قبل أول معاملة مسجلة إذا كان هناك فلترة زمنية، أو 0)
@@ -1455,10 +1518,23 @@ class DatabaseService {
   Future<Customer> updateManualTransaction(DebtTransaction updated, {bool fromSync = false}) async {
     await database;
     await _transactionDao.updateManualTransaction(updated, fromSync: fromSync);
+    // 🚀 تعديل محلي = رفع فوري. شاشة العميل تستدعي هذه الدالة مباشرة (لا عبر
+    // AppProvider)، فكان التعديل ينتظر إعادة تشغيل أو تبدّل الشبكة، ولعملاء
+    // الأجهزة الأخرى لا يُرفع أبداً (المحاكاة: سيناريوهات 04، 05، 33).
+    if (!fromSync) {
+      _triggerCustomerSync(updated.customerId);
+    }
     // للتوافق مع الواجهة القديمة التي تعيد Customer
     final cust = await _customerDao.getCustomerById(updated.customerId);
     if (cust == null) throw Exception('Customer not found');
     return cust;
+  }
+
+  /// رفع فوري لمعاملات هذا الجهاز المعلّقة على عميل (بلا انتظار — الفشل تلتقطه الدورات).
+  void _triggerCustomerSync(int customerId) {
+    try {
+      unawaited(FirebaseSyncService().syncCustomerNow(customerId).catchError((_) {}));
+    } catch (_) {}
   }
 
   Future<Customer> updateTransaction(DebtTransaction updated, {bool fromSync = false}) async {
@@ -1472,7 +1548,8 @@ class DatabaseService {
     if (tx == null) throw Exception('Transaction not found');
     
     await _transactionDao.convertTransactionType(transactionId);
-    
+    _triggerCustomerSync(tx.customerId);
+
     final cust = await _customerDao.getCustomerById(tx.customerId);
     if (cust == null) throw Exception('Customer not found');
     return cust;
@@ -1649,32 +1726,62 @@ class DatabaseService {
     return _invoiceDao.updateInvoice(invoice);
   }
 
+  /// حذف فاتورة — 🛡️ حذف منطقي يتزامن.
+  ///
+  /// النسخة السابقة كانت تحذف صف الفاتورة نهائياً وتترك معاملة دينها نشطة
+  /// (ON DELETE SET NULL تمسح الربط فقط)، فيبقى الدين على الجهاز نفسه وعلى
+  /// كل الأجهزة، ولا يُرفع شيء لأن الفاتورة لم تعد موجودة لتُرفع
+  /// (المحاكاة: سيناريو 20). الآن: الفاتورة تُعلَّم محذوفة، والحارس المحاسبي
+  /// يصفّر مساهمتها، ونسخة جديدة منها تُرفع كحزمة فتصل كل الأجهزة.
   Future<int> deleteInvoice(int id) async {
-    await database;
     final db = await database;
-    
-    return await db.transaction((txn) async {
-      // 1. جلب الأصناف لإرجاعها للمخزن
-      final itemsMaps = await txn.query('invoice_items', where: 'invoice_id = ?', whereArgs: [id]);
-      final items = itemsMaps.map((m) => InvoiceItem.fromMap(m)).toList();
-      
-      // إرجاع الكميات للمخزن
-      await InventoryHelpers.adjustStockForItems(txn, items, isAddition: true);
 
-      // 2. جلب معاملة الدين
-      final debtTx = await _transactionDao.getInvoiceDebtTransaction(id);
-      
-      // 3. حذف الفاتورة
-      final res = await _invoiceDao.deleteInvoice(id);
-      
-      // 4. إعادة حساب رصيد العميل إذا كان هناك دين
-      if (debtTx != null) {
-        await _transactionDao.recalculateCustomerTransactionBalances(debtTx.customerId);
-        await _transactionDao.recalculateAndApplyCustomerDebt(debtTx.customerId);
-      }
-      
-      return res;
+    final check = await db.query('invoices',
+        columns: ['is_created_by_me', 'invoice_uuid', 'customer_id', 'version'],
+        where: 'id = ?', whereArgs: [id], limit: 1);
+    if (check.isEmpty) return 0;
+    if (check.first['is_created_by_me'] == 0) {
+      throw Exception('لا يمكن حذف هذه الفاتورة لأنها مستوردة من جهاز آخر.');
+    }
+
+    final res = await db.transaction((txn) async {
+      // 1. الكميات تعود للمخزن تلقائياً: الفاتورة المحذوفة لا تُحسب مبيعاً
+      //    (دفتر المخزون — مشغّل حالة الفاتورة). الإرجاع اليدوي هنا كان يُضاف
+      //    فوق مشغّل الإرجاع القديم، ولا يصل للأجهزة الأخرى أصلاً.
+
+      // 2. حذف منطقي + نسخة جديدة + طابور الرفع
+      final version = (check.first['version'] as int?) ?? 1;
+      final updated = await txn.update(
+        'invoices',
+        {
+          'is_deleted': 1,
+          'version': version + 1,
+          'is_synced': 0,
+          'restored_mark': 0,
+          'last_modified_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+
+      // 3. الحارس المحاسبي: مساهمة فاتورة محذوفة = صفر (يُحدّث صف التسوية ويعيد بناء الرصيد)
+      await InvoiceDebtReconciler.reconcileInvoice(
+        txn,
+        id,
+        createMissing: false,
+        reason: 'حذف الفاتورة',
+      );
+      return updated;
     });
+
+    // 4. رفع فوري لحزمة الفاتورة (والفشل يلتقطه مؤقت الفواتير)
+    final uuid = check.first['invoice_uuid'] as String?;
+    if (uuid != null && uuid.isNotEmpty) {
+      try {
+        unawaited(InvoiceSyncService().syncInvoiceBundleNow(uuid).catchError((_) => false));
+      } catch (_) {}
+    }
+    return res;
   }
 
   
@@ -2187,6 +2294,7 @@ class DatabaseService {
         throw Exception('ملف قاعدة البيانات المستورد تالف أو غير صالح');
       }
 
+      await markDatabaseRestored(newDb);
       print('✅ تمت استعادة قاعدة البيانات بنجاح من الملف المستورد');
       return true;
     } catch (e) {
@@ -2204,6 +2312,44 @@ class DatabaseService {
     }
   }
   
+  /// 🛡️ تُستدعى بعد أي استعادة نسخة احتياطية (ملف/Dropbox).
+  ///
+  /// النسخة القديمة تفتقد ما وصل بعد أخذها — وقد يكون نُظّف من السحابة —
+  /// وقد تحمل تعديلات «بانتظار الرفع» سبق أن رُفعت نسخ أحدث منها. لذلك:
+  ///   • كل صف يُوسم restored_mark = 1 (أي تعديل بعده يمحو الوسم).
+  ///   • علَم خارج قاعدة البيانات يضع المزامنة في «وضع الاستعادة»: لا رفع
+  ///     حتى تُطلب البيانات من الأجهزة الأخرى وتُقارن نسخنا بالسحابة.
+  /// (المحاكاة: سيناريو 26 + الفوضى القاسية)
+  static const String restoredFlagKey = 'sync_db_restored_pending';
+  static const String restoredRowsMarkedKey = 'sync_db_restored_rows_marked';
+
+  /// يُضبط العلَم فقط (عندما يُستبدل ملف القاعدة وهي مغلقة، كاستعادة Dropbox)؛
+  /// وتُوسم الصفوف عند أول تهيئة للمزامنة بعدها.
+  static Future<void> flagDatabaseRestored() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(restoredFlagKey, true);
+      await prefs.setBool(restoredRowsMarkedKey, false);
+    } catch (e) {
+      print('⚠️ تعذّر ضبط علَم الاستعادة: $e');
+    }
+  }
+
+  Future<void> markDatabaseRestored([Database? db]) async {
+    await flagDatabaseRestored();
+    try {
+      final d = db ?? await database;
+      await d.rawUpdate('UPDATE transactions SET restored_mark = 1');
+      // 🛡️ فواتيري أيضاً: نسختها السحابية الأحدث تحلّ محلها — ما لم يعدّلها
+      // المستخدم بعد الاستعادة (المحاكاة: tools/sync_sim فوضى قاسية seed=20001)
+      await d.rawUpdate('UPDATE invoices SET restored_mark = 1 WHERE is_created_by_me = 1 OR is_created_by_me IS NULL');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(restoredRowsMarkedKey, true);
+    } catch (e) {
+      print('⚠️ تعذّر وسم صفوف النسخة المستعادة: $e');
+    }
+  }
+
   String normalizeArabic(String input) {
     return DatabaseHelpers.normalizeArabic(input);
   }
@@ -2223,13 +2369,17 @@ class DatabaseService {
     await db.delete('invoice_items', where: 'id = ?', whereArgs: [itemId]);
   }
   
+  /// ⚠️ لم تعد لها وظيفة. مساهمة الفاتورة في الدين صارت من مسؤولية
+  /// [InvoiceDebtReconciler] وحده، ويُستدعى عند الحفظ وعند التسوية وعند
+  /// عرض سجل الديون. تُركت هنا للتوافق مع النداءات القديمة فقط.
+  @Deprecated('استخدم InvoiceDebtReconciler.reconcileInvoice')
   Future<void> setInvoiceDebtContribution({
     required int invoiceId, 
     required int customerId, 
     required double newContribution, 
     String? note,
   }) async {
-    // Stub
+    // لا شيء عمداً — الحارس المحاسبي يتولى الأمر عند الحفظ.
   }
   
 
@@ -2292,6 +2442,8 @@ class DatabaseService {
 
     // أي تغيير محلي يعيد الفاتورة لطابور الرفع
     map['is_synced'] = 0;
+    // وتعديل المستخدم بعد استعادة نسخة احتياطية يتقدّم على نسخة السحابة
+    map['restored_mark'] = 0;
   }
 
   /// 🔥 التحقق أن الفاتورة قابلة للتعديل على هذا الجهاز (أنه ملك لنا).
@@ -2347,8 +2499,11 @@ class DatabaseService {
     await _resolveDuplicateIds(db, 'transactions', 'sync_uuid');
     await _resolveDuplicateIds(db, 'invoices', 'invoice_uuid');
 
-    await _tryExec(db, 'CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_sync_uuid ON transactions(sync_uuid) WHERE sync_uuid IS NOT NULL AND sync_uuid != ""');
-    await _tryExec(db, 'CREATE UNIQUE INDEX IF NOT EXISTS ux_invoices_invoice_uuid ON invoices(invoice_uuid) WHERE invoice_uuid IS NOT NULL AND invoice_uuid != ""');
+    // 🔧 اقتباس مفرد '' في SQL (المزدوج "" غير مقبول في SQLite-WASM الصارم)
+    await _tryExec(db,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_sync_uuid ON transactions(sync_uuid) WHERE sync_uuid IS NOT NULL AND sync_uuid != ''");
+    await _tryExec(db,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_invoices_invoice_uuid ON invoices(invoice_uuid) WHERE invoice_uuid IS NOT NULL AND invoice_uuid != ''");
     
     await _tryExec(db, '''
       CREATE TRIGGER IF NOT EXISTS trg_transactions_fill_uuid
@@ -2380,7 +2535,7 @@ class DatabaseService {
       'SELECT t.id, t.sync_uuid, t.transaction_uuid, c.name as customer_name, t.amount_changed, t.transaction_date '
       'FROM transactions t '
       'JOIN customers c ON c.id = t.customer_id '
-      'WHERE t.sync_uuid IS NULL OR t.sync_uuid = "" OR t.transaction_uuid IS NULL OR t.transaction_uuid = ""'
+      "WHERE t.sync_uuid IS NULL OR t.sync_uuid = '' OR t.transaction_uuid IS NULL OR t.transaction_uuid = ''"
     );
     
     if (rows.isEmpty) return;

@@ -12,8 +12,7 @@ import '../models/supplier_invoice_item.dart';
 import '../models/supplier_delegate.dart';
 
 import 'database_service.dart';
-import 'financial_audit_service.dart';
-import '../utils/money_calculator.dart';
+import 'database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 import '../services/database/dao/supplier_dao.dart';
 import '../services/database/dao/supplier_delegate_dao.dart';
 
@@ -56,118 +55,18 @@ class SuppliersService {
     if (_tablesEnsured) return;  // إذا تم التشغيل، لا تعيد
     
     final db = await _db;
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS suppliers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_name TEXT NOT NULL,
-        tax_number TEXT,
-        phone_number TEXT,
-        email_address TEXT,
-        address TEXT,
-        opening_balance REAL NOT NULL DEFAULT 0.0,
-        current_balance REAL NOT NULL DEFAULT 0.0,
-        total_purchases REAL NOT NULL DEFAULT 0.0,
-        created_at TEXT NOT NULL,
-        last_modified_at TEXT NOT NULL,
-        notes TEXT
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS supplier_invoices (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        supplier_id INTEGER NOT NULL,
-        invoice_number TEXT,
-        invoice_date TEXT NOT NULL,
-        total_amount REAL NOT NULL,
-        discount REAL NOT NULL DEFAULT 0.0,
-        amount_paid REAL NOT NULL DEFAULT 0.0,
-        currency TEXT NOT NULL DEFAULT 'IQD',
-        status TEXT NOT NULL DEFAULT 'آجل',
-        payment_type TEXT NOT NULL DEFAULT 'دين',
-        created_at TEXT NOT NULL,
-        last_modified_at TEXT NOT NULL,
-        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
-      )
-    ''');
 
-    // Ensure migration for older databases: add missing columns
-    try {
-      final cols = await db.rawQuery('PRAGMA table_info(supplier_invoices);');
-      final hasPaymentType = cols.any((c) => (c['name'] == 'payment_type'));
-      if (!hasPaymentType) {
-        await db.execute(
-            "ALTER TABLE supplier_invoices ADD COLUMN payment_type TEXT NOT NULL DEFAULT 'دين';");
-      }
-      final hasAmountPaid = cols.any((c) => (c['name'] == 'amount_paid'));
-      if (!hasAmountPaid) {
-        await db.execute(
-            'ALTER TABLE supplier_invoices ADD COLUMN amount_paid REAL NOT NULL DEFAULT 0.0;');
-      }
-    } catch (_) {}
-    // Migration for suppliers.total_purchases
-    try {
-      final colsSup = await db.rawQuery('PRAGMA table_info(suppliers);');
-      final hasTotalPurchases = colsSup.any((c) => (c['name'] == 'total_purchases'));
-      if (!hasTotalPurchases) {
-        await db.execute('ALTER TABLE suppliers ADD COLUMN total_purchases REAL NOT NULL DEFAULT 0.0;');
-      }
-    } catch (_) {}
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS supplier_receipts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        supplier_id INTEGER NOT NULL,
-        receipt_number TEXT,
-        receipt_date TEXT NOT NULL,
-        amount REAL NOT NULL,
-        payment_method TEXT NOT NULL,
-        notes TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS supplier_payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        supplier_id INTEGER NOT NULL,
-        delegate_id INTEGER,
-        receipt_number TEXT,
-        receipt_date TEXT NOT NULL,
-        amount REAL NOT NULL,
-        payment_method TEXT NOT NULL,
-        notes TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE,
-        FOREIGN KEY (delegate_id) REFERENCES supplier_delegates(id) ON DELETE SET NULL
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS supplier_delegates (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        supplier_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        phone TEXT,
-        email TEXT,
-        position TEXT,
-        notes TEXT,
-        is_active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
-      )
-    ''');
-
-    // Add notes column if it doesn't exist (for existing databases)
-    try {
-      await db.execute("ALTER TABLE supplier_delegates ADD COLUMN notes TEXT;");
-    } catch (e) {}
-
-    // Migration for supplier_payments delegate_id
-    try {
-      final cols = await db.rawQuery('PRAGMA table_info(supplier_payments);');
-      if (!cols.any((c) => c['name'] == 'delegate_id')) {
-        await db.execute('ALTER TABLE supplier_payments ADD COLUMN delegate_id INTEGER REFERENCES supplier_delegates(id) ON DELETE SET NULL;');
-      }
-    } catch (_) {}
+    // ⚠️ حُذفت من هنا تعريفات: suppliers / supplier_invoices / supplier_receipts
+    //    / supplier_payments / supplier_invoice_items / supplier_delegates.
+    //
+    // كانت تُعرّف الجداول نفسها التي يُعرّفها DatabaseMigrations بأعمدة مختلفة
+    // تماماً (company_name مقابل name، current_balance مقابل total_debt_iqd،
+    // supplier_invoices مقابل purchase_invoices...). وبما أن الطرفين يستخدمان
+    // CREATE TABLE IF NOT EXISTS فمن ينشئ الجدول أولاً يفرض تعريفه والآخر يجد
+    // جدولاً ينقصه كل ما يحتاجه — والخطأ يُبتلع بصمت. لهذا لم تكن وحدة
+    // الموردين تعمل إطلاقاً.
+    //
+    // المرجع الوحيد الآن هو DatabaseMigrations._ensureSupplierSchema.
 
     await db.execute('''
       CREATE TABLE IF NOT EXISTS attachments (
@@ -213,7 +112,9 @@ class SuppliersService {
     
     await ensureTables();  // سريع الآن (يتخطى إذا تم)
     final db = await _db;
-    final rows = await db.query('suppliers', orderBy: 'company_name COLLATE NOCASE');
+    // 🛡️ العمود اسمه name في مخطط نظام المشتريات (company_name كان مخطط
+    //    SuppliersService القديم، وقد لا يوجد إطلاقاً)
+    final rows = await db.query('suppliers', orderBy: 'name COLLATE NOCASE');
     final suppliers = rows.map((e) => Supplier.fromMap(e)).toList();
     
     // 🚀 تحديث Cache
@@ -238,93 +139,25 @@ class SuppliersService {
     return result;
   }
 
+  static const String _movedMsg =
+      'فواتير وسندات الموردين انتقلت إلى نظام المشتريات (PurchaseService). '
+      'استخدم CreatePurchaseInvoiceScreen و registerPayment.';
+
+  /// ⚠️ لم تعد مدعومة — انظر [_movedMsg].
+  ///
+  /// كانت تُدرج في جدول `supplier_invoices` بمفاتيح نموذج `purchase_invoices`
+  /// (`date` و`paid_amount` مقابل `invoice_date` و`amount_paid`)، فترمي
+  /// «no such column: date» عند أول محاولة حفظ. ثم تُعدّل `current_balance`
+  /// مباشرةً بلا دفتر حركات ولا مسار تعديل أو عكس.
+  @Deprecated('استخدم PurchaseService.savePurchaseInvoice')
   Future<int> insertSupplierInvoice(SupplierInvoice invoice) async {
-    await ensureTables();
-    final db = await _db;
-    
-    int invoiceId = await db.transaction((txn) async {
-      final id = await txn.insert('supplier_invoices', invoice.toMap());
-      final double remaining = MoneyCalculator.subtract(invoice.totalAmount, invoice.paidAmount);
-      
-      // Update supplier balance and total purchases
-      final supplierRows = await txn.query('suppliers', where: 'id = ?', whereArgs: [invoice.supplierId]);
-      if (supplierRows.isNotEmpty) {
-         final s = Supplier.fromMap(supplierRows.first);
-         final newTotalPurchases = s.totalPurchases + invoice.totalAmount;
-         // If remaining > 0, debt increases (currentBalance increases)
-         final double balanceChange = remaining > 0 ? remaining : 0.0;
-         final newBalance = s.currentBalance + balanceChange;
-         
-         await txn.update('suppliers', {
-           'total_purchases': newTotalPurchases,
-           'current_balance': newBalance,
-           'last_modified_at': DateTime.now().toIso8601String(),
-         }, where: 'id = ?', whereArgs: [invoice.supplierId]);
-      }
-      return id;
-    });
-    
-    // Audit log
-    try {
-      final auditService = FinancialAuditService();
-      await auditService.logOperation(
-        operationType: 'supplier_invoice_create',
-        entityType: 'supplier',
-        entityId: invoice.supplierId,
-        newValues: {
-          'invoice_id': invoiceId,
-          'total_amount': invoice.totalAmount,
-          'amount_paid': invoice.paidAmount,
-          'status': invoice.status,
-        },
-        notes: 'فاتورة مورد جديدة بقيمة ${invoice.totalAmount}',
-      );
-    } catch (e) {
-      print('خطأ في تسجيل التدقيق: $e');
-    }
-    
-    return invoiceId;
+    throw UnsupportedError(_movedMsg);
   }
 
+  /// ⚠️ لم تعد مدعومة — انظر [_movedMsg].
+  @Deprecated('استخدم PurchaseService.registerPayment')
   Future<int> insertSupplierReceipt(SupplierReceipt receipt) async {
-    await ensureTables();
-    final db = await _db;
-    
-    int receiptId = await db.transaction((txn) async {
-      final id = await txn.insert('supplier_payments', receipt.toMap());
-      
-      // Update supplier balance (payment reduces debt)
-      final supplierRows = await txn.query('suppliers', where: 'id = ?', whereArgs: [receipt.supplierId]);
-      if (supplierRows.isNotEmpty) {
-        final s = Supplier.fromMap(supplierRows.first);
-        final newBalance = s.currentBalance - receipt.amount;
-        
-        await txn.update('suppliers', {
-          'current_balance': newBalance,
-          'last_modified_at': DateTime.now().toIso8601String(),
-        }, where: 'id = ?', whereArgs: [receipt.supplierId]);
-      }
-      return id;
-    });
-    
-    // Audit log
-    try {
-      final auditService = FinancialAuditService();
-      await auditService.logOperation(
-        operationType: 'supplier_payment_create',
-        entityType: 'supplier',
-        entityId: receipt.supplierId,
-        newValues: {
-          'receipt_id': receiptId,
-          'amount': receipt.amount,
-        },
-        notes: 'سند دفع مورد بقيمة ${receipt.amount}',
-      );
-    } catch (e) {
-      print('خطأ في تسجيل التدقيق: $e');
-    }
-    
-    return receiptId;
+    throw UnsupportedError(_movedMsg);
   }
 
   Future<int> insertAttachment(Attachment attachment) async {
@@ -368,11 +201,14 @@ class SuppliersService {
     await _delegateDao.delete(id);
   }
 
+  /// فواتير المورد — من نظام المشتريات.
+  ///
+  /// كانت تقرأ من `supplier_invoices` وترتّب بـ `date`، والعمود اسمه
+  /// `invoice_date` ⇒ استثناء عند مجرد فتح القائمة.
   Future<List<SupplierInvoice>> getSupplierInvoices(int supplierId) async {
-    await ensureTables();
     final db = await _db;
     final rows = await db.query(
-      'supplier_invoices',
+      'purchase_invoices',
       where: 'supplier_id = ?',
       whereArgs: [supplierId],
       orderBy: 'date DESC',
@@ -380,12 +216,9 @@ class SuppliersService {
     return rows.map((e) => SupplierInvoice.fromMap(e)).toList();
   }
 
+  /// سندات دفع المورد — من نظام المشتريات.
   Future<List<SupplierReceipt>> getSupplierReceipts(int supplierId) async {
-    await ensureTables();
     final db = await _db;
-    // Note: table name is supplier_payments for Invoice/Receipt unification usually, 
-    // but code uses supplier_payments mixed with supplier_receipts in sql queries above.
-    // I created both tables in ensureTables to be safe, but let's stick to 'supplier_payments' as per insertSupplierReceipt.
     final rows = await db.query(
       'supplier_payments',
       where: 'supplier_id = ?',
@@ -526,10 +359,15 @@ class SuppliersService {
         
         // 2. Update Stock
         if (totalStockIncrease > 0) {
-           await db.rawUpdate(
-             'UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?',
-             [totalStockIncrease, productId],
-           );
+           // 📦 حركة شراء في دفتر المخزون المشترك (تصل لكل الأجهزة)
+           final productUuid = await StockLedger.productSyncUuidForId(db, productId);
+           if (productUuid != null) {
+             await StockLedger.addMovement(db,
+                 productSyncUuid: productUuid,
+                 delta: totalStockIncrease,
+                 kind: 'purchase',
+                 note: 'فاتورة مورد');
+           }
            print('  📈 $productName: Stock increased by $totalStockIncrease items');
         }
 
