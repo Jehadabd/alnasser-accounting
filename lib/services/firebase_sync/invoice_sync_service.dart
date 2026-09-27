@@ -171,7 +171,12 @@ class InvoiceSyncService {
 
         // 🔒 رفع ذري: الفاتورة + معاملاتها + items في وثيقة واحدة — ولا فوق
         // نسخة أحدث في السحابة (انظر _uploadBundleIfNotOlder)
-        await _uploadBundleIfNotOlder(collection.doc(uuid), payload);
+        if (!await _uploadBundleIfNotOlder(collection.doc(uuid), payload)) {
+          // السحابة أحدث: لم نكتب فوقها، ونؤشّر كمرفوعة عمداً — النسخة
+          // الأحدث تصل عبر المستمع وتحلّ محل المحلية (إبقاؤها معلّقة يعيد
+          // محاولة لا تُكتب أبداً في كل دورة)
+          print('ℹ️ الفاتورة $uuid: في السحابة نسخة أحدث — لم تُكتب فوقها');
+        }
 
         // 🛡️ مقارنة قبل التأشير: تغيّرت الفاتورة أثناء الرفع = تبقى معلّقة
         final marked = await _coordinator.markAsSynced(uuid,
@@ -213,7 +218,10 @@ class InvoiceSyncService {
       final payload = await _buildInvoiceBundlePayload(fullInvoice, collection);
       if (payload == null) return false;
 
-      await _uploadBundleIfNotOlder(collection.doc(invoiceUuid), payload);
+      if (!await _uploadBundleIfNotOlder(collection.doc(invoiceUuid), payload)) {
+        // السحابة أحدث (انظر syncPendingInvoices): تصل عبر المستمع
+        print('ℹ️ الفاتورة $invoiceUuid: في السحابة نسخة أحدث — لم تُكتب فوقها');
+      }
       final marked = await _coordinator.markAsSynced(invoiceUuid,
           uploadedVersion: (fullInvoice['version'] as num?)?.toInt() ?? 1);
       if (!marked) return false; // تغيّرت أثناء الرفع: الدورة التالية ترفعها

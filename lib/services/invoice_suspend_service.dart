@@ -68,6 +68,8 @@ class InvoiceSuspendService {
     int invoiceId;
     if (invoiceToManage != null) {
       invoiceId = invoiceToManage.id!;
+      // 🛡️ فحص updateInvoice نفسه قبل تغيير الأصناف: لا حفظ ناقص إن رُفض
+      await db.assertInvoiceEditable(invoiceId);
       final oldItems = await db.getInvoiceItems(invoiceId);
       for (var oldItem in oldItems) {
         await db.deleteInvoiceItem(oldItem.id!);
@@ -150,6 +152,8 @@ class InvoiceSuspendService {
     int invoiceId;
     if (invoiceToManage != null) {
       invoiceId = invoiceToManage.id!;
+      // 🛡️ فحص updateInvoice نفسه قبل تغيير الأصناف: لا حفظ ناقص إن رُفض
+      await db.assertInvoiceEditable(invoiceId);
       final oldItems = await db.getInvoiceItems(invoiceId);
       for (var oldItem in oldItems) {
         await db.deleteInvoiceItem(oldItem.id!);
@@ -229,6 +233,8 @@ class InvoiceSuspendService {
       isLocked: false,
     );
     int invoiceId = invoiceToManage.id!;
+    // 🛡️ فحص updateInvoice نفسه قبل تغيير الأصناف: لا حفظ ناقص إن رُفض
+    await db.assertInvoiceEditable(invoiceId);
     final oldItems = await db.getInvoiceItems(invoiceId);
     for (var oldItem in oldItems) {
       await db.deleteInvoiceItem(oldItem.id!);

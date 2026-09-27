@@ -92,6 +92,16 @@ class StockLedger {
         'ON stock_movements(product_sync_uuid)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_stock_movements_pending '
         'ON stock_movements(is_uploaded) WHERE is_uploaded = 0');
+    // معرّفات منتج دُمج في غيره (الاسم نفسه أُنشئ على جهازين): old ← new.
+    // pending_doc: نسخة محلية دُمجت قبل أن يُرفع مستندها — يُرفع رغم ذلك
+    // (ProductSyncService.uploadPendingCopies) لتعرف الأجهزة الأخرى معرّفها.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS product_uuid_alias (
+        old_uuid TEXT PRIMARY KEY,
+        new_uuid TEXT NOT NULL,
+        pending_doc TEXT
+      )
+    ''');
   }
 
   /// مشغّلات إعادة حساب الكمية. تحلّ محل مشغّلَي الخصم/الإرجاع القديمين،
@@ -112,6 +122,8 @@ class StockLedger {
       'trg_stock_mv_upd',
       'trg_stock_product_ins',
       'trg_stock_product_uuid',
+      'trg_stock_item_alias',
+      'trg_stock_mv_alias',
     ]) {
       await db.execute('DROP TRIGGER IF EXISTS $t;');
     }
@@ -145,8 +157,11 @@ class StockLedger {
         ${_recomputeWhere('sync_uuid = OLD.product_sync_uuid')}
       END;
     ''');
+    // الأعمدة التي تدخل في الحساب فقط (تعديل السعر أو ترحيل أعمدة الـ cents لا يعيده)
     await db.execute('''
-      CREATE TRIGGER trg_stock_item_upd AFTER UPDATE ON invoice_items
+      CREATE TRIGGER trg_stock_item_upd
+      AFTER UPDATE OF product_sync_uuid, invoice_id, quantity_large_unit,
+                      units_in_large_unit, quantity_individual ON invoice_items
       BEGIN
         ${_recomputeWhere('sync_uuid IN (OLD.product_sync_uuid, NEW.product_sync_uuid)')}
       END;
@@ -198,6 +213,29 @@ class StockLedger {
       WHEN NEW.sync_uuid IS NOT NULL AND NEW.sync_uuid != ''
       BEGIN
         ${_recomputeWhere('id = NEW.id')}
+      END;
+    ''');
+    // بند أو حركة وصلا بمعرّف منتج دُمج في غيره (rekeyProduct): يتبعان المعرّف
+    // الحيّ، مهما كان مسار الوصول (حزمة فاتورة، حركة، نسخة احتياطية...).
+    // الرصيد الافتتاحي لا يُحوَّل: لا يُحسب إلا رصيد المعرّف الحي نفسه.
+    await db.execute('''
+      CREATE TRIGGER trg_stock_item_alias AFTER INSERT ON invoice_items
+      WHEN NEW.product_sync_uuid IS NOT NULL AND NEW.product_sync_uuid != ''
+        AND EXISTS (SELECT 1 FROM product_uuid_alias WHERE old_uuid = NEW.product_sync_uuid)
+      BEGIN
+        UPDATE invoice_items SET product_sync_uuid =
+            (SELECT new_uuid FROM product_uuid_alias WHERE old_uuid = NEW.product_sync_uuid)
+        WHERE id = NEW.id;
+      END;
+    ''');
+    await db.execute('''
+      CREATE TRIGGER trg_stock_mv_alias AFTER INSERT ON stock_movements
+      WHEN NEW.kind != '$openingKind'
+        AND EXISTS (SELECT 1 FROM product_uuid_alias WHERE old_uuid = NEW.product_sync_uuid)
+      BEGIN
+        UPDATE stock_movements SET product_sync_uuid =
+            (SELECT new_uuid FROM product_uuid_alias WHERE old_uuid = NEW.product_sync_uuid)
+        WHERE id = NEW.id;
       END;
     ''');
   }
@@ -324,16 +362,34 @@ class StockLedger {
     }
   }
 
-  /// إعادة ربط مراجع منتج غيّر معرّفه (مطابقة كتالوج بالاسم): البنود والحركات
-  /// تتبعه. الرصيد الافتتاحي القديم يبقى مهملاً (لا يُحسب إلا opening_<الجديد>).
+  /// دمج معرّف منتج في معرّف حيّ (نسختان من المنتج نفسه — مطابقة كتالوج
+  /// بالاسم): البنود والحركات تتبع [newUuid]، الآن وكل ما يصل لاحقاً بالمعرّف
+  /// القديم (مشغّلا alias). الرصيد الافتتاحي القديم يبقى مهملاً (لا يُحسب إلا
+  /// opening_<الحي>). آمنة التكرار، وتقبل الدمج في أي اتجاه لاحقاً.
+  ///
+  /// بدون سجلّ التحويل كانت الحركات وبنود الفواتير التي تصل بعد الدمج بالمعرّف
+  /// القديم لا تُحسب لأي منتج، فتختلف الكمية بين الأجهزة.
   static Future<void> rekeyProduct(DatabaseExecutor db, String oldUuid, String newUuid) async {
     if (oldUuid.isEmpty || newUuid.isEmpty || oldUuid == newUuid) return;
+    // الحي لا يُحوَّل لغيره، ومن كان يُحوَّل للقديم يُحوَّل للحي مباشرة:
+    // خطوة واحدة دائماً، بلا سلاسل ولا حلقات
+    await db.delete('product_uuid_alias', where: 'old_uuid = ?', whereArgs: [newUuid]);
+    await db.update('product_uuid_alias', {'new_uuid': newUuid},
+        where: 'new_uuid = ?', whereArgs: [oldUuid]);
+    // تحديث ثم إدراج (لا REPLACE): يحفظ pending_doc إن وُجد
+    final n = await db.update('product_uuid_alias', {'new_uuid': newUuid},
+        where: 'old_uuid = ?', whereArgs: [oldUuid]);
+    if (n == 0) {
+      await db.insert('product_uuid_alias', {'old_uuid': oldUuid, 'new_uuid': newUuid});
+    }
+    await db.delete('product_uuid_alias', where: 'old_uuid = new_uuid');
+    const aliased = 'SELECT old_uuid FROM product_uuid_alias WHERE new_uuid = ?';
     await db.rawUpdate(
-        'UPDATE invoice_items SET product_sync_uuid = ? WHERE product_sync_uuid = ?',
-        [newUuid, oldUuid]);
+        'UPDATE invoice_items SET product_sync_uuid = ? WHERE product_sync_uuid IN ($aliased)',
+        [newUuid, newUuid]);
     await db.rawUpdate(
         "UPDATE stock_movements SET product_sync_uuid = ? "
-        "WHERE product_sync_uuid = ? AND kind != '$openingKind'",
-        [newUuid, oldUuid]);
+        "WHERE product_sync_uuid IN ($aliased) AND kind != '$openingKind'",
+        [newUuid, newUuid]);
   }
 }

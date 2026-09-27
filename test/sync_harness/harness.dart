@@ -121,12 +121,20 @@ class Truth {
   final Map<String, TruthInvoice> invoices = {};
   final Map<String, TruthProduct> products = {};
 
-  double stock(String p) =>
-      products[p]!.opening +
-      products[p]!.movements -
-      invoices.values
-          .where((i) => i.status == 'محفوظة')
-          .fold(0.0, (s, i) => s + (i.items[p] ?? 0.0));
+  /// نسخ المنتج الواحد (الاسم نفسه أُنشئ على جهازين قبل تزامنهما): كل نسخة ←
+  /// الباقية منها. يضبطه Harness من مستندات السحابة بقاعدة التطبيق.
+  Map<String, String> survivorOf = {};
+  String survivor(String p) => survivorOf[p] ?? p;
+
+  /// كمية المنتج = الرصيد الافتتاحي للنسخة الباقية + حركات كل النسخ − مبيعها.
+  double stock(String p) {
+    final s = survivor(p);
+    final group = products.keys.where((u) => survivor(u) == s).toList();
+    return products[s]!.opening +
+        group.fold(0.0, (a, u) => a + products[u]!.movements) -
+        invoices.values.where((i) => i.status == 'محفوظة').fold(
+            0.0, (a, i) => a + group.fold(0.0, (b, u) => b + (i.items[u] ?? 0.0)));
+  }
 
   double balance(String cust) =>
       txs.values.where((t) => t.cust == cust && !t.deleted).fold(0.0, (s, t) => s + t.amount) +
@@ -162,7 +170,8 @@ class Harness {
   /// فواتير معلّقة، وانضمام أجهزة جديدة متأخراً.
   bool harsh = false;
   final Map<String, String> _backups = {};
-  int restores = 0, cleanups = 0, joins = 0, armored = 0;
+  int restores = 0, cleanups = 0, joins = 0, armored = 0, twinProducts = 0;
+  int duplicateNamesRefused = 0;
 
   Future<DeviceHandle> spawn(String name,
       {String? dir,
@@ -314,14 +323,30 @@ class Harness {
     return out;
   }
 
+  /// تعديلات رفضها التطبيق لأن السجل من نسخة احتياطية مستعادة والجهاز لم
+  /// يلحق بالبقية بعد (DatabaseService.isRestoredRecordLocked).
+  int lockedEdits = 0;
+
+  bool _locked(Object? r, String what) {
+    if (r is Map && r['locked'] == true) {
+      lockedEdits++;
+      progress('J locked $what');
+      return true;
+    }
+    return false;
+  }
+
   Future<void> editTx(String dev, String tx, double amount) async {
-    await d(dev).call('editTx', {'tx': tx, 'amount': amount});
+    final r = await d(dev).call('editTx', {'tx': tx, 'amount': amount});
+    if (_locked(r, 'editTx $dev tx=$tx')) return;
     truth.txs[tx]?.amount = amount;
     progress('J editTx $dev tx=$tx amount=$amount online=${d(dev).online}');
   }
 
   Future<void> convertTx(String dev, String tx) async {
-    final r = (await d(dev).call('convertTx', {'tx': tx}) as Map).cast<String, Object?>();
+    final raw = await d(dev).call('convertTx', {'tx': tx});
+    if (_locked(raw, 'convertTx $dev tx=$tx')) return;
+    final r = (raw as Map).cast<String, Object?>();
     final t = truth.txs[tx];
     if (t != null) {
       t.amount = (r['amount'] as double?) ?? -t.amount;
@@ -333,6 +358,7 @@ class Harness {
 
   Future<void> deleteCustomer(String dev, String cust) async {
     final r = (await d(dev).call('deleteCustomer', {'cust': cust}) as Map).cast<String, Object?>();
+    if (_locked(r, 'deleteCustomer $dev cust=$cust')) return;
     truth.customers[cust]?.tomb = true;
     for (final tu in (r['txs'] as List).cast<String>()) {
       truth.txs[tu]?.deleted = true;
@@ -359,11 +385,14 @@ class Harness {
         .cast<String, Object?>();
     if (r['ok'] != true) {
       rejectedInvoices++;
+      progress('J saveInvoice $dev inv=$inv cust=$cust REJECTED online=${d(dev).online}');
       return null; // رفضه التطبيق (تحقق مالي) — لا تغيير في الحقيقة
     }
     final uuid = r['uuid'] as String;
     final savedCust = (r['cust'] as String?) ?? cust;
     final savedPaid = (r['paid'] as num?)?.toDouble() ?? paid;
+    progress('J saveInvoice $dev inv=$uuid cust=$savedCust total=$total paid=$savedPaid '
+        '$ptype edit=${inv != null} online=${d(dev).online}');
     final prev = truth.invoices[uuid];
     final ti = TruthInvoice(savedCust, dev, total, savedPaid, ptype, 'محفوظة');
     if (prev != null) ti.voidedFor = {...prev.voidedFor}; // إبطال حذف العميل نهائي (له)
@@ -542,8 +571,42 @@ class Harness {
     }
   }
 
+  /// الباقية من كل مجموعة نسخ، بقاعدة التطبيق (ProductSyncService._copyWins)
+  /// على مستندات السحابة: وقت التعديل الأحدث، والمعروف يغلب المجهول، ثم
+  /// المعرّف الأكبر.
+  Map<String, String> productSurvivors() {
+    final docs = cloud.collection('products');
+    final byName = <String, List<String>>{};
+    truth.products.forEach((u, p) => byName.putIfAbsent(p.name, () => []).add(u));
+    bool wins(String a, String b) {
+      final ta = DateTime.tryParse(docs[a]?['last_modified_at']?.toString() ?? '');
+      final tb = DateTime.tryParse(docs[b]?['last_modified_at']?.toString() ?? '');
+      if (ta != null && tb != null) {
+        if (ta.isAfter(tb)) return true;
+        if (tb.isAfter(ta)) return false;
+      } else if (ta != null || tb != null) {
+        return ta != null;
+      }
+      return a.compareTo(b) > 0;
+    }
+
+    final out = <String, String>{};
+    for (final g in byName.values) {
+      if (g.length < 2) continue;
+      var best = g.first;
+      for (final u in g.skip(1)) {
+        if (wins(u, best)) best = u;
+      }
+      for (final u in g) {
+        out[u] = best;
+      }
+    }
+    return out;
+  }
+
   Future<List<String>> check() async {
     final errs = <String>[];
+    truth.survivorOf = productSurvivors();
     for (final h in devices.values) {
       final st = (await h.call('state') as Map).cast<String, Object?>();
       final rows = <String, Map<String, Object?>>{};
@@ -592,6 +655,14 @@ class Harness {
       final stocks = (st['products'] as Map?)?.cast<String, Object?>() ?? const {};
       for (final e in truth.products.entries) {
         final v = stocks[e.key] as double?;
+        if (truth.survivor(e.key) != e.key) {
+          // نسخة خاسرة: دُمجت في الباقية ولا يبقى لها صف
+          if (v != null) {
+            errs.add('${h.name}: نسخة مكررة من المنتج ${e.value.name} ($v) '
+                'والباقية ${truth.survivor(e.key)}');
+          }
+          continue;
+        }
         final want = truth.stock(e.key);
         if (v == null) {
           errs.add('${h.name}: المنتج ${e.value.name} غائب');
@@ -618,14 +689,29 @@ class Harness {
       final q = i.items[prod];
       if (q != null) b.writeln('  حقيقة فاتورة $u ${i.status} كمية=$q منشئ=${i.creator}');
     });
-    for (final h in devices.values) {
-      final r = (await h.call('stockDetail', {'prod': prod}) as Map).cast<String, Object?>();
-      b.writeln('── ${h.name} كمية=${r['stock']}');
-      for (final m in (r['movements'] as List)) {
-        b.writeln('   حركة $m');
+    final s = truth.survivor(prod);
+    final group = truth.products.keys.where((u) => truth.survivor(u) == s).toList();
+    if (group.length > 1) {
+      b.writeln('  نسخ: $group ← الباقية $s');
+      for (final u in group) {
+        b.writeln('  نسخة $u منشئ=${truth.products[u]!.creator} '
+            'افتتاحي=${truth.products[u]!.opening} حركات=${truth.products[u]!.movements} '
+            'مستند=${cloud.collection('products')[u]?['last_modified_at']}');
       }
-      for (final it in (r['items'] as List)) {
-        b.writeln('   بند $it');
+    }
+    for (final h in devices.values) {
+      for (final u in group) {
+        final r = (await h.call('stockDetail', {'prod': u}) as Map).cast<String, Object?>();
+        b.writeln('── ${h.name} [$u] كمية=${r['stock']}');
+        for (final m in (r['movements'] as List)) {
+          b.writeln('   حركة $m');
+        }
+        for (final it in (r['items'] as List)) {
+          b.writeln('   بند $it');
+        }
+      }
+      if (group.length > 1) {
+        b.writeln('   تحويلات ${await h.call('productAliases')}');
       }
     }
     return b.toString();
@@ -706,13 +792,19 @@ class Harness {
 
   // ─────────────────────────── الفوضى ───────────────────────────
 
-  static final File _progress = File('${Directory.systemTemp.path}${Platform.pathSeparator}sync_harness_progress.log');
+  // لكل عملية اختبار ملفها: دفعات متوازية كانت تخلط سجلاتها في ملف واحد
+  static final File _progress = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}sync_harness_progress_$pid.log');
   static void progress(String line) {
     try {
       _progress.writeAsStringSync('${DateTime.now().toIso8601String()} $line\n',
           mode: FileMode.append, flush: true);
     } catch (_) {}
   }
+
+  /// TWINS=true: أصناف جديدة أكثر، وأغلبها بالاسم نفسه لصنف على جهاز آخر
+  /// (ضغط على دمج النسخ — 21.6 في الدليل).
+  static const _twinsBoost = bool.fromEnvironment('TWINS');
 
   static const _amounts = [50.0, 100.0, 250.0, 400.0, 1000.0, -60.0, -150.0, -500.0];
   static const _edits = [10.0, 75.0, 300.0, 900.0];
@@ -742,9 +834,29 @@ class Harness {
                 .map((m) => m['uuid'] as String)
                 .where(truth.products.containsKey)
                 .toList();
-            if (y < 0.012 || list.isEmpty) {
-              await addProduct(dev, 'صنف $dev-$i', [0.0, 10.0, 40.0][rnd.nextInt(3)],
-                  carton: rnd.nextBool() ? 12 : null);
+            if (y < (_twinsBoost ? 0.04 : 0.012) || list.isEmpty) {
+              // أحياناً: الاسم نفسه لصنف لم يصل هذا الجهاز بعد (أُنشئ على جهاز
+              // آخر) — نسختان من المنتج نفسه تُدمجان عند التزامن
+              final here = (await d(dev).call('products') as List)
+                  .cast<Map>()
+                  .map((m) => m['name'] as String)
+                  .toSet();
+              final twins = truth.products.values.where((p) => !here.contains(p.name)).toList();
+              // (بلا TWINS: nextBool كما كان، فتبقى البذور قابلة للإعادة)
+              if (twins.isNotEmpty && (_twinsBoost ? rnd.nextDouble() < 0.8 : rnd.nextBool())) {
+                final t = twins[rnd.nextInt(twins.length)];
+                // null = وصل الصنف نفسه لحظة الحفظ فرفض التطبيق الاسم المكرر
+                if (await addProduct(dev, t.name, [0.0, 10.0, 40.0][rnd.nextInt(3)],
+                        carton: t.carton) !=
+                    null) {
+                  twinProducts++;
+                } else {
+                  duplicateNamesRefused++;
+                }
+              } else {
+                await addProduct(dev, 'صنف $dev-$i', [0.0, 10.0, 40.0][rnd.nextInt(3)],
+                    carton: rnd.nextBool() ? 12 : null);
+              }
             } else if (y < 0.045) {
               await adjustStock(dev, list[rnd.nextInt(list.length)],
                   [-5.0, -2.0, 1.0, 3.0, 10.0][rnd.nextInt(5)]);

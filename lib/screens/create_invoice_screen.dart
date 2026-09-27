@@ -2617,6 +2617,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       if (invoiceToManage == null ||
           invoiceToManage!.status != 'معلقة' ||
           (invoiceToManage?.isLocked ?? false)) return;
+      // 🛡️ فاتورة من نسخة احتياطية مستعادة والجهاز لم يلحق بالبقية: لا حفظ
+      // تلقائي (كان سيغيّر أصنافها ثم يُرفض تحديث الفاتورة نفسها — حفظ ناقص)
+      if (await db.isRestoredRecordLocked('invoices', invoiceToManage!.id!)) return;
       Customer? customer;
       if (customerNameController.text.trim().isNotEmpty) {
         final customers = await db.getAllCustomers();

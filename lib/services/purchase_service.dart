@@ -312,9 +312,14 @@ class PurchaseService with ChangeNotifier {
     if (costingMethod == 'avco') {
       // Weighted Average Cost Formula (AVCO):
       // ((OldStock * OldCost) + (NewQty * NewCost)) / (OldStock + NewQty)
-      double totalOldValue = currentStock * currentCost;
+      // 🛡️ المخزون السالب (بيع متزامن على جهازين) بِيع فعلاً بالكلفة القديمة:
+      // لا يدخل في المتوسط. كان يدخل بقيمة سالبة فتخرج الكلفة أضعاف السعر
+      // (−19 بكلفة 5 ثم شراء 20 بـ 6 ← 25 بدل 6).
+      final costBasisQty = currentStock > 0 ? currentStock : 0.0;
+      double totalOldValue = costBasisQty * currentCost;
       double totalNewValue = newQty * newUnitCost;
-      finalCost = totalQty > 0 ? (totalOldValue + totalNewValue) / totalQty : newUnitCost;
+      final basisTotal = costBasisQty + newQty;
+      finalCost = basisTotal > 0 ? (totalOldValue + totalNewValue) / basisTotal : newUnitCost;
       print('💾 DB_UPDATE: Using AVCO - New stock: $totalQty, New avg cost: $finalCost');
     } else {
       // Last Purchase Price - simply use the new unit cost

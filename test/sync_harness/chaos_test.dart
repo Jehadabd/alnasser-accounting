@@ -33,8 +33,10 @@ void main() {
         final uncaught = await h.deviceErrors();
         print('seed=$s: ${h.truth.customers.length} عميل، ${h.truth.txs.length} معاملة، '
             '${h.truth.invoices.length} فاتورة (رُفض ${h.rejectedInvoices})، '
-            'استعادات=${h.restores} تنظيف=${h.cleanups} انضمام=${h.joins} مطابقة=${h.armored}، '
-            'منتجات=${h.truth.products.length} مبيع=${h.truth.invoices.values.where((i) => i.status == 'محفوظة').fold(0.0, (s, i) => s + i.items.values.fold(0.0, (a, b) => a + b))} '
+            'استعادات=${h.restores} تنظيف=${h.cleanups} انضمام=${h.joins} مطابقة=${h.armored} '
+            'تعديل مقفل بعد استعادة=${h.lockedEdits}، '
+            'منتجات=${h.truth.products.length} (نسخ مكررة الاسم=${h.twinProducts}، '
+            'رُفض اسم مكرر=${h.duplicateNamesRefused}) مبيع=${h.truth.invoices.values.where((i) => i.status == 'محفوظة').fold(0.0, (s, i) => s + i.items.values.fold(0.0, (a, b) => a + b))} '
             'حركات=${h.truth.products.values.fold(0.0, (s, p) => s + p.movements)}، '
             'كتابات سحابية=${h.cloud.totalWrites}، زمن=${phase1}ث/${sw.elapsed.inSeconds}ث، '
             'أخطاء عمليات=${h.opErrors.length}، أخطاء غير ممسوكة=${uncaught.length}');
@@ -51,7 +53,9 @@ void main() {
           }
           // شرح أول منتج مختلف الكمية
           for (final e in h.truth.products.entries) {
-            if (errs.any((x) => x.contains('مخزون ${e.value.name} ='))) {
+            if (errs.any((x) =>
+                x.contains('مخزون ${e.value.name} =') ||
+                x.contains('نسخة مكررة من المنتج ${e.value.name} '))) {
               print(await h.explainStock(e.key));
               break;
             }

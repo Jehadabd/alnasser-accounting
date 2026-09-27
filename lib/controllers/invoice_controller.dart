@@ -318,6 +318,15 @@ class InvoiceController {
       );
     }
 
+    // 🛡️ فاتورة من نسخة احتياطية مستعادة والجهاز لم يلحق بالبقية بعد: قد تكون
+    // نسختها المعروضة قديمة (DatabaseService.isRestoredRecordLocked)
+    if (!data.isNewInvoice &&
+        data.invoiceToManage?.id != null &&
+        await _db.isRestoredRecordLocked('invoices', data.invoiceToManage!.id!)) {
+      return InvoiceSaveResult(
+          success: false, errorMessage: RestoredRecordLockedException.message);
+    }
+
     // Re-run standard validation to be safe
     final validation = validateInvoiceData(data);
     if (!validation.isValid) {

@@ -575,4 +575,10 @@ class FakeCloud {
     }
     _notify(paths.toSet());
   }
+
+  /// كتابة مستند مباشرة (كجهاز خارج الاختبار — مثلاً إصدار قديم من التطبيق).
+  void putDoc(String path, Map<String, Object?> data) {
+    docs[path] = _Doc(_deepCopy(data), ++_ver);
+    _notify({path});
+  }
 }

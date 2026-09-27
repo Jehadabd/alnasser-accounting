@@ -299,4 +299,36 @@ void main() {
       await h.dispose();
     }
   }, timeout: const Timeout(Duration(minutes: 15)));
+
+  test('كلفة الشراء بالمتوسط المرجّح: مخزون موجب، ومخزون سالب لا يدخل في المتوسط', () async {
+    final h = Harness(seed: 12);
+    try {
+      await h.start(1);
+      final cust = (await h.addCustomer('D1', 'زبون الكلفة'))!;
+      // الأصناف تُنشأ بكلفة 0.5 للقطعة (انظر device.dart: addProduct)
+      final pos = (await h.addProduct('D1', 'كلفة موجب', 10))!;
+      final neg = (await h.addProduct('D1', 'كلفة سالب', 0))!;
+      final exact = (await h.addProduct('D1', 'كلفة صفر', 0))!;
+
+      // موجب: 10 بكلفة 0.5 ثم 10 بـ 1.5 ← (5 + 15) / 20 = 1.0
+      var r = (await h.d('D1').call('avcoPurchase', {'prod': pos, 'qty': 10, 'price': 1.5}) as Map);
+      expect((r['cost'] as double), closeTo(1.0, 1e-9));
+      expect((r['stock'] as double), closeTo(20, 1e-9));
+
+      // سالب: بيع 19 من رصيد صفر ← −19، ثم شراء 20 بـ 6 ← الكلفة 6 (كانت 25)
+      await h.saveInvoice('D1', cust, 19, 19, 'نقد', items: [
+        {'prod': neg, 'qty': 19.0, 'large': false},
+      ]);
+      r = (await h.d('D1').call('avcoPurchase', {'prod': neg, 'qty': 20, 'price': 6}) as Map);
+      expect((r['cost'] as double), closeTo(6.0, 1e-9));
+      expect((r['stock'] as double), closeTo(1, 1e-9));
+
+      // صفر: الكلفة = سعر الشراء
+      r = (await h.d('D1').call('avcoPurchase', {'prod': exact, 'qty': 5, 'price': 4}) as Map);
+      expect((r['cost'] as double), closeTo(4.0, 1e-9));
+      expect(await h.deviceErrors(), isEmpty);
+    } finally {
+      await h.dispose();
+    }
+  }, timeout: const Timeout(Duration(minutes: 10)));
 }

@@ -69,9 +69,34 @@ import '../models/monthly_overview.dart'; // ✅ Added
 import 'sync/sync_security.dart';
 import 'invoice_settings_service.dart';
 import '../utils/uuid_helper.dart';
+import 'firebase_sync/firebase_sync_config.dart';
 
 
 // ... imports ...
+
+/// 🛡️ تعديل سجل من نسخة احتياطية مستعادة قبل أن يلحق الجهاز بالأجهزة الأخرى
+/// (انظر DatabaseService.isRestoredRecordLocked).
+class RestoredRecordLockedException implements Exception {
+  const RestoredRecordLockedException();
+
+  static const String message =
+      'هذا السجل من نسخة احتياطية مستعادة، والجهاز لم يلحق بعد بآخر بيانات الأجهزة '
+      'الأخرى — قد تكون قيمته المعروضة قديمة. اتصل بالإنترنت وانتظر اكتمال الاستعادة '
+      '(دقائق عادة) ثم عدّل. البيع والتسديد الجديد مسموحان الآن.';
+
+  @override
+  String toString() => message;
+}
+
+/// 🛡️ صنف بالاسم نفسه موجود على هذا الجهاز (انظر DatabaseService.insertProduct).
+class DuplicateProductNameException implements Exception {
+  final String name;
+  const DuplicateProductNameException(this.name);
+
+  @override
+  String toString() => 'يوجد صنف بالاسم نفسه «$name» على هذا الجهاز (ربما أُضيف للتو '
+      'من جهاز آخر). استعمل الصنف الموجود، أو اختر اسماً مختلفاً.';
+}
 
 class DatabaseService {
   static final DatabaseService _instance = DatabaseService._internal();
@@ -540,7 +565,8 @@ class DatabaseService {
   /// 🔒 حذف زبون منطقياً (Soft Delete) ويتزامن الحذف بأمان مع باقي الأجهزة
   Future<int> deleteCustomer(int id) async {
     final db = await database;
-    
+    await assertCustomerNotRestoredLocked(id);
+
     // 🔍 جلب sync_uuid للعميل قبل الحذف لإبلاغ الأجهزة الأخرى
     String? syncUuid;
     final res = await db.query('customers', columns: ['sync_uuid'], where: 'id = ?', whereArgs: [id], limit: 1);
@@ -844,18 +870,31 @@ class DatabaseService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /// 🔒 إدراج منتج - يذهب للهارد مباشرة
+  ///
+  /// 🛡️ لا اسمان متطابقان على جهاز واحد: المزامنة تعدّ الاسم نفسه صنفاً واحداً
+  /// (تدمج النسخ)، فاسمان متطابقان هنا يُحسبان صنفين على هذا الجهاز وصنفاً
+  /// واحداً على غيره — فتختلف الكميات (اختبار الكود الحقيقي). الفحص والإدراج
+  /// بلا تداخل مع المستندات الواردة: صنف وصل من جهاز آخر لحظة الحفظ يُكتشف.
   Future<int> insertProduct(Product product) async {
     await database;
-    final result = await _productDao.insertProduct(product);
+    final result = await ProductSyncService.runExclusive(() async {
+      await _assertProductNameFree(product.name);
+      final id = await _productDao.insertProduct(product);
 
-    // 📦 الكمية الأولى = رصيد افتتاحي في دفتر المخزون (يصل لكل الأجهزة)
-    try {
-      final db = await database;
-      final u = await StockLedger.productSyncUuidForId(db, result);
-      if (u != null) await StockLedger.ensureOpenings(db, onlyUuid: u);
-    } catch (e) {
-      print('⚠️ رصيد افتتاحي للمنتج الجديد: $e');
-    }
+      // 📦 الكمية الأولى = رصيد افتتاحي في دفتر المخزون (يصل لكل الأجهزة)
+      try {
+        final db = await database;
+        final u = await StockLedger.productSyncUuidForId(db, id);
+        if (u != null) await StockLedger.ensureOpenings(db, onlyUuid: u);
+        // منشئ الصنف (يسافر مع مستنده): تنبيه دمج نسختين بالاسم نفسه يظهر
+        // على الجهازين اللذين أُدخلت عليهما النسختان فقط (SyncHealth)
+        await db.update('products', {'created_by_device_id': await FirebaseSyncConfig.getDeviceId()},
+            where: 'id = ? AND created_by_device_id IS NULL', whereArgs: [id]);
+      } catch (e) {
+        print('⚠️ رصيد افتتاحي للمنتج الجديد: $e');
+      }
+      return id;
+    });
     
     // 🚀 إبطال Cache بعد الكتابة
     invalidateProductsCache();
@@ -867,6 +906,22 @@ class DatabaseService {
     }
     
     return result;
+  }
+
+  /// صنف آخر بالاسم نفسه على هذا الجهاز؟ بمطابقة المزامنة نفسها
+  /// (ProductSyncService: الاسم كما هو أو المطبَّع).
+  Future<void> _assertProductNameFree(String name, {int? exceptId}) async {
+    final db = await database;
+    final rows = await db.query('products',
+        columns: ['id'],
+        where: '(name = ? OR name_norm = ?)${exceptId != null ? ' AND id != ?' : ''}',
+        whereArgs: [
+          name.trim(),
+          DatabaseHelpers.normalizeArabic(name),
+          if (exceptId != null) exceptId,
+        ],
+        limit: 1);
+    if (rows.isNotEmpty) throw DuplicateProductNameException(name.trim());
   }
 
   /// 🚀 جلب جميع المنتجات مع Cache ذكي
@@ -902,20 +957,30 @@ class DatabaseService {
 
   /// 🔒 تحديث منتج - يذهب للهارد مباشرة
   Future<int> updateProduct(Product product) async {
-    await database;
-    final result = await _productDao.updateProduct(product);
+    final db = await database;
+    final result = await ProductSyncService.runExclusive(() async {
+      // 🛡️ إعادة التسمية لاسم صنف آخر ممنوعة (انظر insertProduct). تعديل صنف
+      // بلا تغيير اسمه مسموح دائماً — حتى لتكرار قديم من إصدار سابق.
+      if (product.id != null) {
+        final cur = await db.query('products',
+            columns: ['name'], where: 'id = ?', whereArgs: [product.id], limit: 1);
+        final renamed = cur.isNotEmpty &&
+            ((cur.first['name'] as String?) ?? '').trim() != product.name.trim();
+        if (renamed) await _assertProductNameFree(product.name, exceptId: product.id);
+      }
+      return _productDao.updateProduct(product);
+    });
     
     // 🚀 إبطال Cache بعد الكتابة
     invalidateProductsCache();
     
-    // 🔄 رفع المنتج المعدل فوراً للمزامنة
-    if (product.syncUuid != null) {
+    // 🔄 رفع المنتج المعدل فوراً للمزامنة — بالصف كما حُفظ لا بكائن الشاشة:
+    // معرّفه قد تغيّر بعد فتح الشاشة (دمج نسختين)، وكميته من دفتر المخزون
+    final updatedProduct = product.id != null ? await getProductById(product.id!) : null;
+    if (updatedProduct != null && updatedProduct.syncUuid != null) {
+      ProductSyncService().uploadProductNow(updatedProduct.syncUuid!, productData: updatedProduct.toMap());
+    } else if (product.syncUuid != null) {
       ProductSyncService().uploadProductNow(product.syncUuid!, productData: product.toMap());
-    } else if (product.id != null) {
-      final updatedProduct = await getProductById(product.id!);
-      if (updatedProduct != null && updatedProduct.syncUuid != null) {
-        ProductSyncService().uploadProductNow(updatedProduct.syncUuid!, productData: updatedProduct.toMap());
-      }
     }
     
     return result;
@@ -1517,6 +1582,9 @@ class DatabaseService {
   
   Future<Customer> updateManualTransaction(DebtTransaction updated, {bool fromSync = false}) async {
     await database;
+    if (!fromSync && updated.id != null) {
+      await assertNotRestoredLocked('transactions', updated.id!);
+    }
     await _transactionDao.updateManualTransaction(updated, fromSync: fromSync);
     // 🚀 تعديل محلي = رفع فوري. شاشة العميل تستدعي هذه الدالة مباشرة (لا عبر
     // AppProvider)، فكان التعديل ينتظر إعادة تشغيل أو تبدّل الشبكة، ولعملاء
@@ -1546,7 +1614,8 @@ class DatabaseService {
     await database;
     final tx = await _transactionDao.getTransactionById(transactionId);
     if (tx == null) throw Exception('Transaction not found');
-    
+    await assertNotRestoredLocked('transactions', transactionId);
+
     await _transactionDao.convertTransactionType(transactionId);
     _triggerCustomerSync(tx.customerId);
 
@@ -1743,6 +1812,7 @@ class DatabaseService {
     if (check.first['is_created_by_me'] == 0) {
       throw Exception('لا يمكن حذف هذه الفاتورة لأنها مستوردة من جهاز آخر.');
     }
+    await assertNotRestoredLocked('invoices', id);
 
     final res = await db.transaction((txn) async {
       // 1. الكميات تعود للمخزن تلقائياً: الفاتورة المحذوفة لا تُحسب مبيعاً
@@ -2335,6 +2405,59 @@ class DatabaseService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🛡️ قفل السجلات المستعادة أثناء وضع الاستعادة
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // بعد استعادة نسخة احتياطية قديمة يعرض الجهاز قيم النسخة (معاملة 1000) بينما
+  // عُدّلت على جهاز آخر بعد أخذها (صارت 300). تعديلها الآن — تغيير المبلغ، أو
+  // تحويلها دين ↔ تسديد، أو تعديل فاتورتها أو حذفها، أو حذف عميلها — يُطبَّق على
+  // القيمة القديمة ويُنشر لكل الأجهزة: تبقى الأجهزة متفقة، لكن الرقم ليس ما قصده
+  // المستخدم (كان تحذيراً في الدليل 20.8). لذلك يُقفل كل سجل من النسخة لم تؤكده
+  // السحابة بعد (restored_mark = 1) حتى تكتمل الاستعادة (_finishRecovery يمحو
+  // الوسم). الإضافة الجديدة — بيع، تسديد، فاتورة — مسموحة دائماً: لا تعتمد على
+  // قيمة قديمة. وبلا مزامنة مفعّلة لا قفل: لا أجهزة أخرى يُنتظر منها شيء.
+
+  Future<bool> isRestoredRecordLocked(String table, int id) async {
+    if (!await isRestoreLockActive()) return false;
+    final db = await database;
+    final r = await db.query(table,
+        columns: ['restored_mark'], where: 'id = ?', whereArgs: [id], limit: 1);
+    return r.isNotEmpty && ((r.first['restored_mark'] as num?)?.toInt() ?? 0) == 1;
+  }
+
+  Future<void> assertNotRestoredLocked(String table, int id) async {
+    if (await isRestoredRecordLocked(table, id)) {
+      throw const RestoredRecordLockedException();
+    }
+  }
+
+  /// حذف عميل يمسّ كل معاملاته وفواتيره: مقفل إن كان بينها سجل مستعاد.
+  Future<void> assertCustomerNotRestoredLocked(int customerId) async {
+    if (!await isRestoreLockActive()) return;
+    final db = await database;
+    final r = await db.rawQuery('''
+      SELECT 1 FROM transactions WHERE customer_id = ? AND restored_mark = 1
+        AND (is_deleted IS NULL OR is_deleted = 0)
+      UNION ALL
+      SELECT 1 FROM invoices WHERE customer_id = ? AND restored_mark = 1
+        AND (is_deleted IS NULL OR is_deleted = 0)
+      LIMIT 1''', [customerId, customerId]);
+    if (r.isNotEmpty) throw const RestoredRecordLockedException();
+  }
+
+  /// وضع الاستعادة قائم (علَم الاستعادة + المزامنة مفعّلة) — يُقرأ بلا انتظار
+  /// تهيئة المزامنة (الشريط في الشاشة الرئيسية يظهر من أول لحظة).
+  static Future<bool> isRestoreLockActive() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool(restoredFlagKey) ?? false)) return false;
+      return await FirebaseSyncConfig.isEnabled();
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> markDatabaseRestored([Database? db]) async {
     await flagDatabaseRestored();
     try {
@@ -2449,6 +2572,7 @@ class DatabaseService {
   /// 🔥 التحقق أن الفاتورة قابلة للتعديل على هذا الجهاز (أنه ملك لنا).
   /// يرمي استثناءً إن كانت من إنشاء جهاز آخر.
   Future<void> assertInvoiceEditable(int invoiceId) async {
+    await assertNotRestoredLocked('invoices', invoiceId);
     final db = await database;
     final rows = await db.query('invoices',
         columns: ['creator_device_id'],

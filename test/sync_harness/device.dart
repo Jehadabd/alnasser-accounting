@@ -15,6 +15,11 @@ import 'package:alnaser/models/invoice.dart';
 import 'package:alnaser/models/invoice_input_data.dart';
 import 'package:alnaser/models/invoice_item.dart';
 import 'package:alnaser/models/product.dart';
+import 'package:alnaser/models/purchase_invoice.dart';
+import 'package:alnaser/models/purchase_invoice_item.dart';
+import 'package:alnaser/models/supplier.dart';
+import 'package:alnaser/services/purchase_service.dart';
+import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/services/database/business/stock_ledger.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
@@ -24,6 +29,8 @@ import 'package:alnaser/services/firebase_sync/firebase_sync_helper.dart';
 import 'package:alnaser/services/firebase_sync/smart_pipe_cleanup_service.dart';
 import 'package:alnaser/services/firebase_sync/firebase_sync_service.dart';
 import 'package:alnaser/services/firebase_sync/invoice_sync_service.dart';
+import 'package:alnaser/services/firebase_sync/sync_health.dart';
+import 'package:alnaser/services/firebase_sync/product_sync_service.dart';
 import 'package:cloud_firestore_platform_interface/cloud_firestore_platform_interface.dart';
 import 'package:connectivity_plus_platform_interface/connectivity_plus_platform_interface.dart';
 import 'package:firebase_auth_platform_interface/firebase_auth_platform_interface.dart';
@@ -110,6 +117,9 @@ Future<void> _run(DeviceBoot boot, List<String> logs, List<String> errors) async
   }
 }
 
+/// شاشات تعديل منتج مفتوحة (الكائن كما حُمّل لحظة الفتح).
+final Map<String, Product> _openProductScreens = {};
+
 Future<int?> _customerId(String uuid) async {
   final db = await DatabaseService().database;
   final r = await db.query('customers',
@@ -169,13 +179,21 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final t = DebtTransaction.fromMap(row);
       final amount = (a['amount'] as num).toDouble();
       // شاشة العميل: db.updateTransaction(updated)
-      await DatabaseService().updateTransaction(t.copyWith(amountChanged: amount));
+      try {
+        await DatabaseService().updateTransaction(t.copyWith(amountChanged: amount));
+      } on RestoredRecordLockedException {
+        return {'locked': true}; // سجل مستعاد أثناء الاستعادة: رفضه التطبيق
+      }
       return true;
 
     case 'convertTx':
       final row = await _txRow(a['tx'] as String);
       if (row == null) throw StateError('tx not on device');
-      await DatabaseService().convertTransactionType(row['id'] as int);
+      try {
+        await DatabaseService().convertTransactionType(row['id'] as int);
+      } on RestoredRecordLockedException {
+        return {'locked': true};
+      }
       // التحويل يقلب ما يراه المستخدم على هذا الجهاز (قد يكون قديماً إن كان
       // الجهاز يلحق بالمجموعة بعد استعادة نسخة): الحقيقة تأخذ الناتج الفعلي.
       final after = await _txRow(a['tx'] as String);
@@ -201,7 +219,11 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         };
       }
       final before = await deleted();
-      await AppProvider().deleteCustomer(cid);
+      try {
+        await AppProvider().deleteCustomer(cid);
+      } on RestoredRecordLockedException {
+        return {'locked': true, 'txs': <String>[], 'invs': <String>[]};
+      }
       final after = await deleted();
       final newly = after.keys.where((u) => !before.containsKey(u)).toList();
       final invs = {
@@ -213,7 +235,9 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
     case 'addProduct':
       // شاشة إضافة منتج: DatabaseService.insertProduct (الكمية الأولى = رصيد افتتاحي)
       final carton = (a['carton'] as num?)?.toInt();
-      final id = await DatabaseService().insertProduct(Product(
+      final int id;
+      try {
+        id = await DatabaseService().insertProduct(Product(
         name: a['name'] as String,
         unit: 'piece',
         unitPrice: 1,
@@ -224,6 +248,9 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         createdAt: DateTime.now(),
         lastModifiedAt: DateTime.now(),
       ));
+      } on DuplicateProductNameException {
+        return null; // وصل صنف بالاسم نفسه لحظة الحفظ: رفضه التطبيق
+      }
       final db = await DatabaseService().database;
       final r = await db.query('products', columns: ['sync_uuid'], where: 'id = ?', whereArgs: [id]);
       return r.first['sync_uuid'];
@@ -242,6 +269,114 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
             'carton': _carton(x['unit_hierarchy'] as String?),
           }
       ];
+
+    case 'openProductScreen':
+      // شاشة تعديل منتج تُفتح الآن وتبقى مفتوحة (الكائن يُحمَّل لحظة الفتح)
+      final db = await DatabaseService().database;
+      final pr = await db.query('products', where: 'sync_uuid = ?', whereArgs: [a['prod']], limit: 1);
+      if (pr.isEmpty) throw StateError('product not on device');
+      _openProductScreens[a['label'] as String] = Product.fromMap(pr.first);
+      return true;
+
+    case 'saveProductScreen':
+      // حفظ الشاشة المفتوحة: DatabaseService.updateProduct بكائن لحظة الفتح
+      final p = _openProductScreens.remove(a['label'] as String)!;
+      final price = (a['price'] as num).toDouble();
+      await DatabaseService().updateProduct(
+          p.copyWith(price1: price, unitPrice: price, lastModifiedAt: DateTime.now()));
+      return true;
+
+    case 'avcoPurchase':
+      // فاتورة شراء مؤكدة عبر PurchaseService بطريقة المتوسط المرجّح ← الكلفة الناتجة
+      final settings = await SettingsManager.getAppSettings();
+      await SettingsManager.saveAppSettings(settings.copyWith(costingMethod: 'avco'));
+      final db = await DatabaseService().database;
+      final pr = await db.query('products', where: 'sync_uuid = ?', whereArgs: [a['prod']], limit: 1);
+      if (pr.isEmpty) throw StateError('product not on device');
+      final ps = PurchaseService();
+      final sid = await ps.addSupplier(
+          Supplier(name: 'مورد ${DateTime.now().microsecondsSinceEpoch}',
+              createdAt: DateTime.now(), updatedAt: DateTime.now()));
+      final qty = (a['qty'] as num).toDouble();
+      final price = (a['price'] as num).toDouble();
+      await ps.savePurchaseInvoice(
+          PurchaseInvoice(
+              invoiceNumber: 'P${DateTime.now().microsecondsSinceEpoch}',
+              supplierId: sid,
+              totalAmount: qty * price,
+              status: 'confirmed',
+              date: DateTime.now()),
+          [
+            PurchaseInvoiceItem(
+                productId: pr.first['id'] as int,
+                unitName: 'قطعة',
+                quantity: qty,
+                unitPrice: price,
+                totalPrice: qty * price),
+          ]);
+      final after = await db.query('products',
+          columns: ['cost_price', 'stock_quantity'], where: 'id = ?', whereArgs: [pr.first['id']]);
+      return {
+        'cost': (after.first['cost_price'] as num).toDouble(),
+        'stock': (after.first['stock_quantity'] as num).toDouble(),
+      };
+
+    case 'renameProduct':
+      // شاشة تعديل المنتج: DatabaseService.updateProduct باسم جديد
+      final db = await DatabaseService().database;
+      final pr = await db.query('products', where: 'sync_uuid = ?', whereArgs: [a['prod']], limit: 1);
+      if (pr.isEmpty) throw StateError('product not on device');
+      try {
+        await DatabaseService().updateProduct(Product.fromMap(pr.first)
+            .copyWith(name: a['name'] as String, lastModifiedAt: DateTime.now()));
+      } on DuplicateProductNameException {
+        return {'refused': true};
+      }
+      return {'refused': false};
+
+    case 'legacyDuplicate':
+      // إصدار سابق سمح بصنفين بالاسم نفسه على جهاز واحد: صف ثانٍ مباشرة
+      final db = await DatabaseService().database;
+      await db.insert('products', {
+        'name': a['name'],
+        'name_norm': a['name'],
+        'unit': 'piece',
+        'unit_price': 1.0,
+        'cost_price': 0.5,
+        'price1': 1.0,
+        'stock_quantity': 0.0,
+        'created_at': DateTime.now().toIso8601String(),
+        'last_modified_at': DateTime.now().toIso8601String(),
+        'sync_uuid': 'prod_legacy_${DateTime.now().microsecondsSinceEpoch}',
+      });
+      return true;
+
+    case 'checkLocalDuplicates':
+      await ProductSyncService().checkLocalDuplicateNames();
+      return true;
+
+    case 'syncHealth':
+      // تنبيهات الشريط في الشاشة الرئيسية
+      await SyncHealth.load();
+      return [
+        for (final w in SyncHealth.warnings.value) {'id': w.id, 'title': w.title}
+      ];
+
+    case 'checkGroupHealth':
+      await FirebaseSyncService().checkGroupHealth();
+      return true;
+
+    case 'setClockOffset':
+      SyncHealth.debugClockOffset = Duration(minutes: (a['minutes'] as num).toInt());
+      return true;
+
+    case 'dismissHealth':
+      await SyncHealth.dismiss(a['id'] as String);
+      return true;
+
+    case 'productAliases':
+      final db = await DatabaseService().database;
+      return await db.query('product_uuid_alias');
 
     case 'adjustStock':
       // نافذة «تعديل المخزون»: DatabaseService.adjustProductStock
@@ -647,7 +782,17 @@ Future<List<InvoiceItem>> _productItems(dynamic db, Object? spec, int invoiceId)
   final out = <InvoiceItem>[];
   for (final raw in (spec as List?) ?? const []) {
     final m = (raw as Map).cast<String, Object?>();
-    final pr = await db.query('products', where: 'sync_uuid = ?', whereArgs: [m['prod']], limit: 1);
+    var pr = await db.query('products', where: 'sync_uuid = ?', whereArgs: [m['prod']], limit: 1);
+    if (pr.isEmpty) {
+      // نسخة دُمجت في غيرها (الاسم نفسه على جهازين): الشاشة تعمل على الصف
+      // نفسه، والصف صار بمعرّف الباقية
+      final al = await db.query('product_uuid_alias',
+          columns: ['new_uuid'], where: 'old_uuid = ?', whereArgs: [m['prod']], limit: 1);
+      if (al.isNotEmpty) {
+        pr = await db.query('products',
+            where: 'sync_uuid = ?', whereArgs: [al.first['new_uuid']], limit: 1);
+      }
+    }
     if (pr.isEmpty) continue;
     final p = pr.first;
     final qty = (m['qty'] as num).toDouble();

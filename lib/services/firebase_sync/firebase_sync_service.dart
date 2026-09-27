@@ -31,6 +31,7 @@ import 'live_match_service.dart'; // 📡 مطابقة حية جهاز↔جها�
 import 'smart_pipe_cleanup_service.dart'; // 🧹 الحذف الذكي بشرط قراءة الجميع
 import 'match_verdict_service.dart'; // ⚖️ بثّ قرارات المطابقة للمجموعة
 import 'sync_diagnostics.dart'; // 🩺 تشخيص المصادقة/المزامنة
+import 'sync_health.dart'; // 🩺 تنبيهات صحة المزامنة للمستخدم
 import 'web_auth_clear.dart'; // 🧹 تنظيف مخزن جلسة الويب التالف
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/widgets.dart' show AppLifecycleListener; // 🌅 خطاف العودة للحياة
@@ -571,6 +572,8 @@ class FirebaseSyncService {
       } catch (e) {
         print('⚠️ خطأ/تأخير في تسجيل الجهاز بالسحابة: $e');
       }
+      // 🩺 إصدارات الأجهزة وساعة هذا الجهاز (تنبيه فقط — بلا انتظار)
+      unawaited(checkGroupHealth().catchError((_) {}));
 
       // 🆕 الاستماع لطلبات الأجهزة الجديدة (هذا الجهاز قد يكون هو المُجيب)
       try {
@@ -825,6 +828,13 @@ class FirebaseSyncService {
       await _uploadAllOwnedPending();
       await _syncPendingChanges();
       await StockMovementSyncService().uploadPending();
+
+      // 3️⃣.ج 🩺 صحة المجموعة (إصدارات الأجهزة والساعة): كل ساعة تكفي
+      final lastHealth = _lastGroupHealthCheck;
+      if (lastHealth == null ||
+          DateTime.now().difference(lastHealth) > const Duration(hours: 1)) {
+        await checkGroupHealth();
+      }
 
       // 4️⃣ تنظيف البيانات القديمة (مرة واحدة يومياً)
       await _periodicCleanup();
@@ -3228,7 +3238,7 @@ class FirebaseSyncService {
 
     // 3️⃣ حركات المخزون (المستمع يلتقط الجديد؛ هذا لما فاته)
     try {
-      final n = await StockMovementSyncService().downloadAll();
+      final n = await StockMovementSyncService().downloadMissing();
       if (n > 0) print('✅ [Catch-Up] حركات مخزون: طُبّق $n');
     } catch (e) {
       print('❌ [Catch-Up] فشل سحب حركات المخزون: $e');
@@ -3975,6 +3985,7 @@ class FirebaseSyncService {
         print('🛡️ وضع الاستعادة: القاعدة من نسخة احتياطية — الرفع موقوف حتى المقارنة');
         _syncEventController.add('استعادة نسخة احتياطية: جاري طلب ما فاتها من الأجهزة الأخرى...');
       }
+      SyncHealth.setRecovering(_recoveryMode);
     } catch (e) {
       print('⚠️ _loadRecoveryState: $e');
     }
@@ -3997,6 +4008,7 @@ class FirebaseSyncService {
       print('⚠️ _finishRecovery: $e');
     }
     _recoveryMode = false;
+    SyncHealth.setRecovering(false);
     print('✅ اكتمل وضع الاستعادة — استُؤنف الرفع');
     _syncEventController.add('اكتملت استعادة البيانات من الأجهزة الأخرى');
     unawaited(_syncPendingChanges().catchError((_) {}));
@@ -4328,11 +4340,29 @@ class FirebaseSyncService {
       print('⚠️ [Bootstrap] تعذّر إعادة بثّ الفواتير: $e');
     }
 
+    // 📦 الأصناف وحركات المخزون: لا ينظّفها SmartPipe فهي في السحابة عادةً،
+    // لكن إن حُذفت من خارج التطبيق (لوحة Firebase، نقل المشروع) يستلم الجهاز
+    // الجديد بنوداً بلا أصناف وكميات خاطئة. «أنشئ إن غاب» كالبقية.
+    int prodOk = 0, mvOk = 0;
+    var ticks = 0;
+    try {
+      onProgress?.call(0.9, 'إرسال الأصناف...');
+      prodOk = await ProductSyncService().rebroadcastMissingProducts(onTick: () {
+        if (++ticks % 20 == 0) onProgress?.call(0.9, 'إرسال الأصناف...');
+      });
+      onProgress?.call(0.95, 'إرسال حركات المخزون...');
+      mvOk = await StockMovementSyncService().rebroadcastMissing();
+    } catch (e) {
+      print('⚠️ [Bootstrap] تعذّر إعادة بثّ الأصناف/حركات المخزون: $e');
+    }
+
     onProgress?.call(1.0, 'اكتمل الإرسال');
     return {
       'customers': custOk,
       'transactions': txOk,
       'invoices': invOk,
+      'products': prodOk,
+      'stockMovements': mvOk,
       'failed': failed,
     };
   }
@@ -4357,6 +4387,8 @@ class FirebaseSyncService {
             'isListening': _isListening,
             'syncStatus': _status.name,
             'appVersion': '1.0.0',
+            // 🩺 بروتوكول المزامنة: الأجهزة الأخرى تنبّه إن اختلف (SyncHealth)
+            'syncProtocol': SyncHealth.syncProtocol,
             // 🔐 لم يعد السرّ يُكتب نصاً في أي مستند (كان يكشفه لكل من يقرأ)،
             // بل بصمته فقط لتعرف الأجهزة من يشاركها نفس السرّ.
             'secretFingerprint': _secretFingerprint(),
@@ -4374,6 +4406,60 @@ class FirebaseSyncService {
     }
   }
   
+  DateTime? _lastGroupHealthCheck;
+
+  /// 🩺 فحص صحة المجموعة (SyncHealth): أجهزة بإصدار آخر، وساعة هذا الجهاز.
+  ///
+  /// • جهاز ظهر خلال 14 يوماً ولم يكتب رقم البروتوكول (إصدار سابق) أو كتب
+  ///   رقماً أقدم = يحسب المخزون والأرصدة بطريقة أخرى: تنبيه باسمه.
+  /// • الساعة: وقت السيرفر لكتابة الآن مقابل وقت الجهاز لحظتها. «آخر تعديل
+  ///   يغلب» في الأصناف يعتمد على ساعات الأجهزة.
+  /// لا يغيّر أي بيانات — تنبيه فقط.
+  Future<void> checkGroupHealth() async {
+    if (_firestore == null || _deviceId == null) return;
+    _lastGroupHealthCheck = DateTime.now();
+    try {
+      final snap = await _firestore!
+          .collection('devices')
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 20));
+      final cutoff = DateTime.now().subtract(SyncHealth.activeDeviceWindow);
+      final older = <String>[], newer = <String>[];
+      for (final d in snap.docs) {
+        if (d.id == _deviceId) continue;
+        final m = d.data();
+        final seen = DateTime.tryParse(m['lastSeen']?.toString() ?? '');
+        if (seen == null || seen.isBefore(cutoff)) continue; // جهاز لم يعد مستعملاً
+        final protocol = (m['syncProtocol'] as num?)?.toInt() ?? 0;
+        final rawName = (m['deviceName'] as String?)?.trim();
+        final name = (rawName == null || rawName.isEmpty) ? d.id : rawName;
+        if (protocol < SyncHealth.syncProtocol) older.add(name);
+        if (protocol > SyncHealth.syncProtocol) newer.add(name);
+      }
+      SyncHealth.setDeviceVersions(older: older, newer: newer);
+    } catch (e) {
+      print('⚠️ [صحة المزامنة] تعذّر فحص إصدارات الأجهزة: $e');
+    }
+    try {
+      final ref = _firestore!.collection('devices').doc(_deviceId);
+      final before = SyncHealth.deviceNow();
+      await ref
+          .set({'clockProbe': FieldValue.serverTimestamp()}, SetOptions(merge: true))
+          .timeout(const Duration(seconds: 20));
+      final after = SyncHealth.deviceNow();
+      final doc = await ref
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 20));
+      final server = doc.data()?['clockProbe'];
+      if (server is Timestamp) {
+        final deviceTime = before.add(after.difference(before) ~/ 2);
+        SyncHealth.setClockSkew(server.toDate().difference(deviceTime));
+      }
+    } catch (e) {
+      print('⚠️ [صحة المزامنة] تعذّر فحص الساعة: $e');
+    }
+  }
+
   /// تحديث حالة الجهاز (نبضة قلب) مع معلومات تفصيلية
   Future<void> updateDeviceHeartbeat() async {
     if (_groupId == null || _deviceId == null || _firestore == null) return;
