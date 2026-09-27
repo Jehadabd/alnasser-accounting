@@ -2,7 +2,8 @@
 //
 // ⌨️ اختصارات لوحة المفاتيح على مستوى البرنامج كله:
 //   F1 الكاشير • F2 إنشاء قائمة • F3 سجل الديون • F4 المحاسبة
-//   F6 بطاقات المواد • F7 سند مصروف • F8 الفروع والمخازن
+//   F6 بطاقات المواد • F7 سند مصروف • F8 الفروع والمخازن • F9 التحصيل والديون
+//   Ctrl+Shift+D لوحة المؤشرات • Ctrl+Shift+S المبيعات • Ctrl+Shift+I المخزون
 //
 // كل اختصار يحترم الصلاحيات: من لا يملك الصلاحية لا ينتقل.
 
@@ -43,6 +44,13 @@ class GlobalShortcuts extends StatelessWidget {
           );
         },
         const SingleActivator(LogicalKeyboardKey.f8): () => _go('/branches', AppPermissions.manageBranches),
+        const SingleActivator(LogicalKeyboardKey.f9): () => _go('/debts_hub', AppPermissions.collection),
+        const SingleActivator(LogicalKeyboardKey.keyD, control: true, shift: true): () =>
+            _go('/dashboard', AppPermissions.dashboard),
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true, shift: true): () =>
+            _go('/sales_hub', AppPermissions.salesDocs),
+        const SingleActivator(LogicalKeyboardKey.keyI, control: true, shift: true): () =>
+            _go('/inventory_hub', AppPermissions.inventoryDocs),
       },
       child: child,
     );

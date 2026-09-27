@@ -120,8 +120,9 @@ class AccountingReports {
 
   /// أرصدة كل الحسابات (الفرعية) لفترة، مع أرصدة ما قبلها.
   Future<Map<int, List<double>>> _rawBalances(
-      DatabaseExecutor db, DateTime? from, DateTime to, {int? branchId}) async {
-    final branchFilter = branchId == null ? '' : 'AND e.branch_id = $branchId';
+      DatabaseExecutor db, DateTime? from, DateTime to, {int? branchId, bool excludeClosing = false}) async {
+    final branchFilter = (branchId == null ? '' : 'AND e.branch_id = $branchId') +
+        (excludeClosing ? " AND e.source_type != 'year_close'" : '');
     final fromS = from == null ? '0000' : _start(from);
     final rows = await db.rawQuery('''
       SELECT l.account_id,
@@ -201,7 +202,8 @@ class AccountingReports {
     final accounts = (await db.query('accounts', where: 'is_group = 0', orderBy: 'code'))
         .map(Account.fromMap)
         .toList();
-    final raw = await _rawBalances(db, from, to, branchId: branchId);
+    // قيد إقفال السنة لا يدخل في قائمة الدخل (هو نقل الربح إلى الأرباح المحتجزة)
+    final raw = await _rawBalances(db, from, to, branchId: branchId, excludeClosing: true);
     final cogsId = await Ledger.systemAccountId(db, 'cogs');
     final rev = <AccountBalanceRow>[], cogs = <AccountBalanceRow>[], exp = <AccountBalanceRow>[];
     for (final a in accounts) {
@@ -329,6 +331,18 @@ class AccountingReports {
       problems.add('ذمم العملاء في الدفتر تختلف عن سجل الديون بمقدار ${diff.toStringAsFixed(0)} '
           '— شغّل «ترحيل الآن» ثم أعد الفحص');
     }
+    // ذمم الموردين بالدينار = مجموع أرصدة الموردين بالدينار
+    try {
+      final ap = await Ledger.systemAccountId(db, 'ap_iqd');
+      final apBal = await db.rawQuery(
+          'SELECT COALESCE(SUM(credit - debit), 0) AS b FROM journal_lines WHERE account_id = ?', [ap]);
+      final sup = await db.rawQuery('SELECT COALESCE(SUM(total_debt_iqd), 0) AS b FROM suppliers');
+      final apDiff = (apBal.first['b'] as num).toDouble() - (sup.first['b'] as num).toDouble();
+      if (apDiff.abs() > 1) {
+        problems.add('ذمم الموردين (دينار) في الدفتر تختلف عن أرصدة الموردين بمقدار ${apDiff.toStringAsFixed(0)} '
+            '— شغّل «ترحيل الآن» ثم أعد الفحص');
+      }
+    } catch (_) {}
     return problems;
   }
 }

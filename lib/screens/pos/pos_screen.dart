@@ -101,7 +101,7 @@ class _POSScreenState extends State<POSScreen> {
       // لم يتم العثور على المنتج
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('⚠ لم يتم العثور على منتج بالباركود: $cleanBarcode'),
+          content: Text(context.read<POSProvider>().lastErrorMessage ?? '⚠ لم يتم العثور على منتج بالباركود: $cleanBarcode'),
           backgroundColor: Colors.orange,
           duration: const Duration(seconds: 2),
         ),

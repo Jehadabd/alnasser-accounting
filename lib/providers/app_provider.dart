@@ -7,6 +7,7 @@ import '../models/invoice.dart';
 import '../models/invoice_item.dart';
 import '../models/account_statement_item.dart'; // ✅ Added import
 import '../services/database_service.dart';
+import '../erp/erp_common.dart' show PeriodLock;
 // DriveService removed
 import '../services/pdf_service.dart';
 import '../services/financial_audit_service.dart';
@@ -371,6 +372,8 @@ class AppProvider with ChangeNotifier {
   }
 
   Future<void> addTransaction(DebtTransaction transaction) async {
+    // 🔒 تثبيت الإدخالات: لا معاملة بتاريخ داخل فترة مثبّتة
+    await PeriodLock.assertOpen(transaction.transactionDate);
     // 1. إدراج المعاملة (تقوم قاعدة البيانات بتحديث رصيد العميل والتحقق منه)
     final id = await _db.insertTransaction(transaction);
     
@@ -426,6 +429,12 @@ class AppProvider with ChangeNotifier {
   }
 
   Future<void> updateTransaction(DebtTransaction transaction) async {
+    // 🔒 تثبيت الإدخالات: لا تعديل لمعاملة مثبّتة، ولا نقلها إلى فترة مثبّتة
+    await PeriodLock.assertOpen(transaction.transactionDate);
+    if (transaction.id != null) {
+      final old = await _db.getTransactionById(transaction.id!);
+      if (old != null) await PeriodLock.assertOpen(old.transactionDate);
+    }
     // Only manual transactions (not linked to invoice) are supported here
     final updatedCustomer = await _db.updateManualTransaction(transaction);
 

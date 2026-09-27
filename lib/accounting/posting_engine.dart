@@ -31,6 +31,8 @@ import 'package:sqflite/sqflite.dart';
 import '../services/database_service.dart';
 import '../services/settings_manager.dart';
 import '../utils/money_calculator.dart';
+import '../erp/currency_service.dart';
+import '../erp/erp_posting.dart';
 import 'ledger.dart';
 
 class PostingSummary {
@@ -84,6 +86,14 @@ class PostingEngine {
         progress?.call('ديون الموردين...');
         await _syncSupplierTransactions(db, summary);
       }
+      // 🧱 مستندات الإداري/سهل: المرتجعات، مستندات المخزون، عمولات البائعين
+      progress?.call('المستندات الإضافية...');
+      final extra = await ErpPosting(db).syncAll();
+      summary.created += extra.created;
+      summary.updated += extra.updated;
+      summary.deleted += extra.deleted;
+      summary.unchanged += extra.unchanged;
+      summary.errors.addAll(extra.errors);
       lastRun = DateTime.now();
     } finally {
       _running = false;
@@ -328,10 +338,16 @@ class PostingEngine {
 
   Future<void> _syncCustomerTransactions(Database db, PostingSummary summary) async {
     final hasDeleted = await _columnExists(db, 'transactions', 'is_deleted');
+    final hasExt = await _tableExists(db, 'customer_tx_ext') &&
+        await _columnExists(db, 'transactions', 'transaction_uuid');
+    // وصف المعاملة (نوعها المحاسبي/صندوقها/عملتها) من جدول customer_tx_ext —
+    // لا يغيّر مبلغ المعاملة ولا رصيد العميل، فقط الحساب المقابل في القيد.
     final rows = await db.rawQuery('''
       SELECT t.id, t.customer_id, t.transaction_date, t.amount_changed,
-             t.transaction_type, t.invoice_id, t.description, c.name AS customer_name
+             t.transaction_type, t.invoice_id, t.description, c.name AS customer_name,
+             ${hasExt ? 'x.kind AS x_kind, x.cash_box_id AS x_box, x.currency AS x_cur, x.fc_amount AS x_fc, x.fx_rate AS x_rate' : "NULL AS x_kind, NULL AS x_box, NULL AS x_cur, NULL AS x_fc, NULL AS x_rate"}
       FROM transactions t LEFT JOIN customers c ON c.id = t.customer_id
+      ${hasExt ? 'LEFT JOIN customer_tx_ext x ON x.transaction_uuid = t.transaction_uuid' : ''}
       ${hasDeleted ? 'WHERE COALESCE(t.is_deleted, 0) = 0' : ''}
     ''');
     final sources = <_Source>[];
@@ -344,11 +360,13 @@ class PostingEngine {
         amt.toStringAsFixed(2),
         r['transaction_type'],
         r['invoice_id'],
+        if (r['x_kind'] != null) ...[r['x_kind'], r['x_box'], r['x_cur'], r['x_fc'], r['x_rate']],
       ].join('|');
       sources.add(_Source(r['id'] as int, hash, r));
     }
 
     final ar = await Ledger.systemAccountId(db, 'ar_customers');
+    final hasErpAccounts = await ErpPosting.hasAccounts(db);
     final sales = await Ledger.systemAccountId(db, 'sales');
     final salesManual = await Ledger.systemAccountId(db, 'sales_manual');
     final opening = await Ledger.systemAccountId(db, 'opening_equity');
@@ -358,17 +376,34 @@ class PostingEngine {
       final r = s.row;
       final amt = _d(r['amount_changed']);
       final type = (r['transaction_type'] as String?) ?? '';
-      final int counter;
+      final xKind = r['x_kind'] as String?;
+      int counter;
       String label;
+      String counterCurrency = 'IQD';
+      double? counterFc;
+      double? counterRate;
       if (r['invoice_id'] != null) {
         counter = sales;
         label = 'الجزء الآجل من فاتورة #${r['invoice_id']}';
+      } else if (xKind != null && xKind != 'cash' && hasErpAccounts) {
+        // معاملة موصوفة: خصم، شيك، مرتجع، مطابقة...
+        counter = await ErpPosting.customerCounter(txn, xKind);
+        label = ErpPosting.customerKindLabel(xKind);
       } else if (type == 'opening_balance') {
         counter = opening;
         label = 'رصيد افتتاحي';
       } else if (type == 'manual_payment' || (type.isEmpty && amt < 0)) {
         counter = cash;
         label = 'تسديد';
+        // وصل قبض من صندوق محدَّد و/أو بعملة أجنبية
+        if (r['x_box'] != null) counter = await _cashAccountFor(txn, r['x_box'] as int?, cash);
+        final cur = r['x_cur'] as String?;
+        if (cur != null && cur != 'IQD' && r['x_fc'] != null) {
+          counterCurrency = cur;
+          counterFc = (r['x_fc'] as num).toDouble().abs();
+          counterRate = (r['x_rate'] as num?)?.toDouble();
+          label = 'تسديد بـ $cur';
+        }
       } else {
         counter = salesManual;
         label = 'دين يدوي';
@@ -378,10 +413,20 @@ class PostingEngine {
           ? [
               JournalLineInput(
                   accountId: ar, debit: amt, partyType: 'customer', partyId: customerId),
-              JournalLineInput(accountId: counter, credit: amt),
+              JournalLineInput(
+                  accountId: counter,
+                  credit: amt,
+                  currency: counterCurrency,
+                  fcAmount: counterFc,
+                  exchangeRate: counterRate),
             ]
           : [
-              JournalLineInput(accountId: counter, debit: -amt),
+              JournalLineInput(
+                  accountId: counter,
+                  debit: -amt,
+                  currency: counterCurrency,
+                  fcAmount: counterFc,
+                  exchangeRate: counterRate),
               JournalLineInput(
                   accountId: ar, credit: -amt, partyType: 'customer', partyId: customerId),
             ];
@@ -404,11 +449,16 @@ class PostingEngine {
       FROM purchase_invoices p LEFT JOIN suppliers s ON s.id = p.supplier_id
       WHERE p.status = 'confirmed'
     ''');
-    final rate = await Ledger.usdRate(db);
+    // 💱 سعر الدولار بتاريخ الفاتورة (سجل أسعار الصرف)، لا السعر الحالي
     final sources = <_Source>[];
+    final rates = <int, double>{};
     for (final r in rows) {
       final paid = _d(r['paid_amount']);
       if (paid.abs() < kMoneyEpsilon) continue; // الجزء الآجل يأتي من حركة المورد
+      final rate = r['currency'] == 'USD'
+          ? await CurrencyService.rateAt(db, 'USD', _date(r['date']))
+          : 1.0;
+      rates[r['id'] as int] = rate;
       final hash = [
         r['date'],
         paid.toStringAsFixed(2),
@@ -424,6 +474,7 @@ class PostingEngine {
       final r = s.row;
       final paid = _d(r['paid_amount']);
       final usd = r['currency'] == 'USD';
+      final rate = rates[s.id] ?? 1.0;
       final iqd = usd ? paid * rate : paid;
       await Ledger.writeEntry(txn,
           sourceType: 'purchase_invoice',
@@ -445,18 +496,35 @@ class PostingEngine {
   }
 
   Future<void> _syncSupplierTransactions(Database db, PostingSummary summary) async {
+    // طريقة الدفع (نقد/بنك/شيك/خصم مكتسب) وصندوقها من سند الدفع نفسه
+    final hasPayMethod = await _tableExists(db, 'supplier_payments') &&
+        await _columnExists(db, 'supplier_transactions', 'payment_id') &&
+        await _columnExists(db, 'supplier_payments', 'payment_method');
+    final hasPayExt = hasPayMethod && await _tableExists(db, 'supplier_payment_ext');
     final rows = await db.rawQuery('''
       SELECT t.id, t.supplier_id, t.transaction_date, t.amount_changed, t.currency,
-             t.transaction_type, t.description, s.name AS supplier_name
+             t.transaction_type, t.description, s.name AS supplier_name,
+             ${hasPayMethod ? 'sp.payment_method' : 'NULL'} AS pay_method,
+             ${hasPayExt ? 'pe.cash_box_id' : 'NULL'} AS pay_box,
+             ${hasPayExt ? 'pe.fx_rate' : 'NULL'} AS pay_rate
       FROM supplier_transactions t LEFT JOIN suppliers s ON s.id = t.supplier_id
+      ${hasPayMethod ? "LEFT JOIN supplier_payments sp ON sp.id = t.payment_id AND t.transaction_type = 'supplier_payment'" : ''}
+      ${hasPayExt ? 'LEFT JOIN supplier_payment_ext pe ON pe.payment_id = t.payment_id' : ''}
       WHERE COALESCE(t.is_deleted, 0) = 0
     ''');
-    final rate = await Ledger.usdRate(db);
     final sources = <_Source>[];
+    final rates = <int, double>{};
     for (final r in rows) {
       final amt = _d(r['amount_changed']);
       if (amt.abs() < kMoneyEpsilon) continue;
       final usd = r['currency'] == 'USD';
+      final payRate = (r['pay_rate'] as num?)?.toDouble();
+      final rate = !usd
+          ? 1.0
+          : (payRate != null && payRate > 0)
+              ? payRate
+              : await CurrencyService.rateAt(db, 'USD', _date(r['transaction_date']));
+      rates[r['id'] as int] = rate;
       final hash = [
         r['supplier_id'],
         r['transaction_date'],
@@ -464,9 +532,16 @@ class PostingEngine {
         r['currency'],
         r['transaction_type'],
         usd ? rate.toStringAsFixed(2) : '',
+        if (r['pay_method'] != null || r['pay_box'] != null) ...[r['pay_method'], r['pay_box']],
       ].join('|');
       sources.add(_Source(r['id'] as int, hash, r));
     }
+    final hasErpAccounts = await ErpPosting.hasAccounts(db);
+    int? bankLookup;
+    try {
+      bankLookup = await Ledger.systemAccountId(db, 'bank_main');
+    } catch (_) {}
+    final int? bankAcc = bankLookup;
     final apIqd = await Ledger.systemAccountId(db, 'ap_iqd');
     final apUsd = await Ledger.systemAccountId(db, 'ap_usd');
     final inventory = await Ledger.systemAccountId(db, 'inventory');
@@ -478,15 +553,32 @@ class PostingEngine {
       final r = s.row;
       final amt = _d(r['amount_changed']);
       final usd = r['currency'] == 'USD';
+      final rate = rates[s.id] ?? 1.0;
       final iqd = usd ? amt * rate : amt;
       final type = (r['transaction_type'] as String?) ?? '';
       final int counter;
       String label;
       switch (type) {
-        case 'supplier_payment':
-          counter = cash;
-          label = 'دفعة لمورد';
+        case 'supplier_payment': {
+          final method = r['pay_method'] as String?;
+          if (method == 'discount' && hasErpAccounts) {
+            counter = await Ledger.systemAccountId(txn, 'discount_received');
+            label = 'خصم مكتسب من مورد';
+          } else if (method == 'cheque' && hasErpAccounts) {
+            counter = await Ledger.systemAccountId(txn, 'cheques_payable');
+            label = 'شيك/ورقة دفع لمورد';
+          } else if (r['pay_box'] != null) {
+            counter = await _cashAccountFor(txn, r['pay_box'] as int?, cash);
+            label = 'دفعة لمورد';
+          } else if (method == 'bank' && bankAcc != null) {
+            counter = bankAcc;
+            label = 'دفعة لمورد (تحويل بنكي)';
+          } else {
+            counter = cash;
+            label = 'دفعة لمورد';
+          }
           break;
+        }
         case 'opening_balance':
           counter = opening;
           label = 'رصيد افتتاحي لمورد';

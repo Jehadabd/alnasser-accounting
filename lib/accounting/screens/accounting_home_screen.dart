@@ -20,6 +20,11 @@ import '../../inventory/item_card_screen.dart';
 import '../../inventory/purchase_return_screen.dart';
 import '../../org/screens/branches_warehouses_screen.dart';
 import 'vouchers_screen.dart';
+import '../../erp/accounting_plus/currency_voucher_screens.dart';
+import '../../erp/accounting_plus/period_screens.dart';
+import '../../erp/debts/receipt_screen.dart';
+import '../../erp/debts/debts_hub_screen.dart';
+import '../../erp/inventory/inventory_hub_screen.dart';
 
 class AccountingHomeScreen extends StatefulWidget {
   const AccountingHomeScreen({super.key});
@@ -224,6 +229,31 @@ class _AccountingHomeScreenState extends State<AccountingHomeScreen> {
                 _tile('الفروع والمخازن', Icons.warehouse, AccColors.green,
                     () => _open(const BranchesWarehousesScreen(), permission: AppPermissions.manageBranches),
                     subtitle: 'والتحويلات المخزنية'),
+                _tile('سند قيد مركّب', Icons.call_split, AccColors.navy,
+                    () => _open(const CompoundVouchersScreen(), permission: AppPermissions.accountingPost),
+                    subtitle: 'عدة حسابات وعملات'),
+                _tile('قوالب السندات', Icons.bookmarks, AccColors.blue,
+                    () => _open(const VoucherTemplatesScreen(), permission: AppPermissions.accountingPost)),
+                _tile('وصل قبض', Icons.receipt, AccColors.green,
+                    () => _open(const ReceiptScreen(), permission: AppPermissions.collection),
+                    subtitle: 'من عميل أو عدة عملاء'),
+                _tile('التحصيل والديون', Icons.request_quote, AccColors.red,
+                    () => _open(const DebtsHubScreen(), permission: AppPermissions.collection)),
+                _tile('المخزون', Icons.warehouse_outlined, AccColors.purple,
+                    () => _open(const InventoryHubScreen(), permission: AppPermissions.inventoryDocs),
+                    subtitle: 'مستندات، جرد، تصنيع'),
+                _tile('العملات', Icons.currency_exchange, AccColors.green,
+                    () => _open(const CurrenciesScreen(), permission: AppPermissions.currencies)),
+                _tile('التثبيت والإقفال', Icons.lock_clock, AccColors.purple,
+                    () => _open(const PeriodCloseScreen(), permission: AppPermissions.periodClose),
+                    subtitle: 'إقفال السنة المالية'),
+                _tile('فروقات العملة', Icons.swap_horiz, AccColors.orange,
+                    () => _open(const FxRevaluationScreen(), permission: AppPermissions.periodClose)),
+                _tile('الحسابات النوعية', Icons.workspaces, AccColors.cyan,
+                    () => _open(const AccountGroupsScreen(), permission: AppPermissions.accounting)),
+                _tile('المحاسبة المتقدمة', Icons.apps, AccColors.navy,
+                    () => _open(const AccountingPlusHubScreen(), permission: AppPermissions.accounting),
+                    subtitle: 'كل الأدوات'),
                 _tile('إعدادات المحاسبة', Icons.tune, AccColors.muted,
                     () => _open(const AccountingSettingsScreen(), permission: AppPermissions.accountingPost),
                     subtitle: 'سعر الصرف، مطابقة المخزون'),

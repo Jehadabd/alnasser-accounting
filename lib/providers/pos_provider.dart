@@ -3,6 +3,7 @@ import '../models/product.dart';
 import '../models/category.dart';
 import '../models/customer.dart';
 import '../services/database_service.dart';
+import '../erp/pos/scale_barcode.dart';
 import '../services/settings_manager.dart';
 import '../services/thermal_receipt_service.dart';
 import '../services/firebase_sync/invoice_sync_service.dart';
@@ -227,6 +228,7 @@ class POSProvider extends ChangeNotifier {
   Future<Product?> addProductByBarcode(String barcode) async {
     final cleanBarcode = barcode.trim();
     if (cleanBarcode.isEmpty) return null;
+    _lastErrorMessage = null;
     
     // 1. البحث أولاً في قائمة المنتجات المحملة بالذاكرة
     Product? product = _allProducts.cast<Product?>().firstWhere(
@@ -260,6 +262,37 @@ class POSProvider extends ChangeNotifier {
 
       addToCart(product, price: customPrice);
       return product;
+    }
+
+    // 3. ⚖️ باركود ميزان (بادئة + رمز المادة + الوزن/العدد)
+    try {
+      final hit = await ScaleBarcode.parse(cleanBarcode);
+      if (hit != null) {
+        final scaled = await DatabaseService().getProductById(hit.productId);
+        if (scaled != null) {
+          final qty = ScaleBarcode.integralBaseQty(hit);
+          if (qty == null) {
+            _lastErrorMessage =
+                'مادة موزونة (${scaled.name}) بكمية كسرية — الكاشير يقبل كميات صحيحة؛ استخدم «إنشاء قائمة» لهذه المادة';
+            notifyListeners();
+            return null;
+          }
+          if (!_allProducts.any((p) => p.id == scaled.id)) {
+            _allProducts.add(scaled);
+            _applyFilter();
+          }
+          addToCart(scaled);
+          final idx = _cartItems.indexWhere((i) => i.product.id == scaled.id && i.unitsInLargeUnit == 1);
+          if (idx >= 0) {
+            // addToCart أضاف 1 (أو زاد 1) ⇒ نضيف الباقي
+            _cartItems[idx].quantity += qty - 1;
+            notifyListeners();
+          }
+          return scaled;
+        }
+      }
+    } catch (e) {
+      debugPrint('scale barcode: $e');
     }
     return null;
   }

@@ -47,6 +47,8 @@ import '../services/smart_search/smart_search.dart'; // 🧠 البحث الذك
 import '../services/auth_service.dart'; // 👤 User authentication
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import '../utils/number_formatter.dart'; // 🔢 Number formatting
+import '../erp/erp_common.dart' show PeriodLock, askNumber;
+import '../erp/sales/invoice_side_panel.dart';
 
 // Helper: format product ID - show raw value without zero-padding
 String formatProductId5(int? id) {
@@ -1690,7 +1692,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   }
 
   // دالة تفعيل وضع التعديل
-  void _enableEditMode() {
+  Future<void> _enableEditMode() async {
+    // 🔒 تثبيت الإدخالات: لا تعديل لفاتورة داخل فترة مثبّتة
+    if (!await PeriodLock.guard(context, invoiceToManage?.invoiceDate)) return;
+    if (!mounted) return;
     setState(() {
       isViewOnly = false;
     });
@@ -3053,6 +3058,13 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // 🧱 رصيد العميل وسقف دينه وحسمه + حقول إضافية/مرتجع للفاتورة المحفوظة
+            ErpInvoiceSidePanel(
+              customerName: customerNameController.text,
+              invoiceTotal: total,
+              isDebt: paymentType == 'دين',
+              invoiceId: invoiceToManage?.status == 'محفوظة' ? invoiceToManage?.id : null,
+            ),
             // ═══════════════════════════════════════════════════════════════
             // 1. تفاصيل الإجماليات (داخل الـ ScrollView لتصعد للأعلى عند السحب)
             // ═══════════════════════════════════════════════════════════════
@@ -3836,6 +3848,13 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           mainAxisSize: MainAxisSize.min,
           children: [
             Text('السعر', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            // 🧱 أدوات سريعة (مثل الإداري): حسم % على السطر، هدية مجانية، الإجمالي ⇐ السعر
+            if (!_isEntryLocked) ...[
+              const SizedBox(width: 4),
+              _entryTool(Icons.percent, 'حسم % على هذا الصنف', _applyEntryDiscount),
+              _entryTool(Icons.card_giftcard, 'هدية مجانية (سعر صفر)', () => setState(() => _priceController.text = '0')),
+              _entryTool(Icons.functions, 'أدخل الإجمالي ليُحسب السعر', _applyEntryTotal),
+            ],
             if (_isEntryPriceBelowCost()) ...[
               const SizedBox(width: 4),
               Tooltip(
@@ -3884,6 +3903,40 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         ),
       ],
     );
+  }
+
+  // 🧱 أدوات شريط الإدخال (تعدّل حقل السعر فقط — الحفظ بالمسار الأصلي)
+  Widget _entryTool(IconData icon, String tip, VoidCallback onTap) => Tooltip(
+        message: tip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.all(2),
+            child: Icon(icon, size: 15, color: Colors.blueGrey.shade600),
+          ),
+        ),
+      );
+
+  Future<void> _applyEntryDiscount() async {
+    final price = double.tryParse(_priceController.text.replaceAll(',', '')) ?? 0;
+    if (price <= 0) return;
+    final pct = await askNumber(context, 'حسم % على سعر هذا الصنف', label: 'النسبة %');
+    if (pct == null || pct <= 0 || pct >= 100) return;
+    final newPrice = (price * (1 - pct / 100) * 100).roundToDouble() / 100;
+    setState(() => _priceController.text = formatNumber(newPrice));
+  }
+
+  Future<void> _applyEntryTotal() async {
+    final qty = safeParseDouble(_quantityController.text) ?? 0;
+    if (qty <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('أدخل الكمية أولاً')));
+      return;
+    }
+    final total = await askNumber(context, 'الإجمالي المطلوب لهذا الصنف', label: 'الإجمالي');
+    if (total == null || total < 0) return;
+    final newPrice = (total / qty * 100).roundToDouble() / 100;
+    setState(() => _priceController.text = formatNumber(newPrice));
   }
 
   // Helper: Entry Field with label

@@ -28,6 +28,9 @@ import '../services/password_service.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import '../services/settings_manager.dart'; // 📋 For company info in WhatsApp message
+import '../erp/debts/customer_card_screen.dart';
+import '../erp/debts/receipt_screen.dart';
+import '../erp/pickers.dart' show PartyLite;
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
@@ -712,6 +715,36 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
+            // 🗂️ بطاقة العميل الموسّعة (سقف، مجموعة، أعمار ديون، مستندات)
+            if (widget.customer.id != null)
+              IconButton(
+                icon: const Icon(Icons.badge_outlined, color: Colors.white),
+                tooltip: 'بطاقة العميل',
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => CustomerCardScreen(customerId: widget.customer.id!)),
+                ),
+              ),
+            // 🧾 وصل قبض (مع حسم وعملة وطباعة)
+            if (widget.customer.id != null)
+              IconButton(
+                icon: const Icon(Icons.payments_outlined, color: Colors.white),
+                tooltip: 'وصل قبض',
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ReceiptScreen(
+                        customer: PartyLite(widget.customer.id!, widget.customer.name, widget.customer.phone,
+                            widget.customer.currentTotalDebt),
+                      ),
+                    ),
+                  );
+                  if (!mounted) return;
+                  await context.read<AppProvider>().selectCustomer(widget.customer);
+                  await context.read<AppProvider>().loadCustomerTransactions(widget.customer.id!);
+                },
+              ),
             // ✏️ تعديل معلومات العميل
             IconButton(
               icon: const Icon(Icons.edit, color: Colors.white),

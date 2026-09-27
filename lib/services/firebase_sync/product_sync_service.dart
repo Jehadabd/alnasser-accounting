@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:sqflite/sqflite.dart' show Database, ConflictAlgorithm;
 import '../database_service.dart';
 import '../database/core/database_helpers.dart';
 import '../database/business/stock_ledger.dart';
@@ -211,6 +212,20 @@ class ProductSyncService {
           payload['category_description'] = catRes.first['description'];
         }
       }
+
+      // 3. 🗂️ بطاقة المادة الموسّعة (رمز، اسم ثانٍ، حدود، نسب ربح، ميزان...)
+      // الحقول المحلية فقط (المورد/المخزن الافتراضي، مسار الصورة) لا تُرسل.
+      try {
+        final d = await db.query('product_details', where: 'product_id = ?', whereArgs: [productId], limit: 1);
+        if (d.isNotEmpty) {
+          final m = Map<String, dynamic>.from(d.first)
+            ..remove('product_id')
+            ..remove('default_supplier_id')
+            ..remove('default_warehouse_id')
+            ..remove('image_path');
+          payload['item_details'] = m;
+        }
+      } catch (_) {}
     }
     return payload;
   }
@@ -409,6 +424,7 @@ class ProductSyncService {
       final categoryName = localData.remove('category_name') as String?;
       final categoryDescription = localData.remove('category_description') as String?;
       final multipleBarcodes = localData.remove('multiple_barcodes') as List<dynamic>?;
+      final itemDetails = localData.remove('item_details');
       
       // 📁 معالجة القسم: البحث بالاسم وإسناده، أو إنشاؤه تلقائياً إذا لم يكن موجوداً
       if (categoryName != null && categoryName.trim().isNotEmpty) {
@@ -479,6 +495,11 @@ class ProductSyncService {
         print('📦 [ProductSyncService] تم إضافة منتج جديد من السحابة: ${localData['name']} (سعر: ${localData['unit_price'] ?? localData['price1']}, كمية: ${localData['stock_quantity']})');
       }
       
+      // 🗂️ بطاقة المادة الموسّعة: دمج مع الحقول المحلية (لا تمس الكمية ولا الأسعار)
+      if (itemDetails is Map) {
+        await _applyItemDetails(db, localProductId, Map<String, dynamic>.from(itemDetails));
+      }
+
       // Handle multiple barcodes
       if (multipleBarcodes != null) {
         await db.delete('product_barcodes', where: 'product_id = ?', whereArgs: [localProductId]);
@@ -501,6 +522,36 @@ class ProductSyncService {
       }
     } catch (e) {
       print('ProductSyncService - Error processing incoming product: $e');
+    }
+  }
+
+  /// يدمج تفاصيل بطاقة المادة الواردة مع الصف المحلي (أعمدة هذا الجهاز فقط).
+  Future<void> _applyItemDetails(Database db, int productId, Map<String, dynamic> incoming) async {
+    try {
+      final cols = (await db.rawQuery('PRAGMA table_info(product_details)')).map((c) => c['name'] as String).toSet();
+      if (cols.isEmpty) return;
+      final current = await db.query('product_details', where: 'product_id = ?', whereArgs: [productId], limit: 1);
+      final row = <String, Object?>{
+        if (current.isNotEmpty) ...current.first,
+        for (final e in incoming.entries)
+          if (cols.contains(e.key) &&
+              e.key != 'product_id' &&
+              e.key != 'default_supplier_id' &&
+              e.key != 'default_warehouse_id' &&
+              e.key != 'image_path')
+            e.key: e.value,
+        'product_id': productId,
+      };
+      // رمز المادة فريد: إن كان مستخدماً لمادة أخرى هنا نُبقي الرمز المحلي
+      final code = row['item_code'] as String?;
+      if (code != null && code.trim().isNotEmpty) {
+        final dup = await db.query('product_details',
+            columns: ['product_id'], where: 'item_code = ? AND product_id != ?', whereArgs: [code, productId], limit: 1);
+        if (dup.isNotEmpty) row['item_code'] = current.isEmpty ? null : current.first['item_code'];
+      }
+      await db.insert('product_details', row, conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (e) {
+      print('ProductSyncService - item details merge skipped: $e');
     }
   }
 }

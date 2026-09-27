@@ -180,7 +180,7 @@ class OrgService {
     const inWarehouse = '''
       COALESCE((SELECT SUM(m.delta) FROM stock_movements m
                 WHERE m.product_sync_uuid = p.sync_uuid AND m.warehouse_id = w.id
-                  AND m.kind = 'transfer'), 0)
+                  AND m.kind != 'opening'), 0)
       - COALESCE((SELECT SUM(CASE WHEN COALESCE(ii.quantity_large_unit, 0) > 0
                                   THEN ii.quantity_large_unit * COALESCE(NULLIF(ii.units_in_large_unit, 0), 1)
                                   ELSE COALESCE(ii.quantity_individual, 0) END)

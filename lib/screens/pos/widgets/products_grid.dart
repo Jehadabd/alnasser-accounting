@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../../providers/pos_provider.dart';
 import '../../../models/product.dart';
+import '../../../models/app_user.dart';
+import '../../../services/auth_service.dart';
 
 class ProductsGrid extends StatelessWidget {
   const ProductsGrid({super.key});
@@ -175,6 +177,13 @@ class _ProductCard extends StatelessWidget {
                       ),
                     ),
                     
+                    // 💰 الكلفة (لمن يملك صلاحية رؤية الكلفة والأرباح فقط)
+                    if (AuthService().hasPermission(AppPermissions.viewCostProfit) && (product.costPrice ?? 0) > 0)
+                      Text(
+                        'كلفة ${_formatPrice(product.costPrice ?? 0)}',
+                        style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                      ),
+
                     // Stock & Price Row
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,

@@ -8,6 +8,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../services/database_service.dart';
+import '../erp/erp_common.dart' show PeriodLock;
 import 'ledger.dart';
 
 enum VoucherType {
@@ -158,6 +159,7 @@ class VouchersService {
     int? userId,
   }) async {
     if (amount <= 0) throw LedgerException('المبلغ يجب أن يكون أكبر من صفر');
+    await PeriodLock.assertOpen(date);
     final db = await _getDb();
     return db.transaction((txn) async {
       final box = await txn.query('cash_boxes', where: 'id = ?', whereArgs: [cashBoxId]);
@@ -252,6 +254,8 @@ class VouchersService {
   /// حذف سند = حذف منطقي + حذف قيده (يبقى في السجل لمن يراجع).
   Future<void> delete(int voucherId, {int? userId}) async {
     final db = await _getDb();
+    final v = await db.query('vouchers', columns: ['voucher_date'], where: 'id = ?', whereArgs: [voucherId], limit: 1);
+    if (v.isNotEmpty) await PeriodLock.assertOpen(DateTime.parse(v.first['voucher_date'] as String));
     await db.transaction((txn) async {
       await txn.update(
         'vouchers',
@@ -280,6 +284,9 @@ class VouchersService {
     if (type != null) {
       where.add('v.voucher_type = ?');
       args.add(type.name);
+    } else {
+      // السندات المركّبة لها شاشتها الخاصة
+      where.add("v.voucher_type IN (${VoucherType.values.map((t) => "'${t.name}'").join(', ')})");
     }
     if (from != null) {
       where.add('v.voucher_date >= ?');

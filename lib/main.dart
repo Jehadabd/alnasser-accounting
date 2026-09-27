@@ -58,6 +58,11 @@ import 'package:firebase_auth/firebase_auth.dart'; // 🔐 Firebase Authenticati
 import 'services/firebase_sync/firebase_custom_config.dart'; // 🆕 Firebase Config
 import 'services/firebase_sync/sync_diagnostics.dart'; // 🩺 تشخيص المصادقة/المزامنة
 import 'services/firebase_sync/web_auth_clear.dart'; // 🧹 تنظيف مخزن جلسة المتصفح
+import 'erp/dashboard/dashboard_screen.dart';
+import 'erp/sales/sales_hub_screen.dart';
+import 'erp/debts/debts_hub_screen.dart';
+import 'erp/inventory/inventory_hub_screen.dart';
+import 'erp/accounting_plus/period_screens.dart' show AccountingPlusHubScreen;
 
 /// 🔥 مفتاح الملاح العام — يُستخدم من ReconciliationPrompt وغيرها لإظهار
 /// حوارات من خارج شجرة الويدجت.
@@ -458,6 +463,11 @@ class MyApp extends StatelessWidget {
           '/item_cards': (context) => const _LicenseGuard(child: ItemCardsListScreen()), // 🗂️
           '/network_settings': (context) => const _LicenseGuard(child: NetworkSettingsScreen()), // 🖧
           '/purchase_return': (context) => const _LicenseGuard(child: PurchaseReturnScreen()), // ↩️
+          '/dashboard': (context) => const _LicenseGuard(child: DashboardScreen()), // 📈
+          '/sales_hub': (context) => const _LicenseGuard(child: SalesHubScreen()), // 🛒
+          '/debts_hub': (context) => const _LicenseGuard(child: DebtsHubScreen()), // 💵
+          '/inventory_hub': (context) => const _LicenseGuard(child: InventoryHubScreen()), // 📦
+          '/accounting_plus': (context) => const _LicenseGuard(child: AccountingPlusHubScreen()), // 🏛️
         },
         initialRoute: initialRoute,
         navigatorKey: globalNavigatorKey, // ✅ مفتاح الملاح العام

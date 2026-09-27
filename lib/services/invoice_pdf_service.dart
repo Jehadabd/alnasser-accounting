@@ -1,4 +1,5 @@
 // services/invoice_pdf_service.dart
+import '../erp/arabic_words.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'dart:convert';
@@ -178,6 +179,13 @@ class InvoicePdfService {
                           ),
                         ],
                       ],
+                    ),
+                    // 🔤 المبلغ كتابةً (التفقيط)
+                    pw.SizedBox(height: 4),
+                    pw.Directionality(
+                      textDirection: pw.TextDirection.rtl,
+                      child: pw.Text(ArabicWords.money(afterDiscount.toDouble()),
+                          style: pw.TextStyle(font: font, fontSize: 10)),
                     ),
                     pw.SizedBox(height: 6),
                     pw.Center(

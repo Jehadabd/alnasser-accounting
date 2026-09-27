@@ -854,6 +854,55 @@ class _MainScreenState extends State<MainScreen> {
                 color: const Color(0xFF455A64),
               ),
 
+            // 📈 لوحة المؤشرات والمراكز الجديدة
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.dashboard_rounded,
+                title: 'لوحة المؤشرات',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.dashboard)) {
+                    Navigator.pushNamed(context, '/dashboard');
+                  }
+                },
+                color: const Color(0xFF1B6CA8),
+              ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.storefront_rounded,
+                title: 'المبيعات والمستندات',
+                onTap: () {
+                  if (_authService.hasPermission(AppPermissions.createInvoice) ||
+                      _checkPermission(AppPermissions.salesDocs)) {
+                    Navigator.pushNamed(context, '/sales_hub');
+                  }
+                },
+                color: const Color(0xFF0E7C61),
+              ),
+            _buildModernFeatureButton(
+              icon: Icons.request_quote_rounded,
+              title: 'التحصيل والديون',
+              onTap: () {
+                if (_authService.hasPermission(AppPermissions.debtRegister) ||
+                    _checkPermission(AppPermissions.collection)) {
+                  Navigator.pushNamed(context, '/debts_hub');
+                }
+              },
+              color: const Color(0xFFC0392B),
+            ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.warehouse_rounded,
+                title: 'المخزون',
+                onTap: () {
+                  if (_authService.hasPermission(AppPermissions.itemCard) ||
+                      _authService.hasPermission(AppPermissions.inventoryReports) ||
+                      _checkPermission(AppPermissions.inventoryDocs)) {
+                    Navigator.pushNamed(context, '/inventory_hub');
+                  }
+                },
+                color: const Color(0xFF5B3CC4),
+              ),
+
             // 🏛️ النسخة المحاسبية
             if (!isDebtsOnly)
               _buildModernFeatureButton(
@@ -865,6 +914,17 @@ class _MainScreenState extends State<MainScreen> {
                   }
                 },
                 color: const Color(0xFF0F3460),
+              ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.account_balance_wallet_rounded,
+                title: 'المحاسبة المتقدمة',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.accounting)) {
+                    Navigator.pushNamed(context, '/accounting_plus');
+                  }
+                },
+                color: const Color(0xFF16213E),
               ),
             if (!isDebtsOnly)
               _buildModernFeatureButton(

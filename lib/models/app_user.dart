@@ -97,6 +97,18 @@ class AppPermissions {
   static const String itemCard = 'item_card'; // بطاقة المادة الموسّعة
   static const String networkSettings = 'network_settings'; // إعداد الشبكة (سيرفر/طرفية)
 
+  // 🧱 ميزات الإداري وسهل
+  static const String dashboard = 'erp_dashboard'; // لوحة المؤشرات
+  static const String salesDocs = 'erp_sales_docs'; // المرتجعات، عروض الأسعار، الطلبات
+  static const String collection = 'erp_collection'; // وصولات القبض، الاستحقاقات، المطابقة
+  static const String debtReports = 'erp_debt_reports'; // أعمار الديون ونسب التحصيل
+  static const String customerCard = 'erp_customer_card'; // بطاقة العميل الموسّعة
+  static const String inventoryDocs = 'erp_inventory_docs'; // إدخال/إخراج/جرد/تصنيع
+  static const String priceTools = 'erp_price_tools'; // تعديل الأسعار الجماعي
+  static const String inventoryReports = 'erp_inventory_reports'; // تقارير المخزون
+  static const String currencies = 'erp_currencies'; // العملات وأسعار الصرف
+  static const String periodClose = 'erp_period_close'; // تثبيت الإدخالات وإقفال السنة
+
   static const Map<String, String> allPermissions = {
     // أزرار الشاشة الرئيسية
     posAccess: 'الوصول للكاشير',
@@ -124,21 +136,37 @@ class AppPermissions {
     stockTransfer: 'التحويل بين المخازن',
     itemCard: 'بطاقة المادة الموسّعة',
     networkSettings: 'إعداد الشبكة (سيرفر/طرفية)',
+    // ميزات الإداري وسهل
+    dashboard: 'لوحة المؤشرات',
+    salesDocs: 'مستندات المبيعات: المرتجعات، عروض الأسعار، الطلبات',
+    collection: 'التحصيل: وصولات القبض، الاستحقاقات، مطابقة الأرصدة',
+    debtReports: 'تقارير الديون: أعمار الديون ونسب التحصيل',
+    customerCard: 'بطاقة العميل الموسّعة (سقف الدين، المجموعة...)',
+    inventoryDocs: 'مستندات المخزون: إدخال، إخراج، جرد، تصنيع',
+    priceTools: 'تعديل الأسعار الجماعي',
+    inventoryReports: 'تقارير المخزون',
+    currencies: 'العملات وأسعار الصرف',
+    periodClose: 'تثبيت الإدخالات وإقفال السنة المالية',
   };
 
   /// قوالب الأدوار الجاهزة — تملأ الصلاحيات بضغطة، ويمكن تعديلها بعدها.
   static const Map<String, List<String>> roleTemplates = {
-    'كاشير': [posAccess, createInvoice, debtRegister, addCustomer, addTransaction],
-    'أمين مخزن': [productEntry, editProducts, monthlyInventory, stockTransfer, itemCard, suppliers],
+    'كاشير': [posAccess, createInvoice, debtRegister, addCustomer, addTransaction, collection],
+    'أمين مخزن': [
+      productEntry, editProducts, monthlyInventory, stockTransfer, itemCard, suppliers,
+      inventoryDocs, inventoryReports,
+    ],
     'محاسب': [
       debtRegister, lateCustomers, shareDebtsPdf, reports, suppliers, addCustomer,
       addTransaction, editInvoices, accounting, accountingPost, viewCostProfit,
+      dashboard, salesDocs, collection, debtReports, customerCard, currencies, inventoryReports,
     ],
     'مدير فرع': [
       posAccess, debtRegister, productEntry, createInvoice, lateCustomers, shareDebtsPdf,
       editInvoices, editProducts, monthlyInventory, reports, suppliers, addCustomer,
       addTransaction, accounting, accountingPost, viewCostProfit, manageBranches,
-      stockTransfer, itemCard,
+      stockTransfer, itemCard, dashboard, salesDocs, collection, debtReports, customerCard,
+      inventoryDocs, priceTools, inventoryReports, currencies,
     ],
   };
 

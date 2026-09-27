@@ -4,6 +4,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../erp/accounting_plus/voucher_pdf.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../ledger.dart';
@@ -170,6 +171,11 @@ class _VouchersScreenState extends State<VouchersScreen> {
                       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                         MoneyText((v['amount'] as num).toDouble(), bold: true),
                         IconButton(
+                          tooltip: 'طباعة السند',
+                          icon: const Icon(Icons.print_outlined),
+                          onPressed: () => VoucherPdf.printVoucher(context, v['id'] as int),
+                        ),
+                        IconButton(
                           tooltip: 'حذف',
                           icon: const Icon(Icons.delete_outline),
                           onPressed: () => _delete(v),
@@ -187,8 +193,19 @@ class _VouchersScreenState extends State<VouchersScreen> {
 // ═══════════════════════════════ نموذج السند ═══════════════════════════════
 
 class VoucherFormScreen extends StatefulWidget {
-  const VoucherFormScreen({super.key, required this.type});
+  const VoucherFormScreen({
+    super.key,
+    required this.type,
+    this.initialCashBoxId,
+    this.initialAccountId,
+    this.initialDescription,
+  });
   final VoucherType type;
+
+  /// قيم أولية (من قوالب السندات).
+  final int? initialCashBoxId;
+  final int? initialAccountId;
+  final String? initialDescription;
 
   @override
   State<VoucherFormScreen> createState() => _VoucherFormScreenState();
@@ -233,7 +250,14 @@ class _VoucherFormScreenState extends State<VoucherFormScreen> {
     setState(() {
       _boxes = boxes;
       _box = boxes.isEmpty ? null : boxes.first;
+      for (final b in boxes) {
+        if (b.id == widget.initialCashBoxId) _box = b;
+      }
       _accounts = accs;
+      for (final a in accs) {
+        if (a.id == widget.initialAccountId) _account = a;
+      }
+      if (widget.initialDescription != null && _desc.text.isEmpty) _desc.text = widget.initialDescription!;
     });
   }
 

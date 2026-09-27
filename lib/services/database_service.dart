@@ -39,6 +39,9 @@ import 'database/core/database_config.dart';
 import '../lan/lan_settings.dart'; // 🖧 وضع الشبكة (مستقل/سيرفر/طرفية)
 import '../lan/lan_codec.dart' show LanConnectionException;
 import '../accounting/accounting_schema.dart'; // 🏛️ مخطط النسخة المحاسبية
+import '../erp/erp_schema.dart'; // 🧱 ميزات الإداري وسهل
+import '../erp/erp_common.dart' show PeriodLock;
+import '../erp/device_defaults.dart';
 import 'database/core/database_helpers.dart';
 import 'database/core/database_migrations.dart';
 
@@ -341,6 +344,13 @@ class DatabaseService {
       await AccountingSchema.ensure(db);
     } catch (e) {
       print('⚠️ Error running AccountingSchema.ensure: $e');
+    }
+
+    // 🧱 ميزات الإداري وسهل: جداول ومسارات إضافية فقط (لا تعديل على القديم).
+    try {
+      await ErpSchema.ensure(db);
+    } catch (e) {
+      print('⚠️ Error running ErpSchema.ensure: $e');
     }
 
     // 🗜️ تصغير قاعدة البيانات: بقايا مزامنة Drive + ضغط اللقطات القديمة.
@@ -1697,7 +1707,10 @@ class DatabaseService {
   // 🔥 الدالة المعقدة تم نقلها لـ InvoiceManager
   Future<int> saveCompleteInvoice(Invoice invoice, List<InvoiceItem> items, {String? createdBy}) async {
     await database;
-    return invoiceManager.saveCompleteInvoice(invoice, items, createdBy: createdBy);
+    final id = await invoiceManager.saveCompleteInvoice(invoice, items, createdBy: createdBy);
+    // 🖥️ صندوق ومخزن هذا الجهاز (إن ضُبطا) — لا يغيّر فاتورة مختومة مسبقاً
+    await DeviceDefaults.stampInvoice(id);
+    return id;
   }
   
   Future<int> getLastInvoiceId() async {
@@ -1832,9 +1845,12 @@ class DatabaseService {
     final db = await database;
 
     final check = await db.query('invoices',
-        columns: ['is_created_by_me', 'invoice_uuid', 'customer_id', 'version'],
+        columns: ['is_created_by_me', 'invoice_uuid', 'customer_id', 'version', 'invoice_date'],
         where: 'id = ?', whereArgs: [id], limit: 1);
     if (check.isEmpty) return 0;
+    // 🔒 تثبيت الإدخالات: لا حذف لفاتورة داخل فترة مثبّتة
+    final invDate = DateTime.tryParse((check.first['invoice_date'] as String?) ?? '');
+    if (invDate != null) await PeriodLock.assertOpen(invDate, db);
     if (check.first['is_created_by_me'] == 0) {
       throw Exception('لا يمكن حذف هذه الفاتورة لأنها مستوردة من جهاز آخر.');
     }
