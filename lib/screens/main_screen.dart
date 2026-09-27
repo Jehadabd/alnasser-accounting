@@ -25,6 +25,7 @@ import '../services/alert_service.dart'; // 🔔 Added
 import '../models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
 import '../widgets/sync_health_banner.dart'; // 🩺 تنبيهات صحة المزامنة
+import '../lan/lan_status_banner.dart';
 import '../services/license_service.dart'; // 🔐 نظام التراخيص
 // ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
 // تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
@@ -484,6 +485,8 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 // 🩺 تنبيهات صحة المزامنة (لا يظهر شيء ما دام كل شيء سليماً)
                 const SyncHealthBanner(),
+                // 🖧 حالة الاتصال بحاسبة السيرفر (طرفية) أو عدد الطرفيات (سيرفر)
+                const LanStatusBanner(),
                 Expanded(
             child: Padding(
               padding: const EdgeInsets.all(16.0),

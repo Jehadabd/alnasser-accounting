@@ -50,6 +50,8 @@ import 'lan/network_settings_screen.dart';
 import 'accounting/screens/accounting_home_screen.dart'; // 🏛️ المحاسبة
 import 'org/screens/branches_warehouses_screen.dart'; // 🏢 الفروع والمخازن
 import 'inventory/item_card_screen.dart'; // 🗂️ بطاقات المواد
+import 'inventory/purchase_return_screen.dart'; // ↩️ مرتجع المشتريات
+import 'widgets/global_shortcuts.dart'; // ⌨️ F1..F8
 
 import 'package:firebase_core/firebase_core.dart'; // 🆕 Firebase
 import 'package:firebase_auth/firebase_auth.dart'; // 🔐 Firebase Authentication
@@ -455,9 +457,13 @@ class MyApp extends StatelessWidget {
           '/branches': (context) => const _LicenseGuard(child: BranchesWarehousesScreen()), // 🏢
           '/item_cards': (context) => const _LicenseGuard(child: ItemCardsListScreen()), // 🗂️
           '/network_settings': (context) => const _LicenseGuard(child: NetworkSettingsScreen()), // 🖧
+          '/purchase_return': (context) => const _LicenseGuard(child: PurchaseReturnScreen()), // ↩️
         },
         initialRoute: initialRoute,
         navigatorKey: globalNavigatorKey, // ✅ مفتاح الملاح العام
+        // ⌨️ اختصارات لوحة المفاتيح لكل الشاشات (F1 الكاشير، F2 قائمة، F4 المحاسبة...)
+        builder: (context, child) =>
+            GlobalShortcuts(navigatorKey: globalNavigatorKey, child: child ?? const SizedBox.shrink()),
       ),
     );
   }

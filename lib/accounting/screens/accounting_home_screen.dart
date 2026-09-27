@@ -16,6 +16,9 @@ import 'income_statement_screen.dart';
 import 'journal_screen.dart';
 import 'accounting_settings_screen.dart';
 import 'trial_balance_screen.dart';
+import '../../inventory/item_card_screen.dart';
+import '../../inventory/purchase_return_screen.dart';
+import '../../org/screens/branches_warehouses_screen.dart';
 import 'vouchers_screen.dart';
 
 class AccountingHomeScreen extends StatefulWidget {
@@ -213,6 +216,14 @@ class _AccountingHomeScreenState extends State<AccountingHomeScreen> {
                     subtitle: 'الأرباح والخسائر'),
                 _tile('الميزانية العمومية', Icons.account_balance, AccColors.navy,
                     () => _open(const BalanceSheetScreen(), permission: AppPermissions.viewCostProfit)),
+                _tile('مرتجع مشتريات', Icons.assignment_return, AccColors.orange,
+                    () => _open(const PurchaseReturnScreen(), permission: AppPermissions.suppliers),
+                    subtitle: 'إرجاع بضاعة للمورد'),
+                _tile('بطاقات المواد', Icons.inventory, AccColors.cyan,
+                    () => _open(const ItemCardsListScreen(), permission: AppPermissions.itemCard)),
+                _tile('الفروع والمخازن', Icons.warehouse, AccColors.green,
+                    () => _open(const BranchesWarehousesScreen(), permission: AppPermissions.manageBranches),
+                    subtitle: 'والتحويلات المخزنية'),
                 _tile('إعدادات المحاسبة', Icons.tune, AccColors.muted,
                     () => _open(const AccountingSettingsScreen(), permission: AppPermissions.accountingPost),
                     subtitle: 'سعر الصرف، مطابقة المخزون'),

@@ -81,5 +81,11 @@ end;
 ; تثبيت Visual C++ Runtime أولاً (بصمت - لن يظهر للمستخدم إلا إذا احتاج)
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "جاري تثبيت المتطلبات الأساسية..."; Flags: waituntilterminated
 
+; 🖧 النسخة المحاسبية: السماح لخادم الشبكة المحلية (حاسبة السيرفر) والاكتشاف التلقائي
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Alnaser LAN Server"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Alnaser LAN Server"" dir=in action=allow protocol=TCP localport=47800 profile=any"; Flags: runhidden waituntilterminated
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Alnaser LAN Discovery"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Alnaser LAN Discovery"" dir=in action=allow protocol=UDP localport=47801 profile=any"; Flags: runhidden waituntilterminated
+
 ; تشغيل التطبيق بعد التثبيت
 Filename: "{app}\debt_book.exe"; Description: "{cm:LaunchProgram,Alnaser}"; Flags: nowait postinstall skipifsilent

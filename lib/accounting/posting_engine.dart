@@ -495,6 +495,10 @@ class PostingEngine {
           counter = corrections;
           label = 'تسوية حساب مورد';
           break;
+        case 'purchase_return':
+          counter = inventory;
+          label = 'مرتجع مشتريات';
+          break;
         default:
           counter = amt > 0 ? inventory : cash;
           label = amt > 0 ? 'مشتريات آجلة' : 'دفعة لمورد';

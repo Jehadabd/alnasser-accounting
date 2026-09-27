@@ -12,7 +12,7 @@
   4) التشغيل الثاني لا يغيّر شيئاً (إدمبوتنت).
   5) حذف معاملة وتعديل فاتورة ينعكسان في الدفتر.
 """
-import json, re, sqlite3, sys, os, shutil, datetime
+import json, re, sqlite3, sys, os, shutil, datetime, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -239,7 +239,7 @@ def check(c, label):
 
 def main():
     src = sys.argv[1]
-    work = src + '.verify.db'
+    work = os.path.join(tempfile.gettempdir(), 'alnaser_verify_posting.db')
     shutil.copy(src, work)
     c = sqlite3.connect(work)
     stmts, cols, chart = load_schema()
