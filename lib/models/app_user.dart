@@ -88,6 +88,15 @@ class AppPermissions {
   static const String addTransaction = 'add_transaction'; // إضافة معاملة
   static const String manageUsers = 'manage_users'; // إدارة المستخدمين
 
+  // 🏛️ النسخة المحاسبية
+  static const String accounting = 'accounting'; // عرض المحاسبة والقيود والكشوفات
+  static const String accountingPost = 'accounting_post'; // السندات والقيود اليدوية وشجرة الحسابات
+  static const String viewCostProfit = 'view_cost_profit'; // رؤية الكلفة والأرباح وقائمة الدخل
+  static const String manageBranches = 'manage_branches'; // الفروع والمخازن
+  static const String stockTransfer = 'stock_transfer'; // التحويل بين المخازن
+  static const String itemCard = 'item_card'; // بطاقة المادة الموسّعة
+  static const String networkSettings = 'network_settings'; // إعداد الشبكة (سيرفر/طرفية)
+
   static const Map<String, String> allPermissions = {
     // أزرار الشاشة الرئيسية
     posAccess: 'الوصول للكاشير',
@@ -107,6 +116,30 @@ class AppPermissions {
     addCustomer: 'إضافة عميل',
     addTransaction: 'إضافة معاملة',
     manageUsers: 'إدارة المستخدمين',
+    // النسخة المحاسبية
+    accounting: 'المحاسبة: عرض القيود والكشوفات وميزان المراجعة',
+    accountingPost: 'المحاسبة: السندات والمصاريف والقيود اليدوية',
+    viewCostProfit: 'رؤية الكلفة والأرباح (قائمة الدخل والميزانية)',
+    manageBranches: 'الفروع والمخازن',
+    stockTransfer: 'التحويل بين المخازن',
+    itemCard: 'بطاقة المادة الموسّعة',
+    networkSettings: 'إعداد الشبكة (سيرفر/طرفية)',
+  };
+
+  /// قوالب الأدوار الجاهزة — تملأ الصلاحيات بضغطة، ويمكن تعديلها بعدها.
+  static const Map<String, List<String>> roleTemplates = {
+    'كاشير': [posAccess, createInvoice, debtRegister, addCustomer, addTransaction],
+    'أمين مخزن': [productEntry, editProducts, monthlyInventory, stockTransfer, itemCard, suppliers],
+    'محاسب': [
+      debtRegister, lateCustomers, shareDebtsPdf, reports, suppliers, addCustomer,
+      addTransaction, editInvoices, accounting, accountingPost, viewCostProfit,
+    ],
+    'مدير فرع': [
+      posAccess, debtRegister, productEntry, createInvoice, lateCustomers, shareDebtsPdf,
+      editInvoices, editProducts, monthlyInventory, reports, suppliers, addCustomer,
+      addTransaction, accounting, accountingPost, viewCostProfit, manageBranches,
+      stockTransfer, itemCard,
+    ],
   };
 
   static List<String> get allKeys => allPermissions.keys.toList();

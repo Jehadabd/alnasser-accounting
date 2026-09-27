@@ -36,6 +36,9 @@ import 'smart_pricing_service.dart';
 
 // Core
 import 'database/core/database_config.dart';
+import '../lan/lan_settings.dart'; // 🖧 وضع الشبكة (مستقل/سيرفر/طرفية)
+import '../lan/lan_codec.dart' show LanConnectionException;
+import '../accounting/accounting_schema.dart'; // 🏛️ مخطط النسخة المحاسبية
 import 'database/core/database_helpers.dart';
 import 'database/core/database_migrations.dart';
 
@@ -244,6 +247,8 @@ class DatabaseService {
       // النسخة الاحتياطية إن وُجدت، وإلا نحذف الملف التالف وننشئ قاعدة جديدة.
       // هذا يمنع التطبيق من التعليق صامتاً (لا شاشة) عند تلف الـ DB.
       print('⚠️ فشل فتح قاعدة البيانات: $e');
+      // 🖧 الطرفية لا تملك ملف القاعدة — لا حذف ولا استعادة، الخطأ يظهر كما هو
+      if (AppNetworkMode.isClient) rethrow;
       // 🌐 الويب: لا ملفات نظام ولا نسخ احتياطية ملفية — أعد المحاولة مباشرة
       // (IndexedDB يدير التخزين داخلياً في محرك WASM)
       if (kIsWeb) {
@@ -281,6 +286,19 @@ class DatabaseService {
 
   Future<Database> _initDatabase() async {
     final path = await DatabaseConfig.getDatabasePath();
+
+    // 🖧 الطرفية: قاعدة السيرفر جاهزة ومُرقّاة — نفتحها بلا هجرات ولا صيانة
+    //    (الهجرات وVACUUM والفحوص تعمل على حاسبة السيرفر وحدها).
+    if (AppNetworkMode.isClient) {
+      final db = await openDatabase(path);
+      final v = await db.rawQuery('PRAGMA user_version');
+      final serverVersion = (v.first.values.first as int?) ?? 0;
+      if (serverVersion < DatabaseConfig.databaseVersion) {
+        throw LanConnectionException(
+            'برنامج السيرفر أقدم من هذا الجهاز (إصدار القاعدة $serverVersion) — حدّث برنامج السيرفر أولاً');
+      }
+      return db;
+    }
     // تأكد من وجود المجلد (أصلي فقط — الويب لا مجلدات)
     if (!kIsWeb) {
       try {
@@ -315,6 +333,14 @@ class DatabaseService {
       await StockLedger.migrate(db);
     } catch (e) {
       print('⚠️ Error running StockLedger.migrate: $e');
+    }
+
+    // 🏛️ النسخة المحاسبية: الفروع، المخازن، شجرة الحسابات، القيود، الصناديق،
+    // السندات، بطاقة المادة. آمن التكرار (IF NOT EXISTS + بذر ما ينقص فقط).
+    try {
+      await AccountingSchema.ensure(db);
+    } catch (e) {
+      print('⚠️ Error running AccountingSchema.ensure: $e');
     }
 
     // 🗜️ تصغير قاعدة البيانات: بقايا مزامنة Drive + ضغط اللقطات القديمة.

@@ -850,6 +850,52 @@ class _MainScreenState extends State<MainScreen> {
                 },
                 color: const Color(0xFF455A64),
               ),
+
+            // 🏛️ النسخة المحاسبية
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.account_balance,
+                title: 'المحاسبة',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.accounting)) {
+                    Navigator.pushNamed(context, '/accounting');
+                  }
+                },
+                color: const Color(0xFF0F3460),
+              ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.inventory,
+                title: 'بطاقات المواد',
+                onTap: () {
+                  if (_checkPermission(AppPermissions.itemCard)) {
+                    Navigator.pushNamed(context, '/item_cards');
+                  }
+                },
+                color: const Color(0xFF00B4D8),
+              ),
+            if (!isDebtsOnly)
+              _buildModernFeatureButton(
+                icon: Icons.warehouse,
+                title: 'الفروع والمخازن',
+                onTap: () {
+                  if (_authService.hasPermission(AppPermissions.stockTransfer) ||
+                      _checkPermission(AppPermissions.manageBranches)) {
+                    Navigator.pushNamed(context, '/branches');
+                  }
+                },
+                color: const Color(0xFF047857),
+              ),
+            _buildModernFeatureButton(
+              icon: Icons.lan,
+              title: 'الشبكة',
+              onTap: () {
+                if (_checkPermission(AppPermissions.networkSettings)) {
+                  Navigator.pushNamed(context, '/network_settings');
+                }
+              },
+              color: const Color(0xFF2563EB),
+            ),
           ],
         ),
       ),

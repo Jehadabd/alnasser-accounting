@@ -44,6 +44,12 @@ import 'services/font_manager.dart'; // 🔡 Font management
 import 'services/ensemble_ai_service_factory.dart'; // 🧠 AI Service (مشروط ويب/أصلي)
 import 'screens/reconciliation_prompt.dart';
 import 'web_db_init.dart'; // 🌐 تهيئة محرك قاعدة البيانات على الويب (مشروط)
+import 'lan/lan_bootstrap.dart'; // 🖧 سيرفر/طرفية على الشبكة المحلية
+import 'lan/lan_settings.dart';
+import 'lan/network_settings_screen.dart';
+import 'accounting/screens/accounting_home_screen.dart'; // 🏛️ المحاسبة
+import 'org/screens/branches_warehouses_screen.dart'; // 🏢 الفروع والمخازن
+import 'inventory/item_card_screen.dart'; // 🗂️ بطاقات المواد
 
 import 'package:firebase_core/firebase_core.dart'; // 🆕 Firebase
 import 'package:firebase_auth/firebase_auth.dart'; // 🔐 Firebase Authentication
@@ -122,6 +128,16 @@ void main() async {
     databaseFactory = databaseFactoryFfi;
   }
 
+  // 🖧 وضع الشبكة: الطرفية تتصل بالسيرفر وتستبدل مصنع قاعدة البيانات قبل
+  //    أي فتح للقاعدة. عند الفشل نعرض شاشة الاتصال بدل البرنامج.
+  if (!kIsWeb) {
+    final lanError = await LanRuntime.beforeDatabase();
+    if (lanError != null) {
+      runApp(LanConnectionErrorApp(message: lanError));
+      return;
+    }
+  }
+
   //Ensure Supplier Tables exist (Migration)
   try {
      await SuppliersService().ensureTables();
@@ -129,12 +145,14 @@ void main() async {
      print('⚠️ Error ensuring supplier tables: $e');
   }
 
-  // فحص سلامة البيانات المالية (صامت - بدون طباعة)
-  try {
-    final dbService = DatabaseService();
-    await dbService.performQuickIntegrityCheck();
-  } catch (e) {
-    // تجاهل الخطأ - لا نوقف التطبيق
+  // فحص سلامة البيانات المالية (صامت - بدون طباعة) — على مالك القاعدة فقط
+  if (AppNetworkMode.ownsDatabase) {
+    try {
+      final dbService = DatabaseService();
+      await dbService.performQuickIntegrityCheck();
+    } catch (e) {
+      // تجاهل الخطأ - لا نوقف التطبيق
+    }
   }
 
   // 🪟 تهيئة WindowManager (يحتاجه main_screen للتحكم في إغلاق النافذة).
@@ -299,15 +317,21 @@ void main() async {
     initialRoute = '/license_check';
   }
 
-  // 🔥 تفعيل نظام المطابقة وحل التعارضات عند التشغيل
-  ReconciliationPrompt.start();
+  // 🔥 تفعيل نظام المطابقة وحل التعارضات عند التشغيل (مالك القاعدة فقط:
+  //    المزامنة مع Firebase تعمل على السيرفر وحده، لا على الطرفيات)
+  if (AppNetworkMode.ownsDatabase) ReconciliationPrompt.start();
 
   runApp(MyApp(initialRoute: initialRoute));
+
+  // 🖧 السيرفر يبدأ خدمة الطرفيات + الترحيل المحاسبي التلقائي
+  if (!kIsWeb) {
+    LanRuntime.afterDatabase();
+  }
 
   // 🔄 بدء المزامنة تلقائياً عند تشغيل التطبيق (بدون الحاجة للدخول لإعدادات المزامنة).
   //    fire-and-forget: لا نُعلّق الإقلاع؛ التهيئة تحدث في الخلفية.
   //    تتم فقط لو الرخصة مفعّلة (لا داعي للمزامنة على شاشة التفعيل).
-  if (isLicenseActivated) {
+  if (isLicenseActivated && AppNetworkMode.ownsDatabase) {
     final license = licenseService.getStoredLicense();
     if (license != null && license.isSyncAllowed) {
       FirebaseSyncService().initialize().then((ok) {
@@ -427,6 +451,10 @@ class MyApp extends StatelessWidget {
           '/suppliers': (context) => const _LicenseGuard(child: SuppliersListScreen()), // 🆕
           '/ai_chat': (context) => const _LicenseGuard(child: AIChatScreen()),
           '/pos': (context) => const _LicenseGuard(child: POSScreen()),
+          '/accounting': (context) => const _LicenseGuard(child: AccountingHomeScreen()), // 🏛️
+          '/branches': (context) => const _LicenseGuard(child: BranchesWarehousesScreen()), // 🏢
+          '/item_cards': (context) => const _LicenseGuard(child: ItemCardsListScreen()), // 🗂️
+          '/network_settings': (context) => const _LicenseGuard(child: NetworkSettingsScreen()), // 🖧
         },
         initialRoute: initialRoute,
         navigatorKey: globalNavigatorKey, // ✅ مفتاح الملاح العام

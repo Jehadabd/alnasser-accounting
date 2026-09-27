@@ -135,6 +135,24 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   const SizedBox(height: 24),
                   const Text('الصلاحيات:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                   const SizedBox(height: 8),
+                  // 🧩 قوالب جاهزة: تملأ الصلاحيات ثم يمكن تعديلها
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final t in AppPermissions.roleTemplates.entries)
+                        ActionChip(
+                          avatar: const Icon(Icons.badge, size: 16),
+                          label: Text(t.key),
+                          onPressed: () => setDialogState(() {
+                            selectedPermissions
+                              ..clear()
+                              ..addAll(t.value);
+                          }),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
                   ...AppPermissions.allPermissions.entries.map((entry) => CheckboxListTile(
                     title: Text(entry.value),
                     value: selectedPermissions.contains(entry.key),
