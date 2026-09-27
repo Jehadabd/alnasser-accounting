@@ -350,6 +350,17 @@ class _LanSession {
               code: 'lan_bad_db', message: 'قاعدة بيانات غير مفتوحة في هذه الجلسة');
         }
         final inTxnChange = map['inTransaction'] as bool?;
+        // عملية تحمل رقم معاملة ليست مفتوحة في هذه الجلسة = معاملة تراجعنا
+        // عنها بعد انقطاع الاتصال. لو نفّذناها لنُفّذت خارج أي معاملة وحُفظ
+        // نصف العملية. نرفضها ليفشل حفظ الطرفية كاملاً ويعيده المستخدم.
+        final tid = map['transactionId'];
+        if (tid is int && tid != -1 && _openTransactions[dbId] != tid) {
+          throw LanRemoteError(
+            code: 'lan_txn_lost',
+            message: 'انقطع الاتصال بالسيرفر أثناء الحفظ فأُلغيت العملية كاملة — أعد المحاولة',
+            transactionClosed: true,
+          );
+        }
         try {
           final result = await server._invoke(method, map);
           if (inTxnChange == true && result is Map && result['transactionId'] is int) {
