@@ -11,6 +11,7 @@ import '../models/purchase_invoice.dart';
 import '../models/purchase_invoice_item.dart';
 import '../models/supplier_delegate.dart';
 import '../services/purchase_service.dart';
+import '../erp/pickers.dart' show CashBoxDropdown, WarehouseDropdown;
 import '../services/database_service.dart';
 import '../widgets/quick_product_creation_dialog.dart';
 import '../services/ocr_service_factory.dart';
@@ -49,6 +50,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   // 🆕 New Fields
   String _paymentType = 'دين'; // دين or نقد
   final _paidAmountController = TextEditingController(text: '0');
+  // 🏬 المخزن المستلم والصندوق/البنك المدفوع منه (فارغ = الرئيسي/الافتراضي)
+  int? _warehouseId;
+  int? _cashBoxId;
   final _delegateNameController = TextEditingController();
   List<SupplierDelegate> _delegates = []; // For auto-complete or check
 
@@ -105,6 +109,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
 
     if (widget.existingInvoice != null) {
       _loadExistingItems(widget.existingInvoice!.id!);
+      _loadExt(widget.existingInvoice!.id!);
     }
   }
 
@@ -342,6 +347,19 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     }
   }
 
+  Future<void> _loadExt(int invoiceId) async {
+    try {
+      final db = await DatabaseService().database;
+      final e = await PurchaseExt.read(db, invoiceId);
+      if (mounted) {
+        setState(() {
+          _warehouseId = e.warehouseId;
+          _cashBoxId = e.cashBoxId;
+        });
+      }
+    } catch (_) {}
+  }
+
   Widget _buildHeaderSection() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -486,6 +504,21 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               ),
             ],
           ),
+          const SizedBox(height: 12),
+
+          // 🏬 المخزن المستلم + الصندوق/البنك (مثل سهل)
+          Wrap(spacing: 12, runSpacing: 12, children: [
+            WarehouseDropdown(
+              value: _warehouseId,
+              label: 'المخزن المستلم',
+              onChanged: (w) => setState(() => _warehouseId = w?.id),
+            ),
+            CashBoxDropdown(
+              value: _cashBoxId,
+              label: 'يُدفع من (صندوق/بنك)',
+              onChanged: (b) => setState(() => _cashBoxId = b?.id),
+            ),
+          ]),
           const SizedBox(height: 12),
 
           // 🆕 Row 4: Delegate Name
@@ -966,9 +999,12 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
           invoice,
           oldItems,
           _items,
+          warehouseId: _warehouseId,
+          cashBoxId: _cashBoxId,
         );
       } else {
-        await purchaseService.savePurchaseInvoice(invoice, _items, confirm: confirm);
+        await purchaseService.savePurchaseInvoice(invoice, _items,
+            confirm: confirm, warehouseId: _warehouseId, cashBoxId: _cashBoxId);
       }
 
       if (mounted) {

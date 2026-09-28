@@ -10,6 +10,7 @@
 
 import '../../accounting/ledger.dart';
 import '../../services/database_service.dart';
+import '../activity/activity_log.dart';
 import '../erp_common.dart';
 import '../stock_helpers.dart';
 
@@ -89,7 +90,14 @@ class StockDocsService {
       }
     }
 
-    return db.transaction((txn) async {
+    // 🧮 تسوية الجرد: حسابا الزيادة والعجز من الإعدادات يُثبَّتان على المستند نفسه
+    // (تغيير الإعداد لاحقاً لا يغيّر قيود مستندات سابقة).
+    int? gainAcc, lossAcc;
+    if (docType == 'count' && counterAccountId == null) {
+      gainAcc = int.tryParse((await Ledger.getSetting(db, CountAccounts.gainKey)) ?? '');
+      lossAcc = int.tryParse((await Ledger.getSetting(db, CountAccounts.lossKey)) ?? '');
+    }
+    final docId = await db.transaction((txn) async {
       final no = await nextDocNumber(txn, 'stock_docs', 'doc_no', where: 'doc_type = ?', args: [docType]);
       var total = 0.0;
       final id = await txn.insert('stock_docs', {
@@ -105,6 +113,8 @@ class StockDocsService {
         'produced_qty': producedQty,
         'overhead_amount': roundMoney(overheadAmount),
         'overhead_account_id': overheadAccountId,
+        'gain_account_id': gainAcc,
+        'loss_account_id': lossAcc,
         'status': 'posted',
         'created_by': currentUserName(),
         'created_at': DateTime.now().toIso8601String(),
@@ -134,6 +144,9 @@ class StockDocsService {
       await txn.update('stock_docs', {'total_cost': roundMoney(total)}, where: 'id = ?', whereArgs: [id]);
       return id;
     });
+    ActivityLog.log('إنشاء', 'المستندات المخزنية',
+        '${stockDocLabels[docType] ?? docType} (#$docId) — ${valid.length} مادة${reason == null || reason.isEmpty ? '' : ' — $reason'}');
+    return docId;
   }
 
   /// إلغاء مستند: حركات عكسية لكل سطر، والقيد يُحذف في الترحيل التالي.
@@ -160,6 +173,8 @@ class StockDocsService {
       await txn.update('stock_counts', {'status': 'draft', 'stock_doc_id': null, 'approved_at': null},
           where: 'stock_doc_id = ?', whereArgs: [id]);
     });
+    ActivityLog.log('إلغاء', 'المستندات المخزنية',
+        'إلغاء ${stockDocLabels[h.first['doc_type']] ?? ''} رقم ${h.first['doc_no']}${reason == null ? '' : ' — $reason'}');
   }
 
   Future<List<Map<String, Object?>>> list({String? docType, DateTime? from, DateTime? to}) async {
@@ -299,6 +314,7 @@ class StockDocsService {
       'stock_doc_id': docId,
       'approved_at': DateTime.now().toIso8601String(),
     }, where: 'id = ?', whereArgs: [countId]);
+    ActivityLog.log('اعتماد', 'الجرد الفعلي', 'اعتماد جرد رقم ${c.first['count_no']} — ${lines.length} فرق');
     return docId;
   }
 
@@ -531,5 +547,26 @@ class StockDocsService {
           'actual': used[c['product_id']] ?? 0.0,
         },
     ];
+  }
+}
+
+/// حسابا فروقات الجرد (مثل إعدادات سهل): زيادة الجرد ← حساب إيراد، العجز ← حساب مصروف.
+/// فارغان = حساب «فروقات جرد المخزون» الافتراضي للاثنين.
+class CountAccounts {
+  static const gainKey = 'acc_count_gain';
+  static const lossKey = 'acc_count_loss';
+
+  static Future<(int?, int?)> get() async {
+    final db = await erpDb();
+    return (
+      int.tryParse((await Ledger.getSetting(db, gainKey)) ?? ''),
+      int.tryParse((await Ledger.getSetting(db, lossKey)) ?? ''),
+    );
+  }
+
+  static Future<void> set(int? gain, int? loss) async {
+    final db = await erpDb();
+    await Ledger.setSetting(db, gainKey, gain?.toString() ?? '');
+    await Ledger.setSetting(db, lossKey, loss?.toString() ?? '');
   }
 }

@@ -11,6 +11,7 @@
 import '../../accounting/ledger.dart';
 import '../../models/product.dart';
 import '../../services/database_service.dart';
+import '../activity/activity_log.dart';
 import '../erp_common.dart';
 
 const List<String> priceFieldNames = ['مفرد', 'مفرد 2', 'منزل', 'جملة', 'جملة 2', 'أخرى'];
@@ -180,6 +181,7 @@ class PriceTools {
     for (final e in byProduct.entries) {
       await applyPrices(e.key, e.value, batchNo: batch);
     }
+    ActivityLog.log('تعديل', 'أدوات الأسعار', 'دفعة أسعار #$batch — ${changes.length} سعراً لـ ${byProduct.length} مادة');
     return batch;
   }
 
@@ -197,6 +199,7 @@ class PriceTools {
     for (final e in byProduct.entries) {
       n += await applyPrices(e.key, e.value, batchNo: newBatch);
     }
+    ActivityLog.log('تعديل', 'أدوات الأسعار', 'تراجع عن دفعة الأسعار #$batch ($n سعراً)');
     return n;
   }
 

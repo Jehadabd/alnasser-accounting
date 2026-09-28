@@ -15,6 +15,9 @@ class _CartPanelState extends State<CartPanel> {
   final TextEditingController _customerController = TextEditingController();
   final TextEditingController _discountController = TextEditingController();
   final TextEditingController _paidController = TextEditingController();
+  // 💵 المستلم من الزبون (نقداً) لحساب «الباقي للزبون» — عرض فقط، لا يُحفظ
+  final TextEditingController _tenderedController = TextEditingController();
+  double _tendered = 0;
   bool _showSuggestions = false;
   
   // Number formatter with thousands separator
@@ -26,6 +29,7 @@ class _CartPanelState extends State<CartPanel> {
     _customerController.dispose();
     _discountController.dispose();
     _paidController.dispose();
+    _tenderedController.dispose();
     super.dispose();
   }
 
@@ -65,6 +69,8 @@ class _CartPanelState extends State<CartPanel> {
                             _customerController.clear();
                             _discountController.clear();
                             _paidController.clear();
+                            _tenderedController.clear();
+                            _tendered = 0;
                           },
                           child: const Text('مسح', style: TextStyle(color: Colors.grey, fontSize: 12)),
                         ),
@@ -370,6 +376,38 @@ class _CartPanelState extends State<CartPanel> {
                         ]),
                       ),
 
+                    // 💵 الباقي للزبون (نقداً)
+                    if (provider.paymentType == PaymentType.cash)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(children: [
+                          const Text('المستلم:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 100,
+                            child: TextField(
+                              controller: _tenderedController,
+                              keyboardType: TextInputType.number,
+                              textAlign: TextAlign.center,
+                              onChanged: (v) => setState(() => _tendered = double.tryParse(v.replaceAll(',', '')) ?? 0),
+                              decoration: InputDecoration(isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)), hintText: '0'),
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const Spacer(),
+                          if (_tendered > 0)
+                            Text(
+                              _tendered >= provider.total
+                                  ? 'الباقي للزبون: ${_formatNumber(_tendered - provider.total)}'
+                                  : 'ناقص: ${_formatNumber(provider.total - _tendered)}',
+                              style: TextStyle(
+                                  color: _tendered >= provider.total ? Colors.green[700] : Colors.red[700],
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13),
+                            ),
+                        ]),
+                      ),
+
                     // Total
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                       const Text('الإجمالي', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
@@ -387,6 +425,8 @@ class _CartPanelState extends State<CartPanel> {
                             _customerController.clear();
                             _discountController.clear();
                             _paidController.clear();
+                            _tenderedController.clear();
+                            _tendered = 0;
                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم حفظ الفاتورة #${provider.lastInvoiceDisplayNumber ?? provider.lastInvoiceId} بنجاح!'), backgroundColor: Colors.green));
                           } else if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(

@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 
 import '../accounting/screens/acc_ui.dart';
+import 'activity/activity_log.dart';
 
 class ErpColors {
   static const navy = AccColors.navy;
@@ -48,6 +49,7 @@ class ErpPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    ActivityLog.viewed(title);
     return Scaffold(
       backgroundColor: ErpColors.bg,
       floatingActionButton: floatingActionButton,

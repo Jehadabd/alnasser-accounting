@@ -16,6 +16,7 @@ import '../../accounting/ledger.dart';
 import '../../accounting/vouchers_service.dart';
 import '../../models/supplier_payment.dart';
 import '../../services/purchase_service.dart';
+import '../activity/activity_log.dart';
 import '../erp_common.dart';
 import 'customer_money.dart';
 
@@ -171,6 +172,7 @@ class ReceiptsService {
     if (((n.first['n'] as num?) ?? 0) == 0 && commission <= 0) {
       await db.delete('customer_receipts', where: 'id = ?', whereArgs: [receiptId]);
     }
+    ActivityLog.log('إنشاء', 'وصل قبض', 'وصل قبض رقم $receiptNo — ${((n.first['n'] as num?) ?? 0)} عميل${errors.isEmpty ? '' : ' (${errors.length} خطأ)'}');
     return ReceiptResult(receiptId, receiptNo, errors);
   }
 
@@ -255,5 +257,6 @@ class ReceiptsService {
         'created_at': DateTime.now().toIso8601String(),
       });
     }
+    ActivityLog.log('إنشاء', 'دفعة لمورد', 'دفعة للمورد #$supplierId — $amount $currency ($method)');
   }
 }

@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../accounting/ledger.dart';
 import '../../accounting/screens/acc_ui.dart';
 import '../erp_common.dart';
 import '../report_export.dart';
@@ -23,7 +24,33 @@ class LabelOptions {
     this.showPrice = true,
     this.columns = 3,
     this.labelHeight = 30,
+    this.labelWidth = 50,
+    this.labelPrinter = false,
   });
+
+  /// عرض الملصق بالمليمتر (لطابعة الملصقات).
+  double labelWidth;
+
+  /// true = طابعة ملصقات (كل ملصق صفحة بحجمه)، false = ورقة A4.
+  bool labelPrinter;
+
+  static Future<LabelOptions> loadDefaults({int copies = 1}) async {
+    final o = LabelOptions(copies: copies);
+    try {
+      final db = await erpDb();
+      o.labelWidth = double.tryParse((await Ledger.getSetting(db, 'label_width_mm')) ?? '') ?? 50;
+      o.labelHeight = double.tryParse((await Ledger.getSetting(db, 'label_height_mm')) ?? '') ?? 30;
+      o.labelPrinter = (await Ledger.getSetting(db, 'label_printer')) == '1';
+    } catch (_) {}
+    return o;
+  }
+
+  Future<void> saveDefaults() async {
+    final db = await erpDb();
+    await Ledger.setSetting(db, 'label_width_mm', '$labelWidth');
+    await Ledger.setSetting(db, 'label_height_mm', '$labelHeight');
+    await Ledger.setSetting(db, 'label_printer', labelPrinter ? '1' : '0');
+  }
   int copies;
 
   /// 1..6
@@ -51,7 +78,9 @@ class BarcodeLabels {
   /// يعرض نافذة الخيارات ثم يطبع الملصقات.
   static Future<void> printForProducts(BuildContext context, List<int> productIds, {int copies = 1}) async {
     if (productIds.isEmpty) return;
-    final opts = await _askOptions(context, LabelOptions(copies: copies));
+    final defaults = await LabelOptions.loadDefaults(copies: copies);
+    if (!context.mounted) return;
+    final opts = await _askOptions(context, defaults);
     if (opts == null || !context.mounted) return;
     try {
       final db = await erpDb();
@@ -109,6 +138,34 @@ class BarcodeLabels {
                   onChanged: (v) => setS(() => o.priceLevel = v ?? 1),
                 ),
               const SizedBox(height: 10),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('طابعة ملصقات (ملصق لكل صفحة)'),
+                subtitle: const Text('وإلا ورقة A4 بعدة أعمدة'),
+                value: o.labelPrinter,
+                onChanged: (v) => setS(() => o.labelPrinter = v),
+              ),
+              Row(children: [
+                Expanded(
+                  child: TextFormField(
+                    initialValue: fmtQty(o.labelWidth),
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'عرض الملصق (مم)', border: OutlineInputBorder(), isDense: true),
+                    onChanged: (v) => o.labelWidth = double.tryParse(v) ?? o.labelWidth,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextFormField(
+                    initialValue: fmtQty(o.labelHeight),
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'ارتفاع الملصق (مم)', border: OutlineInputBorder(), isDense: true),
+                    onChanged: (v) => o.labelHeight = double.tryParse(v) ?? o.labelHeight,
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 6),
+              if (!o.labelPrinter)
               Row(children: [
                 const Text('الأعمدة في الصفحة:'),
                 Expanded(
@@ -133,6 +190,9 @@ class BarcodeLabels {
               onPressed: () {
                 final n = int.tryParse(copiesCtl.text.trim()) ?? 1;
                 o.copies = n < 1 ? 1 : (n > 500 ? 500 : n);
+                if (o.labelWidth < 15) o.labelWidth = 15;
+                if (o.labelHeight < 10) o.labelHeight = 10;
+                o.saveDefaults();
                 Navigator.pop(ctx, o);
               },
             ),
@@ -152,7 +212,7 @@ class BarcodeLabels {
       final price = p.prices.length > idx ? p.prices[idx] : 0.0;
       for (var c = 0; c < o.copies; c++) {
         cells.add(pw.Container(
-          height: o.labelHeight * PdfPageFormat.mm,
+          height: o.labelPrinter ? null : o.labelHeight * PdfPageFormat.mm,
           padding: const pw.EdgeInsets.all(4),
           decoration: pw.BoxDecoration(
             border: pw.Border.all(color: PdfColors.grey400, width: 0.4),
@@ -184,6 +244,15 @@ class BarcodeLabels {
           ),
         ));
       }
+    }
+    if (o.labelPrinter) {
+      // طابعة ملصقات: صفحة بحجم الملصق لكل ملصق
+      final fmt = PdfPageFormat(o.labelWidth * PdfPageFormat.mm, o.labelHeight * PdfPageFormat.mm,
+          marginAll: 1 * PdfPageFormat.mm);
+      for (final c in cells) {
+        doc.addPage(pw.Page(pageFormat: fmt, build: (_) => pw.SizedBox.expand(child: c)));
+      }
+      return doc.save();
     }
     final rows = <pw.TableRow>[];
     for (var i = 0; i < cells.length; i += o.columns) {

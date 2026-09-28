@@ -3,6 +3,8 @@
 // أدوات مشتركة لكل ميزات النسخة المحاسبية الموسّعة.
 
 import 'package:flutter/material.dart';
+
+import 'activity/activity_log.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../accounting/ledger.dart';
@@ -85,6 +87,8 @@ class PeriodLock {
   static Future<void> setLockDate(DateTime? date) async {
     final d = await erpDb();
     await Ledger.setSetting(d, settingKey, date == null ? '' : isoDay(date));
+    ActivityLog.log(date == null ? 'إلغاء' : 'تعديل', 'تثبيت الإدخالات',
+        date == null ? 'إلغاء تثبيت الإدخالات' : 'تثبيت كل ما قبل ${fmtDate(date)}');
   }
 
   /// true إن كان التاريخ داخل فترة مثبّتة (قبل تاريخ التثبيت).

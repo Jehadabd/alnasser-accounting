@@ -8,6 +8,7 @@ import '../../accounting/screens/acc_ui.dart';
 import '../../models/app_user.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
+import '../reports/finance_reports.dart';
 import 'customer_card_screen.dart';
 import 'customer_statement_screen.dart';
 import 'debt_reports_screen.dart';
@@ -94,6 +95,9 @@ class _DebtsHubScreenState extends State<DebtsHubScreen> {
             subtitle: 'فترة، شهري، موضّح، مطابقة'),
         HubTile('دليل العملاء', Icons.contacts_outlined, ErpColors.cyan, () => _go(const CustomersDirectoryScreen()),
             subtitle: 'البطاقات، المجموعات، المناطق', permission: AppPermissions.customerCard),
+        HubTile('أرصدة الديون (زبائن + موردون)', Icons.balance_rounded, ErpColors.navy,
+            () => _go(const PartyBalancesScreen()),
+            subtitle: 'مع تسديد سريع', permission: AppPermissions.debtReports),
         HubTile('أعمار الديون', Icons.hourglass_bottom, ErpColors.red, () => _go(const AgingScreen()),
             subtitle: 'العملاء والموردون', permission: AppPermissions.debtReports),
         HubTile('نسب التحصيل', Icons.percent, ErpColors.purple, () => _go(const CollectionReportScreen()),

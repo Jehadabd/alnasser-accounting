@@ -443,10 +443,14 @@ class PostingEngine {
   // ═══════════════════════════════ المشتريات ═══════════════════════════════
 
   Future<void> _syncPurchaseInvoices(Database db, PostingSummary summary) async {
+    // 🏦 الصندوق/البنك المدفوع منه (امتداد الفاتورة) — وإلا الصندوق الافتراضي
+    final hasPExt = await _tableExists(db, 'purchase_invoice_ext');
     final rows = await db.rawQuery('''
       SELECT p.id, p.invoice_number, p.date, p.paid_amount, p.total_amount,
-             p.currency, s.name AS supplier_name
+             p.currency, s.name AS supplier_name,
+             ${hasPExt ? 'bx.account_id AS pay_account' : 'NULL AS pay_account'}
       FROM purchase_invoices p LEFT JOIN suppliers s ON s.id = p.supplier_id
+      ${hasPExt ? 'LEFT JOIN purchase_invoice_ext px ON px.invoice_id = p.id LEFT JOIN cash_boxes bx ON bx.id = px.cash_box_id' : ''}
       WHERE p.status = 'confirmed'
     ''');
     // 💱 سعر الدولار بتاريخ الفاتورة (سجل أسعار الصرف)، لا السعر الحالي
@@ -464,11 +468,12 @@ class PostingEngine {
         paid.toStringAsFixed(2),
         r['currency'],
         r['currency'] == 'USD' ? rate.toStringAsFixed(2) : '',
+        r['pay_account'] ?? '',
       ].join('|');
       sources.add(_Source(r['id'] as int, hash, r));
     }
     final inventory = await Ledger.systemAccountId(db, 'inventory');
-    final cash = await _defaultCashAccount(db);
+    final defaultCash = await _defaultCashAccount(db);
 
     await _reconcile(db, 'purchase_invoice', sources, summary, (txn, s) async {
       final r = s.row;
@@ -490,7 +495,7 @@ class PostingEngine {
                 currency: usd ? 'USD' : 'IQD',
                 fcAmount: usd ? paid : null,
                 exchangeRate: usd ? rate : null),
-            JournalLineInput(accountId: cash, credit: iqd),
+            JournalLineInput(accountId: (r['pay_account'] as int?) ?? defaultCash, credit: iqd),
           ]);
     });
   }

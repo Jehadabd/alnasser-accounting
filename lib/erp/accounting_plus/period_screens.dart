@@ -13,6 +13,9 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
+import '../activity/activity_log.dart';
+import '../erp_settings_screen.dart';
+import '../reports/finance_reports.dart';
 import 'accounting_plus_service.dart';
 import 'currency_voucher_screens.dart';
 
@@ -843,6 +846,17 @@ class AccountingPlusHubScreen extends StatelessWidget {
             subtitle: 'ذمم الموردين بالدولار', permission: AppPermissions.periodClose),
         HubTile('الحسابات النوعية', Icons.workspaces_rounded, ErpColors.cyan, () => go(const AccountGroupsScreen()),
             permission: AppPermissions.accounting),
+        HubTile('تحليل المصاريف', Icons.pie_chart_rounded, ErpColors.red, () => go(const ExpenseAnalysisScreen()),
+            subtitle: 'أين ذهبت الأموال؟', permission: AppPermissions.accounting),
+        HubTile('حركة الصندوق والخزنة', Icons.account_balance_wallet_rounded, ErpColors.green,
+            () => go(const CashMovementScreen()),
+            permission: AppPermissions.accounting),
+        HubTile('أرصدة الديون', Icons.balance_rounded, ErpColors.navy, () => go(const PartyBalancesScreen()),
+            subtitle: 'زبائن + موردون', permission: AppPermissions.debtReports),
+        HubTile('سجل حركات النظام', Icons.manage_search_rounded, ErpColors.purple, () => go(const ActivityLogScreen()),
+            subtitle: 'من فعل ماذا ومتى', permission: AppPermissions.manageUsers),
+        HubTile('إعدادات الطباعة والمخزون', Icons.tune_rounded, ErpColors.muted, () => go(const ErpSettingsScreen()),
+            permission: AppPermissions.settings),
         HubTile('الملاحظات', Icons.sticky_note_2_rounded, ErpColors.gold, () => go(const NotesScreen())),
         HubTile('الحاسبة', Icons.calculate_rounded, ErpColors.muted, () => showCalculator(context)),
       ]),

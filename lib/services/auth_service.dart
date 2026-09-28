@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_user.dart';
 import 'database_service.dart';
 import 'password_service.dart';
+import '../erp/activity/activity_log.dart';
 
 class AuthService {
   static final AuthService _instance = AuthService._internal();
@@ -92,12 +93,14 @@ class AuthService {
     final permissions = await _getUserPermissions(result.first['id'] as int);
     _currentUser = AppUser.fromMap(result.first, permissions: permissions);
     await _saveSession(_currentUser!);
+    ActivityLog.log('دخول', 'تسجيل الدخول', 'دخول المستخدم ${_currentUser!.username}');
     
     return _currentUser;
   }
 
   /// تسجيل الخروج
   Future<void> logout() async {
+    if (_currentUser != null) await ActivityLog.log('خروج', 'تسجيل الدخول', 'خروج المستخدم ${_currentUser!.username}');
     _currentUser = null;
     await _clearSession();
   }

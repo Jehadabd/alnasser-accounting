@@ -530,6 +530,9 @@ class ErpSchema {
   /// أعمدة تُضاف لجداول موجودة: [جدول، عمود، تعريف].
   static const List<List<String>> addedColumns = [
     ['cash_boxes', 'currency', "TEXT NOT NULL DEFAULT 'IQD'"],
+    ['sales_returns', 'cash_amount', 'REAL'],
+    ['stock_docs', 'gain_account_id', 'INTEGER'],
+    ['stock_docs', 'loss_account_id', 'INTEGER'],
     ['vouchers', 'currency', "TEXT NOT NULL DEFAULT 'IQD'"],
     ['vouchers', 'fc_amount', 'REAL'],
     ['vouchers', 'fx_rate', 'REAL'],

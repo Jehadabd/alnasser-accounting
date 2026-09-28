@@ -16,6 +16,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../accounting/ledger.dart';
 import 'erp_common.dart';
+import 'sales/sales_return_service.dart' show returnCashPart;
 
 class ErpPostingSummary {
   int created = 0;
@@ -162,7 +163,7 @@ class ErpPosting {
     for (final r in rows) {
       final total = d0(r['total']);
       final cost = d0(r['cost_total']);
-      final cashPart = r['refund_mode'] == 'cash' ? total : 0.0;
+      final cashPart = returnCashPart(r);
       if (cashPart.abs() < kMoneyEpsilon && cost.abs() < kMoneyEpsilon) continue;
       final hash = [
         r['return_date'],
@@ -170,6 +171,7 @@ class ErpPosting {
         cost.toStringAsFixed(2),
         r['refund_mode'],
         r['cash_box_id'],
+        cashPart.toStringAsFixed(2),
       ].join('|');
       sources.add(_Src(r['id'] as int, hash, r));
     }
@@ -180,11 +182,12 @@ class ErpPosting {
       final r = s.row;
       final total = d0(r['total']);
       final cost = d0(r['cost_total']);
-      final isCash = r['refund_mode'] == 'cash';
+      final cashPart = returnCashPart(r);
       final lines = <JournalLineInput>[
-        if (isCash && total > 0) ...[
-          JournalLineInput(accountId: salesReturns, debit: total, memo: 'مرتجع نقدي'),
-          JournalLineInput(accountId: await _boxAccount(txn, r['cash_box_id'] as int?), credit: total),
+        // الجزء النقدي فقط؛ جزء الحساب يُرحَّل من حركة العميل نفسها
+        if (cashPart > 0 && total > 0) ...[
+          JournalLineInput(accountId: salesReturns, debit: cashPart, memo: 'مرتجع نقدي'),
+          JournalLineInput(accountId: await _boxAccount(txn, r['cash_box_id'] as int?), credit: cashPart),
         ],
         if (cost > 0) ...[
           JournalLineInput(accountId: inventory, debit: cost, memo: 'عودة البضاعة للمخزن'),
@@ -211,17 +214,27 @@ class ErpPosting {
     'production': 'عملية تصنيع',
   };
 
+  /// جرد بحسابَي زيادة/عجز مثبّتين على المستند.
+  static bool _splitCount(Map<String, Object?> r) =>
+      r['doc_type'] == 'count' &&
+      r['counter_account_id'] == null &&
+      (r['gain_account_id'] != null || r['loss_account_id'] != null);
+
   Future<void> _stockDocs(ErpPostingSummary summary) async {
     final rows = await db.rawQuery('''
       SELECT d.*, COALESCE((SELECT SUM(CASE WHEN i.base_qty < 0 THEN -i.total_cost ELSE i.total_cost END)
                              FROM stock_doc_items i WHERE i.doc_id = d.id), 0) AS inv_delta,
+             COALESCE((SELECT SUM(i.total_cost) FROM stock_doc_items i WHERE i.doc_id = d.id AND i.base_qty > 0), 0) AS gain_total,
+             COALESCE((SELECT SUM(i.total_cost) FROM stock_doc_items i WHERE i.doc_id = d.id AND i.base_qty < 0), 0) AS loss_total,
              (SELECT COUNT(*) FROM stock_doc_items i WHERE i.doc_id = d.id) AS n_items
       FROM stock_docs d WHERE d.status = 'posted'
     ''');
     final sources = <_Src>[];
     for (final r in rows) {
       final delta = roundMoney(d0(r['inv_delta']));
-      if (delta.abs() < kMoneyEpsilon) continue;
+      final split = _splitCount(r);
+      if (!split && delta.abs() < kMoneyEpsilon) continue;
+      if (split && d0(r['gain_total']) < kMoneyEpsilon && d0(r['loss_total']) < kMoneyEpsilon) continue;
       final hash = [
         r['doc_date'],
         delta.toStringAsFixed(2),
@@ -229,6 +242,7 @@ class ErpPosting {
         r['overhead_account_id'],
         r['n_items'],
         r['doc_type'],
+        if (split) '${r['gain_account_id']}/${r['loss_account_id']}/${d0(r['gain_total']).toStringAsFixed(2)}',
       ].join('|');
       sources.add(_Src(r['id'] as int, hash, r));
     }
@@ -237,6 +251,31 @@ class ErpPosting {
       final r = s.row;
       final delta = roundMoney(d0(r['inv_delta']));
       final type = r['doc_type'] as String;
+      if (_splitCount(r)) {
+        // 🧮 جرد بحسابَي زيادة/عجز منفصلين
+        final gain = roundMoney(d0(r['gain_total']));
+        final loss = roundMoney(d0(r['loss_total']));
+        final fallback = await Ledger.systemAccountId(txn, 'inventory_adjust');
+        final gainAcc = (r['gain_account_id'] as int?) ?? fallback;
+        final lossAcc = (r['loss_account_id'] as int?) ?? fallback;
+        await Ledger.writeEntry(txn,
+            sourceType: 'stock_doc',
+            sourceId: s.id,
+            sourceHash: s.hash,
+            date: parseDate(r['doc_date']),
+            description: '${docTypeLabels[type] ?? type} رقم ${r['doc_no']}${(r['reason'] as String?)?.isNotEmpty == true ? ' — ${r['reason']}' : ''}',
+            lines: [
+              if (gain > 0) ...[
+                JournalLineInput(accountId: inventory, debit: gain, memo: 'زيادة جرد'),
+                JournalLineInput(accountId: gainAcc, credit: gain),
+              ],
+              if (loss > 0) ...[
+                JournalLineInput(accountId: lossAcc, debit: loss, memo: 'عجز جرد'),
+                JournalLineInput(accountId: inventory, credit: loss),
+              ],
+            ]);
+        return;
+      }
       int counter;
       final explicit = (type == 'production' ? r['overhead_account_id'] : r['counter_account_id']) as int?;
       if (explicit != null) {

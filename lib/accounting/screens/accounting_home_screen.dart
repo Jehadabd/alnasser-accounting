@@ -25,6 +25,8 @@ import '../../erp/accounting_plus/period_screens.dart';
 import '../../erp/debts/receipt_screen.dart';
 import '../../erp/debts/debts_hub_screen.dart';
 import '../../erp/inventory/inventory_hub_screen.dart';
+import '../../erp/reports/finance_reports.dart';
+import '../../erp/activity/activity_log.dart';
 
 class AccountingHomeScreen extends StatefulWidget {
   const AccountingHomeScreen({super.key});
@@ -251,6 +253,14 @@ class _AccountingHomeScreenState extends State<AccountingHomeScreen> {
                     () => _open(const FxRevaluationScreen(), permission: AppPermissions.periodClose)),
                 _tile('الحسابات النوعية', Icons.workspaces, AccColors.cyan,
                     () => _open(const AccountGroupsScreen(), permission: AppPermissions.accounting)),
+                _tile('تحليل المصاريف', Icons.pie_chart, AccColors.red,
+                    () => _open(const ExpenseAnalysisScreen(), permission: AppPermissions.accounting),
+                    subtitle: 'أين ذهبت الأموال؟'),
+                _tile('حركة الصندوق', Icons.account_balance_wallet_outlined, AccColors.green,
+                    () => _open(const CashMovementScreen(), permission: AppPermissions.accounting),
+                    subtitle: 'وارد وصادر ورصيد'),
+                _tile('سجل حركات النظام', Icons.manage_search, AccColors.purple,
+                    () => _open(const ActivityLogScreen(), permission: AppPermissions.manageUsers)),
                 _tile('المحاسبة المتقدمة', Icons.apps, AccColors.navy,
                     () => _open(const AccountingPlusHubScreen(), permission: AppPermissions.accounting),
                     subtitle: 'كل الأدوات'),

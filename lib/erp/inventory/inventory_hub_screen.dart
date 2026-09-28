@@ -12,6 +12,8 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pos/scale_barcode.dart';
 import '../sales/quotes_orders_screen.dart';
+import '../erp_settings_screen.dart';
+import '../pos/price_checker_screen.dart';
 import 'categories_screen.dart';
 import 'inventory_reports.dart';
 import 'inventory_reports_screen.dart';
@@ -171,6 +173,10 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
             permission: AppPermissions.suppliers),
         HubTile('المخازن والتحويلات', Icons.warehouse_outlined, ErpColors.green, () => Navigator.pushNamed(context, '/branches'),
             permission: AppPermissions.stockTransfer),
+        HubTile('قارئ الأسعار', Icons.qr_code_scanner_rounded, ErpColors.cyan, () => _go(const PriceCheckerScreen()),
+            subtitle: 'شاشة للزبائن'),
+        HubTile('إعدادات الطباعة والمخزون', Icons.tune_rounded, ErpColors.muted, () => _go(const ErpSettingsScreen()),
+            subtitle: 'الملصقات، حسابات الجرد', permission: AppPermissions.settings),
         HubTile('باركود الميزان', Icons.scale_rounded, ErpColors.cyan, _scaleSettings,
             subtitle: 'مواد موزونة في الكاشير', permission: AppPermissions.editProducts),
         HubTile('الجرد الشهري (القديم)', Icons.inventory, ErpColors.muted, () => Navigator.pushNamed(context, '/inventory'),

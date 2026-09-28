@@ -10,6 +10,7 @@ import '../services/database_service.dart';
 import '../services/settings_manager.dart';
 import '../services/database/business/supplier_debt_reconciler.dart';
 import '../services/database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
+import '../erp/activity/activity_log.dart';
 
 /// خدمة المشتريات والموردين (Odoo-Style)
 class PurchaseService with ChangeNotifier {
@@ -145,7 +146,8 @@ class PurchaseService with ChangeNotifier {
   // --- Invoice Actions ---
   
   /// تعديل فاتورة مشتريات موجودة مع إرجاع التأثيرات السابقة وتطبيق التأثيرات الجديدة
-  Future<void> updatePurchaseInvoiceWithReversal(PurchaseInvoice oldInvoice, PurchaseInvoice newInvoice, List<PurchaseInvoiceItem> oldItems, List<PurchaseInvoiceItem> newItems) async {
+  Future<void> updatePurchaseInvoiceWithReversal(PurchaseInvoice oldInvoice, PurchaseInvoice newInvoice, List<PurchaseInvoiceItem> oldItems, List<PurchaseInvoiceItem> newItems,
+      {int? warehouseId, int? cashBoxId}) async {
     final db = await _db.database;
     
     String costingMethod = 'last_purchase';
@@ -165,11 +167,14 @@ class PurchaseService with ChangeNotifier {
       final String oldStatus =
           oldRows.isEmpty ? 'draft' : ((oldRows.first['status'] as String?) ?? 'draft');
 
+      // 🏬 المخزن القديم للفاتورة (العكس يعود إليه نفسه)
+      final oldExt = await PurchaseExt.read(txn, oldInvoice.id!);
       if (oldStatus == 'confirmed') {
         for (var item in oldItems) {
-          await _reverseProductStock(txn, item);
+          await _reverseProductStock(txn, item, warehouseId: oldExt.warehouseId);
         }
       }
+      await PurchaseExt.write(txn, oldInvoice.id!, warehouseId: warehouseId, cashBoxId: cashBoxId);
       
       // 2. Delete Old Items
       await txn.delete('purchase_invoice_items', where: 'invoice_id = ?', whereArgs: [oldInvoice.id]);
@@ -191,7 +196,7 @@ class PurchaseService with ChangeNotifier {
       // 5. Apply New Effects (if new invoice is confirmed)
       if (newInvoice.status == 'confirmed') {
         for (var item in newItems) {
-          await _updateProductStockAndCost(txn, item, costingMethod);
+          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId);
         }
       }
 
@@ -200,11 +205,13 @@ class PurchaseService with ChangeNotifier {
       await SupplierDebtReconciler.reconcileInvoice(txn, oldInvoice.id!,
           reason: 'تعديل');
     });
+    ActivityLog.log('تعديل', 'فواتير الشراء', 'تعديل فاتورة شراء ${newInvoice.invoiceNumber} — ${newInvoice.totalAmount}');
     
     notifyListeners();
   }
 
-  Future<void> savePurchaseInvoice(PurchaseInvoice invoice, List<PurchaseInvoiceItem> items, {bool confirm = false}) async {
+  Future<void> savePurchaseInvoice(PurchaseInvoice invoice, List<PurchaseInvoiceItem> items,
+      {bool confirm = false, int? warehouseId, int? cashBoxId}) async {
     final db = await _db.database;
     
     // Load costing method from settings
@@ -241,10 +248,11 @@ class PurchaseService with ChangeNotifier {
             : ((oldRows.first['status'] as String?) ?? 'draft');
 
         if (oldStatus == 'confirmed') {
+          final oldExt = await PurchaseExt.read(txn, invoiceId);
           final oldItemRows = await txn.query('purchase_invoice_items',
               where: 'invoice_id = ?', whereArgs: [invoiceId]);
           for (final m in oldItemRows) {
-            await _reverseProductStock(txn, PurchaseInvoiceItem.fromMap(m));
+            await _reverseProductStock(txn, PurchaseInvoiceItem.fromMap(m), warehouseId: oldExt.warehouseId);
           }
         }
 
@@ -264,10 +272,13 @@ class PurchaseService with ChangeNotifier {
         await txn.insert('purchase_invoice_items', itemMap);
       }
 
+      // 🏬 المخزن المستلم والصندوق/البنك المدفوع منه (امتداد محلي)
+      await PurchaseExt.write(txn, invoiceId, warehouseId: warehouseId, cashBoxId: cashBoxId);
+
       // 3. If Confirmed, Update Stock and Cost
       if (nowConfirmed) {
         for (var item in items) {
-          await _updateProductStockAndCost(txn, item, costingMethod);
+          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId);
         }
       }
 
@@ -277,11 +288,14 @@ class PurchaseService with ChangeNotifier {
       await SupplierDebtReconciler.reconcileInvoice(txn, invoiceId,
           reason: invoice.id != null ? 'تعديل' : 'حفظ');
     });
+    ActivityLog.log(invoice.id != null ? 'تعديل' : 'إنشاء', 'فواتير الشراء',
+        'فاتورة شراء ${invoice.invoiceNumber} — ${invoice.totalAmount}${nowConfirmed ? ' (مؤكدة)' : ' (مسودة)'}');
 
     notifyListeners();
   }
 
-  Future<void> _updateProductStockAndCost(Transaction txn, PurchaseInvoiceItem item, String costingMethod) async {
+  Future<void> _updateProductStockAndCost(Transaction txn, PurchaseInvoiceItem item, String costingMethod,
+      {int? warehouseId}) async {
     print('💾 DB_UPDATE: Starting stock/cost update for product ID: ${item.productId}');
     print('💾 DB_UPDATE: Item baseQuantity: ${item.baseQuantity}, baseUnitCost: ${item.baseUnitCost}');
     print('💾 DB_UPDATE: Costing method: $costingMethod');
@@ -361,14 +375,15 @@ class PurchaseService with ChangeNotifier {
     //    المورد نفسها تبقى محلية). كانت تُكتب رقماً مطلقاً على هذا الجهاز وحده.
     final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
     if (productUuid != null) {
-      await StockLedger.addMovement(txn,
+      final mv = await StockLedger.addMovement(txn,
           productSyncUuid: productUuid, delta: newQty, kind: 'purchase', note: 'فاتورة شراء');
+      await PurchaseExt.stampWarehouse(txn, mv, warehouseId);
     }
 
     print('💾 DB_UPDATE: ✅ Product updated successfully!');
   }
 
-  Future<void> _reverseProductStock(Transaction txn, PurchaseInvoiceItem item) async {
+  Future<void> _reverseProductStock(Transaction txn, PurchaseInvoiceItem item, {int? warehouseId}) async {
     final List<Map<String, dynamic>> products = await txn.query('products', where: 'id = ?', whereArgs: [item.productId]);
     if (products.isEmpty) return;
     
@@ -376,11 +391,12 @@ class PurchaseService with ChangeNotifier {
     //    لا حدّ عند الصفر — كان يجعل الكمية تتوقف على ترتيب العمليات.
     final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
     if (productUuid == null) return;
-    await StockLedger.addMovement(txn,
+    final mv = await StockLedger.addMovement(txn,
         productSyncUuid: productUuid,
         delta: -item.baseQuantity,
         kind: 'purchase_reverse',
         note: 'إلغاء/تعديل فاتورة شراء');
+    await PurchaseExt.stampWarehouse(txn, mv, warehouseId);
   }
 
   // ⚠️ حُذفت هنا أربع دوال تراكمية:
@@ -463,5 +479,48 @@ class PurchaseService with ChangeNotifier {
     });
 
     notifyListeners();
+  }
+}
+
+
+/// 🏬 امتداد فاتورة الشراء (مثل سهل): المخزن المستلم والصندوق/البنك المدفوع منه.
+/// جدول محلي `purchase_invoice_ext`؛ الفاتورة نفسها ودين المورد لا يتغيران.
+class PurchaseExt {
+  PurchaseExt(this.warehouseId, this.cashBoxId);
+  final int? warehouseId;
+  final int? cashBoxId;
+
+  static Future<void> _ensure(DatabaseExecutor d) => d.execute('''
+    CREATE TABLE IF NOT EXISTS purchase_invoice_ext (
+      invoice_id INTEGER PRIMARY KEY,
+      warehouse_id INTEGER,
+      cash_box_id INTEGER
+    )''');
+
+  static Future<PurchaseExt> read(DatabaseExecutor d, int invoiceId) async {
+    await _ensure(d);
+    final r = await d.query('purchase_invoice_ext', where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
+    if (r.isEmpty) return PurchaseExt(null, null);
+    return PurchaseExt(r.first['warehouse_id'] as int?, r.first['cash_box_id'] as int?);
+  }
+
+  static Future<void> write(DatabaseExecutor d, int invoiceId, {int? warehouseId, int? cashBoxId}) async {
+    await _ensure(d);
+    if (warehouseId == null && cashBoxId == null) {
+      await d.delete('purchase_invoice_ext', where: 'invoice_id = ?', whereArgs: [invoiceId]);
+      return;
+    }
+    await d.insert('purchase_invoice_ext', {'invoice_id': invoiceId, 'warehouse_id': warehouseId, 'cash_box_id': cashBoxId},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// يربط حركة المخزون بمخزن غير الرئيسي (الرئيسي = الكلي − غيره فلا يُختم).
+  static Future<void> stampWarehouse(DatabaseExecutor d, String? movementUuid, int? warehouseId) async {
+    if (movementUuid == null || warehouseId == null) return;
+    final main = await d.query('warehouses', columns: ['id'], where: 'is_default = 1', orderBy: 'id', limit: 1);
+    final mainId = main.isEmpty ? 1 : main.first['id'] as int;
+    if (warehouseId == mainId) return;
+    await d.update('stock_movements', {'warehouse_id': warehouseId},
+        where: 'movement_uuid = ?', whereArgs: [movementUuid]);
   }
 }

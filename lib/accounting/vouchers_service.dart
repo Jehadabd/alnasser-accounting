@@ -8,6 +8,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../services/database_service.dart';
+import '../erp/activity/activity_log.dart';
 import '../erp/erp_common.dart' show PeriodLock;
 import 'ledger.dart';
 
@@ -161,7 +162,7 @@ class VouchersService {
     if (amount <= 0) throw LedgerException('المبلغ يجب أن يكون أكبر من صفر');
     await PeriodLock.assertOpen(date);
     final db = await _getDb();
-    return db.transaction((txn) async {
+    final newId = await db.transaction((txn) async {
       final box = await txn.query('cash_boxes', where: 'id = ?', whereArgs: [cashBoxId]);
       if (box.isEmpty) throw LedgerException('الصندوق غير موجود');
       final boxAcc = box.first['account_id'] as int;
@@ -249,6 +250,9 @@ class VouchersService {
           userId: userId);
       return id;
     });
+    ActivityLog.log('إنشاء', 'السندات',
+        '${voucherTypeLabels[type]} #$newId — ${roundMoney(amount)}${description == null || description.isEmpty ? '' : ' — $description'}');
+    return newId;
   }
 
   /// حذف سند = حذف منطقي + حذف قيده (يبقى في السجل لمن يراجع).
@@ -269,6 +273,7 @@ class VouchersService {
       );
       await Ledger.deleteBySource(txn, 'voucher', voucherId);
     });
+    ActivityLog.log('حذف', 'السندات', 'حذف سند #$voucherId');
   }
 
   Future<List<Map<String, Object?>>> list({

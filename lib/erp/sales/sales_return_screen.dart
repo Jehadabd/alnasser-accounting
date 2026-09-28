@@ -4,6 +4,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../accounting/ledger.dart' show roundMoney;
 import '../../accounting/screens/acc_ui.dart';
 import '../doc_lines.dart';
 import '../erp_common.dart';
@@ -33,6 +34,10 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
   DateTime _date = DateTime.now();
   final _notes = TextEditingController();
   final _invoiceCtrl = TextEditingController();
+  final _cashCtrl = TextEditingController();
+
+  /// المتبقي (الآجل) من الفاتورة الأصلية — لاقتراح التقسيم في المرتجع المختلط.
+  double? _invRemaining;
   bool _saving = false;
 
   @override
@@ -73,7 +78,9 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
       lines.add(DocLine(product: p, unit: u, quantity: 0, price: d0(it['applied_price'])));
     }
     if (!mounted) return;
+    final rem = d0(h['total_amount']) - d0(h['amount_paid_on_invoice']);
     setState(() {
+      _invRemaining = rem > 0 ? rem : 0;
       _invoiceId = id;
       _returnable = allowed;
       _lines
@@ -86,6 +93,20 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
         _mode = 'cash';
       }
     });
+  }
+
+  /// مثل سهل: يُنزل من دين الفاتورة بقدر آجلها، والباقي يُرد نقداً.
+  void _suggestSplit() {
+    final total = linesTotal(_lines);
+    if (_invRemaining != null && _invRemaining! >= total - 0.004) {
+      // آجل الفاتورة يغطي المرتجع كله ⇒ من الحساب بالكامل
+      _mode = 'credit';
+      _cashCtrl.clear();
+      return;
+    }
+    final credit = _invRemaining ?? roundMoney(total / 2);
+    final cash = total - credit;
+    _cashCtrl.text = cash <= 0 ? '' : fmtMoney(cash);
   }
 
   Future<void> _save() async {
@@ -103,6 +124,7 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
         originalInvoiceId: _invoiceId,
         refundMode: _mode,
         cashBoxId: _boxId,
+        cashAmount: _mode == 'mixed' ? (parseMoney(_cashCtrl.text) ?? 0) : 0,
         warehouseId: _warehouseId,
         date: _date,
         lines: [
@@ -189,11 +211,27 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
               segments: const [
                 ButtonSegment(value: 'credit', label: Text('من حسابه (ينقص دينه)'), icon: Icon(Icons.account_balance)),
                 ButtonSegment(value: 'cash', label: Text('نقداً من الصندوق'), icon: Icon(Icons.payments)),
+                ButtonSegment(value: 'mixed', label: Text('مختلط'), icon: Icon(Icons.call_split)),
               ],
               selected: {_mode},
-              onSelectionChanged: (s) => setState(() => _mode = s.first),
+              onSelectionChanged: (s) => setState(() {
+                _mode = s.first;
+                if (_mode == 'mixed') _suggestSplit();
+              }),
             ),
-            if (_mode == 'cash') CashBoxDropdown(value: _boxId, onChanged: (b) => setState(() => _boxId = b?.id)),
+            if (_mode != 'credit') CashBoxDropdown(value: _boxId, onChanged: (b) => setState(() => _boxId = b?.id)),
+            if (_mode == 'mixed') ...[
+              MoneyField(controller: _cashCtrl, label: 'المُرجع نقداً', width: 170, onChanged: (_) => setState(() {})),
+              Text(
+                'يُنزل من الدين: ${fmtMoney(linesTotal(_lines) - (parseMoney(_cashCtrl.text) ?? 0))}',
+                style: const TextStyle(fontWeight: FontWeight.bold, color: ErpColors.blue),
+              ),
+              TextButton.icon(
+                onPressed: () => setState(_suggestSplit),
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                label: Text(_invRemaining == null ? 'اقتراح' : 'اقتراح (آجل الفاتورة ${fmtMoney(_invRemaining!)})'),
+              ),
+            ],
             WarehouseDropdown(
                 value: _warehouseId, label: 'يعود إلى مخزن', onChanged: (w) => setState(() => _warehouseId = w?.id)),
             DateButton(label: 'التاريخ', value: _date, onChanged: (d) => setState(() => _date = d)),
@@ -303,7 +341,7 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
                       fmtDate(parseDate(r['return_date'])),
                       '${r['customer_name']}',
                       r['original_invoice_id'] == null ? '' : '#${r['original_invoice_id']}',
-                      r['refund_mode'] == 'cash' ? 'نقداً' : 'من الحساب',
+                      _modeLabel(r),
                       fmtMoney(d0(r['total'])),
                       fmtMoney(d0(r['cost_total'])),
                       r['status'] == 'posted' ? 'مرحّل' : 'ملغى',
@@ -346,7 +384,7 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
                             style: TextStyle(decoration: voided ? TextDecoration.lineThrough : null)),
                         subtitle: Text([
                           fmtDate(parseDate(r['return_date'])),
-                          r['refund_mode'] == 'cash' ? 'نقداً' : 'من الحساب',
+                          _modeLabel(r),
                           if (r['original_invoice_id'] != null) 'فاتورة #${r['original_invoice_id']}',
                           '${r['n_items']} مادة',
                         ].join(' • ')),
@@ -360,5 +398,16 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
         ),
       ]),
     );
+  }
+}
+
+String _modeLabel(Map<String, Object?> r) {
+  switch (r['refund_mode']) {
+    case 'cash':
+      return 'نقداً';
+    case 'mixed':
+      return 'مختلط (نقداً ${fmtMoney(returnCashPart(r))})';
+    default:
+      return 'من الحساب';
   }
 }

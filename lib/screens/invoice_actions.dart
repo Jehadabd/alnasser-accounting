@@ -28,6 +28,7 @@ import 'package:uuid/uuid.dart';
 import '../services/pdf_header.dart';
 import '../services/pdf_service.dart';
 import '../services/invoice_pdf_service.dart'; // لدوال PDF الفاتورة
+import '../erp/sales/roll_invoice_pdf.dart'; // 🧾 طباعة 80mm
 import '../services/printing_service.dart';
 import '../services/settings_manager.dart';
 import '../services/smart_search/smart_search.dart'; // 🧠 البحث الذكي
@@ -1129,7 +1130,19 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
 // ============================================
   Future<void> printInvoice() async {
     try {
-      final pdf = await generateInvoicePdf();
+      // 🧾 نوع الطباعة الافتراضي (A4 أو حرارية 80mm) من إعدادات الطباعة
+      final pdf = await InvoicePrintFormat.get() == '80mm'
+          ? await RollInvoicePdf.build(
+              items: invoiceItems,
+              customerName: customerNameController.text,
+              date: selectedDate,
+              discount: discount,
+              loadingFee: double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0.0,
+              paid: double.tryParse(paidAmountController.text.replaceAll(',', '')) ?? 0.0,
+              paymentType: paymentType,
+              invoiceNumber: invoiceToManage?.invoiceNumber ?? (invoiceToManage?.id == null ? null : '#${invoiceToManage!.id}'),
+            )
+          : await generateInvoicePdf();
 
       // 🌐 على الويب: فتح نافذة طباعة المتصفح مباشرة وتجنب استدعاءات Platform
       if (kIsWeb) {

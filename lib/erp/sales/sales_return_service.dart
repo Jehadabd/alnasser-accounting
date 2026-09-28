@@ -16,7 +16,9 @@
 import 'package:flutter/material.dart';
 
 import '../../accounting/ledger.dart';
+import '../../accounting/screens/acc_ui.dart' show fmtMoney;
 import '../debts/customer_money.dart';
+import '../activity/activity_log.dart';
 import '../erp_common.dart';
 import '../stock_helpers.dart';
 
@@ -37,6 +39,22 @@ class ReturnLine {
   double get baseQty => quantity * unit.factor;
   double get total => roundMoney(quantity * price);
 }
+
+/// الجزء النقدي من مرتجع (من الصندوق).
+double returnCashPart(Map<String, Object?> r) {
+  final total = d0(r['total']);
+  switch (r['refund_mode']) {
+    case 'cash':
+      return total;
+    case 'mixed':
+      return roundMoney(d0(r['cash_amount']));
+    default:
+      return 0;
+  }
+}
+
+/// الجزء الذي نزل من دين العميل.
+double returnCreditPart(Map<String, Object?> r) => roundMoney(d0(r['total']) - returnCashPart(r));
 
 class SalesReturnService {
   /// الكمية المباعة (بالوحدة الأساسية) من كل مادة في فاتورة، مطروحاً منها المُرجع سابقاً.
@@ -77,8 +95,9 @@ class SalesReturnService {
     int? customerId,
     required String customerName,
     int? originalInvoiceId,
-    required String refundMode, // cash | credit
+    required String refundMode, // cash | credit | mixed
     int? cashBoxId,
+    double cashAmount = 0, // للمختلط: الجزء المردود نقداً، والباقي يُنزل من الدين
     int? warehouseId,
     required DateTime date,
     required List<ReturnLine> lines,
@@ -89,10 +108,13 @@ class SalesReturnService {
     for (final l in valid) {
       if (l.price < 0) throw ErpException('سعر سالب للمادة ${l.product.name}');
     }
-    if (refundMode == 'credit' && customerId == null) {
+    if (refundMode != 'cash' && refundMode != 'credit' && refundMode != 'mixed') {
+      throw ErpException('طريقة ردّ غير معروفة');
+    }
+    if (refundMode != 'cash' && customerId == null) {
       throw ErpException('المرتجع على الحساب يحتاج عميلاً مسجّلاً');
     }
-    if (refundMode == 'cash' && cashBoxId == null) throw ErpException('اختر الصندوق الذي يُردّ منه المبلغ');
+    if (refundMode != 'credit' && cashBoxId == null) throw ErpException('اختر الصندوق الذي يُردّ منه المبلغ');
     await PeriodLock.assertOpen(date);
 
     // التحقق من كميات الفاتورة الأصلية
@@ -112,17 +134,24 @@ class SalesReturnService {
     }
 
     final total = roundMoney(valid.fold(0.0, (s, l) => s + l.total));
+    final cashPart = refundMode == 'cash' ? total : (refundMode == 'mixed' ? roundMoney(cashAmount) : 0.0);
+    final creditPart = roundMoney(total - cashPart);
+    if (refundMode == 'mixed') {
+      if (cashPart <= kMoneyEpsilon || cashPart >= total - kMoneyEpsilon) {
+        throw ErpException('في المرتجع المختلط يكون المبلغ النقدي أكبر من صفر وأقل من إجمالي المرتجع (${fmtMoney(total)})');
+      }
+    }
     final db = await erpDb();
     final number = await db.transaction((txn) => nextDocNumber(txn, 'sales_returns', 'return_no'));
 
     // 1) الأثر على دين العميل أولاً (على الحساب)
     String? txUuid;
-    if (refundMode == 'credit' && total > 0) {
+    if (creditPart > kMoneyEpsilon) {
       if (!context.mounted) throw ErpException('أُغلقت الشاشة');
       txUuid = await CustomerMoney.post(
         context,
         customerId: customerId!,
-        amount: -total,
+        amount: -creditPart,
         kind: CustomerTxKind.salesReturn,
         note: 'مرتجع مبيعات رقم $number${originalInvoiceId == null ? '' : ' من فاتورة #$originalInvoiceId'}',
         date: date,
@@ -141,7 +170,8 @@ class SalesReturnService {
           'customer_name': customerName,
           'original_invoice_id': originalInvoiceId,
           'refund_mode': refundMode,
-          'cash_box_id': refundMode == 'cash' ? cashBoxId : null,
+          'cash_box_id': refundMode == 'credit' ? null : cashBoxId,
+          'cash_amount': cashPart,
           'warehouse_id': warehouseId,
           'total': total,
           'cost_total': 0,
@@ -184,6 +214,7 @@ class SalesReturnService {
         }
         return rid;
       });
+      ActivityLog.log('إنشاء', 'مرتجع المبيعات', 'مرتجع رقم $number — $customerName — ${fmtMoney(total)}');
       return id;
     } catch (e) {
       // تعويض: إلغاء أثر الدين إن كان قد سُجّل
@@ -192,7 +223,7 @@ class SalesReturnService {
           await CustomerMoney.post(
             context,
             customerId: customerId!,
-            amount: total,
+            amount: creditPart,
             kind: CustomerTxKind.salesReturn,
             note: 'إلغاء مرتجع مبيعات رقم $number (فشل الحفظ)',
             date: date,
@@ -213,13 +244,13 @@ class SalesReturnService {
     if (h['status'] != 'posted') throw ErpException('المرتجع ملغى مسبقاً');
     await PeriodLock.assertOpen(parseDate(h['return_date']));
     await PeriodLock.assertOpen(DateTime.now());
-    final total = d0(h['total']);
-    if (h['refund_mode'] == 'credit' && total > 0 && h['customer_id'] != null) {
+    final creditPart = returnCreditPart(h);
+    if (creditPart > kMoneyEpsilon && h['customer_id'] != null) {
       if (!context.mounted) throw ErpException('أُغلقت الشاشة');
       await CustomerMoney.post(
         context,
         customerId: h['customer_id'] as int,
-        amount: total,
+        amount: creditPart,
         kind: CustomerTxKind.salesReturn,
         note: 'إلغاء مرتجع مبيعات رقم ${h['return_no']}${reason == null || reason.isEmpty ? '' : ' — $reason'}',
         refType: 'sales_return_void',
@@ -240,6 +271,7 @@ class SalesReturnService {
       await txn.update('sales_returns', {'status': 'void', 'notes': '${h['notes'] ?? ''} [ملغى: ${reason ?? ''}]'},
           where: 'id = ?', whereArgs: [id]);
     });
+    ActivityLog.log('إلغاء', 'مرتجع المبيعات', 'إلغاء مرتجع رقم ${h['return_no']} — ${reason ?? ''}');
   }
 
   Future<List<Map<String, Object?>>> list({DateTime? from, DateTime? to}) async {

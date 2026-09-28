@@ -11,8 +11,9 @@
 // القيد اليدوي، وكل عملية تحترم تثبيت الفترة.
 
 import '../../accounting/ledger.dart';
-import '../../accounting/screens/acc_ui.dart' show fmtMoney;
+import '../../accounting/screens/acc_ui.dart' show fmtMoney, fmtDate;
 import '../currency_service.dart';
+import '../activity/activity_log.dart';
 import '../erp_common.dart';
 
 class VLine {
@@ -76,7 +77,7 @@ class CompoundVoucherService {
     }
     await PeriodLock.assertOpen(date);
     final db = await erpDb();
-    return db.transaction((txn) async {
+    final vid = await db.transaction((txn) async {
       final no = await nextDocNumber(txn, 'vouchers', 'voucher_number', where: 'voucher_type = ?', args: [type]);
       final id = await txn.insert('vouchers', {
         'voucher_number': no,
@@ -123,6 +124,8 @@ class CompoundVoucherService {
           ]);
       return id;
     });
+    ActivityLog.log('إنشاء', 'سند قيد مركّب', '${description ?? 'سند قيد'} — ${fmtMoney(dr)}');
+    return vid;
   }
 
   Future<void> delete(int id) async {
@@ -143,6 +146,7 @@ class CompoundVoucherService {
           whereArgs: [id]);
       await Ledger.deleteBySource(txn, 'voucher', id);
     });
+    ActivityLog.log('حذف', 'سند قيد مركّب', 'حذف سند قيد رقم ${v.first['voucher_number']}');
   }
 
   Future<List<Map<String, Object?>>> list({DateTime? from, DateTime? to, bool includeDeleted = false}) async {
@@ -304,6 +308,7 @@ class FiscalCloseService {
         'created_at': DateTime.now().toIso8601String(),
       });
     });
+    ActivityLog.log('اعتماد', 'إقفال السنة', 'إقفال السنة المالية $year — صافي ${fmtMoney(net)}');
     if (lockAfter) {
       final current = await PeriodLock.lockDate();
       final target = DateTime(year + 1, 1, 1);
@@ -323,6 +328,7 @@ class FiscalCloseService {
       await Ledger.deleteBySource(txn, source, year);
       await txn.delete('fiscal_closings', where: 'year = ?', whereArgs: [year]);
     });
+    ActivityLog.log('إلغاء', 'إقفال السنة', 'إعادة فتح السنة المالية $year');
   }
 
   /// بعد الإقفال يجب أن يكون صافي الإيرادات والمصاريف حتى نهاية السنة (مع قيد
@@ -423,6 +429,7 @@ class FxRevaluationService {
           userId: currentUserId(),
           lines: lines);
     });
+    ActivityLog.log('إنشاء', 'إعادة تقييم العملة', 'قيد فروقات ${fmtDate(date)} — ${fmtMoney(total)}');
     return roundMoney(total);
   }
 

@@ -429,13 +429,14 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
 
 /// دفعة لمورد: نقداً/بنك/شيك/خصم مكتسب، بعملة ومن صندوق محدد.
 class SupplierPaymentScreen extends StatefulWidget {
-  const SupplierPaymentScreen({super.key});
+  const SupplierPaymentScreen({super.key, this.supplier});
+  final PartyLite? supplier;
   @override
   State<SupplierPaymentScreen> createState() => _SupplierPaymentScreenState();
 }
 
 class _SupplierPaymentScreenState extends State<SupplierPaymentScreen> {
-  PartyLite? _supplier;
+  late PartyLite? _supplier = widget.supplier;
   DateTime _date = DateTime.now();
   String _method = 'cash';
   String _currency = 'IQD';
