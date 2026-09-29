@@ -5,7 +5,7 @@
 import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../lan/lan_settings.dart';
 import '../../services/auth_service.dart';

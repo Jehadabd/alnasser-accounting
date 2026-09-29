@@ -18,6 +18,7 @@ import '../accounting/posting_engine.dart';
 import '../services/database/core/database_config.dart';
 import '../services/database_service.dart';
 import 'lan_client.dart';
+import 'lan_codec.dart' show LanConnectionException;
 import 'lan_settings.dart';
 import 'lan_server.dart';
 import 'network_settings_screen.dart';
