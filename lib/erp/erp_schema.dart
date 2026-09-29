@@ -18,6 +18,16 @@ class ErpSchema {
   ErpSchema._();
 
   static const List<String> createStatements = [
+    // الأقسام: تُنشأ في القواعد الجديدة فقط (onCreate)؛ القواعد القديمة قد لا تملكها.
+    '''
+    CREATE TABLE IF NOT EXISTS categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      parent_id INTEGER,
+      description TEXT,
+      FOREIGN KEY (parent_id) REFERENCES categories (id) ON DELETE SET NULL
+    )
+    ''',
     // ═══════════════════════════ العملاء ═══════════════════════════
     '''
     CREATE TABLE IF NOT EXISTS customer_groups (
@@ -570,6 +580,7 @@ class ErpSchema {
 
   /// أعمدة تُضاف لجداول موجودة: [جدول، عمود، تعريف].
   static const List<List<String>> addedColumns = [
+    ['products', 'category_id', 'INTEGER'],
     ['cash_boxes', 'currency', "TEXT NOT NULL DEFAULT 'IQD'"],
     ['sales_returns', 'cash_amount', 'REAL'],
     ['stock_docs', 'gain_account_id', 'INTEGER'],
