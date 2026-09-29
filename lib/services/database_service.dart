@@ -36,6 +36,7 @@ import 'smart_pricing_service.dart';
 
 // Core
 import 'database/core/database_config.dart';
+import 'database/core/schema_healer.dart'; // 🩹 إكمال الجداول/الأعمدة الناقصة
 import '../lan/lan_settings.dart'; // 🖧 وضع الشبكة (مستقل/سيرفر/طرفية)
 import '../lan/lan_codec.dart' show LanConnectionException;
 import '../accounting/accounting_schema.dart'; // 🏛️ مخطط النسخة المحاسبية
@@ -328,6 +329,14 @@ class DatabaseService {
        await DatabaseMigrations.ensureSchema(db);
     } catch (e) {
        print('⚠️ Error running ensureSchema: $e');
+    }
+
+    // 🩹 القواعد القديمة: إكمال ما لا يُنشأ إلا في onCreate (categories, units,
+    //    products.barcode ...) بمقارنتها بمخطط مرجعي. إضافة فقط، آمن التكرار.
+    try {
+      await SchemaHealer.heal(db, DatabaseMigrations.createTables);
+    } catch (e) {
+      print('⚠️ Error running SchemaHealer: $e');
     }
 
     // 📦 دفتر المخزون: ربط البنود القديمة بمنتجاتها + رصيد افتتاحي لكل منتج

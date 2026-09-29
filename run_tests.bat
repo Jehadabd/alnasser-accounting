@@ -12,7 +12,7 @@ call flutter test test\sync_harness\full_accounting_scenarios_test.dart > test_r
 echo [4/7] invoice math
 call flutter test test\sync_harness\invoice_math_test.dart > test_results\4_invoice_math.txt 2>&1
 echo [5/7] accounting + lan + money
-call flutter test test\accounting test\lan test\money_calculator_test.dart > test_results\5_accounting_lan.txt 2>&1
+call flutter test test\accounting test\lan test\money_calculator_test.dart test\schema_healer_test.dart > test_results\5_accounting_lan.txt 2>&1
 echo [6/7] sync harness: smoke, residual risks, products, stock migration
 call flutter test test\sync_harness\smoke_test.dart test\sync_harness\residual_risks_test.dart test\sync_harness\product_merge_test.dart test\sync_harness\stock_migration_test.dart > test_results\6_sync.txt 2>&1
 echo [7/7] sync chaos
