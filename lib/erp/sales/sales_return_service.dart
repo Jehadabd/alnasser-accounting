@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 
 import '../../accounting/ledger.dart';
 import '../../accounting/screens/acc_ui.dart' show fmtMoney;
+import '../../providers/app_provider.dart';
 import '../debts/customer_money.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
@@ -90,8 +91,45 @@ class SalesReturnService {
     return r.isEmpty ? null : r.first;
   }
 
+  /// كلفة الوحدة الأساسية لكل مادة كما بيعت في الفاتورة الأصلية (لتعود بالكلفة نفسها).
+  Future<Map<int, double>> invoiceBaseCosts(int invoiceId) async {
+    final db = await erpDb();
+    final rows = await db.rawQuery('''
+      SELECT p.id AS pid, ii.actual_cost_price AS c, ii.quantity_large_unit AS ql, ii.quantity_individual AS qi,
+             COALESCE(NULLIF(ii.units_in_large_unit, 0), 1) AS u
+      FROM invoice_items ii
+      JOIN products p ON (p.sync_uuid = ii.product_sync_uuid OR (ii.product_sync_uuid IS NULL AND p.name = ii.product_name))
+      WHERE ii.invoice_id = ? AND COALESCE(ii.actual_cost_price, 0) > 0''', [invoiceId]);
+    final qty = <int, double>{}, val = <int, double>{};
+    for (final r in rows) {
+      final pid = r['pid'] as int;
+      final large = d0(r['ql']) > 0;
+      final soldUnits = large ? d0(r['ql']) : d0(r['qi']);
+      final base = large ? soldUnits * d0(r['u']) : soldUnits;
+      if (base <= 0) continue;
+      qty[pid] = (qty[pid] ?? 0) + base;
+      val[pid] = (val[pid] ?? 0) + d0(r['c']) * soldUnits;
+    }
+    return {for (final e in qty.entries) if (e.value > 0) e.key: (val[e.key] ?? 0) / e.value};
+  }
+
+  /// البحث عن فاتورة برقمها التجاري أو بمعرّفها.
+  Future<int?> findInvoice(String text) async {
+    final t = text.trim();
+    if (t.isEmpty) return null;
+    final db = await erpDb();
+    final byNo = await db.query('invoices',
+        columns: ['id'], where: 'invoice_number = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [t], limit: 1);
+    if (byNo.isNotEmpty) return byNo.first['id'] as int;
+    final id = int.tryParse(t);
+    if (id == null) return null;
+    final r = await db.query('invoices', columns: ['id'], where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [id], limit: 1);
+    return r.isEmpty ? null : id;
+  }
+
   Future<int> create(
-    BuildContext context, {
+    BuildContext? context, {
+    AppProvider? provider,
     int? customerId,
     required String customerName,
     int? originalInvoiceId,
@@ -146,10 +184,13 @@ class SalesReturnService {
 
     // 1) الأثر على دين العميل أولاً (على الحساب)
     String? txUuid;
+    // الكلفة بسعرها يوم البيع (من الفاتورة الأصلية)، وإلا الكلفة الحالية
+    final origCosts = originalInvoiceId == null ? const <int, double>{} : await invoiceBaseCosts(originalInvoiceId);
     if (creditPart > kMoneyEpsilon) {
-      if (!context.mounted) throw ErpException('أُغلقت الشاشة');
+      if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
       txUuid = await CustomerMoney.post(
         context,
+        provider: provider,
         customerId: customerId!,
         amount: -creditPart,
         kind: CustomerTxKind.salesReturn,
@@ -183,7 +224,7 @@ class SalesReturnService {
         });
         for (final l in valid) {
           final p = await ErpStock.byId(txn, l.product.id);
-          final unitCost = p?.cost ?? l.product.cost;
+          final unitCost = origCosts[l.product.id] ?? p?.cost ?? l.product.cost;
           final lineCost = roundMoney(unitCost * l.baseQty);
           costTotal += lineCost;
           final mv = p != null && p.isService
@@ -218,10 +259,11 @@ class SalesReturnService {
       return id;
     } catch (e) {
       // تعويض: إلغاء أثر الدين إن كان قد سُجّل
-      if (txUuid != null && context.mounted) {
+      if (txUuid != null && (context == null || context.mounted)) {
         try {
           await CustomerMoney.post(
             context,
+            provider: provider,
             customerId: customerId!,
             amount: creditPart,
             kind: CustomerTxKind.salesReturn,
@@ -236,7 +278,7 @@ class SalesReturnService {
   }
 
   /// إلغاء مرتجع: تخرج البضاعة ثانية، ويعود المبلغ ديناً (إن كان على الحساب).
-  Future<void> voidReturn(BuildContext context, int id, {String? reason}) async {
+  Future<void> voidReturn(BuildContext? context, int id, {String? reason, AppProvider? provider}) async {
     final db = await erpDb();
     final r = await db.query('sales_returns', where: 'id = ?', whereArgs: [id], limit: 1);
     if (r.isEmpty) throw ErpException('المرتجع غير موجود');
@@ -246,9 +288,10 @@ class SalesReturnService {
     await PeriodLock.assertOpen(DateTime.now());
     final creditPart = returnCreditPart(h);
     if (creditPart > kMoneyEpsilon && h['customer_id'] != null) {
-      if (!context.mounted) throw ErpException('أُغلقت الشاشة');
+      if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
       await CustomerMoney.post(
         context,
+        provider: provider,
         customerId: h['customer_id'] as int,
         amount: creditPart,
         kind: CustomerTxKind.salesReturn,

@@ -50,7 +50,8 @@ class CustomerMoney {
   /// يضيف معاملة على العميل. [amount] بإشارة: موجب = يزيد الدين، سالب = ينقصه.
   /// يعيد transaction_uuid.
   static Future<String> post(
-    BuildContext context, {
+    BuildContext? context, {
+    AppProvider? provider,
     required int customerId,
     required double amount,
     required CustomerTxKind kind,
@@ -67,7 +68,7 @@ class CustomerMoney {
   }) async {
     final amt = roundMoney(amount);
     if (amt.abs() < kMoneyEpsilon) throw ErpException('المبلغ صفر');
-    final provider = context.read<AppProvider>();
+    final app = provider ?? context!.read<AppProvider>();
     final when = date ?? DateTime.now();
     await PeriodLock.assertOpen(when);
     final db = await erpDb();
@@ -108,7 +109,7 @@ class CustomerMoney {
       transactionUuid: uuid,
     );
     try {
-      await provider.addTransaction(tx);
+      await app.addTransaction(tx);
     } catch (e) {
       try {
         await db.delete('customer_tx_ext', where: 'transaction_uuid = ?', whereArgs: [uuid]);

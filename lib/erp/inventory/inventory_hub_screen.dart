@@ -14,6 +14,7 @@ import '../pos/scale_barcode.dart';
 import '../sales/quotes_orders_screen.dart';
 import '../erp_settings_screen.dart';
 import '../pos/price_checker_screen.dart';
+import '../purchases/purchase_return_screen.dart';
 import 'categories_screen.dart';
 import 'inventory_reports.dart';
 import 'inventory_reports_screen.dart';
@@ -170,6 +171,9 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
             permission: AppPermissions.suppliers),
         HubTile('مرتجع مشتريات', Icons.assignment_return_outlined, ErpColors.orange,
             () => Navigator.pushNamed(context, '/purchase_return'),
+            permission: AppPermissions.suppliers),
+        HubTile('سجل مرتجعات المشتريات', Icons.history_rounded, ErpColors.muted,
+            () => _go(const PurchaseReturnsListScreen()),
             permission: AppPermissions.suppliers),
         HubTile('المخازن والتحويلات', Icons.warehouse_outlined, ErpColors.green, () => Navigator.pushNamed(context, '/branches'),
             permission: AppPermissions.stockTransfer),

@@ -16,6 +16,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../accounting/ledger.dart';
 import 'erp_common.dart';
+import 'purchases/purchase_return_service.dart' show purchaseReturnCashPart;
 import 'sales/sales_return_service.dart' show returnCashPart;
 
 class ErpPostingSummary {
@@ -87,6 +88,7 @@ class ErpPosting {
     final s = ErpPostingSummary();
     if (!await _tableExists(db, 'sales_returns') || !await hasAccounts(db)) return s;
     await _salesReturns(s);
+    await _purchaseReturns(s);
     await _stockDocs(s);
     await _commissions(s);
     return s;
@@ -201,6 +203,46 @@ class ErpPosting {
           date: parseDate(r['return_date']),
           description: 'مرتجع مبيعات رقم ${r['return_no']} — ${r['customer_name'] ?? ''}',
           lines: lines);
+    });
+  }
+
+  // ═══════════════════════════ مرتجع المشتريات (الجزء النقدي) ═══════════════════════════
+  // جزء الدين يُرحَّل من حركة المورد نفسها (مدين الذمم / دائن المخزون).
+  // الجزء النقدي هنا: مدين الصندوق (المورد ردّ المبلغ) / دائن المخزون.
+
+  Future<void> _purchaseReturns(ErpPostingSummary summary) async {
+    if (!await _tableExists(db, 'purchase_returns')) return;
+    final rows = await db.rawQuery("SELECT * FROM purchase_returns WHERE status = 'posted'");
+    final sources = <_Src>[];
+    for (final r in rows) {
+      final cash = purchaseReturnCashPart(r);
+      if (cash.abs() < kMoneyEpsilon) continue;
+      final rate = r['currency'] == 'IQD' ? 1.0 : d0(r['fx_rate']);
+      final hash = [r['return_date'], cash.toStringAsFixed(2), r['currency'], rate.toStringAsFixed(4), r['cash_box_id']].join('|');
+      sources.add(_Src(r['id'] as int, hash, r));
+    }
+    final inventory = await Ledger.systemAccountId(db, 'inventory');
+    await _reconcile('purchase_return', sources, summary, (txn, s) async {
+      final r = s.row;
+      final cash = purchaseReturnCashPart(r);
+      final usd = r['currency'] != 'IQD';
+      final rate = usd ? d0(r['fx_rate']) : 1.0;
+      final iqd = roundMoney(cash * rate);
+      await Ledger.writeEntry(txn,
+          sourceType: 'purchase_return',
+          sourceId: s.id,
+          sourceHash: s.hash,
+          date: parseDate(r['return_date']),
+          description: 'مرتجع مشتريات رقم ${r['return_no']} — ${r['supplier_name'] ?? ''} (مسترد نقداً)',
+          lines: [
+            JournalLineInput(
+                accountId: await _boxAccount(txn, r['cash_box_id'] as int?),
+                debit: iqd,
+                currency: usd ? '${r['currency']}' : 'IQD',
+                fcAmount: usd ? cash : null,
+                exchangeRate: usd ? rate : null),
+            JournalLineInput(accountId: inventory, credit: iqd, memo: 'بضاعة مُرجعة للمورد'),
+          ]);
     });
   }
 

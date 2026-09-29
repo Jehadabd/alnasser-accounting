@@ -17,7 +17,7 @@ import 'journal_screen.dart';
 import 'accounting_settings_screen.dart';
 import 'trial_balance_screen.dart';
 import '../../inventory/item_card_screen.dart';
-import '../../inventory/purchase_return_screen.dart';
+import '../../erp/purchases/purchase_return_screen.dart';
 import '../../org/screens/branches_warehouses_screen.dart';
 import 'vouchers_screen.dart';
 import '../../erp/accounting_plus/currency_voucher_screens.dart';
@@ -224,7 +224,7 @@ class _AccountingHomeScreenState extends State<AccountingHomeScreen> {
                 _tile('الميزانية العمومية', Icons.account_balance, AccColors.navy,
                     () => _open(const BalanceSheetScreen(), permission: AppPermissions.viewCostProfit)),
                 _tile('مرتجع مشتريات', Icons.assignment_return, AccColors.orange,
-                    () => _open(const PurchaseReturnScreen(), permission: AppPermissions.suppliers),
+                    () => _open(const PurchaseReturnEditorScreen(), permission: AppPermissions.suppliers),
                     subtitle: 'إرجاع بضاعة للمورد'),
                 _tile('بطاقات المواد', Icons.inventory, AccColors.cyan,
                     () => _open(const ItemCardsListScreen(), permission: AppPermissions.itemCard)),

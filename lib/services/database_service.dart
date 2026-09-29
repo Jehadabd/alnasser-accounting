@@ -1620,6 +1620,10 @@ class DatabaseService {
     await database;
     if (!fromSync && updated.id != null) {
       await assertNotRestoredLocked('transactions', updated.id!);
+      // 🔒 تثبيت الإدخالات: لا تعديل لمعاملة مثبّتة ولا نقلها إلى فترة مثبّتة
+      final old = await _transactionDao.getTransactionById(updated.id!);
+      if (old != null) await PeriodLock.assertOpen(old.transactionDate);
+      await PeriodLock.assertOpen(updated.transactionDate);
     }
     await _transactionDao.updateManualTransaction(updated, fromSync: fromSync);
     // 🚀 تعديل محلي = رفع فوري. شاشة العميل تستدعي هذه الدالة مباشرة (لا عبر
@@ -1651,6 +1655,7 @@ class DatabaseService {
     final tx = await _transactionDao.getTransactionById(transactionId);
     if (tx == null) throw Exception('Transaction not found');
     await assertNotRestoredLocked('transactions', transactionId);
+    await PeriodLock.assertOpen(tx.transactionDate); // 🔒 تثبيت الإدخالات
 
     await _transactionDao.convertTransactionType(transactionId);
     _triggerCustomerSync(tx.customerId);
@@ -2206,6 +2211,7 @@ class DatabaseService {
     required double paidAmount,
   }) async {
     final db = await database;
+    await PeriodLock.assertOpen(DateTime.now(), db); // 🔒 تثبيت الإدخالات
 
     final String finalCustomerName = (customerName != null && customerName.trim().isNotEmpty)
         ? customerName.trim()

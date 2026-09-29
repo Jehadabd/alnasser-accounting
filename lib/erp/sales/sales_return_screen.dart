@@ -12,6 +12,7 @@ import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
 import '../stock_helpers.dart';
+import 'doc_pdf.dart';
 import 'sales_return_service.dart';
 
 class SalesReturnScreen extends StatefulWidget {
@@ -50,8 +51,13 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
   }
 
   Future<void> _loadInvoice() async {
-    final id = int.tryParse(_invoiceCtrl.text.trim());
-    if (id == null) return;
+    final id = widget.invoiceId != null && _invoiceCtrl.text.trim() == '${widget.invoiceId}'
+        ? widget.invoiceId
+        : await _svc.findInvoice(_invoiceCtrl.text);
+    if (id == null) {
+      if (mounted && _invoiceCtrl.text.trim().isNotEmpty) showError(context, 'لا توجد فاتورة بهذا الرقم');
+      return;
+    }
     final h = await _svc.invoiceHeader(id);
     if (h == null) {
       if (mounted) showError(context, 'الفاتورة #$id غير موجودة');
@@ -135,6 +141,9 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
       );
       if (!mounted) return;
       showOk(context, 'حُفظ المرتجع (#$id)');
+      final pr = await confirmDialog(context, 'طباعة', 'طباعة مستند المرتجع؟', ok: 'طباعة');
+      if (pr && mounted) await printSalesReturn(context, id);
+      if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
       if (mounted) showError(context, e);
@@ -174,12 +183,24 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
                 controller: _invoiceCtrl,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
-                    labelText: 'رقم الفاتورة (المعرّف)', border: OutlineInputBorder(), isDense: true, filled: true,
+                    labelText: 'رقم الفاتورة', border: OutlineInputBorder(), isDense: true, filled: true,
                     fillColor: Colors.white),
                 onSubmitted: (_) => _loadInvoice(),
               ),
             ),
             OutlinedButton.icon(onPressed: _loadInvoice, icon: const Icon(Icons.download), label: const Text('تحميل موادها')),
+            if (_invoiceId != null)
+              TextButton.icon(
+                onPressed: () => setState(() {
+                  for (final l in _lines) {
+                    final left = _returnable[l.product.id] ?? 0;
+                    l.quantity = l.unit.factor <= 0 ? 0 : left / l.unit.factor;
+                    l.rev++;
+                  }
+                }),
+                icon: const Icon(Icons.select_all),
+                label: const Text('إرجاع كل المتبقي'),
+              ),
             if (_invoiceId != null)
               const Text('لا يمكن إرجاع أكثر مما بيع في الفاتورة', style: TextStyle(color: ErpColors.muted)),
           ]),
@@ -302,6 +323,8 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
           ),
         ),
         actions: [
+          TextButton.icon(
+              onPressed: () => printSalesReturn(ctx, r['id'] as int), icon: const Icon(Icons.print), label: const Text('طباعة')),
           if (r['status'] == 'posted')
             TextButton(
               onPressed: () async {
@@ -409,5 +432,42 @@ String _modeLabel(Map<String, Object?> r) {
       return 'مختلط (نقداً ${fmtMoney(returnCashPart(r))})';
     default:
       return 'من الحساب';
+  }
+}
+
+/// طباعة مستند مرتجع مبيعات (بالمبلغ كتابةً).
+Future<void> printSalesReturn(BuildContext context, int id) async {
+  try {
+    final db = await erpDb();
+    final h = (await db.query('sales_returns', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+    final items = await SalesReturnService().items(id);
+    final bytes = await DocPdf.build(
+      title: h['status'] == 'posted' ? 'مرتجع مبيعات' : 'مرتجع مبيعات (ملغى)',
+      number: '${h['return_no']}',
+      date: parseDate(h['return_date']),
+      partyLabel: 'الزبون',
+      partyName: '${h['customer_name'] ?? ''}',
+      infos: [
+        MapEntry('طريقة الرد', _modeLabel(h)),
+        if (h['original_invoice_id'] != null) MapEntry('الفاتورة الأصلية', '#${h['original_invoice_id']}'),
+      ],
+      headers: const ['#', 'المادة', 'الوحدة', 'الكمية', 'السعر', 'الإجمالي'],
+      rows: [
+        for (var i = 0; i < items.length; i++)
+          [
+            '${i + 1}',
+            '${items[i]['product_name']}',
+            '${items[i]['sale_type'] ?? ''}',
+            fmtQty(d0(items[i]['quantity'])),
+            fmtMoney(d0(items[i]['price'])),
+            fmtMoney(d0(items[i]['total'])),
+          ],
+      ],
+      total: d0(h['total']),
+      notes: h['notes'] as String?,
+    );
+    if (context.mounted) await ReportExport.openPdf(context, bytes, 'مرتجع مبيعات ${h['return_no']}');
+  } catch (e) {
+    if (context.mounted) showError(context, 'تعذّرت الطباعة: $e');
   }
 }

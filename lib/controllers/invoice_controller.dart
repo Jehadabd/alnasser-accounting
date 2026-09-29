@@ -1,3 +1,4 @@
+import '../erp/erp_common.dart' show PeriodLock;
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -325,6 +326,16 @@ class InvoiceController {
         await _db.isRestoredRecordLocked('invoices', data.invoiceToManage!.id!)) {
       return InvoiceSaveResult(
           success: false, errorMessage: RestoredRecordLockedException.message);
+    }
+
+    // 🔒 تثبيت الإدخالات: لا فاتورة جديدة ولا تعديل بتاريخ داخل فترة مثبّتة
+    //    (يُفحص التاريخ الجديد والتاريخ الأصلي للفاتورة المعدّلة)
+    try {
+      await PeriodLock.assertOpen(data.selectedDate);
+      final orig = data.invoiceToManage?.invoiceDate;
+      if (!data.isNewInvoice && orig != null) await PeriodLock.assertOpen(orig);
+    } catch (e) {
+      return InvoiceSaveResult(success: false, errorMessage: e.toString());
     }
 
     // Re-run standard validation to be safe

@@ -335,6 +335,47 @@ class ErpSchema {
       FOREIGN KEY (return_id) REFERENCES sales_returns (id) ON DELETE CASCADE
     )''',
 
+    // ═══════════════════════════ مرتجع المشتريات ═══════════════════════════
+    // refund_mode: debt (يُنزل من دين المورد) | cash (يردّ المورد نقداً) | mixed
+    '''
+    CREATE TABLE IF NOT EXISTS purchase_returns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      return_no INTEGER NOT NULL,
+      return_date TEXT NOT NULL,
+      supplier_id INTEGER NOT NULL,
+      supplier_name TEXT,
+      original_invoice_id INTEGER,
+      currency TEXT NOT NULL DEFAULT 'IQD',
+      fx_rate REAL NOT NULL DEFAULT 1,
+      refund_mode TEXT NOT NULL,
+      cash_amount REAL NOT NULL DEFAULT 0,
+      cash_box_id INTEGER,
+      warehouse_id INTEGER,
+      total REAL NOT NULL,
+      cost_total REAL NOT NULL DEFAULT 0,
+      tx_uuid TEXT,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'posted',
+      created_by TEXT,
+      created_at TEXT NOT NULL
+    )''',
+    '''
+    CREATE TABLE IF NOT EXISTS purchase_return_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      return_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      product_name TEXT NOT NULL,
+      unit_name TEXT,
+      factor REAL NOT NULL DEFAULT 1,
+      quantity REAL NOT NULL,
+      base_qty REAL NOT NULL,
+      price REAL NOT NULL,
+      total REAL NOT NULL,
+      unit_cost REAL NOT NULL DEFAULT 0,
+      movement_uuid TEXT,
+      FOREIGN KEY (return_id) REFERENCES purchase_returns (id) ON DELETE CASCADE
+    )''',
+
     // ═══════════════════════════ المخزون ═══════════════════════════
     // doc_type: in | out | opening | production | count
     '''

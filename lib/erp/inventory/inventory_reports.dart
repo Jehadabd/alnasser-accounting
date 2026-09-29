@@ -95,7 +95,7 @@ class InventoryReports {
       if (r == null) continue;
       final q = d0(x['q']);
       final kind = (x['kind'] as String?) ?? '';
-      if (kind == 'purchase' || kind == 'purchase_reverse' || kind == 'purchase_return') {
+      if (kind == 'purchase' || kind == 'purchase_reverse' || kind == 'purchase_return' || kind == 'purchase_return_void') {
         r.purchases += q; // الإلغاء والمرتجع سالبان فيُطرحان
       } else if (kind == 'sales_return' || kind == 'sales_return_void') {
         r.returnsIn += q;
@@ -342,6 +342,7 @@ const Map<String, String> movementKindLabels = {
   'purchase': 'شراء',
   'purchase_return': 'مرتجع مشتريات',
   'purchase_reverse': 'إلغاء شراء',
+  'purchase_return_void': 'إلغاء مرتجع مشتريات',
   'adjust': 'تعديل يدوي',
   'transfer': 'تحويل مخزني',
   'sales_return': 'مرتجع مبيعات',

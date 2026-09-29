@@ -1,5 +1,6 @@
 // screens/edit_invoices_screen.dart
 // screens/edit_invoices_screen.dart
+import '../erp/sales/sales_return_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -561,6 +562,17 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
                                           icon: const Icon(Icons.share),
                                           onPressed: () => _shareInvoicePdf(invoice),
                                         ),
+                                        // ↩️ مرتجع مبيعات من هذه الفاتورة (مستند مستقل، لا يعدّل الفاتورة)
+                                        if (invoice.status != 'معلقة' && invoice.id != null)
+                                          IconButton(
+                                            tooltip: 'مرتجع من هذه الفاتورة',
+                                            icon: const Icon(Icons.assignment_return_outlined),
+                                            onPressed: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) => SalesReturnScreen(invoiceId: invoice.id)),
+                                            ).then((_) => _fetchInvoices(refresh: true)),
+                                          ),
                                       ],
                                     ),
                                     onTap: () async {

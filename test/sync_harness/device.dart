@@ -9,7 +9,14 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:alnaser/accounting/accounting_reports.dart';
+import 'package:alnaser/accounting/posting_engine.dart';
 import 'package:alnaser/controllers/invoice_controller.dart';
+import 'package:alnaser/erp/debts/customer_money.dart';
+import 'package:alnaser/erp/erp_common.dart' show PeriodLock;
+import 'package:alnaser/erp/purchases/purchase_return_service.dart';
+import 'package:alnaser/erp/sales/sales_return_service.dart';
+import 'package:alnaser/erp/stock_helpers.dart';
 import 'package:alnaser/models/customer.dart';
 import 'package:alnaser/models/invoice.dart';
 import 'package:alnaser/models/invoice_input_data.dart';
@@ -683,6 +690,187 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         for (final x in r)
           [x['transaction_uuid'], x['transaction_type'], (x['amount_changed'] as num).toDouble()]
       ];
+
+    // ═══════════ عمليات النسخة المحاسبية (نفس خدمات الشاشات) ═══════════
+
+    case 'deleteInvoice':
+      final db = await DatabaseService().database;
+      final ir = await db.query('invoices', columns: ['id'], where: 'invoice_uuid = ?', whereArgs: [a['inv']], limit: 1);
+      if (ir.isEmpty) throw StateError('invoice not on device');
+      try {
+        await DatabaseService().deleteInvoice(ir.first['id'] as int);
+      } catch (e) {
+        return {'ok': false, 'err': '$e'};
+      }
+      return {'ok': true};
+
+    case 'receipt':
+      // وصل قبض/خصم عبر البوابة الوحيدة CustomerMoney (يمر بـ AppProvider.addTransaction)
+      final cid = await _customerId(a['cust'] as String);
+      if (cid == null) throw StateError('customer not on device');
+      final kind = (a['kind'] as String?) == 'discount' ? CustomerTxKind.discount : CustomerTxKind.cash;
+      final u = await CustomerMoney.post(null,
+          provider: AppProvider(),
+          customerId: cid,
+          amount: -(a['amount'] as num).toDouble(),
+          kind: kind,
+          note: 'وصل اختبار ${a['marker'] ?? ''}');
+      return u;
+
+    case 'salesReturn':
+      final db = await DatabaseService().database;
+      final cid = await _customerId(a['cust'] as String);
+      if (cid == null) throw StateError('customer not on device');
+      final cname = (await db.query('customers', columns: ['name'], where: 'id = ?', whereArgs: [cid])).first['name'] as String;
+      int? invId;
+      if (a['inv'] != null) {
+        final ir = await db.query('invoices', columns: ['id'], where: 'invoice_uuid = ?', whereArgs: [a['inv']], limit: 1);
+        if (ir.isEmpty) throw StateError('invoice not on device');
+        invId = ir.first['id'] as int;
+      }
+      final lines = <ReturnLine>[];
+      for (final it in (a['items'] as List).cast<Map>()) {
+        final pr = await db.query('products', columns: ['id'], where: 'sync_uuid = ?', whereArgs: [it['prod']], limit: 1);
+        final p = await ErpStock.byId(db, pr.first['id'] as int);
+        lines.add(ReturnLine(product: p!, unit: p.units.first, quantity: (it['qty'] as num).toDouble(),
+            price: (it['price'] as num).toDouble()));
+      }
+      final box = await db.rawQuery('SELECT id FROM cash_boxes ORDER BY is_default DESC, id LIMIT 1');
+      final before = await db.rawQuery('SELECT COALESCE(MAX(id), 0) AS m FROM transactions');
+      try {
+        final id = await SalesReturnService().create(null,
+            provider: AppProvider(),
+            customerId: cid,
+            customerName: cname,
+            originalInvoiceId: invId,
+            refundMode: a['mode'] as String,
+            cashAmount: ((a['cash'] as num?) ?? 0).toDouble(),
+            cashBoxId: box.isEmpty ? null : box.first['id'] as int,
+            date: DateTime.now(),
+            lines: lines);
+        final tx = await db.rawQuery(
+            'SELECT transaction_uuid AS u, amount_changed AS a FROM transactions WHERE id > ? AND customer_id = ?',
+            [before.first['m'], cid]);
+        return {'ok': true, 'id': id, 'txs': [for (final t in tx) [t['u'], (t['a'] as num).toDouble()]]};
+      } catch (e) {
+        return {'ok': false, 'err': '$e'};
+      }
+
+    case 'voidSalesReturn':
+      final db = await DatabaseService().database;
+      final before = await db.rawQuery('SELECT COALESCE(MAX(id), 0) AS m FROM transactions');
+      try {
+        await SalesReturnService().voidReturn(null, a['id'] as int, reason: 'اختبار', provider: AppProvider());
+      } catch (e) {
+        return {'ok': false, 'err': '$e'};
+      }
+      final tx = await db.rawQuery('SELECT transaction_uuid AS u, amount_changed AS a FROM transactions WHERE id > ?',
+          [before.first['m']]);
+      return {'ok': true, 'txs': [for (final t in tx) [t['u'], (t['a'] as num).toDouble()]]};
+
+    case 'purchaseReturn':
+      final db = await DatabaseService().database;
+      var sup = await db.query('suppliers', columns: ['id', 'name'], where: 'name = ?', whereArgs: ['مورد الاختبار'], limit: 1);
+      if (sup.isEmpty) {
+        await db.insert('suppliers', {
+          'name': 'مورد الاختبار',
+          'total_debt_iqd': 0.0,
+          'total_debt_usd': 0.0,
+          'created_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        });
+        sup = await db.query('suppliers', columns: ['id', 'name'], where: 'name = ?', whereArgs: ['مورد الاختبار'], limit: 1);
+      }
+      final pr = await db.query('products', columns: ['id'], where: 'sync_uuid = ?', whereArgs: [a['prod']], limit: 1);
+      final p = await ErpStock.byId(db, pr.first['id'] as int);
+      final box = await db.rawQuery('SELECT id FROM cash_boxes ORDER BY is_default DESC, id LIMIT 1');
+      try {
+        final id = await PurchaseReturnService().create(
+          supplierId: sup.first['id'] as int,
+          supplierName: 'مورد الاختبار',
+          currency: 'IQD',
+          refundMode: a['mode'] as String,
+          cashAmount: ((a['cash'] as num?) ?? 0).toDouble(),
+          cashBoxId: box.isEmpty ? null : box.first['id'] as int,
+          date: DateTime.now(),
+          allowNegative: a['allowNegative'] == true,
+          lines: [
+            PurchaseReturnLine(product: p!, unit: p.units.first, quantity: (a['qty'] as num).toDouble(),
+                price: (a['price'] as num).toDouble())
+          ],
+        );
+        return {'ok': true, 'id': id};
+      } catch (e) {
+        return {'ok': false, 'err': '$e'};
+      }
+
+    case 'voidPurchaseReturn':
+      try {
+        await PurchaseReturnService().voidReturn(a['id'] as int, reason: 'اختبار');
+        return {'ok': true};
+      } catch (e) {
+        return {'ok': false, 'err': '$e'};
+      }
+
+    case 'setLock':
+      final v = a['date'] as String?;
+      await PeriodLock.setLockDate(v == null ? null : DateTime.parse(v));
+      return true;
+
+    case 'ledgerCheck':
+      // ترحيل كامل ثم فحوص الدفتر: كل قيد متوازن، الميزان متوازن، ذمم العملاء =
+      // سجل الديون (إجمالاً ولكل عميل)، ذمم الموردين = أرصدتهم، والترحيل الثاني لا يغيّر شيئاً.
+      final db = await DatabaseService().database;
+      final s1 = await PostingEngine().syncAll();
+      final s2 = await PostingEngine().syncAll();
+      final problems = <String>[...s1.errors, ...s2.errors];
+      if (s2.created + s2.updated + s2.deleted > 0) {
+        problems.add('الترحيل الثاني غيّر قيوداً (غير إدمبوتنت): $s2');
+      }
+      problems.addAll(await AccountingReports().integrityCheck());
+      final unb = await db.rawQuery('''
+        SELECT e.id, e.source_type, SUM(l.debit) AS d, SUM(l.credit) AS c FROM journal_entries e
+        JOIN journal_lines l ON l.entry_id = e.id GROUP BY e.id HAVING ABS(SUM(l.debit) - SUM(l.credit)) > 0.004''');
+      for (final r in unb) {
+        problems.add('قيد غير متوازن #${r['id']} (${r['source_type']}): ${r['d']} ≠ ${r['c']}');
+      }
+      final neg = await db.rawQuery('SELECT COUNT(*) AS n FROM journal_lines WHERE debit < 0 OR credit < 0');
+      if (((neg.first['n'] as num?) ?? 0) > 0) problems.add('أسطر قيد بمبالغ سالبة: ${neg.first['n']}');
+      // ذمم كل عميل في الدفتر = رصيده في سجل الديون
+      try {
+        final arRow = await db.query('accounts', columns: ['id'], where: "system_key = 'ar_customers'", limit: 1);
+        final ar = arRow.first['id'] as int;
+        final per = await db.rawQuery('''
+          SELECT c.name, c.current_total_debt AS reg,
+                 COALESCE((SELECT SUM(l.debit - l.credit) FROM journal_lines l
+                           WHERE l.account_id = ? AND l.party_type = 'customer' AND l.party_id = c.id), 0) AS led
+          FROM customers c WHERE COALESCE(c.is_deleted, 0) = 0''', [ar]);
+        for (final r in per) {
+          final reg = (r['reg'] as num?)?.toDouble() ?? 0, led = (r['led'] as num?)?.toDouble() ?? 0;
+          if ((reg - led).abs() > 0.01) problems.add('العميل ${r['name']}: الدفتر $led وسجل الديون $reg');
+        }
+      } catch (e) {
+        problems.add('فحص ذمم العملاء: $e');
+      }
+      // الكمية المخزّنة = الافتتاحي + الحركات − المبيع (دفتر المخزون)
+      final stockBad = await db.rawQuery('''
+        SELECT p.name, p.stock_quantity AS q,
+          COALESCE((SELECT SUM(m.delta) FROM stock_movements m WHERE m.product_sync_uuid = p.sync_uuid
+                      AND (m.kind != 'opening' OR m.movement_uuid = 'opening_' || p.sync_uuid)), 0)
+          - COALESCE((SELECT SUM(CASE WHEN COALESCE(ii.quantity_large_unit, 0) > 0
+                        THEN ii.quantity_large_unit * COALESCE(NULLIF(ii.units_in_large_unit, 0), 1)
+                        ELSE COALESCE(ii.quantity_individual, 0) END)
+                      FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+                      WHERE ii.product_sync_uuid = p.sync_uuid AND COALESCE(i.is_deleted, 0) = 0
+                        AND COALESCE(i.status, '') != 'معلقة'), 0) AS calc
+        FROM products p WHERE COALESCE(p.is_deleted, 0) = 0 AND p.sync_uuid IS NOT NULL
+          AND EXISTS (SELECT 1 FROM stock_movements m0 WHERE m0.movement_uuid = 'opening_' || p.sync_uuid)''');
+      for (final r in stockBad) {
+        final q = (r['q'] as num?)?.toDouble() ?? 0, c = (r['calc'] as num?)?.toDouble() ?? 0;
+        if ((q - c).abs() > 0.001) problems.add('المادة ${r['name']}: الكمية $q ودفتر المخزون $c');
+      }
+      final tb = await db.rawQuery('SELECT COALESCE(SUM(debit), 0) AS d FROM journal_lines');
+      return {'problems': problems, 'entries': s1.created + s1.updated + s1.unchanged, 'volume': tb.first['d']};
 
     case 'state':
       final db = await DatabaseService().database;

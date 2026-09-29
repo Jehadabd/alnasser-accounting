@@ -50,7 +50,7 @@ import 'lan/network_settings_screen.dart';
 import 'accounting/screens/accounting_home_screen.dart'; // 🏛️ المحاسبة
 import 'org/screens/branches_warehouses_screen.dart'; // 🏢 الفروع والمخازن
 import 'inventory/item_card_screen.dart'; // 🗂️ بطاقات المواد
-import 'inventory/purchase_return_screen.dart'; // ↩️ مرتجع المشتريات
+import 'erp/purchases/purchase_return_screen.dart'; // ↩️ مرتجع المشتريات
 import 'widgets/global_shortcuts.dart'; // ⌨️ F1..F8
 
 import 'package:firebase_core/firebase_core.dart'; // 🆕 Firebase
@@ -462,7 +462,7 @@ class MyApp extends StatelessWidget {
           '/branches': (context) => const _LicenseGuard(child: BranchesWarehousesScreen()), // 🏢
           '/item_cards': (context) => const _LicenseGuard(child: ItemCardsListScreen()), // 🗂️
           '/network_settings': (context) => const _LicenseGuard(child: NetworkSettingsScreen()), // 🖧
-          '/purchase_return': (context) => const _LicenseGuard(child: PurchaseReturnScreen()), // ↩️
+          '/purchase_return': (context) => const _LicenseGuard(child: PurchaseReturnEditorScreen()), // ↩️
           '/dashboard': (context) => const _LicenseGuard(child: DashboardScreen()), // 📈
           '/sales_hub': (context) => const _LicenseGuard(child: SalesHubScreen()), // 🛒
           '/debts_hub': (context) => const _LicenseGuard(child: DebtsHubScreen()), // 💵
