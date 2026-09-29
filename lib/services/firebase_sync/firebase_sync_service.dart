@@ -10,6 +10,7 @@ import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fauth; // 🔐 Firebase Auth
+import 'package:firebase_core/firebase_core.dart' show Firebase;
 
 import '../database_service.dart';
 import '../database/core/database_helpers.dart';
@@ -318,6 +319,16 @@ class FirebaseSyncService {
       print('🔒 [FirebaseSyncService] المزامنة غير مشمولة في هذا الترخيص (${license.appMode}) - تم حظر محرك المزامنة.');
       _initFailureRetryable = false; // إعادة المحاولة بلا فائدة هنا
       _updateStatus(FirebaseSyncStatus.disabled);
+      return false;
+    }
+
+    // ⚙️ لا تطبيق Firebase مهيّأ (لم تُضبط إعدادات Firebase في هذا الجهاز):
+    //    لا فائدة من بوابة المصادقة ولا من إعادة المحاولة — كانت تملأ السجل
+    //    بـ [core/no-app] كل بضع ثوانٍ. تُستأنف عند ضبط الإعدادات من شاشتها.
+    if (Firebase.apps.isEmpty) {
+      print('ℹ️ [FirebaseSyncService] Firebase غير مهيّأ في هذا الجهاز — المزامنة معطّلة حتى ضبط الإعدادات.');
+      _initFailureRetryable = false;
+      _updateStatus(FirebaseSyncStatus.notConfigured);
       return false;
     }
 
