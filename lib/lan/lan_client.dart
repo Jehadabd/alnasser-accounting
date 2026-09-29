@@ -75,6 +75,10 @@ class LanClientConnection {
   Future<void> _doConnect() async {
     _setState(LanLinkState.connecting);
     try {
+      // رمز الربط يُرسل في ترويسة HTTP: أي حرف غير ASCII يعني رمزاً خاطئاً حتماً.
+      if (secret.codeUnits.any((c) => c < 32 || c > 126)) {
+        throw LanConnectionException('رمز الربط غير صحيح — يتكوّن من أحرف وأرقام إنجليزية فقط');
+      }
       final socket = await WebSocket.connect(
         _uri.toString(),
         headers: {

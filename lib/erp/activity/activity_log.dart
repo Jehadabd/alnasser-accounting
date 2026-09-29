@@ -40,7 +40,13 @@ class ActivityLog {
   /// تسجيل عملية. [action]: إنشاء | تعديل | حذف | إلغاء | اعتماد | دخول | خروج | تصفح ...
   static Future<void> log(String action, String screen, [String? details]) async {
     try {
-      final db = await DatabaseService().database;
+      await logTo(await DatabaseService().database, action, screen, details);
+    } catch (_) {}
+  }
+
+  /// مثل [log] لكن على قاعدة محددة (خدمات تُحقن قاعدتها، كالاختبارات).
+  static Future<void> logTo(DatabaseExecutor db, String action, String screen, [String? details]) async {
+    try {
       await _ensure(db);
       await db.insert('activity_logs', {
         'at': DateTime.now().toIso8601String(),

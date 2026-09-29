@@ -25,7 +25,7 @@ class AccColors {
 }
 
 final NumberFormat _money = NumberFormat('#,##0.##', 'en');
-final DateFormat _date = DateFormat('yyyy/MM/dd', 'en');
+final DateFormat _date = DateFormat('yyyy/MM/dd', 'en_US');
 
 String fmtMoney(num v) => _money.format(v);
 String fmtDate(DateTime d) => _date.format(d);

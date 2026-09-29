@@ -160,8 +160,8 @@ class VouchersService {
     int? userId,
   }) async {
     if (amount <= 0) throw LedgerException('المبلغ يجب أن يكون أكبر من صفر');
-    await PeriodLock.assertOpen(date);
     final db = await _getDb();
+    await PeriodLock.assertOpen(date, db);
     final newId = await db.transaction((txn) async {
       final box = await txn.query('cash_boxes', where: 'id = ?', whereArgs: [cashBoxId]);
       if (box.isEmpty) throw LedgerException('الصندوق غير موجود');
@@ -250,7 +250,7 @@ class VouchersService {
           userId: userId);
       return id;
     });
-    ActivityLog.log('إنشاء', 'السندات',
+    ActivityLog.logTo(db, 'إنشاء', 'السندات',
         '${voucherTypeLabels[type]} #$newId — ${roundMoney(amount)}${description == null || description.isEmpty ? '' : ' — $description'}');
     return newId;
   }
@@ -259,7 +259,7 @@ class VouchersService {
   Future<void> delete(int voucherId, {int? userId}) async {
     final db = await _getDb();
     final v = await db.query('vouchers', columns: ['voucher_date'], where: 'id = ?', whereArgs: [voucherId], limit: 1);
-    if (v.isNotEmpty) await PeriodLock.assertOpen(DateTime.parse(v.first['voucher_date'] as String));
+    if (v.isNotEmpty) await PeriodLock.assertOpen(DateTime.parse(v.first['voucher_date'] as String), db);
     await db.transaction((txn) async {
       await txn.update(
         'vouchers',
@@ -273,7 +273,7 @@ class VouchersService {
       );
       await Ledger.deleteBySource(txn, 'voucher', voucherId);
     });
-    ActivityLog.log('حذف', 'السندات', 'حذف سند #$voucherId');
+    ActivityLog.logTo(db, 'حذف', 'السندات', 'حذف سند #$voucherId');
   }
 
   Future<List<Map<String, Object?>>> list({
