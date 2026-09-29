@@ -64,9 +64,13 @@ class CashBox {
 
 class VouchersService {
   VouchersService({Future<Database> Function()? getDatabase})
-      : _getDb = getDatabase ?? (() => DatabaseService().database);
+      : _getDb = getDatabase ?? (() => DatabaseService().database),
+        _logActivity = getDatabase == null;
 
   final Future<Database> Function() _getDb;
+
+  /// سجل حركات النظام يخص قاعدة البرنامج فقط (لا قواعد الاختبار المحقونة).
+  final bool _logActivity;
 
   // ───────────────────────── الصناديق ─────────────────────────
 
@@ -250,7 +254,7 @@ class VouchersService {
           userId: userId);
       return id;
     });
-    ActivityLog.logTo(db, 'إنشاء', 'السندات',
+    if (_logActivity) ActivityLog.log('إنشاء', 'السندات',
         '${voucherTypeLabels[type]} #$newId — ${roundMoney(amount)}${description == null || description.isEmpty ? '' : ' — $description'}');
     return newId;
   }
@@ -273,7 +277,7 @@ class VouchersService {
       );
       await Ledger.deleteBySource(txn, 'voucher', voucherId);
     });
-    ActivityLog.logTo(db, 'حذف', 'السندات', 'حذف سند #$voucherId');
+    if (_logActivity) ActivityLog.log('حذف', 'السندات', 'حذف سند #$voucherId');
   }
 
   Future<List<Map<String, Object?>>> list({
