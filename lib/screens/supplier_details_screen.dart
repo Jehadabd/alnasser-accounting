@@ -8,7 +8,10 @@ import '../models/supplier_delegate.dart';
 import '../services/purchase_service.dart';
 import '../services/suppliers_service.dart';
 import 'create_purchase_invoice_screen.dart';
-import 'register_payment_dialog.dart';
+import '../erp/debts/receipt_screen.dart' show SupplierPaymentScreen;
+import '../erp/pickers.dart' show PartyLite;
+import '../erp/purchases/purchase_return_screen.dart' show PurchaseReturnEditorScreen;
+import '../erp/purchases/supplier_statement_screen.dart';
 import 'invoice_details_split_screen.dart';
 import 'delegate_details_screen.dart';
 
@@ -432,10 +435,33 @@ class _SupplierDetailsScreenState extends State<SupplierDetailsScreen> {
               ),
               ListTile(
                 leading: const Icon(Icons.payment),
-                title: const Text('تسجيل دفعة واصلة'),
+                title: const Text('دفعة لمورد'),
+                subtitle: const Text('نقداً أو بشيك أو خصم، من صندوق محدد'),
                 onTap: () {
                   Navigator.pop(context);
                   _registerPayment();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.assignment_return_outlined),
+                title: const Text('مرتجع مشتريات'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchaseReturnEditorScreen()))
+                      .then((_) => _loadData());
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.list_alt),
+                title: const Text('كشف حساب المورد'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => SupplierStatementScreen(supplierId: _supplier.id!, supplierName: _supplier.name),
+                    ),
+                  );
                 },
               ),
             ],
@@ -503,11 +529,13 @@ class _SupplierDetailsScreenState extends State<SupplierDetailsScreen> {
     ).then((_) => _loadData());
   }
 
+  // 💸 طريق واحد لدفعة المورد: شاشة «دفعة لمورد» (صندوق، عملة، شيك، خصم مكتسب).
+  //    النافذة القديمة RegisterPaymentDialog لم تكن تسجّل الصندوق.
   void _registerPayment() {
-    showDialog(
-      context: context,
-      builder: (_) => RegisterPaymentDialog(supplier: _supplier),
-    ).then((_) => _loadData());
+    final party = PartyLite(_supplier.id!, _supplier.name, _supplier.phone, _supplier.totalDebtIqd,
+        balanceUsd: _supplier.totalDebtUsd);
+    Navigator.push(context, MaterialPageRoute(builder: (_) => SupplierPaymentScreen(supplier: party)))
+        .then((_) => _loadData());
   }
 
   void _editSupplier() {

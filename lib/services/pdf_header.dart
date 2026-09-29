@@ -77,6 +77,23 @@ pw.Widget buildPdfHeader(
                     ),
                   ),
                 ],
+                // 🧾 الرقم الضريبي والسجل التجاري (إن كُتبا في تصميم القائمة)
+                if (invoiceDesign.taxNumber.trim().isNotEmpty ||
+                    invoiceDesign.commercialRegister.trim().isNotEmpty) ...[
+                  pw.SizedBox(height: 2),
+                  pw.Center(
+                    child: pw.Text(
+                      [
+                        if (invoiceDesign.taxNumber.trim().isNotEmpty)
+                          'الرقم الضريبي: ${invoiceDesign.taxNumber.trim()}',
+                        if (invoiceDesign.commercialRegister.trim().isNotEmpty)
+                          'السجل التجاري: ${invoiceDesign.commercialRegister.trim()}',
+                      ].join('   |   '),
+                      style: pw.TextStyle(font: font, fontSize: 11),
+                      textDirection: pw.TextDirection.rtl,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

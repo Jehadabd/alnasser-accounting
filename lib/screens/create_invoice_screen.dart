@@ -1219,6 +1219,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   }
 
   void _addInvoiceItem() {
+    _entryDiscountHint = null;
     try {
       // تحديد أن هناك تغييرات غير محفوظة
       if (invoiceToManage != null && !isViewOnly) {
@@ -3851,7 +3852,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             // 🧱 أدوات سريعة (مثل الإداري): حسم % على السطر، هدية مجانية، الإجمالي ⇐ السعر
             if (!_isEntryLocked) ...[
               const SizedBox(width: 4),
-              _entryTool(Icons.percent, 'حسم % على هذا الصنف', _applyEntryDiscount),
+              _entryTool(Icons.percent, 'خصم على سعر هذا الصنف (نسبة أو مبلغ)', _applyEntryDiscount),
               _entryTool(Icons.card_giftcard, 'هدية مجانية (سعر صفر)', () => setState(() => _priceController.text = '0')),
               _entryTool(Icons.functions, 'أدخل الإجمالي ليُحسب السعر', _applyEntryTotal),
             ],
@@ -3894,13 +3895,19 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-            onChanged: (_) => setState(() {}), // Trigger rebuild for warning
+            onChanged: (_) => setState(() => _entryDiscountHint = null), // Trigger rebuild for warning
             onFieldSubmitted: (_) {
               _addInvoiceItem();
+              _entryDiscountHint = null;
               _searchFocusNode.requestFocus();
             },
           ),
         ),
+        if (_entryDiscountHint != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(_entryDiscountHint!, style: TextStyle(fontSize: 11, color: Colors.green.shade700)),
+          ),
       ],
     );
   }
@@ -3918,13 +3925,76 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         ),
       );
 
+  // 🏷️ خصم على سعر هذا الصنف: بنسبة % أو بمبلغ. يغيّر حقل السعر فقط (المسار الأصلي للحفظ)،
+  //    ويعرض تحت الحقل من أي سعر نزل وبكم، حتى لا يضيع الخصم عن العين.
+  String? _entryDiscountHint;
+
   Future<void> _applyEntryDiscount() async {
     final price = double.tryParse(_priceController.text.replaceAll(',', '')) ?? 0;
-    if (price <= 0) return;
-    final pct = await askNumber(context, 'حسم % على سعر هذا الصنف', label: 'النسبة %');
-    if (pct == null || pct <= 0 || pct >= 100) return;
-    final newPrice = (price * (1 - pct / 100) * 100).roundToDouble() / 100;
-    setState(() => _priceController.text = formatNumber(newPrice));
+    if (price <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اكتب السعر أولاً ثم اضغط الخصم')));
+      return;
+    }
+    final valueCtrl = TextEditingController();
+    var byPercent = true;
+    final result = await showDialog<double>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          final v = double.tryParse(valueCtrl.text.replaceAll(',', '')) ?? 0;
+          final off = byPercent ? price * v / 100 : v;
+          final ok = v > 0 && off < price;
+          return AlertDialog(
+            title: const Text('خصم على سعر هذا الصنف'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: true, label: Text('نسبة %')),
+                    ButtonSegment(value: false, label: Text('مبلغ')),
+                  ],
+                  selected: {byPercent},
+                  onSelectionChanged: (s) => setD(() => byPercent = s.first),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: valueCtrl,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: byPercent ? 'النسبة %' : 'مبلغ الخصم من سعر الوحدة',
+                    border: const OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setD(() {}),
+                  onSubmitted: (_) {
+                    if (ok) Navigator.pop(ctx, price - off);
+                  },
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  ok
+                      ? 'السعر: ${formatNumber(price)} ← ${formatNumber(price - off)}  (خصم ${formatNumber(off)})'
+                      : 'اكتب نسبة أو مبلغاً أقل من السعر',
+                  style: TextStyle(color: ok ? Colors.green.shade700 : Colors.grey),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+              FilledButton(onPressed: ok ? () => Navigator.pop(ctx, price - off) : null, child: const Text('تطبيق')),
+            ],
+          );
+        },
+      ),
+    );
+    if (result == null) return;
+    final newPrice = (result * 100).roundToDouble() / 100;
+    setState(() {
+      _priceController.text = formatNumber(newPrice);
+      _entryDiscountHint = 'بعد خصم ${formatNumber(price - newPrice)} من ${formatNumber(price)}';
+    });
   }
 
   Future<void> _applyEntryTotal() async {

@@ -188,9 +188,12 @@ class InvoicePdfService {
                           style: pw.TextStyle(font: font, fontSize: 10)),
                     ),
                     pw.SizedBox(height: 6),
-                    pw.Center(
-                        child: pw.Text('شكراً لتعاملكم معنا',
-                            style: pw.TextStyle(font: font, fontSize: 11))),
+                    if (appSettings.invoiceDesign.footerNote.trim().isNotEmpty)
+                      pw.Center(
+                          child: pw.Text(appSettings.invoiceDesign.footerNote.trim(),
+                              textDirection: pw.TextDirection.rtl,
+                              textAlign: pw.TextAlign.center,
+                              style: pw.TextStyle(font: font, fontSize: 11))),
                   ],
                   pw.Align(
                     alignment: pw.Alignment.center,

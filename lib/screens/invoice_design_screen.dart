@@ -28,6 +28,9 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
   final TextEditingController _phone1Controller = TextEditingController();
   final TextEditingController _phone2Controller = TextEditingController();
   final TextEditingController _companyDescriptionController = TextEditingController();
+  final TextEditingController _taxNumberController = TextEditingController();
+  final TextEditingController _commercialRegisterController = TextEditingController();
+  final TextEditingController _footerNoteController = TextEditingController();
   
   File? _logoFile;
   
@@ -62,6 +65,9 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
     
     _companyNameController.text = _invoiceDesign.companyName;
     _companyAddressController.text = _invoiceDesign.companyAddress;
+    _taxNumberController.text = _invoiceDesign.taxNumber;
+    _commercialRegisterController.text = _invoiceDesign.commercialRegister;
+    _footerNoteController.text = _invoiceDesign.footerNote;
     _companyDescriptionController.text = _appSettings.companyDescription;
     
     if (_invoiceDesign.phoneNumbers.isNotEmpty) {
@@ -115,6 +121,9 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
       companyAddress: _companyAddressController.text.trim(),
       phoneNumbers: phones,
       logoPath: _logoFile?.path,
+      taxNumber: _taxNumberController.text.trim(),
+      commercialRegister: _commercialRegisterController.text.trim(),
+      footerNote: _footerNoteController.text.trim(),
     );
 
     final updatedSettings = _appSettings.copyWith(
@@ -326,6 +335,9 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
     _phone1Controller.dispose();
     _phone2Controller.dispose();
     _companyDescriptionController.dispose();
+    _taxNumberController.dispose();
+    _commercialRegisterController.dispose();
+    _footerNoteController.dispose();
     super.dispose();
   }
 
@@ -690,6 +702,45 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
                           prefixIcon: const Icon(Icons.location_on),
                         ),
                         onChanged: (_) => setState(() {}),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // 🧾 البيانات الرسمية وتذييل القائمة
+                _buildSettingsCard(
+                  icon: Icons.verified_outlined,
+                  iconColor: Colors.indigo,
+                  title: 'الرقم الضريبي وتذييل القائمة',
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: _taxNumberController,
+                        decoration: InputDecoration(
+                          labelText: 'الرقم الضريبي (اختياري)',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          prefixIcon: const Icon(Icons.numbers),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _commercialRegisterController,
+                        decoration: InputDecoration(
+                          labelText: 'رقم السجل التجاري (اختياري)',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          prefixIcon: const Icon(Icons.badge_outlined),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _footerNoteController,
+                        maxLines: 2,
+                        decoration: InputDecoration(
+                          labelText: 'عبارة أسفل القائمة',
+                          hintText: 'مثال: البضاعة المباعة لا ترد إلا خلال 3 أيام — شكراً لتعاملكم معنا',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          prefixIcon: const Icon(Icons.short_text),
+                        ),
                       ),
                     ],
                   ),

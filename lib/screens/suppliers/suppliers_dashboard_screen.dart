@@ -5,6 +5,11 @@ import '../../services/purchase_service.dart';
 import '../../widgets/stat_card.dart';
 import '../../widgets/supplier_rich_card.dart';
 import '../supplier_details_screen.dart';
+import '../../accounting/screens/acc_ui.dart' show requirePermission;
+import '../../models/app_user.dart' show AppPermissions;
+import '../../erp/debts/receipt_screen.dart' show SupplierPaymentScreen;
+import '../../erp/purchases/purchase_return_screen.dart' show PurchaseReturnEditorScreen, PurchaseReturnsListScreen;
+import '../../erp/sales/quotes_orders_screen.dart' show OrdersScreen;
 import 'package:intl/intl.dart' as intl;
 
 class SuppliersDashboardScreen extends StatefulWidget {
@@ -55,6 +60,20 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
     setState(() {});
   }
 
+  Widget _quickAction(IconData icon, String label, Color color, VoidCallback onTap) {
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: color.withOpacity(0.5)),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      onPressed: onTap,
+      icon: Icon(icon),
+      label: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Stats Calculations
@@ -103,15 +122,30 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // BREADCRUMBS
-                  Row(
+                  // ⚡ أعمال الموردين في مكان واحد (كانت موزعة على المخزون والمحاسبة والتحصيل)
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
                     children: [
-                      Icon(Icons.dashboard_outlined, size: 20, color: Colors.blue[600]),
-                      const SizedBox(width: 8),
-                      Text(
-                        'الرئيسية',
-                        style: TextStyle(color: Colors.blue[600], fontWeight: FontWeight.bold),
-                      ),
+                      _quickAction(Icons.outbox, 'دفعة لمورد', Colors.orange, () {
+                        if (!requirePermission(context, AppPermissions.suppliers)) return;
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const SupplierPaymentScreen()))
+                            .then((_) => _loadSuppliers());
+                      }),
+                      _quickAction(Icons.shopping_cart_checkout, 'طلبات المشتريات', Colors.purple, () {
+                        if (!requirePermission(context, AppPermissions.suppliers)) return;
+                        Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => const OrdersScreen(orderType: 'purchase')));
+                      }),
+                      _quickAction(Icons.assignment_return_outlined, 'مرتجع مشتريات', Colors.deepOrange, () {
+                        if (!requirePermission(context, AppPermissions.suppliers)) return;
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchaseReturnEditorScreen()))
+                            .then((_) => _loadSuppliers());
+                      }),
+                      _quickAction(Icons.history, 'سجل مرتجعات المشتريات', Colors.blueGrey, () {
+                        if (!requirePermission(context, AppPermissions.suppliers)) return;
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchaseReturnsListScreen()));
+                      }),
                     ],
                   ),
                   const SizedBox(height: 24),
@@ -134,15 +168,12 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
                           value: '${_formatNumber(totalDebt)} IQD',
                           icon: Icons.monetization_on_outlined,
                           color: Colors.red,
-                          trend: '+12% هذا الشهر',
-                          isPositiveTrend: false, // Debt going up is bad? Or shows activity. Let's assume standard trend.
                         ),
                         StatCard(
                           title: 'حجم المشتريات',
                           value: '${_formatNumber(totalPurchases)} IQD',
                           icon: Icons.shopping_bag_outlined,
                           color: Colors.blue,
-                          trend: '+5% عن العام الماضي',
                         ),
                         StatCard(
                           title: 'إجمالي الفواتير',

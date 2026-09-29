@@ -622,6 +622,19 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     }
   }
 
+  Future<void> _openTransaction(Customer customer, {required bool isDebt}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddTransactionScreen(customer: customer, initialIsDebt: isDebt),
+      ),
+    );
+    // تحديث المعاملات المجمعة بعد العودة من شاشة الإضافة
+    if (mounted) {
+      await _loadTransactions();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Define the consistent theme colors for the screen
@@ -775,6 +788,17 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   case 'receipt_archive':
                     _showReceiptVouchersArchive();
                     break;
+                  case 'customer_receipts':
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ReceiptsListScreen(
+                          customerId: widget.customer.id,
+                          customerName: widget.customer.name,
+                        ),
+                      ),
+                    );
+                    break;
                   case 'financial_integrity':
                     _showFinancialIntegrityReport();
                     break;
@@ -807,12 +831,22 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   ),
                 ),
                 const PopupMenuItem(
+                  value: 'customer_receipts',
+                  child: Row(
+                    children: [
+                      Icon(Icons.history_edu, color: Colors.blueGrey, size: 20),
+                      SizedBox(width: 12),
+                      Text('وصولات القبض لهذا العميل'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
                   value: 'receipt_archive',
                   child: Row(
                     children: [
                       Icon(Icons.archive, color: Colors.blueGrey, size: 20),
                       SizedBox(width: 12),
-                      Text('أرشيف سندات القبض'),
+                      Text('أرشيف سندات القبض القديمة'),
                     ],
                   ),
                 ),
@@ -1228,32 +1262,24 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                           ),
                         ],
                       ),
-                      TextButton.icon(
-                        onPressed: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => AddTransactionScreen(
-                                customer: customer,
-                              ),
-                            ),
-                          );
-                          // تحديث المعاملات المجمعة بعد العودة من شاشة الإضافة
-                          if (mounted) {
-                            await _loadTransactions();
-                          }
-                        },
-                        icon: Icon(Icons.add_circle_outline,
-                            color: Theme.of(context).colorScheme.secondary,
-                            size: 28), // Themed icon
-                        label: Text('إضافة معاملة',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyLarge
-                                ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .secondary)), // Themed text
+                      // ➕ زرّان واضحان بدل «إضافة معاملة»: دين، وتسديد (التسديد = وصل قبض)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade600),
+                            onPressed: () => _openTransaction(customer, isDebt: true),
+                            icon: const Icon(Icons.add_circle_outline),
+                            label: const Text('إضافة دين'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
+                            onPressed: () => _openTransaction(customer, isDebt: false),
+                            icon: const Icon(Icons.payments_outlined),
+                            label: const Text('تسديد'),
+                          ),
+                        ],
                       ),
                     ],
                   ),

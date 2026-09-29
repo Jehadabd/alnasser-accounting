@@ -298,15 +298,53 @@ class HubTile {
   final String? permission;
 }
 
-class HubGrid extends StatelessWidget {
-  const HubGrid({super.key, required this.tiles});
+/// مجموعة أزرار بعنوان داخل مركز (مثل قوائم الإداري وسهل).
+class HubSection {
+  const HubSection(this.title, this.tiles);
+  final String title;
   final List<HubTile> tiles;
+}
+
+/// مركز مقسّم إلى مجموعات بعناوين؛ كل مجموعة شبكة أزرار.
+class HubSections extends StatelessWidget {
+  const HubSections({super.key, required this.sections});
+  final List<HubSection> sections;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 16),
+      children: [
+        for (final s in sections)
+          if (s.tiles.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+              child: Row(children: [
+                Text(s.title,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AccColors.navy)),
+                const SizedBox(width: 10),
+                Expanded(child: Divider(color: Colors.grey.shade300)),
+              ]),
+            ),
+            HubGrid(tiles: s.tiles, shrinkWrap: true),
+          ],
+      ],
+    );
+  }
+}
+
+class HubGrid extends StatelessWidget {
+  const HubGrid({super.key, required this.tiles, this.shrinkWrap = false});
+  final List<HubTile> tiles;
+  final bool shrinkWrap;
 
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final cols = width > 1200 ? 5 : width > 900 ? 4 : width > 600 ? 3 : 2;
     return GridView.count(
+      shrinkWrap: shrinkWrap,
+      physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
       padding: const EdgeInsets.all(12),
       crossAxisCount: cols,
       mainAxisSpacing: 8,

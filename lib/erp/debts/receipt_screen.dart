@@ -303,7 +303,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
 /// سجل وصولات القبض.
 class ReceiptsListScreen extends StatefulWidget {
-  const ReceiptsListScreen({super.key});
+  const ReceiptsListScreen({super.key, this.customerId, this.customerName});
+
+  /// عند التمرير: وصولات هذا العميل فقط (كل الفترات).
+  final int? customerId;
+  final String? customerName;
   @override
   State<ReceiptsListScreen> createState() => _ReceiptsListScreenState();
 }
@@ -316,11 +320,12 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.customerId != null) _from = null; // وصولات العميل: من البداية
     _load();
   }
 
   Future<void> _load() async {
-    final r = await ReceiptsService().receipts(from: _from, to: _to);
+    final r = await ReceiptsService().receipts(from: _from, to: _to, customerId: widget.customerId);
     if (mounted) setState(() => _rows = r);
   }
 
@@ -360,7 +365,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
   Widget build(BuildContext context) {
     final total = _rows.fold<double>(0, (s, r) => s + d0(r['total_amount']));
     return ErpPage(
-      title: 'سجل وصولات القبض',
+      title: widget.customerName == null ? 'سجل وصولات القبض' : 'وصولات ${widget.customerName}',
       subtitle: '${_rows.length} وصل — المجموع ${fmtMoney(total)}',
       icon: Icons.history_edu,
       actions: [

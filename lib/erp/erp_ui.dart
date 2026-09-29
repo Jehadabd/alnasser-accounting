@@ -182,7 +182,9 @@ class ErpSection extends StatelessWidget {
               ],
             ),
           ),
-          Padding(padding: padding, child: child),
+          // Material شفاف: يرسم عليه ListTile/SwitchListTile داخل البطاقة
+          // (بدونه يظهر تحذير «ListTile background ... may be invisible»)
+          Padding(padding: padding, child: Material(type: MaterialType.transparency, child: child)),
         ],
       ),
     );

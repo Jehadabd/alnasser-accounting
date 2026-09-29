@@ -20,7 +20,7 @@ import 'screens/edit_products_screen.dart';
 import 'screens/inventory_screen.dart';
 import 'screens/reports_screen.dart';
 // removed font settings screen import
-import 'screens/suppliers_list_screen.dart';
+import 'screens/suppliers/suppliers_dashboard_screen.dart';
 import 'screens/ai_chat_screen.dart';
 import 'screens/pos/pos_screen.dart';
 import 'services/password_service.dart';
@@ -455,7 +455,7 @@ class MyApp extends StatelessWidget {
           '/edit_products': (context) => const _LicenseGuard(child: EditProductsScreen()),
           '/inventory': (context) => const _LicenseGuard(child: InventoryScreen()),
           '/reports': (context) => const _LicenseGuard(child: ReportsScreen()),
-          '/suppliers': (context) => const _LicenseGuard(child: SuppliersListScreen()), // 🆕
+          '/suppliers': (context) => const _LicenseGuard(child: SuppliersDashboardScreen()), // 🆕 شاشة موردين واحدة
           '/ai_chat': (context) => const _LicenseGuard(child: AIChatScreen()),
           '/pos': (context) => const _LicenseGuard(child: POSScreen()),
           '/accounting': (context) => const _LicenseGuard(child: AccountingHomeScreen()), // 🏛️

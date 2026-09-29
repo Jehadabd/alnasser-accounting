@@ -20,13 +20,22 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:flutter/services.dart' show rootBundle;
 import '../utils/money_calculator.dart'; // 🔒 إضافة MoneyCalculator للأمان المالي
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
+import '../accounting/vouchers_service.dart' show VouchersService;
+import '../erp/device_defaults.dart';
+import '../erp/debts/receipts_service.dart';
+import '../erp/debts/receipt_pdf.dart';
+import '../erp/report_export.dart';
 
 class AddTransactionScreen extends StatefulWidget {
   final Customer customer;
 
+  /// true = «إضافة دين»، false = «تسديد». زرّا صفحة العميل يفتحان الشاشة على النوع المطلوب.
+  final bool initialIsDebt;
+
   const AddTransactionScreen({
     super.key,
     required this.customer,
+    this.initialIsDebt = true,
   });
 
   @override
@@ -42,9 +51,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
 
   @override
-  @override
   void initState() {
     super.initState();
+    _isDebt = widget.initialIsDebt;
   }
 
   @override
@@ -105,6 +114,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         return;
       }
       
+      // 🧾 التسديد = وصل قبض (سجل وصولات واحد، بالصندوق)، مع نفس سؤال الطباعة.
+      if (!_isDebt) {
+        await _savePaymentAsReceipt(amount);
+        return;
+      }
+
       final uuid = const Uuid().v4();
       final transaction = DebtTransaction(
         customerId: widget.customer.id!,
@@ -224,6 +239,88 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
 
+
+  /// التسديد يُحفظ كوصل قبض عبر ReceiptsService ⇒ CustomerMoney ⇒ AppProvider.addTransaction
+  /// (نفس دالة الرصيد)، فيظهر في «سجل الوصولات» ويُرحَّل على الصندوق.
+  Future<void> _savePaymentAsReceipt(double amount) async {
+    final boxes = await VouchersService().cashBoxes();
+    if (!mounted) return;
+    if (boxes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('لا يوجد صندوق مفعّل — أضف صندوقاً من المحاسبة ← الصناديق والبنوك'),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
+    final preferred = await DeviceDefaults.cashBoxId();
+    final box = boxes.firstWhere((b) => b.id == preferred,
+        orElse: () => boxes.firstWhere((b) => b.isDefault, orElse: () => boxes.first));
+    if (!mounted) return;
+    final note = _noteController.text.trim();
+    final res = await ReceiptsService().createCustomerReceipt(
+      context,
+      date: DateTime.now(),
+      cashBoxId: box.id,
+      currency: 'IQD',
+      fxRate: 1,
+      lines: [
+        ReceiptLineInput(
+          customerId: widget.customer.id!,
+          customerName: widget.customer.name,
+          amountFc: amount,
+          note: note.isEmpty ? null : note,
+        ),
+      ],
+    );
+    if (!mounted) return;
+    if (res.errors.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('لم يُحفظ التسديد: ${res.errors.join(' — ')}'),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('تم تسديد ${formatCurrency(amount)} دينار — وصل قبض رقم ${res.receiptNo}'),
+      backgroundColor: Colors.green[600],
+    ));
+    final shouldPrint = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('طباعة سند قبض'),
+        content: const Text('هل تريد طباعة سند القبض لهذا التسديد؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('لا')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('نعم')),
+        ],
+      ),
+    );
+    if (shouldPrint == true && mounted) {
+      // الطباعة بعد الحفظ: فشلها لا يعني أن التسديد لم يُحفظ
+      try {
+        final lines = await ReceiptsService().receiptLines(res.receiptId);
+        final bytes = await ReceiptPdf.build(
+          title: 'وصل قبض',
+          number: res.receiptNo,
+          date: DateTime.now(),
+          boxName: box.name,
+          currency: 'IQD',
+          fxRate: 1,
+          lines: lines,
+          notes: note.isEmpty ? null : note,
+        );
+        if (mounted) await ReportExport.openPdf(context, bytes, 'وصل_قبض_${res.receiptNo}');
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('حُفظ التسديد، لكن تعذّرت الطباعة: $e — أعد الطباعة من سجل الوصولات'),
+            backgroundColor: Colors.orange,
+          ));
+        }
+      }
+    }
+    if (mounted) Navigator.pop(context, true);
+  }
 
   @override
   Widget build(BuildContext context) {

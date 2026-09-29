@@ -8,13 +8,10 @@ import 'package:flutter/material.dart';
 import '../../accounting/screens/acc_ui.dart';
 import '../../inventory/item_card_screen.dart';
 import '../../models/app_user.dart';
+import '../../org/screens/branches_warehouses_screen.dart';
+import '../../screens/material_inventory_screen.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
-import '../pos/scale_barcode.dart';
-import '../sales/quotes_orders_screen.dart';
-import '../erp_settings_screen.dart';
-import '../pos/price_checker_screen.dart';
-import '../purchases/purchase_return_screen.dart';
 import 'categories_screen.dart';
 import 'inventory_reports.dart';
 import 'inventory_reports_screen.dart';
@@ -65,69 +62,13 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
     } catch (_) {}
   }
 
-  Future<void> _scaleSettings() async {
-    final s = await ScaleSettings.load();
-    final prefix = TextEditingController(text: s.prefix);
-    final plu = TextEditingController(text: '${s.pluLength}');
-    final val = TextEditingController(text: '${s.valueLength}');
-    var div = s.divisor;
-    if (!mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('إعداد باركود الميزان'),
-          content: SizedBox(
-            width: 380,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Text('مثال: 2 12345 00750 C ⇒ بادئة 2، رمز المادة 12345، القيمة 750',
-                  style: TextStyle(color: ErpColors.muted, fontSize: 12)),
-              const SizedBox(height: 10),
-              TextBox(controller: prefix, label: 'البادئة'),
-              const SizedBox(height: 8),
-              TextBox(controller: plu, label: 'عدد أرقام رمز المادة'),
-              const SizedBox(height: 8),
-              TextBox(controller: val, label: 'عدد أرقام القيمة'),
-              const SizedBox(height: 8),
-              DropBox<double>(
-                label: 'القيمة تمثّل',
-                width: 360,
-                value: div,
-                items: const [
-                  DropdownMenuItem(value: 1000, child: Text('الوزن بالغرام')),
-                  DropdownMenuItem(value: 1, child: Text('العدد (قطع)')),
-                ],
-                onChanged: (v) => setS(() => div = v ?? 1000),
-              ),
-              const SizedBox(height: 8),
-              const Text('الكاشير يقبل الكميات الصحيحة فقط: المادة الموزونة تُعرَّف بوحدة «غرام».',
-                  style: TextStyle(color: ErpColors.orange, fontSize: 12)),
-            ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حفظ')),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-    s
-      ..prefix = prefix.text.trim()
-      ..pluLength = int.tryParse(plu.text.trim()) ?? 5
-      ..valueLength = int.tryParse(val.text.trim()) ?? 5
-      ..divisor = div;
-    await s.save();
-    if (mounted) showOk(context, 'حُفظ إعداد الميزان');
-  }
-
   void _go(Widget w) => Navigator.push(context, MaterialPageRoute(builder: (_) => w)).then((_) => _load());
 
   @override
   Widget build(BuildContext context) {
     return ErpPage(
       title: 'المخزون',
-      subtitle: 'بطاقات المواد • المستندات • الجرد • التصنيع • الأسعار • التقارير',
+      subtitle: 'المواد • حركة المخزون • الفروع والمخازن • التقارير',
       icon: Icons.warehouse_rounded,
       actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: Colors.white))],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
@@ -142,49 +83,50 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
           StatCard(label: 'جرد مفتوح', value: '$_openCounts', icon: Icons.fact_check_outlined, color: ErpColors.purple,
               onTap: () => _go(const StockCountsScreen())),
       ]),
-      body: HubGrid(tiles: [
-        HubTile('بطاقات المواد', Icons.style_rounded, ErpColors.navy, () => _go(const ItemCardsListScreen()),
-            subtitle: 'تعريف، أسعار، باركودات، حركة', permission: AppPermissions.itemCard),
-        HubTile('إدخال بضاعة', Icons.add_box_rounded, ErpColors.blue, () => Navigator.pushNamed(context, '/product_entry'),
-            permission: AppPermissions.productEntry),
-        HubTile('سند إدخال', Icons.move_to_inbox_rounded, ErpColors.green, () => _go(const StockDocEditorScreen(docType: 'in')),
-            subtitle: 'هدايا، فائض، إدخال بلا مورد', permission: AppPermissions.inventoryDocs),
-        HubTile('سند إخراج', Icons.outbox_rounded, ErpColors.red, () => _go(const StockDocEditorScreen(docType: 'out')),
-            subtitle: 'تالف، ضيافة، استهلاك', permission: AppPermissions.inventoryDocs),
-        HubTile('بضاعة أول المدة', Icons.inventory_rounded, ErpColors.cyan,
-            () => _go(const StockDocEditorScreen(docType: 'opening')),
-            permission: AppPermissions.inventoryDocs),
-        HubTile('سجل المستندات', Icons.receipt_long_rounded, ErpColors.muted, () => _go(const StockDocsListScreen()),
-            permission: AppPermissions.inventoryDocs),
-        HubTile('الجرد الفعلي', Icons.fact_check_rounded, ErpColors.orange, () => _go(const StockCountsScreen()),
-            subtitle: 'بالباركود مع تسوية تلقائية', permission: AppPermissions.inventoryDocs),
-        HubTile('التصنيع', Icons.precision_manufacturing_rounded, ErpColors.purple, () => _go(const ManufacturingScreen()),
-            subtitle: 'نماذج وعمليات وهدر', permission: AppPermissions.inventoryDocs),
-        HubTile('أدوات الأسعار', Icons.price_change_rounded, ErpColors.gold, () => _go(const PriceToolsScreen()),
-            subtitle: 'تعديل جماعي + تراجع', permission: AppPermissions.priceTools),
-        HubTile('الأقسام والتعديل الجماعي', Icons.account_tree_rounded, ErpColors.navy, () => _go(const CategoriesScreen()),
-            permission: AppPermissions.editProducts),
-        HubTile('تقارير المخزون', Icons.analytics_rounded, ErpColors.blue, () => _go(const InventoryReportsScreen()),
-            subtitle: 'حركة، تقييم، راكدة، حدود', permission: AppPermissions.inventoryReports),
-        HubTile('طلبات المشتريات', Icons.shopping_cart_checkout_rounded, ErpColors.purple,
-            () => _go(const OrdersScreen(orderType: 'purchase')),
-            permission: AppPermissions.suppliers),
-        HubTile('مرتجع مشتريات', Icons.assignment_return_outlined, ErpColors.orange,
-            () => Navigator.pushNamed(context, '/purchase_return'),
-            permission: AppPermissions.suppliers),
-        HubTile('سجل مرتجعات المشتريات', Icons.history_rounded, ErpColors.muted,
-            () => _go(const PurchaseReturnsListScreen()),
-            permission: AppPermissions.suppliers),
-        HubTile('المخازن والتحويلات', Icons.warehouse_outlined, ErpColors.green, () => Navigator.pushNamed(context, '/branches'),
-            permission: AppPermissions.stockTransfer),
-        HubTile('قارئ الأسعار', Icons.qr_code_scanner_rounded, ErpColors.cyan, () => _go(const PriceCheckerScreen()),
-            subtitle: 'شاشة للزبائن'),
-        HubTile('إعدادات الطباعة والمخزون', Icons.tune_rounded, ErpColors.muted, () => _go(const ErpSettingsScreen()),
-            subtitle: 'الملصقات، حسابات الجرد', permission: AppPermissions.settings),
-        HubTile('باركود الميزان', Icons.scale_rounded, ErpColors.cyan, _scaleSettings,
-            subtitle: 'مواد موزونة في الكاشير', permission: AppPermissions.editProducts),
-        HubTile('الجرد الشهري (القديم)', Icons.inventory, ErpColors.muted, () => Navigator.pushNamed(context, '/inventory'),
-            permission: AppPermissions.monthlyInventory),
+      body: HubSections(sections: [
+        HubSection('المواد', [
+          HubTile('بطاقات المواد', Icons.style_rounded, ErpColors.navy, () => _go(const ItemCardsListScreen()),
+              subtitle: 'تعريف، أسعار، باركودات، حركة', permission: AppPermissions.itemCard),
+          HubTile('تعديل المواد وحذفها', Icons.edit_note_rounded, ErpColors.blue,
+              () => Navigator.pushNamed(context, '/edit_products'),
+              subtitle: 'القائمة القديمة: وحدات، حذف مادة', permission: AppPermissions.editProducts),
+          HubTile('الأقسام والتعديل الجماعي', Icons.account_tree_rounded, ErpColors.navy, () => _go(const CategoriesScreen()),
+              permission: AppPermissions.editProducts),
+          HubTile('أدوات الأسعار', Icons.price_change_rounded, ErpColors.gold, () => _go(const PriceToolsScreen()),
+              subtitle: 'تعديل جماعي + تراجع', permission: AppPermissions.priceTools),
+        ]),
+        HubSection('حركة المخزون', [
+          HubTile('سند إدخال', Icons.move_to_inbox_rounded, ErpColors.green, () => _go(const StockDocEditorScreen(docType: 'in')),
+              subtitle: 'زيادة كمية: هدايا، فائض، بلا مورد', permission: AppPermissions.inventoryDocs),
+          HubTile('سند إخراج', Icons.outbox_rounded, ErpColors.red, () => _go(const StockDocEditorScreen(docType: 'out')),
+              subtitle: 'نقص كمية: تالف، ضيافة، استهلاك', permission: AppPermissions.inventoryDocs),
+          HubTile('بضاعة أول المدة', Icons.inventory_rounded, ErpColors.cyan,
+              () => _go(const StockDocEditorScreen(docType: 'opening')),
+              permission: AppPermissions.inventoryDocs),
+          HubTile('الجرد الفعلي', Icons.fact_check_rounded, ErpColors.orange, () => _go(const StockCountsScreen()),
+              subtitle: 'بالباركود مع تسوية تلقائية', permission: AppPermissions.inventoryDocs),
+          HubTile('تحويل بين المخازن', Icons.swap_horiz_rounded, ErpColors.green, () {
+            if (!requireAnyPermission(context, const [AppPermissions.stockTransfer, AppPermissions.manageBranches])) return;
+            _go(const BranchesWarehousesScreen(initialTab: 2));
+          }),
+          HubTile('التصنيع', Icons.precision_manufacturing_rounded, ErpColors.purple, () => _go(const ManufacturingScreen()),
+              subtitle: 'نماذج وعمليات وهدر', permission: AppPermissions.inventoryDocs),
+          HubTile('سجل المستندات', Icons.receipt_long_rounded, ErpColors.muted, () => _go(const StockDocsListScreen()),
+              subtitle: 'كل السندات مع الإلغاء', permission: AppPermissions.inventoryDocs),
+        ]),
+        HubSection('الفروع والمخازن', [
+          HubTile('الفروع والمخازن', Icons.warehouse_outlined, ErpColors.green, () {
+            if (!requireAnyPermission(context, const [AppPermissions.manageBranches, AppPermissions.stockTransfer])) return;
+            _go(const BranchesWarehousesScreen());
+          }, subtitle: 'الفروع، المخازن، أرصدة كل مخزن'),
+        ]),
+        HubSection('تقارير المخزون', [
+          HubTile('تقارير المخزون', Icons.analytics_rounded, ErpColors.blue, () => _go(const InventoryReportsScreen()),
+              subtitle: 'حركة، تقييم، راكدة، حدود، صلاحية', permission: AppPermissions.inventoryReports),
+          HubTile('جرد المواد (القيمة الحالية)', Icons.inventory, ErpColors.muted,
+              () => _go(const MaterialInventoryScreen()),
+              subtitle: 'المواد الموجودة وقيمتها بالكلفة', permission: AppPermissions.inventoryReports),
+        ]),
       ]),
     );
   }

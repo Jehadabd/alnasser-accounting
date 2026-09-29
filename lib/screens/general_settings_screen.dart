@@ -33,6 +33,10 @@ import 'firebase_custom_setup_screen.dart';
 import 'web_hosting_guide_screen.dart'; // 🌐 استضافة الويب
 import 'package:file_picker/file_picker.dart';
 import '../services/license_service.dart';
+import '../accounting/screens/acc_ui.dart' show requirePermission;
+import '../models/app_user.dart' show AppPermissions;
+import '../erp/erp_settings_screen.dart';
+import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 
 import '../models/account_statement_item.dart';
 import '../models/verification_result.dart'; // ✅ Added
@@ -1369,6 +1373,46 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               onTap: () {
                 Navigator.pushNamed(context, '/user_management');
               },
+            ),
+          ),
+
+          // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
+          _buildSettingsCard(
+            icon: Icons.tune,
+            iconColor: Colors.indigo,
+            title: 'الشبكة والطباعة والسجل',
+            child: Column(
+              children: [
+                _buildActionTile(
+                  icon: Icons.lan,
+                  iconColor: Colors.blue,
+                  title: 'الشبكة المحلية',
+                  subtitle: 'جهاز مستقل، حاسبة السيرفر، أو طرفية',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.networkSettings)) {
+                      Navigator.pushNamed(context, '/network_settings');
+                    }
+                  },
+                ),
+                _buildActionTile(
+                  icon: Icons.local_printshop_outlined,
+                  iconColor: Colors.teal,
+                  title: 'إعدادات الطباعة والمخزون',
+                  subtitle: 'A4 أو 80mm، ملصقات الباركود، باركود الميزان، حسابات الجرد',
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ErpSettingsScreen())),
+                ),
+                _buildActionTile(
+                  icon: Icons.manage_search,
+                  iconColor: Colors.purple,
+                  title: 'سجل حركات النظام',
+                  subtitle: 'من فعل ماذا ومتى',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.manageUsers)) {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityLogScreen()));
+                    }
+                  },
+                ),
+              ],
             ),
           ),
 

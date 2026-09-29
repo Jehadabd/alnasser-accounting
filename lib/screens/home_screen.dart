@@ -16,6 +16,9 @@ import '../services/alert_service.dart'; // ✅ Added
 import 'package:intl/intl.dart';
 import '../models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
+import '../accounting/screens/acc_ui.dart' show requireAnyPermission;
+import '../erp/debts/debts_hub_screen.dart';
+import '../models/app_user.dart' show AppPermissions;
 
 // أسماء أنواع الترتيب بالعربية
 String getSortTypeName(CustomerSortType type) {
@@ -264,8 +267,19 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('الناصر'),
+          title: const Text('سجل الديون'),
           actions: [
+            // 💵 الوصولات والاستحقاقات وتقارير الديون (كانت زراً مستقلاً في الرئيسية)
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              icon: const Icon(Icons.request_quote_rounded),
+              label: const Text('التحصيل والتقارير'),
+              onPressed: () {
+                if (!requireAnyPermission(
+                    context, const [AppPermissions.collection, AppPermissions.debtReports, AppPermissions.debtRegister])) return;
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const DebtsHubScreen()));
+              },
+            ),
             IconButton(
               icon: const Icon(Icons.receipt_long,
                   color: Colors.white), // Themed icon

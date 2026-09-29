@@ -44,9 +44,13 @@ class _DebtsHubScreenState extends State<DebtsHubScreen> {
         FROM customers WHERE COALESCE(is_deleted, 0) = 0
       ''');
       final now = DateTime.now();
+      // المحصّل = تسديدات فعلية فقط (نقد/شيك)؛ لا الخصومات ولا المرتجعات ولا تعديلات القوائم
       final m = await db.rawQuery('''
-        SELECT COALESCE(SUM(-amount_changed), 0) AS c FROM transactions
-        WHERE amount_changed < 0 AND COALESCE(is_deleted, 0) = 0 AND transaction_date >= ?
+        SELECT COALESCE(SUM(-t.amount_changed), 0) AS c FROM transactions t
+        LEFT JOIN customer_tx_ext x ON x.transaction_uuid = t.transaction_uuid
+        WHERE t.amount_changed < 0 AND COALESCE(t.is_deleted, 0) = 0 AND t.transaction_date >= ?
+          AND t.transaction_type = 'manual_payment'
+          AND COALESCE(x.kind, 'cash') IN ('cash', 'cheque')
       ''', [isoDay(DateTime(now.year, now.month, 1))]);
       final o = await db.rawQuery('''
         SELECT COUNT(*) AS n FROM customers c JOIN customer_ext x ON x.customer_id = c.id
@@ -70,8 +74,8 @@ class _DebtsHubScreenState extends State<DebtsHubScreen> {
   @override
   Widget build(BuildContext context) {
     return ErpPage(
-      title: 'الديون والتحصيل',
-      subtitle: 'وصولات القبض، الاستحقاقات، أعمار الديون، المطابقة',
+      title: 'التحصيل والتقارير',
+      subtitle: 'جزء من سجل الديون: الوصولات • الاستحقاقات • التقارير',
       icon: Icons.account_balance_wallet_outlined,
       actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh))],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
@@ -82,30 +86,31 @@ class _DebtsHubScreenState extends State<DebtsHubScreen> {
         StatCard(label: 'تجاوزوا السقف', value: '$_over', icon: Icons.block, color: ErpColors.purple,
             onTap: () => _go(const OverLimitScreen())),
       ]),
-      body: HubGrid(tiles: [
-        HubTile('وصل قبض', Icons.receipt_long, ErpColors.green, () => _go(const ReceiptScreen()),
-            subtitle: 'مفرد أو مركّب، بحسم وعملة', permission: AppPermissions.collection),
-        HubTile('سجل الوصولات', Icons.history_edu, ErpColors.navy, () => _go(const ReceiptsListScreen()),
-            permission: AppPermissions.collection),
-        HubTile('دفعة لمورد', Icons.outbox, ErpColors.orange, () => _go(const SupplierPaymentScreen()),
-            subtitle: 'نقداً، شيك، خصم مكتسب', permission: AppPermissions.suppliers),
-        HubTile('الاستحقاقات', Icons.event_note, ErpColors.gold, () => _go(const DueItemsScreen()),
-            subtitle: 'شيكات، كمبيالات، أقساط', permission: AppPermissions.collection),
-        HubTile('كشف حساب عميل', Icons.list_alt, ErpColors.blue, () => _go(const CustomerStatementScreen()),
-            subtitle: 'فترة، شهري، موضّح، مطابقة'),
-        HubTile('دليل العملاء', Icons.contacts_outlined, ErpColors.cyan, () => _go(const CustomersDirectoryScreen()),
-            subtitle: 'البطاقات، المجموعات، المناطق', permission: AppPermissions.customerCard),
-        HubTile('أرصدة الديون (زبائن + موردون)', Icons.balance_rounded, ErpColors.navy,
-            () => _go(const PartyBalancesScreen()),
-            subtitle: 'مع تسديد سريع', permission: AppPermissions.debtReports),
-        HubTile('أعمار الديون', Icons.hourglass_bottom, ErpColors.red, () => _go(const AgingScreen()),
-            subtitle: 'العملاء والموردون', permission: AppPermissions.debtReports),
-        HubTile('نسب التحصيل', Icons.percent, ErpColors.purple, () => _go(const CollectionReportScreen()),
-            permission: AppPermissions.debtReports),
-        HubTile('الفواتير غير المسددة', Icons.receipt_outlined, ErpColors.orange, () => _go(const OpenInvoicesScreen()),
-            permission: AppPermissions.debtReports),
-        HubTile('المتجاوزون للسقف', Icons.block, ErpColors.red, () => _go(const OverLimitScreen()),
-            permission: AppPermissions.debtReports),
+      body: HubSections(sections: [
+        HubSection('الوصولات', [
+          HubTile('وصل قبض', Icons.receipt_long, ErpColors.green, () => _go(const ReceiptScreen()),
+              subtitle: 'من عميل أو عدة عملاء، بحسم وعملة', permission: AppPermissions.collection),
+          HubTile('سجل الوصولات', Icons.history_edu, ErpColors.navy, () => _go(const ReceiptsListScreen()),
+              subtitle: 'كل وصولات القبض وإعادة طباعتها', permission: AppPermissions.collection),
+          HubTile('الاستحقاقات', Icons.event_note, ErpColors.gold, () => _go(const DueItemsScreen()),
+              subtitle: 'شيكات، كمبيالات، أقساط', permission: AppPermissions.collection),
+        ]),
+        HubSection('العملاء', [
+          HubTile('كشف حساب عميل', Icons.list_alt, ErpColors.blue, () => _go(const CustomerStatementScreen()),
+              subtitle: 'فترة، شهري، موضّح، مطابقة'),
+          HubTile('دليل العملاء', Icons.contacts_outlined, ErpColors.cyan, () => _go(const CustomersDirectoryScreen()),
+              subtitle: 'البطاقات، المجموعات، المناطق', permission: AppPermissions.customerCard),
+        ]),
+        HubSection('تقارير الديون', [
+          HubTile('أرصدة الديون', Icons.balance_rounded, ErpColors.navy, () => _go(const PartyBalancesScreen()),
+              subtitle: 'العملاء والموردون مع تسديد سريع', permission: AppPermissions.debtReports),
+          HubTile('أعمار الديون', Icons.hourglass_bottom, ErpColors.red, () => _go(const AgingScreen()),
+              subtitle: 'منذ متى لم يسدد', permission: AppPermissions.debtReports),
+          HubTile('نسب التحصيل', Icons.percent, ErpColors.purple, () => _go(const CollectionReportScreen()),
+              permission: AppPermissions.debtReports),
+          HubTile('المتجاوزون للسقف', Icons.block, ErpColors.red, () => _go(const OverLimitScreen()),
+              permission: AppPermissions.debtReports),
+        ]),
       ]),
     );
   }

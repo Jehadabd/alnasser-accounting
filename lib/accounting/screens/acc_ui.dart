@@ -201,5 +201,12 @@ bool requirePermission(BuildContext context, String key) {
   return false;
 }
 
+/// يكفي امتلاك أي صلاحية من القائمة.
+bool requireAnyPermission(BuildContext context, List<String> keys) {
+  final auth = AuthService();
+  if (keys.any(auth.hasPermission)) return true;
+  return requirePermission(context, keys.first);
+}
+
 /// على الطرفية لا يعمل محرك الترحيل — السيرفر يرحّل تلقائياً كل دقيقتين.
 bool get canRunPosting => AppNetworkMode.ownsDatabase;

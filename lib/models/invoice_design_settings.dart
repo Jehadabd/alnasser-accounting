@@ -74,6 +74,9 @@ class InvoiceDesignSettings {
   final String companyAddress;      // عنوان الشركة
   final List<String> phoneNumbers;  // أرقام الهاتف (حد أقصى 2)
   final List<InvoiceColumnConfig> columns; // إعدادات الأعمدة
+  final String taxNumber;          // الرقم الضريبي (يظهر في رأس القائمة إن كُتب)
+  final String commercialRegister; // رقم السجل التجاري
+  final String footerNote;         // عبارة أسفل القائمة (شروط، شكر، سياسة الإرجاع)
 
   const InvoiceDesignSettings({
     this.logoPath,
@@ -81,6 +84,9 @@ class InvoiceDesignSettings {
     this.companyAddress = 'الموصل - الجدعة - مقابل البرج',
     this.phoneNumbers = const [],
     List<InvoiceColumnConfig>? columns,
+    this.taxNumber = '',
+    this.commercialRegister = '',
+    this.footerNote = 'شكراً لتعاملكم معنا',
   }) : columns = columns ?? const [];
 
   /// الإعدادات الافتراضية
@@ -99,6 +105,9 @@ class InvoiceDesignSettings {
     String? companyAddress,
     List<String>? phoneNumbers,
     List<InvoiceColumnConfig>? columns,
+    String? taxNumber,
+    String? commercialRegister,
+    String? footerNote,
   }) {
     return InvoiceDesignSettings(
       logoPath: logoPath ?? this.logoPath,
@@ -106,6 +115,9 @@ class InvoiceDesignSettings {
       companyAddress: companyAddress ?? this.companyAddress,
       phoneNumbers: phoneNumbers ?? this.phoneNumbers,
       columns: columns ?? this.columns,
+      taxNumber: taxNumber ?? this.taxNumber,
+      commercialRegister: commercialRegister ?? this.commercialRegister,
+      footerNote: footerNote ?? this.footerNote,
     );
   }
 
@@ -115,6 +127,9 @@ class InvoiceDesignSettings {
     'companyAddress': companyAddress,
     'phoneNumbers': phoneNumbers,
     'columns': columns.map((c) => c.toJson()).toList(),
+    'taxNumber': taxNumber,
+    'commercialRegister': commercialRegister,
+    'footerNote': footerNote,
   };
 
   factory InvoiceDesignSettings.fromJson(Map<String, dynamic> json) {
@@ -134,6 +149,9 @@ class InvoiceDesignSettings {
       companyAddress: json['companyAddress'] ?? 'الموصل - الجدعة - مقابل البرج',
       phoneNumbers: List<String>.from(json['phoneNumbers'] ?? []),
       columns: cols,
+      taxNumber: (json['taxNumber'] as String?) ?? '',
+      commercialRegister: (json['commercialRegister'] as String?) ?? '',
+      footerNote: (json['footerNote'] as String?) ?? 'شكراً لتعاملكم معنا',
     );
   }
 

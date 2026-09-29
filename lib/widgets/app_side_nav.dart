@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/app_settings.dart';
 import '../services/settings_manager.dart';
-import '../screens/inventory_menu_screen.dart';
+import '../models/app_user.dart';
+import '../services/auth_service.dart';
 import '../services/license_service.dart';
 
 /// 🧭 شريط التنقل الجانبي التكيفي (Adaptive Side Navigation Rail)
@@ -24,60 +25,30 @@ class AppSideNav extends StatelessWidget {
     final license = LicenseService().getStoredLicense();
     final bool isDebtsOnly = license?.isDebtsOnly ?? false;
 
+    // نفس أزرار الشاشة الرئيسية وبنفس الترتيب (6 يومية + 5 أقسام)
     final allItems = [
-      _NavItem(
-        route: '/pos',
-        title: 'الكاشير',
-        icon: Icons.point_of_sale,
-        color: const Color(0xFFFF5722),
-        isFullAppOnly: true,
-      ),
-      _NavItem(
-        route: '/debt_register',
-        title: 'سجل الديون',
-        icon: Icons.book,
-        color: const Color(0xFF4A90E2),
-      ),
-      _NavItem(
-        route: '/inventory_menu',
-        title: 'المخزون',
-        icon: Icons.inventory_2,
-        color: const Color(0xFF4CAF50),
-        isFullAppOnly: true,
-      ),
-      _NavItem(
-        route: '/create_invoice',
-        title: 'إنشاء قائمة',
-        icon: Icons.list_alt,
-        color: const Color(0xFF2196F3),
-        isFullAppOnly: true,
-      ),
-      _NavItem(
-        route: '/edit_invoices',
-        title: 'تعديل القوائم',
-        icon: Icons.edit_note,
-        color: const Color(0xFF8D6E63),
-        isFullAppOnly: true,
-      ),
-      _NavItem(
-        route: '/suppliers',
-        title: 'الموردون',
-        icon: Icons.local_shipping,
-        color: const Color(0xFF9C27B0),
-        isFullAppOnly: true,
-      ),
-      _NavItem(
-        route: '/reports',
-        title: 'التقارير',
-        icon: Icons.bar_chart,
-        color: const Color(0xFFFF9800),
-      ),
-      _NavItem(
-        route: '/general_settings',
-        title: 'الإعدادات',
-        icon: Icons.settings,
-        color: const Color(0xFF607D8B),
-      ),
+      _NavItem(route: '/pos', title: 'الكاشير', icon: Icons.point_of_sale, color: const Color(0xFFFF5722),
+          permission: AppPermissions.posAccess, isFullAppOnly: true),
+      _NavItem(route: '/create_invoice', title: 'إنشاء قائمة', icon: Icons.list_alt, color: const Color(0xFF2196F3),
+          permission: AppPermissions.createInvoice, isFullAppOnly: true),
+      _NavItem(route: '/edit_invoices', title: 'تعديل القوائم', icon: Icons.edit_note, color: const Color(0xFF8D6E63),
+          permission: AppPermissions.editInvoices, isFullAppOnly: true),
+      _NavItem(route: '/debt_register', title: 'سجل الديون', icon: Icons.book, color: const Color(0xFF4A90E2),
+          permission: AppPermissions.debtRegister),
+      _NavItem(route: '/product_entry', title: 'إدخال بضاعة', icon: Icons.add_box_rounded, color: const Color(0xFF4CAF50),
+          permission: AppPermissions.productEntry, isFullAppOnly: true),
+      _NavItem(route: '/suppliers', title: 'الموردون', icon: Icons.local_shipping, color: const Color(0xFF9C27B0),
+          permission: AppPermissions.suppliers, isFullAppOnly: true),
+      _NavItem(route: '/sales_hub', title: 'المبيعات', icon: Icons.storefront_rounded, color: const Color(0xFF0E7C61),
+          permission: AppPermissions.salesDocs, isFullAppOnly: true),
+      _NavItem(route: '/inventory_hub', title: 'المخزون', icon: Icons.warehouse_rounded, color: const Color(0xFF5B3CC4),
+          isFullAppOnly: true),
+      _NavItem(route: '/accounting', title: 'المحاسبة', icon: Icons.account_balance, color: const Color(0xFF0F3460),
+          permission: AppPermissions.accounting, isFullAppOnly: true),
+      _NavItem(route: '/reports', title: 'التقارير', icon: Icons.bar_chart, color: const Color(0xFFFF9800),
+          permission: AppPermissions.reports),
+      _NavItem(route: '/general_settings', title: 'الإعدادات', icon: Icons.settings, color: const Color(0xFF607D8B),
+          permission: AppPermissions.settings),
     ];
 
     final items = isDebtsOnly ? allItems.where((item) => !item.isFullAppOnly).toList() : allItems;
@@ -148,10 +119,15 @@ class AppSideNav extends StatelessWidget {
                       child: InkWell(
                         onTap: () {
                           if (isSelected) return;
-                          if (item.route == '/inventory_menu') {
-                            Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(builder: (context) => const InventoryMenuScreen()),
+                          if (item.permission != null && !AuthService().hasPermission(item.permission!)) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('ليس لديك صلاحية للوصول إلى هذه الميزة')),
                             );
+                            return;
+                          }
+                          // من الرئيسية: فتح فوقها (حتى يعمل زر الرجوع)؛ من غيرها: استبدال الشاشة الحالية
+                          if (currentRoute == '/' || currentRoute == '/main') {
+                            Navigator.of(context).pushNamed(item.route);
                           } else {
                             Navigator.of(context).pushReplacementNamed(item.route);
                           }
@@ -212,6 +188,7 @@ class _NavItem {
   final IconData icon;
   final Color color;
   final bool isFullAppOnly;
+  final String? permission;
 
   const _NavItem({
     required this.route,
@@ -219,5 +196,6 @@ class _NavItem {
     required this.icon,
     required this.color,
     this.isFullAppOnly = false,
+    this.permission,
   });
 }

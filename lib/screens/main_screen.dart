@@ -20,7 +20,7 @@ import '../services/debt_report_service.dart';
 import '../services/reports_service.dart'; // ✅ Added
 import '../services/settings_manager.dart'; // ✅ Added
 import '../screens/suppliers/suppliers_dashboard_screen.dart'; // ✅ Added
-import 'inventory_menu_screen.dart'; // ✅ Added
+import '../widgets/global_search.dart'; // 🔎 Ctrl+K
 import '../services/alert_service.dart'; // 🔔 Added
 import '../models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
@@ -283,11 +283,274 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // Modern specific button for targeted features
+  // ☁️ رفع البيانات (Telegram/Dropbox) — صار زراً في الشريط العلوي بدل زر في الشبكة
+  Future<void> _uploadData() async {
+    if (!_checkPermission(AppPermissions.uploadDatabase)) return;
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('جاري تحضير النسخة الاحتياطية...');
+    final errorNotifier = ValueNotifier<String?>(''); // لتتبع الأخطاء
+    bool uploadSucceeded = false;
+
+    // جلب وقت آخر رفع
+    final telegramService = TelegramBackupService();
+    final lastUploadTime = await telegramService.getLastUploadTime();
+    
+    // طباعة معلومات التشخيص
+    final diagnostics = await telegramService.getDiagnostics();
+    print('📊 معلومات تشخيص Telegram:');
+    diagnostics.forEach((key, value) => print('   $key: $value'));
+
+    // ابدأ الرفع في مهمة منفصلة وتحديث المؤشر ثم إغلاق الحوار
+    Future(() async {
+      try {
+        // متغير لتتبع نجاح إرسال الفواتير لتيليجرام
+        bool allInvoicesSentSuccessfully = true;
+        List<String> errors = [];
+        
+        // 1) رفع قاعدة البيانات إلى Telegram (محلي + تيليجرام فقط)
+        await context.read<AppProvider>().backupDatabaseToTelegram(
+          onProgress: (p) {
+            progressNotifier.value = p * 0.5; // 50% للرفع الأساسي
+          },
+        );
+
+        // 2) إرسال الفواتير إلى Telegram
+        final bool isConfigured = await telegramService.isConfigured;
+        if (isConfigured) {
+          DateTime? exportAfterDate = lastUploadTime;
+          
+          // إذا كان الرفع للمرة الأولى، نسأل المستخدم عن المدى الزمني
+          if (exportAfterDate == null) {
+            statusNotifier.value = 'بانتظار اختيار مدى الفواتير...';
+            
+            // الخيارات المتاحة للمستخدم
+            final rangeChoice = await showDialog<String>(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => AlertDialog(
+                title: const Text('أول عملية رفع للفواتير'),
+                content: const Text('يرجى اختيار مدى الفواتير التي ترغب في إرسالها إلى Telegram للمرة الأولى:'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, '24h'),
+                    child: const Text('آخر 24 ساعة'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, 'week'),
+                    child: const Text('آخر أسبوع'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, 'all'),
+                    child: const Text('الكل (قد يستغرق وقتاً)'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, 'cancel'),
+                    child: const Text('إلغاء رفع الفواتير', style: TextStyle(color: Colors.red)),
+                  ),
+                ],
+              ),
+            );
+
+            if (rangeChoice == 'cancel' || rangeChoice == null) {
+              // تخطي رفع الفواتير ولكن استمر في الباقي
+              exportAfterDate = null; 
+            } else if (rangeChoice == '24h') {
+              exportAfterDate = DateTime.now().subtract(const Duration(days: 1));
+            } else if (rangeChoice == 'week') {
+              exportAfterDate = DateTime.now().subtract(const Duration(days: 7));
+            } else if (rangeChoice == 'all') {
+              exportAfterDate = DateTime(2000); // تاريخ قديم جداً يشمل الكل
+            }
+          }
+
+          if (exportAfterDate != null) {
+            statusNotifier.value = 'جاري إرسال الفواتير...';
+            final exportService = TelegramInvoiceExportService();
+            final exportResult = await exportService.exportAndSendNewInvoices(
+              afterDate: exportAfterDate,
+              onProgress: (current, total, status) {
+                if (total > 0) {
+                  progressNotifier.value = 0.5 + (current / total) * 0.40;
+                  statusNotifier.value = status;
+                }
+              },
+            );
+            
+            // التحقق من نجاح إرسال جميع الفواتير
+            if (exportResult.failedCount > 0) {
+              allInvoicesSentSuccessfully = false;
+              errors.add('فشل إرسال ${exportResult.failedCount} فاتورة');
+            }
+          }
+        } else {
+          errors.add('إعدادات Telegram غير مكتملة');
+        }
+
+        // 3) إرسال الملخص الشهري إلى Telegram
+        if (await telegramService.isConfigured) {
+          statusNotifier.value = 'جاري إرسال الملخص الشهري...';
+          progressNotifier.value = 0.85;
+          final summaryResult = await telegramService.sendMonthlySummaryWithDetails();
+          if (!summaryResult.success) {
+            errors.add('فشل إرسال الملخص الشهري: ${summaryResult.errorMessage}');
+            if (summaryResult.errorDetails != null) {
+              errors.add('التفاصيل: ${summaryResult.errorDetails}');
+            }
+          }
+        }
+
+        // 4) رفع النسخة الاحتياطية إلى Dropbox (إذا كان متصلاً)
+        final dropboxService = DropboxBackupService();
+        final dropboxStatus = await dropboxService.checkAuthStatus();
+        if (dropboxStatus == DropboxAuthStatus.authenticated) {
+          statusNotifier.value = 'جاري رفع النسخة إلى Dropbox...';
+          progressNotifier.value = 0.90;
+          
+          final dropboxResult = await dropboxService.createAndUploadBackup(
+            maxBackups: 20,
+            onProgress: (p, s) {
+              progressNotifier.value = 0.90 + (p / 1000); // 0.90 - 0.95
+            },
+          );
+          
+          if (dropboxResult.success) {
+            statusNotifier.value = '✅ تم رفع النسخة إلى Dropbox';
+          } else {
+            errors.add('Dropbox: ${dropboxResult.error}');
+          }
+        }
+
+        // 5) حفظ وقت الرفع الحالي فقط إذا نجح إرسال جميع الفواتير
+        if (allInvoicesSentSuccessfully && errors.isEmpty) {
+          await telegramService.saveLastUploadTime();
+        }
+        
+        progressNotifier.value = 1.0;
+        
+        if (errors.isNotEmpty) {
+          errorNotifier.value = errors.join('\n');
+          uploadSucceeded = false;
+        } else {
+          uploadSucceeded = true;
+        }
+      } catch (e) {
+        print('Backup error: $e');
+        errorNotifier.value = 'خطأ: $e';
+        uploadSucceeded = false;
+      } finally {
+        if (Navigator.of(context, rootNavigator: true).canPop()) {
+          Navigator.of(context, rootNavigator: true).pop({
+            'success': uploadSucceeded,
+            'error': errorNotifier.value,
+          });
+        }
+      }
+    });
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('رفع قاعدة البيانات'),
+        content: ValueListenableBuilder<double>(
+          valueListenable: progressNotifier,
+          builder: (context, progress, _) => ValueListenableBuilder<String>(
+            valueListenable: statusNotifier,
+            builder: (context, status, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: progress <= 0 || progress >= 1 ? null : progress),
+                const SizedBox(height: 12),
+                Text('${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%'),
+                const SizedBox(height: 8),
+                Text(status, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (result?['success'] == true) {
+      // التحقق من حالة Dropbox لعرض رسالة مناسبة
+      final dropboxStatus = await DropboxBackupService().checkAuthStatus();
+      String successMessage = 'تم رفع قاعدة البيانات وإرسال الفواتير بنجاح';
+      if (dropboxStatus == DropboxAuthStatus.authenticated) {
+        successMessage += '\n☁️ تم رفع نسخة إلى Dropbox';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(successMessage),
+        duration: const Duration(seconds: 4),
+        backgroundColor: Colors.green,
+      ));
+    } else {
+      final errorMsg = result?['error'] as String?;
+      // عرض dialog مفصل للخطأ
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.red),
+              SizedBox(width: 8),
+              Text('فشل الإرسال'),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('حدث خطأ أثناء إرسال البيانات إلى Telegram:',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                  ),
+                  child: Text(
+                    errorMsg ?? 'خطأ غير معروف - تحقق من اتصال الإنترنت',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('الحلول المقترحة:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text('• تأكد من اتصال الإنترنت'),
+                const Text('• تأكد من إعدادات بوت Telegram'),
+                const Text('• حاول مرة أخرى بعد قليل'),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('حسناً'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Widget _groupTitle(String t) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 4, 4, 10),
+        child: Row(children: [
+          Text(t, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF37474F))),
+          const SizedBox(width: 10),
+          Expanded(child: Divider(color: Colors.grey.shade300)),
+        ]),
+      );
+
   Widget _buildModernFeatureButton({
     required IconData icon,
     required String title,
     required VoidCallback onTap,
     required Color color,
+    String? shortcut,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -335,14 +598,17 @@ class _MainScreenState extends State<MainScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Container(
-                  width: 22, 
-                  height: 3, 
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.4), 
-                    borderRadius: BorderRadius.circular(2),
+                if (shortcut != null)
+                  Text(shortcut, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600))
+                else
+                  Container(
+                    width: 22,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -373,49 +639,12 @@ class _MainScreenState extends State<MainScreen> {
     final bool isDebtsOnly = license.isDebtsOnly;
     final screenWidth = MediaQuery.of(context).size.width;
 
-    // 📱 حساب عدد الأعسبة ونسبة الحجم استجابياً حسب حجم الشاشة ونوع الترخيص
-    int crossAxisCount;
-    double childAspectRatio;
-    double gridSpacing;
-
-    if (isDebtsOnly) {
-      // 📘 نمط سجل الديون (4 أزرار فقط)
-      if (screenWidth < 600) {
-        // جوال عمودي: 2 عمود × 2 صفوف (تنسيق أنيق وشاشات كبيرة)
-        crossAxisCount = 2;
-        childAspectRatio = 1.15;
-        gridSpacing = 16.0;
-      } else if (screenWidth < 900) {
-        // جوال أفقي / تابلت صغير: 4 أزرار بصف واحد
-        crossAxisCount = 4;
-        childAspectRatio = 1.05;
-        gridSpacing = 20.0;
-      } else {
-        // تابلت كبير / ديسكتوب: 4 أزرار بصف واحد متباعد
-        crossAxisCount = 4;
-        childAspectRatio = 1.25;
-        gridSpacing = 24.0;
-      }
-    } else {
-      // 🏬 التطبيق الكامل (9 أزرار)
-      if (screenWidth < 500) {
-        crossAxisCount = 2;
-        childAspectRatio = 1.05;
-        gridSpacing = 14.0;
-      } else if (screenWidth < 800) {
-        crossAxisCount = 3;
-        childAspectRatio = 1.0;
-        gridSpacing = 16.0;
-      } else if (screenWidth < 1100) {
-        crossAxisCount = 4;
-        childAspectRatio = 1.05;
-        gridSpacing = 20.0;
-      } else {
-        crossAxisCount = 5;
-        childAspectRatio = 1.15;
-        gridSpacing = 24.0;
-      }
-    }
+    // 📱 شبكتان: «العمل اليومي» (أزرار أعرض) و«الأقسام».
+    final int dailyCols = screenWidth < 500 ? 2 : 3;
+    final double dailyAspect = screenWidth < 500 ? 1.1 : (screenWidth < 900 ? 1.5 : 2.3);
+    final int sectionCols = screenWidth < 500 ? 2 : (screenWidth < 800 ? 3 : 5);
+    final double sectionAspect = screenWidth < 500 ? 1.1 : (screenWidth < 1100 ? 1.2 : 1.45);
+    final double gridSpacing = screenWidth < 800 ? 14.0 : 20.0;
 
     return PopScope(
       canPop: false,
@@ -437,6 +666,18 @@ class _MainScreenState extends State<MainScreen> {
         backgroundColor: _primaryColor,
         elevation: 0,
         actions: [
+          // 🔎 بحث شامل: عميل، مادة، رقم قائمة (Ctrl+K من أي شاشة)
+          IconButton(
+            icon: const Icon(Icons.search, color: Colors.white),
+            tooltip: 'بحث شامل (Ctrl+K)',
+            onPressed: () => showGlobalSearch(context),
+          ),
+          // ☁️ رفع البيانات (كان زراً في الشبكة)
+          IconButton(
+            icon: const Icon(Icons.cloud_upload, color: Colors.white),
+            tooltip: 'رفع البيانات (Telegram / Dropbox)',
+            onPressed: _uploadData,
+          ),
           // 👤 Logout button (only if users exist)
           FutureBuilder<bool>(
             future: _authService.hasAnyUsers(),
@@ -488,480 +729,167 @@ class _MainScreenState extends State<MainScreen> {
                 // 🖧 حالة الاتصال بحاسبة السيرفر (طرفية) أو عدد الطرفيات (سيرفر)
                 const LanStatusBanner(),
                 Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: GridView.count(
-          crossAxisCount: crossAxisCount,
-          mainAxisSpacing: gridSpacing,
-          crossAxisSpacing: gridSpacing,
-          childAspectRatio: childAspectRatio,
-          children: [
-            // 💰 POS Button - Only for Full App
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.point_of_sale,
-                title: 'الكاشير',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.posAccess)) {
-                    Navigator.pushNamed(context, '/pos');
-                  }
-                },
-                color: const Color(0xFFFF5722), // Vibrant Orange
-              ),
-
-            _buildModernFeatureButton(
-              icon: Icons.book,
-              title: 'سجل الديون',
-              onTap: () {
-                if (_checkPermission(AppPermissions.debtRegister)) {
-                  Navigator.pushNamed(context, '/debt_register');
-                }
-              },
-              color: _primaryColor,
-            ),
-            
-            // 🆕 زر المخزون - Only for Full App
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.inventory_2, // أيقونة المخزون
-                title: 'المخزون',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.productEntry) || _checkPermission(AppPermissions.editProducts)) {
-                     Navigator.push(
-                       context,
-                       MaterialPageRoute(builder: (context) => const InventoryMenuScreen()),
-                     );
-                  }
-                },
-                color: const Color(0xFF4CAF50),
-              ),
-
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.list_alt,
-                title: 'إنشاء قائمة',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.createInvoice)) {
-                    Navigator.pushNamed(context, '/create_invoice');
-                  }
-                },
-                color: const Color(0xFF2196F3),
-              ),
-            
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.edit_note,
-                title: 'تعديل القوائم',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.editInvoices)) {
-                    Navigator.pushNamed(context, '/edit_invoices');
-                  }
-                },
-                color: const Color(0xFF795548),
-              ),
-
-            _buildModernFeatureButton(
-              icon: Icons.cloud_upload,
-              title: 'رفع البيانات',
-              onTap: () async {
-                if (!_checkPermission(AppPermissions.uploadDatabase)) return;
-                final progressNotifier = ValueNotifier<double>(0.0);
-                final statusNotifier = ValueNotifier<String>('جاري تحضير النسخة الاحتياطية...');
-                final errorNotifier = ValueNotifier<String?>(''); // لتتبع الأخطاء
-                bool uploadSucceeded = false;
-
-                // جلب وقت آخر رفع
-                final telegramService = TelegramBackupService();
-                final lastUploadTime = await telegramService.getLastUploadTime();
-                
-                // طباعة معلومات التشخيص
-                final diagnostics = await telegramService.getDiagnostics();
-                print('📊 معلومات تشخيص Telegram:');
-                diagnostics.forEach((key, value) => print('   $key: $value'));
-
-                // ابدأ الرفع في مهمة منفصلة وتحديث المؤشر ثم إغلاق الحوار
-                Future(() async {
-                  try {
-                    // متغير لتتبع نجاح إرسال الفواتير لتيليجرام
-                    bool allInvoicesSentSuccessfully = true;
-                    List<String> errors = [];
-                    
-                    // 1) رفع قاعدة البيانات إلى Telegram (محلي + تيليجرام فقط)
-                    await context.read<AppProvider>().backupDatabaseToTelegram(
-                      onProgress: (p) {
-                        progressNotifier.value = p * 0.5; // 50% للرفع الأساسي
-                      },
-                    );
-
-                    // 2) إرسال الفواتير إلى Telegram
-                    final bool isConfigured = await telegramService.isConfigured;
-                    if (isConfigured) {
-                      DateTime? exportAfterDate = lastUploadTime;
-                      
-                      // إذا كان الرفع للمرة الأولى، نسأل المستخدم عن المدى الزمني
-                      if (exportAfterDate == null) {
-                        statusNotifier.value = 'بانتظار اختيار مدى الفواتير...';
-                        
-                        // الخيارات المتاحة للمستخدم
-                        final rangeChoice = await showDialog<String>(
-                          context: context,
-                          barrierDismissible: false,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('أول عملية رفع للفواتير'),
-                            content: const Text('يرجى اختيار مدى الفواتير التي ترغب في إرسالها إلى Telegram للمرة الأولى:'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, '24h'),
-                                child: const Text('آخر 24 ساعة'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, 'week'),
-                                child: const Text('آخر أسبوع'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, 'all'),
-                                child: const Text('الكل (قد يستغرق وقتاً)'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, 'cancel'),
-                                child: const Text('إلغاء رفع الفواتير', style: TextStyle(color: Colors.red)),
-                              ),
-                            ],
-                          ),
-                        );
-
-                        if (rangeChoice == 'cancel' || rangeChoice == null) {
-                          // تخطي رفع الفواتير ولكن استمر في الباقي
-                          exportAfterDate = null; 
-                        } else if (rangeChoice == '24h') {
-                          exportAfterDate = DateTime.now().subtract(const Duration(days: 1));
-                        } else if (rangeChoice == 'week') {
-                          exportAfterDate = DateTime.now().subtract(const Duration(days: 7));
-                        } else if (rangeChoice == 'all') {
-                          exportAfterDate = DateTime(2000); // تاريخ قديم جداً يشمل الكل
-                        }
-                      }
-
-                      if (exportAfterDate != null) {
-                        statusNotifier.value = 'جاري إرسال الفواتير...';
-                        final exportService = TelegramInvoiceExportService();
-                        final exportResult = await exportService.exportAndSendNewInvoices(
-                          afterDate: exportAfterDate,
-                          onProgress: (current, total, status) {
-                            if (total > 0) {
-                              progressNotifier.value = 0.5 + (current / total) * 0.40;
-                              statusNotifier.value = status;
-                            }
-                          },
-                        );
-                        
-                        // التحقق من نجاح إرسال جميع الفواتير
-                        if (exportResult.failedCount > 0) {
-                          allInvoicesSentSuccessfully = false;
-                          errors.add('فشل إرسال ${exportResult.failedCount} فاتورة');
-                        }
-                      }
-                    } else {
-                      errors.add('إعدادات Telegram غير مكتملة');
-                    }
-
-                    // 3) إرسال الملخص الشهري إلى Telegram
-                    if (await telegramService.isConfigured) {
-                      statusNotifier.value = 'جاري إرسال الملخص الشهري...';
-                      progressNotifier.value = 0.85;
-                      final summaryResult = await telegramService.sendMonthlySummaryWithDetails();
-                      if (!summaryResult.success) {
-                        errors.add('فشل إرسال الملخص الشهري: ${summaryResult.errorMessage}');
-                        if (summaryResult.errorDetails != null) {
-                          errors.add('التفاصيل: ${summaryResult.errorDetails}');
-                        }
-                      }
-                    }
-
-                    // 4) رفع النسخة الاحتياطية إلى Dropbox (إذا كان متصلاً)
-                    final dropboxService = DropboxBackupService();
-                    final dropboxStatus = await dropboxService.checkAuthStatus();
-                    if (dropboxStatus == DropboxAuthStatus.authenticated) {
-                      statusNotifier.value = 'جاري رفع النسخة إلى Dropbox...';
-                      progressNotifier.value = 0.90;
-                      
-                      final dropboxResult = await dropboxService.createAndUploadBackup(
-                        maxBackups: 20,
-                        onProgress: (p, s) {
-                          progressNotifier.value = 0.90 + (p / 1000); // 0.90 - 0.95
-                        },
-                      );
-                      
-                      if (dropboxResult.success) {
-                        statusNotifier.value = '✅ تم رفع النسخة إلى Dropbox';
-                      } else {
-                        errors.add('Dropbox: ${dropboxResult.error}');
-                      }
-                    }
-
-                    // 5) حفظ وقت الرفع الحالي فقط إذا نجح إرسال جميع الفواتير
-                    if (allInvoicesSentSuccessfully && errors.isEmpty) {
-                      await telegramService.saveLastUploadTime();
-                    }
-                    
-                    progressNotifier.value = 1.0;
-                    
-                    if (errors.isNotEmpty) {
-                      errorNotifier.value = errors.join('\n');
-                      uploadSucceeded = false;
-                    } else {
-                      uploadSucceeded = true;
-                    }
-                  } catch (e) {
-                    print('Backup error: $e');
-                    errorNotifier.value = 'خطأ: $e';
-                    uploadSucceeded = false;
-                  } finally {
-                    if (Navigator.of(context, rootNavigator: true).canPop()) {
-                      Navigator.of(context, rootNavigator: true).pop({
-                        'success': uploadSucceeded,
-                        'error': errorNotifier.value,
-                      });
-                    }
-                  }
-                });
-
-                final result = await showDialog<Map<String, dynamic>>(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('رفع قاعدة البيانات'),
-                    content: ValueListenableBuilder<double>(
-                      valueListenable: progressNotifier,
-                      builder: (context, progress, _) => ValueListenableBuilder<String>(
-                        valueListenable: statusNotifier,
-                        builder: (context, status, _) => Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            LinearProgressIndicator(value: progress <= 0 || progress >= 1 ? null : progress),
-                            const SizedBox(height: 12),
-                            Text('${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%'),
-                            const SizedBox(height: 8),
-                            Text(status, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-
-                if (result?['success'] == true) {
-                  // التحقق من حالة Dropbox لعرض رسالة مناسبة
-                  final dropboxStatus = await DropboxBackupService().checkAuthStatus();
-                  String successMessage = 'تم رفع قاعدة البيانات وإرسال الفواتير بنجاح';
-                  if (dropboxStatus == DropboxAuthStatus.authenticated) {
-                    successMessage += '\n☁️ تم رفع نسخة إلى Dropbox';
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text(successMessage),
-                    duration: const Duration(seconds: 4),
-                    backgroundColor: Colors.green,
-                  ));
-                } else {
-                  final errorMsg = result?['error'] as String?;
-                  // عرض dialog مفصل للخطأ
-                  showDialog(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Row(
+                  child: ListView(
+                    padding: const EdgeInsets.all(16.0),
+                    children: [
+                      _groupTitle('العمل اليومي'),
+                      GridView.count(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisCount: dailyCols,
+                        mainAxisSpacing: gridSpacing,
+                        crossAxisSpacing: gridSpacing,
+                        childAspectRatio: dailyAspect,
                         children: [
-                          Icon(Icons.error_outline, color: Colors.red),
-                          SizedBox(width: 8),
-                          Text('فشل الإرسال'),
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.point_of_sale,
+                              title: 'الكاشير',
+                              shortcut: 'F1',
+                              onTap: () {
+                                if (_checkPermission(AppPermissions.posAccess)) {
+                                  Navigator.pushNamed(context, '/pos');
+                                }
+                              },
+                              color: const Color(0xFFFF5722),
+                            ),
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.list_alt,
+                              title: 'إنشاء قائمة',
+                              shortcut: 'F2',
+                              onTap: () {
+                                if (_checkPermission(AppPermissions.createInvoice)) {
+                                  Navigator.pushNamed(context, '/create_invoice');
+                                }
+                              },
+                              color: const Color(0xFF2196F3),
+                            ),
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.edit_note,
+                              title: 'تعديل القوائم',
+                              shortcut: 'F5',
+                              onTap: () {
+                                if (_checkPermission(AppPermissions.editInvoices)) {
+                                  Navigator.pushNamed(context, '/edit_invoices');
+                                }
+                              },
+                              color: const Color(0xFF795548),
+                            ),
+                          _buildModernFeatureButton(
+                            icon: Icons.book,
+                            title: 'سجل الديون',
+                            shortcut: 'F3',
+                            onTap: () {
+                              if (_checkPermission(AppPermissions.debtRegister)) {
+                                Navigator.pushNamed(context, '/debt_register');
+                              }
+                            },
+                            color: _primaryColor,
+                          ),
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.add_box_rounded,
+                              title: 'إدخال بضاعة',
+                              shortcut: 'F6',
+                              onTap: () {
+                                if (_checkPermission(AppPermissions.productEntry)) {
+                                  Navigator.pushNamed(context, '/product_entry');
+                                }
+                              },
+                              color: const Color(0xFF4CAF50),
+                            ),
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.factory,
+                              title: 'الموردون',
+                              shortcut: 'F8',
+                              onTap: () {
+                                if (_checkPermission(AppPermissions.suppliers)) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const SuppliersDashboardScreen()),
+                                  );
+                                }
+                              },
+                              color: const Color(0xFF455A64),
+                            ),
                         ],
                       ),
-                      content: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('حدث خطأ أثناء إرسال البيانات إلى Telegram:',
-                                style: TextStyle(fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.red.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.red.withOpacity(0.3)),
-                              ),
-                              child: Text(
-                                errorMsg ?? 'خطأ غير معروف - تحقق من اتصال الإنترنت',
-                                style: const TextStyle(fontSize: 13),
-                              ),
+                      const SizedBox(height: 8),
+                      _groupTitle('الأقسام'),
+                      GridView.count(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisCount: sectionCols,
+                        mainAxisSpacing: gridSpacing,
+                        crossAxisSpacing: gridSpacing,
+                        childAspectRatio: sectionAspect,
+                        children: [
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.storefront_rounded,
+                              title: 'المبيعات',
+                              onTap: () {
+                                if (_authService.hasPermission(AppPermissions.createInvoice) ||
+                                    _checkPermission(AppPermissions.salesDocs)) {
+                                  Navigator.pushNamed(context, '/sales_hub');
+                                }
+                              },
+                              color: const Color(0xFF0E7C61),
                             ),
-                            const SizedBox(height: 16),
-                            const Text('الحلول المقترحة:', style: TextStyle(fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 8),
-                            const Text('• تأكد من اتصال الإنترنت'),
-                            const Text('• تأكد من إعدادات بوت Telegram'),
-                            const Text('• حاول مرة أخرى بعد قليل'),
-                          ],
-                        ),
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.warehouse_rounded,
+                              title: 'المخزون',
+                              onTap: () {
+                                if (_authService.hasPermission(AppPermissions.itemCard) ||
+                                    _authService.hasPermission(AppPermissions.inventoryReports) ||
+                                    _authService.hasPermission(AppPermissions.editProducts) ||
+                                    _authService.hasPermission(AppPermissions.stockTransfer) ||
+                                    _checkPermission(AppPermissions.inventoryDocs)) {
+                                  Navigator.pushNamed(context, '/inventory_hub');
+                                }
+                              },
+                              color: const Color(0xFF5B3CC4),
+                            ),
+                          if (!isDebtsOnly)
+                            _buildModernFeatureButton(
+                              icon: Icons.account_balance,
+                              title: 'المحاسبة',
+                              shortcut: 'F4',
+                              onTap: () {
+                                if (_checkPermission(AppPermissions.accounting)) {
+                                  Navigator.pushNamed(context, '/accounting');
+                                }
+                              },
+                              color: const Color(0xFF0F3460),
+                            ),
+                          _buildModernFeatureButton(
+                            icon: Icons.analytics,
+                            title: 'التقارير',
+                            onTap: () {
+                              if (_checkPermission(AppPermissions.reports)) {
+                                Navigator.pushNamed(context, '/reports');
+                              }
+                            },
+                            color: const Color(0xFF673AB7),
+                          ),
+                          _buildModernFeatureButton(
+                            icon: Icons.settings,
+                            title: 'الإعدادات',
+                            onTap: () {
+                              if (_checkPermission(AppPermissions.settings)) {
+                                Navigator.pushNamed(context, '/general_settings');
+                              }
+                            },
+                            color: const Color(0xFF607D8B),
+                          ),
+                        ],
                       ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('حسناً'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-              },
-              color: const Color(0xFF0D47A1),
-            ),
-            _buildModernFeatureButton(
-              icon: Icons.settings,
-              title: 'الإعدادات',
-              onTap: () {
-                if (_checkPermission(AppPermissions.settings)) {
-                  Navigator.pushNamed(context, '/general_settings');
-                }
-              },
-              color: const Color(0xFF607D8B),
-            ),
-            
-            // تم حذف الزر "الجرد الشهري" من هنا، وسيتم إضافته داخل التقارير
-            _buildModernFeatureButton(
-              icon: Icons.analytics,
-              title: 'التقارير',
-              onTap: () async {
-                if (!_checkPermission(AppPermissions.reports)) return;
-                Navigator.pushNamed(context, '/reports');
-              },
-              color: const Color(0xFF673AB7),
-            ),           
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.factory,
-                title: 'الموردون',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.suppliers)) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const SuppliersDashboardScreen(),
-                      ),
-                    );
-                  }
-                },
-                color: const Color(0xFF455A64),
-              ),
-
-            // 📈 لوحة المؤشرات والمراكز الجديدة
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.dashboard_rounded,
-                title: 'لوحة المؤشرات',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.dashboard)) {
-                    Navigator.pushNamed(context, '/dashboard');
-                  }
-                },
-                color: const Color(0xFF1B6CA8),
-              ),
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.storefront_rounded,
-                title: 'المبيعات والمستندات',
-                onTap: () {
-                  if (_authService.hasPermission(AppPermissions.createInvoice) ||
-                      _checkPermission(AppPermissions.salesDocs)) {
-                    Navigator.pushNamed(context, '/sales_hub');
-                  }
-                },
-                color: const Color(0xFF0E7C61),
-              ),
-            _buildModernFeatureButton(
-              icon: Icons.request_quote_rounded,
-              title: 'التحصيل والديون',
-              onTap: () {
-                if (_authService.hasPermission(AppPermissions.debtRegister) ||
-                    _checkPermission(AppPermissions.collection)) {
-                  Navigator.pushNamed(context, '/debts_hub');
-                }
-              },
-              color: const Color(0xFFC0392B),
-            ),
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.warehouse_rounded,
-                title: 'المخزون',
-                onTap: () {
-                  if (_authService.hasPermission(AppPermissions.itemCard) ||
-                      _authService.hasPermission(AppPermissions.inventoryReports) ||
-                      _checkPermission(AppPermissions.inventoryDocs)) {
-                    Navigator.pushNamed(context, '/inventory_hub');
-                  }
-                },
-                color: const Color(0xFF5B3CC4),
-              ),
-
-            // 🏛️ النسخة المحاسبية
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.account_balance,
-                title: 'المحاسبة',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.accounting)) {
-                    Navigator.pushNamed(context, '/accounting');
-                  }
-                },
-                color: const Color(0xFF0F3460),
-              ),
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.account_balance_wallet_rounded,
-                title: 'المحاسبة المتقدمة',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.accounting)) {
-                    Navigator.pushNamed(context, '/accounting_plus');
-                  }
-                },
-                color: const Color(0xFF16213E),
-              ),
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.inventory,
-                title: 'بطاقات المواد',
-                onTap: () {
-                  if (_checkPermission(AppPermissions.itemCard)) {
-                    Navigator.pushNamed(context, '/item_cards');
-                  }
-                },
-                color: const Color(0xFF00B4D8),
-              ),
-            if (!isDebtsOnly)
-              _buildModernFeatureButton(
-                icon: Icons.warehouse,
-                title: 'الفروع والمخازن',
-                onTap: () {
-                  if (_authService.hasPermission(AppPermissions.stockTransfer) ||
-                      _checkPermission(AppPermissions.manageBranches)) {
-                    Navigator.pushNamed(context, '/branches');
-                  }
-                },
-                color: const Color(0xFF047857),
-              ),
-            _buildModernFeatureButton(
-              icon: Icons.lan,
-              title: 'الشبكة',
-              onTap: () {
-                if (_checkPermission(AppPermissions.networkSettings)) {
-                  Navigator.pushNamed(context, '/network_settings');
-                }
-              },
-              color: const Color(0xFF2563EB),
-            ),
-          ],
-        ),
-      ),
+                    ],
+                  ),
                 ),
               ],
             ),

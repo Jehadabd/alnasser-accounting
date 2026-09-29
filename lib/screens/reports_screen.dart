@@ -11,6 +11,12 @@ import 'returns_report_screen.dart';
 import '../services/settings_manager.dart';
 import '../models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
+import '../accounting/screens/acc_ui.dart' show requirePermission;
+import '../accounting/screens/trial_balance_screen.dart';
+import '../accounting/screens/income_statement_screen.dart';
+import '../accounting/screens/balance_sheet_screen.dart';
+import '../erp/reports/finance_reports.dart';
+import '../models/app_user.dart';
 
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
@@ -58,6 +64,26 @@ class ReportsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 30),
             
+            // 📈 لوحة المؤشرات في أعلى التقارير (بدل زر مستقل في الرئيسية)
+            Row(
+              children: [
+                Expanded(
+                  child: _buildReportCard(
+                    title: 'لوحة المؤشرات',
+                    subtitle: 'مبيعات وأرباح اليوم والشهر، الديون، النواقص',
+                    icon: Icons.dashboard_rounded,
+                    color: const Color(0xFF1B6CA8),
+                    onTap: () {
+                      if (requirePermission(context, AppPermissions.dashboard)) {
+                        Navigator.pushNamed(context, '/dashboard');
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
             // الصف الأول: تقارير البضاعة والأشخاص
             Row(
               children: [
@@ -182,6 +208,34 @@ class ReportsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             
+            // 🏛️ القوائم المالية والتقارير المحاسبية (نُقلت من المحاسبة)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text('القوائم المالية',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF2C3E50))),
+            ),
+            Row(
+              children: [
+                Expanded(child: _finCard(context, 'ميزان المراجعة', 'أرصدة كل الحسابات', Icons.balance,
+                    const Color(0xFF0891B2), AppPermissions.accounting, const TrialBalanceScreen())),
+                Expanded(child: _finCard(context, 'قائمة الدخل', 'الأرباح والخسائر', Icons.trending_up,
+                    const Color(0xFF047857), AppPermissions.viewCostProfit, const IncomeStatementScreen())),
+                Expanded(child: _finCard(context, 'الميزانية العمومية', 'الأصول والخصوم', Icons.account_balance,
+                    const Color(0xFF0F3460), AppPermissions.viewCostProfit, const BalanceSheetScreen())),
+              ],
+            ),
+            Row(
+              children: [
+                Expanded(child: _finCard(context, 'تقرير المبيعات التفصيلي', 'ربح كل قائمة', Icons.receipt_long,
+                    const Color(0xFF0E7C61), AppPermissions.viewCostProfit, const SalesDetailReportScreen())),
+                Expanded(child: _finCard(context, 'تحليل المصاريف', 'أين ذهبت الأموال؟', Icons.pie_chart,
+                    const Color(0xFFB91C1C), AppPermissions.accounting, const ExpenseAnalysisScreen())),
+                Expanded(child: _finCard(context, 'حركة الصندوق', 'وارد وصادر ورصيد', Icons.account_balance_wallet_outlined,
+                    const Color(0xFF047857), AppPermissions.accounting, const CashMovementScreen())),
+              ],
+            ),
+            const SizedBox(height: 16),
+
             // تم حذف زر الديون المتأخرة وزر تقرير الشهر بناءً على الطلب
           ],
         ),
@@ -190,6 +244,20 @@ class ReportsScreen extends StatelessWidget {
         ],
       ),
         );
+      },
+    );
+  }
+
+  Widget _finCard(BuildContext context, String title, String subtitle, IconData icon, Color color,
+      String permission, Widget screen) {
+    return _buildReportCard(
+      title: title,
+      subtitle: subtitle,
+      icon: icon,
+      color: color,
+      onTap: () {
+        if (!requirePermission(context, permission)) return;
+        Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
       },
     );
   }
