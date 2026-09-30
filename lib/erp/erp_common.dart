@@ -3,6 +3,7 @@
 // أدوات مشتركة لكل ميزات النسخة المحاسبية الموسّعة.
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart' show NumberFormat;
 
 import 'activity/activity_log.dart';
 import 'package:sqflite/sqflite.dart';
@@ -11,6 +12,7 @@ import '../accounting/ledger.dart';
 import '../accounting/screens/acc_ui.dart';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
+import '../widgets/formatters.dart';
 
 class ErpException implements Exception {
   ErpException(this.message);
@@ -150,6 +152,7 @@ class MoneyField extends StatelessWidget {
       enabled: enabled,
       autofocus: autofocus,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [ThousandSeparatorDecimalInputFormatter(allowNegative: true)],
       textDirection: TextDirection.ltr,
       decoration: InputDecoration(
         labelText: label,
@@ -456,4 +459,7 @@ class SimpleTable extends StatelessWidget {
   }
 }
 
-String fmtQty(num v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(3).replaceAll(RegExp(r'0+$'), '');
+final NumberFormat _qtyFmt = NumberFormat('#,##0.###', 'en');
+
+/// كمية بفواصل الآلاف (حتى 3 مراتب عشرية).
+String fmtQty(num v) => _qtyFmt.format(v);

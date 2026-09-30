@@ -581,6 +581,11 @@ class ErpSchema {
   /// أعمدة تُضاف لجداول موجودة: [جدول، عمود، تعريف].
   static const List<List<String>> addedColumns = [
     ['products', 'category_id', 'INTEGER'],
+    ['users', 'last_login_at', 'TEXT'], // 👤 آخر دخول للموظف
+    ['invoice_items', 'price_before_discount', 'REAL'], // 🏷️ خصم السطر
+    ['invoice_items', 'discount_type', 'TEXT'], // percent | amount | gift
+    ['invoice_items', 'discount_value', 'REAL'],
+    ['users', 'display_name', 'TEXT'], // 👤 اسم الموظف للعرض
     ['cash_boxes', 'currency', "TEXT NOT NULL DEFAULT 'IQD'"],
     ['sales_returns', 'cash_amount', 'REAL'],
     ['stock_docs', 'gain_account_id', 'INTEGER'],

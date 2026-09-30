@@ -3,6 +3,7 @@
 // 📊 التقارير المحاسبية: ميزان المراجعة، قائمة الدخل، الميزانية العمومية،
 // كشف حساب (دفتر أستاذ).
 
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:sqflite/sqflite.dart';
 
 import '../services/database_service.dart';
@@ -319,7 +320,7 @@ class AccountingReports {
         'SELECT COALESCE(SUM(debit), 0) AS d, COALESCE(SUM(credit), 0) AS c FROM journal_lines');
     final d = (tb.first['d'] as num).toDouble(), c = (tb.first['c'] as num).toDouble();
     if ((d - c).abs() > 0.05) {
-      problems.add('ميزان المراجعة غير متوازن: الفرق ${(d - c).toStringAsFixed(2)}');
+      problems.add('ميزان المراجعة غير متوازن: الفرق ${NumberFormat('#,##0.##', 'en').format(d - c)}');
     }
     final ar = await Ledger.systemAccountId(db, 'ar_customers');
     final arBal = await db.rawQuery(
@@ -328,7 +329,7 @@ class AccountingReports {
         'SELECT COALESCE(SUM(current_total_debt), 0) AS b FROM customers WHERE COALESCE(is_deleted, 0) = 0');
     final diff = (arBal.first['b'] as num).toDouble() - (cust.first['b'] as num).toDouble();
     if (diff.abs() > 1) {
-      problems.add('ذمم العملاء في الدفتر تختلف عن سجل الديون بمقدار ${diff.toStringAsFixed(0)} '
+      problems.add('ذمم العملاء في الدفتر تختلف عن سجل الديون بمقدار ${NumberFormat('#,##0', 'en').format(diff)} '
           '— شغّل «ترحيل الآن» ثم أعد الفحص');
     }
     // ذمم الموردين بالدينار = مجموع أرصدة الموردين بالدينار
@@ -339,7 +340,7 @@ class AccountingReports {
       final sup = await db.rawQuery('SELECT COALESCE(SUM(total_debt_iqd), 0) AS b FROM suppliers');
       final apDiff = (apBal.first['b'] as num).toDouble() - (sup.first['b'] as num).toDouble();
       if (apDiff.abs() > 1) {
-        problems.add('ذمم الموردين (دينار) في الدفتر تختلف عن أرصدة الموردين بمقدار ${apDiff.toStringAsFixed(0)} '
+        problems.add('ذمم الموردين (دينار) في الدفتر تختلف عن أرصدة الموردين بمقدار ${NumberFormat('#,##0', 'en').format(apDiff)} '
             '— شغّل «ترحيل الآن» ثم أعد الفحص');
       }
     } catch (_) {}

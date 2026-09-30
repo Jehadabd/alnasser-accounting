@@ -280,7 +280,7 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
                               child: _buildClickableStatCard(
                                 title: 'إضافة دين',
                                 value: '${_fmt(_reportData!['totalManualDebt'])} د.ع',
-                                subtitle: '${_reportData!['manualDebtCount']} معاملة',
+                                subtitle: '${_fmt((_reportData!['manualDebtCount'] as num?) ?? 0)} معاملة',
                                 icon: Icons.add_circle,
                                 color: const Color(0xFFFF5722),
                                 onTap: () => _showDebtAdditions(),
@@ -291,7 +291,7 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
                               child: _buildClickableStatCard(
                                 title: 'تسديد دين',
                                 value: '${_fmt(_reportData!['totalManualPayment'])} د.ع',
-                                subtitle: '${_reportData!['manualPaymentCount']} معاملة',
+                                subtitle: '${_fmt((_reportData!['manualPaymentCount'] as num?) ?? 0)} معاملة',
                                 icon: Icons.remove_circle,
                                 color: const Color(0xFF4CAF50),
                                 onTap: () => _showDebtPayments(),
@@ -322,7 +322,7 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
                             Expanded(
                               child: _buildStatCard(
                                 title: 'عدد الفواتير',
-                                value: '${_reportData!['invoiceCount']} فاتورة',
+                                value: '${_fmt((_reportData!['invoiceCount'] as num?) ?? 0)} فاتورة',
                                 icon: Icons.receipt_long,
                                 color: const Color(0xFF607D8B),
                               ),
@@ -604,7 +604,7 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
               customer['customer_name']?.toString() ?? '',
               style: const TextStyle(fontWeight: FontWeight.w500),
             ),
-            subtitle: Text('${customer['invoice_count'] ?? 0} فاتورة'),
+            subtitle: Text('${_fmt((customer['invoice_count'] as num?) ?? 0)} فاتورة'),
             trailing: Text(
               '${_fmt(customer['total_purchases'] ?? 0)} د.ع',
               style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF4CAF50)),

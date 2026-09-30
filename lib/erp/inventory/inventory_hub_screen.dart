@@ -72,15 +72,15 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
       icon: Icons.warehouse_rounded,
       actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: Colors.white))],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
-        StatCard(label: 'المواد المخزنية', value: '$_items', icon: Icons.inventory_2_outlined, color: ErpColors.blue,
+        StatCard(label: 'المواد المخزنية', value: fmtQty(_items), icon: Icons.inventory_2_outlined, color: ErpColors.blue,
             onTap: () => _go(const ItemCardsListScreen())),
         StatCard(label: 'قيمة المخزون', value: fmtMoney(_value), icon: Icons.account_balance_wallet_outlined, color: ErpColors.green,
             onTap: () => _go(const InventoryReportsScreen(initial: 'valuation'))),
-        StatCard(label: 'تحت الحد الأدنى', value: '$_below', icon: Icons.warning_amber_rounded, color: ErpColors.red,
+        StatCard(label: 'تحت الحد الأدنى', value: fmtQty(_below), icon: Icons.warning_amber_rounded, color: ErpColors.red,
             onTap: () => _go(const InventoryReportsScreen(initial: 'limits'))),
-        StatCard(label: 'نافدة', value: '$_zero', icon: Icons.remove_shopping_cart_outlined, color: ErpColors.orange),
+        StatCard(label: 'نافدة', value: fmtQty(_zero), icon: Icons.remove_shopping_cart_outlined, color: ErpColors.orange),
         if (_openCounts > 0)
-          StatCard(label: 'جرد مفتوح', value: '$_openCounts', icon: Icons.fact_check_outlined, color: ErpColors.purple,
+          StatCard(label: 'جرد مفتوح', value: fmtQty(_openCounts), icon: Icons.fact_check_outlined, color: ErpColors.purple,
               onTap: () => _go(const StockCountsScreen())),
       ]),
       body: HubSections(sections: [

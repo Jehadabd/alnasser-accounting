@@ -45,10 +45,13 @@ import '../services/password_service.dart'; // Added for password protection
 import '../utils/money_calculator.dart'; // Added for profit calculation fix
 import '../services/smart_search/smart_search.dart'; // 🧠 البحث الذكي
 import '../services/auth_service.dart'; // 👤 User authentication
+import '../models/app_user.dart' show AppPermissions;
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import '../utils/number_formatter.dart'; // 🔢 Number formatting
 import '../erp/erp_common.dart' show PeriodLock, askNumber;
 import '../erp/sales/invoice_side_panel.dart';
+import '../models/invoice_entry_layout.dart'; // 🧩 أعمدة الجدول وعرضها
+import '../widgets/line_discount_dialog.dart'; // 🏷️ خصم السطر
 
 // Helper: format product ID - show raw value without zero-padding
 String formatProductId5(int? id) {
@@ -109,6 +112,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   List<Map<String, dynamic>> _currentUnitHierarchy = [];
 
   final _priceController = TextEditingController();
+  // 🏷️ خصم الصنف في شريط الإدخال: قيمة + نوع (نسبة/مبلغ) + هدية
+  final _entryDiscountController = TextEditingController();
+  bool _entryDiscountPercent = true;
+  bool _entryGift = false;
   final _itemSearchFocusNode = FocusNode();
   final _priceFocusNode = FocusNode(); // 🔧 FocusNode لحقل السعر
   final GlobalKey _entryBarUnitDropdownKey = GlobalKey(); // 🔧 مفتاح لقائمة الوحدات في شريط البحث
@@ -566,6 +573,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   @override
   void initState() {
     super.initState();
+    // 🧩 تخطيط أعمدة الجدول كما ضبطه المستخدم في الإعدادات
+    InvoiceEntryLayout.load().then((_) {
+      if (mounted) setState(() {});
+    });
     try {
       printingService = getPlatformPrintingService();
       invoiceToManage = widget.existingInvoice;
@@ -1219,7 +1230,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   }
 
   void _addInvoiceItem() {
-    _entryDiscountHint = null;
     try {
       // تحديد أن هناك تغييرات غير محفوظة
       if (invoiceToManage != null && !isViewOnly) {
@@ -1246,8 +1256,20 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             );
         }
 
-        // 🔧 استخدام السعر المدخل مباشرة من الحقل (لأنه تم تحديثه بالفعل عند اختيار الوحدة)
-        double finalAppliedPrice = inputPrice;
+        // 🏷️ السعر المكتوب هو «قبل الخصم»؛ الصافي بعد خصم الصنف (أو صفر للهدية)
+        //    هو ما تُحسب عليه الفاتورة والأرباح. بلا خصم: الصافي = السعر المكتوب.
+        final double entryDiscValue = safeParseDouble(_entryDiscountController.text) ?? 0.0;
+        final String? entryDiscType = _entryGift
+            ? 'gift'
+            : (entryDiscValue > 0 ? (_entryDiscountPercent ? 'percent' : 'amount') : null);
+        double finalAppliedPrice = lineNetPrice(inputPrice, entryDiscType, entryDiscValue);
+        if (entryDiscType != null && entryDiscType != 'gift' && finalAppliedPrice <= 0) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('الخصم يساوي السعر أو أكبر منه — للمجان اختر «هدية»'),
+            backgroundColor: Colors.orange,
+          ));
+          return;
+        }
 
         double baseUnitsPerSelectedUnit = 1.0;
 
@@ -1318,7 +1340,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
               SnackBar(
                 content: Text(
                   '⚠️ عذراً، الرصيد غير كافٍ! \n'
-                  'المطلوب: $totalBaseUnitsSold قطعة، المتاح: ${_selectedProduct!.stockQuantity ?? 0}',
+                  'المطلوب: ${formatNumber(totalBaseUnitsSold)} قطعة، المتاح: ${formatNumber(_selectedProduct!.stockQuantity)}',
                   style: const TextStyle(fontFamily: 'Cairo'),
                 ),
                 backgroundColor: Colors.red,
@@ -1335,7 +1357,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                '⚠️ تنبيه: الكمية المتاحة ${_selectedProduct!.stockQuantity ?? 0} أقل من '
+                '⚠️ تنبيه: الكمية المتاحة ${formatNumber(_selectedProduct!.stockQuantity)} أقل من '
                 'المطلوب $totalBaseUnitsSold — سيصبح المخزون سالباً',
                 style: const TextStyle(fontFamily: 'Cairo'),
               ),
@@ -1373,12 +1395,19 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           itemTotal: finalItemTotal,
           saleType: selectedUnitForItem,
           unitsInLargeUnit: baseUnitsPerSelectedUnit != 1.0 ? baseUnitsPerSelectedUnit : null,
+          priceBeforeDiscount: entryDiscType != null ? inputPrice : null,
+          discountType: entryDiscType,
+          discountValue: (entryDiscType == 'percent' || entryDiscType == 'amount') ? entryDiscValue : null,
         );
         setState(() {
+          // يُدمج مع سطر موجود فقط إن كان بنفس السعر الصافي ونفس الخصم
+          // (الهدية أو الصنف المخصوم يبقى سطراً مستقلاً)
           final existingIndex = invoiceItems.indexWhere((item) =>
               item.productName == newItem.productName &&
               item.saleType == newItem.saleType &&
-              item.unit == newItem.unit);
+              item.unit == newItem.unit &&
+              item.appliedPriceCents == newItem.appliedPriceCents &&
+              item.discountType == newItem.discountType);
           if (existingIndex != -1) {
             final existingItem = invoiceItems[existingIndex];
             invoiceItems[existingIndex] = existingItem.copyWith(
@@ -1396,6 +1425,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           }
           _productSearchController.clear();
           _quantityController.clear();
+          _entryDiscountController.clear();
+          _entryGift = false;
           _selectedProduct = null;
           _selectedPriceLevel = null;
           _searchResults = [];
@@ -1465,7 +1496,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       // 🔒 شرط 1: منع حذف جميع الأصناف عند تعديل فاتورة محفوظة
       // يجب أن يبقى صنف واحد على الأقل
       final completeItems = invoiceItems.where((item) => 
-        item.productName.isNotEmpty && item.itemTotal > 0
+        item.productName.isNotEmpty && (item.itemTotal > 0 || item.isGift)
       ).toList();
       
       if (invoiceToManage != null && completeItems.length <= 1) {
@@ -1477,7 +1508,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             appliedPrice: 0, itemTotal: 0, uniqueId: '',
           ),
         );
-        if (itemToRemove.productName.isNotEmpty && itemToRemove.itemTotal > 0) {
+        if (itemToRemove.productName.isNotEmpty && (itemToRemove.itemTotal > 0 || itemToRemove.isGift)) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('⚠️ لا يمكن حذف جميع الأصناف! يجب أن يبقى صنف واحد على الأقل'),
@@ -1694,6 +1725,14 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
   // دالة تفعيل وضع التعديل
   Future<void> _enableEditMode() async {
+    // 👤 تعديل فاتورة محفوظة يحتاج صلاحية «تعديل الفواتير»
+    if (!AuthService().hasPermission(AppPermissions.editInvoices)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('ليس لديك صلاحية تعديل الفواتير — يمكنك عمل مرتجع بدلاً من ذلك'),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
     // 🔒 تثبيت الإدخالات: لا تعديل لفاتورة داخل فترة مثبّتة
     if (!await PeriodLock.guard(context, invoiceToManage?.invoiceDate)) return;
     if (!mounted) return;
@@ -1835,6 +1874,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             TextField(
               controller: amountCtrl,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               decoration: const InputDecoration(labelText: 'المبلغ'),
             ),
             if (_settlementIsDebit) ...[
@@ -1863,7 +1903,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       ),
     );
     if (ok != true || invoiceToManage == null) return;
-    final v = double.tryParse(amountCtrl.text.trim());
+    final v = safeParseDouble(amountCtrl.text);
     if (v == null || v <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('أدخل مبلغاً صحيحاً')));
       return;
@@ -2112,6 +2152,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                           child: TextField(
                             controller: _settleQtyCtrl,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                             textAlign: TextAlign.center,
                             decoration: const InputDecoration(
                               hintText: 'العدد',
@@ -2143,6 +2184,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                           child: TextField(
                             controller: _settlePriceCtrl,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                             textAlign: TextAlign.center,
                             decoration: const InputDecoration(
                               hintText: 'السعر',
@@ -2193,12 +2235,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                       child: Row(
                         children: [
                           Expanded(flex: 1, child: Text('${i + 1}', textAlign: TextAlign.center)),
-                          Expanded(flex: 1, child: Text(_settlementItems[i].itemTotal.toStringAsFixed(2), textAlign: TextAlign.center)),
+                          Expanded(flex: 1, child: Text(formatNumber(_settlementItems[i].itemTotal), textAlign: TextAlign.center)),
                           Expanded(flex: 1, child: Text(_settlementItems[i].productId?.toString() ?? '', textAlign: TextAlign.center)),
                           Expanded(flex: 2, child: Text(_settlementItems[i].productName, textAlign: TextAlign.center)),
                           Expanded(flex: 1, child: Text((_settlementItems[i].quantityIndividual ?? _settlementItems[i].quantityLargeUnit ?? 0).toString(), textAlign: TextAlign.center)),
                           Expanded(flex: 1, child: Text(_settlementItems[i].unit, textAlign: TextAlign.center)),
-                          Expanded(flex: 1, child: Text(_settlementItems[i].appliedPrice.toStringAsFixed(2), textAlign: TextAlign.center)),
+                          Expanded(flex: 1, child: Text(formatNumber(_settlementItems[i].appliedPrice), textAlign: TextAlign.center)),
                           Expanded(flex: 1, child: Text('', textAlign: TextAlign.center)), // عدد الوحدات
                           Expanded(
                             flex: 1,
@@ -2233,8 +2275,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
   void _addSettlementRow() {
     final name = _settleNameCtrl.text.trim();
-    final qty = double.tryParse(_settleQtyCtrl.text.trim());
-    final price = double.tryParse(_settlePriceCtrl.text.trim());
+    final qty = safeParseDouble(_settleQtyCtrl.text);
+    final price = safeParseDouble(_settlePriceCtrl.text);
     // احسب عدد الوحدات الأساسية داخل وحدة البيع المختارة باستخدام الهرمية
     double unitsCount = 1.0;
     if (_settleSelectedProduct != null) {
@@ -2300,7 +2342,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       // ملء حقل التفاصيل بالاسم
       _settleNameCtrl.text = prod.name;
       // ملء حقل السعر
-      _settlePriceCtrl.text = (prod.price1 ?? prod.unitPrice).toString();
+      _settlePriceCtrl.text = formatNumber(prod.price1 ?? prod.unitPrice);
       
       // تحديد نوع البيع المناسب بناءً على الخيارات المتاحة
       List<String> availableOptions = _getAvailableUnitOptions(prod);
@@ -3521,7 +3563,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                                                                         subtitle: Row(
                                                                           children: [
                                                                             Text(
-                                                                                'السعر: ${formatNumber(product.price1)} | المخزون: ${product.stockQuantity}',
+                                                                                'السعر: ${formatNumber(product.price1)} | المخزون: ${formatNumber(product.stockQuantity)}',
                                                                                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                                                                             if ((product.stockQuantity ?? 0) <= 0)
                                                                               const Padding(
@@ -3673,6 +3715,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                 // 3. السعر (مع تحذير التكلفة)
                 _buildPriceEntryFieldWithWarning(),
                 const SizedBox(width: 12),
+
+                // 3.5 🏷️ الخصم (نسبة/مبلغ) + 🎁 هدية — يُخفى إن أُخفي عمود الخصم من الإعدادات
+                if (InvoiceEntryLayout.current.show('discount')) ...[
+                  _buildEntryDiscountField(),
+                  const SizedBox(width: 12),
+                ],
                 
                 // 4. زر الإضافة
                 Padding(
@@ -3759,7 +3807,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   bool _isEntryPriceBelowCost() {
     if (_selectedProduct == null) return false;
     
-    final double enteredPrice = double.tryParse(_priceController.text.replaceAll(',', '')) ?? 0;
+    final double enteredPrice = _entryNetPrice; // 🏷️ الصافي بعد خصم الصنف
     if (enteredPrice <= 0) return false;
     
     double? effectiveCostPerUnit;
@@ -3849,11 +3897,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           mainAxisSize: MainAxisSize.min,
           children: [
             Text('السعر', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-            // 🧱 أدوات سريعة (مثل الإداري): حسم % على السطر، هدية مجانية، الإجمالي ⇐ السعر
+            // 🧱 أداة سريعة: أدخل الإجمالي ليُحسب السعر (الخصم والهدية لهما حقل مستقل بجانب السعر)
             if (!_isEntryLocked) ...[
               const SizedBox(width: 4),
-              _entryTool(Icons.percent, 'خصم على سعر هذا الصنف (نسبة أو مبلغ)', _applyEntryDiscount),
-              _entryTool(Icons.card_giftcard, 'هدية مجانية (سعر صفر)', () => setState(() => _priceController.text = '0')),
               _entryTool(Icons.functions, 'أدخل الإجمالي ليُحسب السعر', _applyEntryTotal),
             ],
             if (_isEntryPriceBelowCost()) ...[
@@ -3895,18 +3941,105 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-            onChanged: (_) => setState(() => _entryDiscountHint = null), // Trigger rebuild for warning
+            onChanged: (_) => setState(() {}), // Trigger rebuild for warning + net preview
             onFieldSubmitted: (_) {
               _addInvoiceItem();
-              _entryDiscountHint = null;
               _searchFocusNode.requestFocus();
             },
           ),
         ),
-        if (_entryDiscountHint != null)
+      ],
+    );
+  }
+
+  /// 🏷️ الصافي الحالي في شريط الإدخال (السعر − الخصم، أو صفر للهدية)
+  double get _entryNetPrice {
+    final price = safeParseDouble(_priceController.text) ?? 0.0;
+    final v = safeParseDouble(_entryDiscountController.text) ?? 0.0;
+    final type = _entryGift ? 'gift' : (v > 0 ? (_entryDiscountPercent ? 'percent' : 'amount') : null);
+    return lineNetPrice(price, type, v);
+  }
+
+  /// 🏷️ حقل خصم الصنف + زر الهدية + معاينة الصافي (بجانب السعر في شريط الإدخال)
+  Widget _buildEntryDiscountField() {
+    final price = safeParseDouble(_priceController.text) ?? 0.0;
+    final v = safeParseDouble(_entryDiscountController.text) ?? 0.0;
+    final hasDisc = _entryGift || v > 0;
+    final net = _entryNetPrice;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('الخصم', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+          const SizedBox(width: 6),
+          // 🎁 هدية مجانية
+          Tooltip(
+            message: 'هدية مجانية: تخرج من المخزون بسعر صفر ويظهر سعرها الأصلي في الفاتورة',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _isEntryLocked ? null : () => setState(() => _entryGift = !_entryGift),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: _entryGift ? Colors.purple.shade600 : Colors.purple.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.card_giftcard, size: 13, color: _entryGift ? Colors.white : Colors.purple),
+                  const SizedBox(width: 2),
+                  Text('هدية', style: TextStyle(fontSize: 11, color: _entryGift ? Colors.white : Colors.purple)),
+                ]),
+              ),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Container(
+          width: 120,
+          height: 48,
+          decoration: BoxDecoration(
+            color: _entryGift ? Colors.purple.shade50 : Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))],
+          ),
+          child: _entryGift
+              ? const Center(child: Text('مجاناً 🎁', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)))
+              : TextField(
+                  controller: _entryDiscountController,
+                  enabled: !_isEntryLocked,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) {
+                    _addInvoiceItem();
+                    _searchFocusNode.requestFocus();
+                  },
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: '0',
+                    contentPadding: const EdgeInsets.only(right: 12, top: 12, bottom: 12),
+                    // زر تبديل النوع: % أو مبلغ
+                    suffixIcon: InkWell(
+                      onTap: () => setState(() => _entryDiscountPercent = !_entryDiscountPercent),
+                      child: Container(
+                        width: 44,
+                        alignment: Alignment.center,
+                        margin: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(16)),
+                        child: Text(_entryDiscountPercent ? '%' : 'مبلغ',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green.shade800)),
+                      ),
+                    ),
+                  ),
+                ),
+        ),
+        if (hasDisc && price > 0)
           Padding(
             padding: const EdgeInsets.only(top: 2),
-            child: Text(_entryDiscountHint!, style: TextStyle(fontSize: 11, color: Colors.green.shade700)),
+            child: Text('الصافي ${formatNumber(net)}', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.bold)),
           ),
       ],
     );
@@ -3924,78 +4057,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           ),
         ),
       );
-
-  // 🏷️ خصم على سعر هذا الصنف: بنسبة % أو بمبلغ. يغيّر حقل السعر فقط (المسار الأصلي للحفظ)،
-  //    ويعرض تحت الحقل من أي سعر نزل وبكم، حتى لا يضيع الخصم عن العين.
-  String? _entryDiscountHint;
-
-  Future<void> _applyEntryDiscount() async {
-    final price = double.tryParse(_priceController.text.replaceAll(',', '')) ?? 0;
-    if (price <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اكتب السعر أولاً ثم اضغط الخصم')));
-      return;
-    }
-    final valueCtrl = TextEditingController();
-    var byPercent = true;
-    final result = await showDialog<double>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) {
-          final v = double.tryParse(valueCtrl.text.replaceAll(',', '')) ?? 0;
-          final off = byPercent ? price * v / 100 : v;
-          final ok = v > 0 && off < price;
-          return AlertDialog(
-            title: const Text('خصم على سعر هذا الصنف'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(value: true, label: Text('نسبة %')),
-                    ButtonSegment(value: false, label: Text('مبلغ')),
-                  ],
-                  selected: {byPercent},
-                  onSelectionChanged: (s) => setD(() => byPercent = s.first),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: valueCtrl,
-                  autofocus: true,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: InputDecoration(
-                    labelText: byPercent ? 'النسبة %' : 'مبلغ الخصم من سعر الوحدة',
-                    border: const OutlineInputBorder(),
-                  ),
-                  onChanged: (_) => setD(() {}),
-                  onSubmitted: (_) {
-                    if (ok) Navigator.pop(ctx, price - off);
-                  },
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  ok
-                      ? 'السعر: ${formatNumber(price)} ← ${formatNumber(price - off)}  (خصم ${formatNumber(off)})'
-                      : 'اكتب نسبة أو مبلغاً أقل من السعر',
-                  style: TextStyle(color: ok ? Colors.green.shade700 : Colors.grey),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-              FilledButton(onPressed: ok ? () => Navigator.pop(ctx, price - off) : null, child: const Text('تطبيق')),
-            ],
-          );
-        },
-      ),
-    );
-    if (result == null) return;
-    final newPrice = (result * 100).roundToDouble() / 100;
-    setState(() {
-      _priceController.text = formatNumber(newPrice);
-      _entryDiscountHint = 'بعد خصم ${formatNumber(price - newPrice)} من ${formatNumber(price)}';
-    });
-  }
 
   Future<void> _applyEntryTotal() async {
     final qty = safeParseDouble(_quantityController.text) ?? 0;
@@ -4698,7 +4759,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                   // شريط إدخال المواد (أفقي) - يظهر فقط إذا لم يكن للعرض
                   _buildProductEntryBar(context),
                   
-                  // رأس الجدول (Header Row)
+                  // رأس الجدول (Header Row) — الأعمدة وعرضها من الإعدادات (🧩 InvoiceEntryLayout)
                   if (invoiceItems.isNotEmpty || !isViewOnly)
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -4706,53 +4767,16 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                       color: Colors.grey[200],
                       child: Row(
                         children: [
-                          Expanded(
-                              flex: 1,
-                              child: Text('ت',
-                                  textAlign: TextAlign.center,
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.bold))),
-                                      
-                          // ID Removed from here previously
-                          
-                          Expanded(
-                              flex: 7,
-                              child: Text('التفاصيل',
-                                  textAlign: TextAlign.center,
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(
-                              flex: 2,
-                              child: Text('العدد',
-                                  textAlign: TextAlign.center,
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(
-                              flex: 2,
-                              child: Text('نوع',
-                                  textAlign: TextAlign.center,
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(
-                              flex: 2,
-                              child: Text('السعر',
-                                  textAlign: TextAlign.center,
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.bold))),
-                          if (!isViewOnly)
-                          Expanded(
-                              flex: 2,
-                              child: Text('وحدة', // Unit Count
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
-
-                          Expanded(
-                              flex: 2,
-                              child: Text('الإجمالي',
-                                  textAlign: TextAlign.center,
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.bold))),
-const SizedBox(width: 120),
+                          for (final k in InvoiceEntryLayout.keys)
+                            if (InvoiceEntryLayout.current.show(k) && !(k == 'units' && isViewOnly))
+                              Expanded(
+                                  flex: InvoiceEntryLayout.current.f(k),
+                                  child: Text(InvoiceEntryLayout.headers[k]!,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: k == 'units' ? 11 : null))),
+                          const SizedBox(width: 120),
                         ],
                       ),
                     ),
@@ -5033,6 +5057,7 @@ const SizedBox(width: 120),
                           child: TextField(
                             controller: qtyCtrl,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                             decoration: const InputDecoration(labelText: 'الكمية'),
                           ),
                         ),
@@ -5041,6 +5066,7 @@ const SizedBox(width: 120),
                           child: TextField(
                             controller: priceCtrl,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                             decoration: const InputDecoration(labelText: 'السعر'),
                           ),
                         ),
@@ -5049,6 +5075,7 @@ const SizedBox(width: 120),
                       TextField(
                         controller: amountCtrl,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                         decoration: const InputDecoration(labelText: 'مبلغ التسوية'),
                       ),
                     ],
@@ -5079,8 +5106,8 @@ const SizedBox(width: 120),
                     if (selectedProduct == null) {
                       throw 'اختر منتجاً';
                     }
-                    qty = double.tryParse(qtyCtrl.text.trim());
-                    price = double.tryParse(priceCtrl.text.trim());
+                    qty = safeParseDouble(qtyCtrl.text);
+                    price = safeParseDouble(priceCtrl.text);
                     if (qty == null || price == null) {
                       throw 'أدخل الكمية والسعر بشكل صحيح';
                     }
@@ -5088,7 +5115,7 @@ const SizedBox(width: 120),
                     productId = selectedProduct!.id;
                     productName = selectedProduct!.name;
                   } else {
-                    final v = double.tryParse(amountCtrl.text.trim());
+                    final v = safeParseDouble(amountCtrl.text);
                     if (v == null) throw 'أدخل مبلغاً صحيحاً';
                     delta = v;
                   }
@@ -5658,7 +5685,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         if ((product.stockQuantity ?? 0) < totalBaseUnits) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('⚠️ الرصيد غير كافٍ! المتاح: ${product.stockQuantity ?? 0}'),
+              content: Text('⚠️ الرصيد غير كافٍ! المتاح: ${NumberFormat('#,##0.###', 'en_US').format(product.stockQuantity)}'),
               backgroundColor: Colors.red,
             ),
           );
@@ -5965,6 +5992,30 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     _fetchLowestRecentPrice();
   }
 
+  /// 🏷️ خصم هذا السطر: نسبة/مبلغ/هدية/بلا خصم — يغيّر السعر الصافي والإجمالي
+  Future<void> _editLineDiscount() async {
+    final it = _currentItem;
+    final r = await showLineDiscountDialog(
+      context,
+      listPrice: it.priceBeforeDiscount ?? it.appliedPrice,
+      type: it.discountType,
+      value: it.discountValue,
+    );
+    if (r == null || !mounted) return;
+    final qty = it.soldQuantity;
+    setState(() {
+      _currentItem = _currentItem.copyWith(
+        appliedPrice: r.net,
+        itemTotal: qty * r.net,
+        priceBeforeDiscount: r.type == null ? null : r.listPrice,
+        discountType: r.type,
+        discountValue: r.value,
+      );
+      _priceController.text = NumberFormat('#,##0.##', 'en_US').format(r.net);
+    });
+    widget.onItemUpdated(_currentItem);
+  }
+
   String formatCurrency(num value) {
     final formatter = NumberFormat('#,##0.00', 'en_US');
     return formatter.format(value);
@@ -5984,8 +6035,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             // رقم الصف
+            if (InvoiceEntryLayout.current.show('index'))
             Expanded(
-              flex: 1,
+              flex: InvoiceEntryLayout.current.f('index'),
               child: Container(
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
@@ -5999,7 +6051,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
 
             // التفاصيل (اسم المنتج) - Increased Flex (5 -> 7)
             Expanded(
-              flex: 7, 
+              flex: InvoiceEntryLayout.current.f('details'), 
               child: Container(
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
@@ -6118,7 +6170,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
             ),
             // العدد
             Expanded(
-              flex: 2,
+              flex: InvoiceEntryLayout.current.f('qty'),
               child: Container(
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
@@ -6139,6 +6191,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                         textAlign: TextAlign.center,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
+                        inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                         enabled: !widget.isViewOnly && !_isRowLocked, // 🔒 قفل الحقل
                         onChanged: _updateQuantity, // الآن أصبح آمناً
                         focusNode: _quantityFocusNode,
@@ -6171,7 +6224,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
             ),
             // نوع البيع
             Expanded(
-              flex: 2,
+              flex: InvoiceEntryLayout.current.f('saleType'),
               child: Container(
                 key: _saleTypeKey, // مفتاح لتحديد موقع القائمة المنبثقة
                 decoration: BoxDecoration(
@@ -6224,7 +6277,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
             ),
             // السعر
             Expanded(
-              flex: 2,
+              flex: InvoiceEntryLayout.current.f('price'),
               child: Container(
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
@@ -6280,9 +6333,40 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                       ),
               ),
             ),
-            if (!widget.isViewOnly)
+            // 🏷️ الخصم / الهدية — اضغط لتعديل خصم هذا السطر
+            if (InvoiceEntryLayout.current.show('discount'))
             Expanded(
-              flex: 2,
+              flex: InvoiceEntryLayout.current.f('discount'),
+              child: InkWell(
+                onTap: (widget.isViewOnly || widget.isPlaceholder || _isRowLocked) ? null : _editLineDiscount,
+                child: Container(
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
+                  ),
+                  child: Tooltip(
+                    message: _currentItem.hasLineDiscount
+                        ? 'قبل الخصم: ${formatCurrency(_currentItem.priceBeforeDiscount ?? _currentItem.appliedPrice)}'
+                        : 'اضغط لإضافة خصم أو جعلها هدية',
+                    child: _currentItem.hasLineDiscount
+                        ? Text(
+                            _currentItem.discountLabel,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: _currentItem.isGift ? Colors.purple : Colors.green.shade800,
+                            ),
+                          )
+                        : (widget.isViewOnly || widget.isPlaceholder
+                            ? const SizedBox.shrink()
+                            : Icon(Icons.local_offer_outlined, size: 16, color: Colors.grey.shade400)),
+                  ),
+                ),
+              ),
+            ),
+            if (!widget.isViewOnly && InvoiceEntryLayout.current.show('units'))
+            Expanded(
+              flex: InvoiceEntryLayout.current.f('units'),
               child: Container(
                 alignment: Alignment.center,
                 child: widget.isViewOnly
@@ -6306,7 +6390,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
             ),
             // المبلغ (Total) - Moved to end
             Expanded(
-              flex: 2,
+              flex: InvoiceEntryLayout.current.f('total'),
               child: Container(
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
@@ -6393,8 +6477,8 @@ bool _isInvoiceItemComplete(InvoiceItem item) {
                            (item.quantityLargeUnit != null && item.quantityLargeUnit! > 0);
   return (item.productName.isNotEmpty &&
       hasValidQuantity &&
-      item.appliedPrice > 0 &&
-      item.itemTotal > 0 &&
+      (item.appliedPrice > 0 || item.isGift) && // 🎁 الهدية سعرها صفر
+      (item.itemTotal > 0 || item.isGift) &&
       (item.saleType != null && item.saleType!.isNotEmpty));
 }
 
@@ -6499,7 +6583,7 @@ class _ProductAutoScrollListViewState extends State<_ProductAutoScrollListView> 
             subtitle: Row(
               children: [
                 Text(
-                  'المخزون: ${product.stockQuantity}',
+                  'المخزون: ${NumberFormat('#,##0.###', 'en_US').format(product.stockQuantity)}',
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                 ),
                 if ((product.stockQuantity ?? 0) <= 0) ...[

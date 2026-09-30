@@ -3,6 +3,7 @@ import '../models/product.dart';
 import '../models/category.dart';
 import '../models/customer.dart';
 import '../services/database_service.dart';
+import '../services/auth_service.dart';
 import '../erp/pos/scale_barcode.dart';
 import '../services/settings_manager.dart';
 import '../services/thermal_receipt_service.dart';
@@ -273,7 +274,7 @@ class POSProvider extends ChangeNotifier {
           final qty = ScaleBarcode.integralBaseQty(hit);
           if (qty == null) {
             _lastErrorMessage =
-                'مادة موزونة (${scaled.name}) بكمية كسرية — الكاشير يقبل كميات صحيحة؛ استخدم «إنشاء قائمة» لهذه المادة';
+                'مادة موزونة (${scaled.name}) بكمية كسرية — الكاشير يقبل كميات صحيحة؛ استخدم «إنشاء فاتورة» لهذه المادة';
             notifyListeners();
             return null;
           }
@@ -369,6 +370,8 @@ class POSProvider extends ChangeNotifier {
             customerName: _customerName.isNotEmpty ? _customerName : null,
             discount: _discount,
             paidAmount: _paymentType == PaymentType.credit ? _paidAmount : total,
+            createdByUserId: AuthService().currentUser?.id,
+            createdByUsername: AuthService().currentUser?.username,
         );
         
         _lastInvoiceId = invoiceId;

@@ -189,7 +189,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   Widget build(BuildContext context) {
     return ErpPage(
       title: 'سجل حركات النظام',
-      subtitle: 'من فعل ماذا ومتى — ${_rows.length} حركة',
+      subtitle: 'من فعل ماذا ومتى — ${fmtQty(_rows.length)} حركة',
       icon: Icons.manage_search_rounded,
       actions: [
         ...exportActions(context,

@@ -26,6 +26,7 @@ import '../services/demo_seeder.dart';
 import '../services/alert_service.dart'; // 🔔 Added
 import '../models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
+import '../widgets/user_menu_button.dart'; // 👤
 import '../widgets/sync_health_banner.dart'; // 🩺 تنبيهات صحة المزامنة
 import '../lan/lan_status_banner.dart';
 import '../services/license_service.dart'; // 🔐 نظام التراخيص
@@ -222,6 +223,9 @@ class _MainScreenState extends State<MainScreen> {
     final now = DateTime.now();
     _currentMonthYear = DateFormat.yMMMM('ar').format(now);
   }
+
+  /// 👤 هل يملك المستخدم الحالي هذه الصلاحية؟ (تُخفى الأزرار التي لا يملكها)
+  bool _can(String permissionKey) => _authService.hasPermission(permissionKey);
 
   // 👤 فحص الصلاحية قبل السماح بالوصول
   bool _checkPermission(String permissionKey) {
@@ -732,49 +736,16 @@ class _MainScreenState extends State<MainScreen> {
             tooltip: 'بحث شامل (Ctrl+K)',
             onPressed: () => showGlobalSearch(context),
           ),
-          // ☁️ رفع البيانات (كان زراً في الشبكة)
+          // ☁️ رفع البيانات (كان زراً في الشبكة) — لمن يملك الصلاحية فقط
+          if (_authService.hasPermission(AppPermissions.uploadDatabase))
           IconButton(
             icon: const Icon(Icons.cloud_upload, color: Colors.white),
             tooltip: 'رفع البيانات (Telegram / Dropbox)',
             onPressed: _uploadData,
           ),
-          // 👤 Logout button (only if users exist)
-          FutureBuilder<bool>(
-            future: _authService.hasAnyUsers(),
-            builder: (context, snapshot) {
-              if (snapshot.data != true) return const SizedBox.shrink();
-              return IconButton(
-                icon: const Icon(Icons.logout, color: Colors.white),
-                tooltip: 'تسجيل الخروج',
-                onPressed: () async {
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('تسجيل الخروج'),
-                      content: const Text('هل تريد تسجيل الخروج؟'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('إلغاء'),
-                        ),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('خروج', style: TextStyle(color: Colors.white)),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (confirmed == true) {
-                    await _authService.logout();
-                    if (mounted) {
-                      Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
-                    }
-                  }
-                },
-              );
-            },
-          ),
+          // 👤 المستخدم الحالي: تغيير كلمة السر، الموظفون، تبديل المستخدم
+          const UserMenuButton(),
+          const SizedBox(width: 8),
         ],
       ),
       body: Row(
@@ -795,7 +766,7 @@ class _MainScreenState extends State<MainScreen> {
                     color: Colors.orange.shade700,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: const Text(
-                      '🧪 وضع تجريبي — البيانات وهمية، والمزامنة والشبكة ورفع البيانات متوقفة. للخروج: الإعدادات ← الوضع التجريبي',
+                      '🧪 وضع تجريبي — البيانات وهمية، والمزامنة والشبكة ورفع البيانات متوقفة. للخروج: زر المستخدم ← خروج ← «العودة إلى البيانات الحقيقية»',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
@@ -813,7 +784,7 @@ class _MainScreenState extends State<MainScreen> {
                         crossAxisSpacing: gridSpacing,
                         childAspectRatio: dailyAspect,
                         children: [
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly && _can(AppPermissions.posAccess))
                             _buildModernFeatureButton(
                               icon: Icons.point_of_sale,
                               title: 'الكاشير',
@@ -825,10 +796,10 @@ class _MainScreenState extends State<MainScreen> {
                               },
                               color: const Color(0xFFFF5722),
                             ),
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly && _can(AppPermissions.createInvoice))
                             _buildModernFeatureButton(
                               icon: Icons.list_alt,
-                              title: 'إنشاء قائمة',
+                              title: 'إنشاء فاتورة',
                               shortcut: 'F2',
                               onTap: () {
                                 if (_checkPermission(AppPermissions.createInvoice)) {
@@ -837,10 +808,10 @@ class _MainScreenState extends State<MainScreen> {
                               },
                               color: const Color(0xFF2196F3),
                             ),
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly && _can(AppPermissions.editInvoices))
                             _buildModernFeatureButton(
                               icon: Icons.edit_note,
-                              title: 'تعديل القوائم',
+                              title: 'تعديل الفواتير',
                               shortcut: 'F5',
                               onTap: () {
                                 if (_checkPermission(AppPermissions.editInvoices)) {
@@ -849,6 +820,7 @@ class _MainScreenState extends State<MainScreen> {
                               },
                               color: const Color(0xFF795548),
                             ),
+                          if (_can(AppPermissions.debtRegister))
                           _buildModernFeatureButton(
                             icon: Icons.book,
                             title: 'سجل الديون',
@@ -860,7 +832,7 @@ class _MainScreenState extends State<MainScreen> {
                             },
                             color: _primaryColor,
                           ),
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly && _can(AppPermissions.productEntry))
                             _buildModernFeatureButton(
                               icon: Icons.add_box_rounded,
                               title: 'إدخال بضاعة',
@@ -872,7 +844,7 @@ class _MainScreenState extends State<MainScreen> {
                               },
                               color: const Color(0xFF4CAF50),
                             ),
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly && _can(AppPermissions.suppliers))
                             _buildModernFeatureButton(
                               icon: Icons.factory,
                               title: 'الموردون',
@@ -899,7 +871,7 @@ class _MainScreenState extends State<MainScreen> {
                         crossAxisSpacing: gridSpacing,
                         childAspectRatio: sectionAspect,
                         children: [
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly && (_can(AppPermissions.createInvoice) || _can(AppPermissions.salesDocs)))
                             _buildModernFeatureButton(
                               icon: Icons.storefront_rounded,
                               title: 'المبيعات',
@@ -911,7 +883,10 @@ class _MainScreenState extends State<MainScreen> {
                               },
                               color: const Color(0xFF0E7C61),
                             ),
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly &&
+                              (_can(AppPermissions.itemCard) || _can(AppPermissions.inventoryReports) ||
+                                  _can(AppPermissions.editProducts) || _can(AppPermissions.stockTransfer) ||
+                                  _can(AppPermissions.inventoryDocs)))
                             _buildModernFeatureButton(
                               icon: Icons.warehouse_rounded,
                               title: 'المخزون',
@@ -926,7 +901,7 @@ class _MainScreenState extends State<MainScreen> {
                               },
                               color: const Color(0xFF5B3CC4),
                             ),
-                          if (!isDebtsOnly)
+                          if (!isDebtsOnly && _can(AppPermissions.accounting))
                             _buildModernFeatureButton(
                               icon: Icons.account_balance,
                               title: 'المحاسبة',
@@ -938,6 +913,7 @@ class _MainScreenState extends State<MainScreen> {
                               },
                               color: const Color(0xFF0F3460),
                             ),
+                          if (_can(AppPermissions.reports))
                           _buildModernFeatureButton(
                             icon: Icons.analytics,
                             title: 'التقارير',
@@ -948,6 +924,7 @@ class _MainScreenState extends State<MainScreen> {
                             },
                             color: const Color(0xFF673AB7),
                           ),
+                          if (_can(AppPermissions.settings))
                           _buildModernFeatureButton(
                             icon: Icons.settings,
                             title: 'الإعدادات',

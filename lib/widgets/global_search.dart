@@ -13,6 +13,7 @@ import '../models/app_user.dart';
 import '../models/customer.dart';
 import '../screens/create_invoice_screen.dart';
 import '../screens/customer_details_screen.dart';
+import '../services/auth_service.dart';
 import '../services/database_service.dart';
 
 enum _Kind { customer, product, invoice }
@@ -65,7 +66,12 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
     try {
       final db = await DatabaseService().database;
       final like = '%$q%';
-      final customers = await db.rawQuery('''
+      // 👤 كل موظف يرى في البحث ما تسمح به صلاحياته فقط
+      final auth = AuthService();
+      final canCustomers = auth.hasPermission(AppPermissions.debtRegister);
+      final canProducts = auth.hasPermission(AppPermissions.itemCard);
+      final canInvoices = auth.hasPermission(AppPermissions.editInvoices);
+      final customers = !canCustomers ? const <Map<String, Object?>>[] : await db.rawQuery('''
         SELECT id, name, phone, current_total_debt FROM customers
         WHERE COALESCE(is_deleted, 0) = 0 AND (name LIKE ? OR phone LIKE ?)
         ORDER BY name LIMIT 8
@@ -75,17 +81,17 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
         hits.add(_Hit(_Kind.customer, r['id'] as int, '${r['name']}',
             'عميل • ${r['phone'] ?? ''} • الدين ${fmtMoney(debt)}'));
       }
-      final products = await db.rawQuery('''
+      final products = !canProducts ? const <Map<String, Object?>>[] : await db.rawQuery('''
         SELECT id, name, stock_quantity, unit_price FROM products
         WHERE COALESCE(is_deleted, 0) = 0 AND name LIKE ?
         ORDER BY name LIMIT 8
       ''', [like]);
       for (final r in products) {
         hits.add(_Hit(_Kind.product, r['id'] as int, '${r['name']}',
-            'مادة • الكمية ${r['stock_quantity'] ?? 0} • السعر ${fmtMoney((r['unit_price'] as num?) ?? 0)}'));
+            'مادة • الكمية ${fmtMoney((r['stock_quantity'] as num?) ?? 0)} • السعر ${fmtMoney((r['unit_price'] as num?) ?? 0)}'));
       }
       final isNumber = RegExp(r'^\d+$').hasMatch(q);
-      final invoices = await db.rawQuery('''
+      final invoices = !canInvoices ? const <Map<String, Object?>>[] : await db.rawQuery('''
         SELECT id, invoice_number, customer_name, total_amount, invoice_date FROM invoices
         WHERE COALESCE(is_deleted, 0) = 0 AND (invoice_number = ? ${isNumber ? 'OR id = ?' : ''} OR customer_name LIKE ?)
         ORDER BY id DESC LIMIT 8
@@ -93,8 +99,8 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
       for (final r in invoices) {
         final no = (r['invoice_number'] as String?)?.isNotEmpty == true ? r['invoice_number'] : r['id'];
         final date = '${r['invoice_date'] ?? ''}';
-        hits.add(_Hit(_Kind.invoice, r['id'] as int, 'قائمة رقم $no — ${r['customer_name'] ?? ''}',
-            'قائمة • ${date.length >= 10 ? date.substring(0, 10) : date} • ${fmtMoney((r['total_amount'] as num?) ?? 0)}'));
+        hits.add(_Hit(_Kind.invoice, r['id'] as int, 'فاتورة رقم $no — ${r['customer_name'] ?? ''}',
+            'فاتورة • ${date.length >= 10 ? date.substring(0, 10) : date} • ${fmtMoney((r['total_amount'] as num?) ?? 0)}'));
       }
     } catch (_) {}
     if (!mounted || seq != _seq) return;
@@ -161,7 +167,7 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
                   if (_hits.isNotEmpty) _open(_hits.first);
                 },
                 decoration: InputDecoration(
-                  hintText: 'ابحث: اسم عميل، هاتف، اسم مادة، رقم قائمة...',
+                  hintText: 'ابحث: اسم عميل، هاتف، اسم مادة، رقم فاتورة...',
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon: _busy
                       ? const Padding(

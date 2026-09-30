@@ -71,8 +71,8 @@ class InvoiceController {
                              (item.quantityLargeUnit != null && item.quantityLargeUnit! > 0);
     return (item.productName.isNotEmpty &&
         hasValidQuantity &&
-        item.appliedPrice > 0 &&
-        item.itemTotal > 0 &&
+        (item.appliedPrice > 0 || item.isGift) && // 🎁 الهدية سعرها صفر
+        (item.itemTotal > 0 || item.isGift) &&
         (item.saleType != null && item.saleType!.isNotEmpty));
   }
 
@@ -145,7 +145,7 @@ class InvoiceController {
           final hasQty = (item.quantityIndividual != null && item.quantityIndividual! > 0) ||
                          (item.quantityLargeUnit != null && item.quantityLargeUnit! > 0);
           if (!hasQty) itemProblems.add('الكمية');
-          if (item.appliedPrice <= 0) itemProblems.add('السعر');
+          if (item.appliedPrice <= 0 && !item.isGift) itemProblems.add('السعر');
           if (item.saleType == null || item.saleType!.isEmpty) itemProblems.add('نوع البيع');
           if (itemProblems.isNotEmpty) {
             problems.add('${item.productName}: ينقص ${itemProblems.join('، ')}');
@@ -197,7 +197,7 @@ class InvoiceController {
       if (finalTotal < data.paidAmount - 0.01) {
         return InvoiceValidationResult(
           isValid: false, 
-          errorMessage: 'لا يمكن أن يكون إجمالي الفاتورة (${finalTotal.toStringAsFixed(0)}) أقل من المبلغ المسدد (${data.paidAmount.toStringAsFixed(0)}). يرجى تقليل المبلغ المسدد أولاً.',
+          errorMessage: 'لا يمكن أن يكون إجمالي الفاتورة (${formatNumber(finalTotal)}) أقل من المبلغ المسدد (${formatNumber(data.paidAmount)}). يرجى تقليل المبلغ المسدد أولاً.',
         );
       }
     }
@@ -276,7 +276,7 @@ class InvoiceController {
     final expectedNewBalance = currentCustomerDebt + debtChange;
     
     if (expectedNewBalance < -0.01) {
-      final debtToDeduct = (-debtChange).toStringAsFixed(0);
+      final debtToDeduct = formatNumber(-debtChange);
       String reason = '';
       String solution = '';
       
@@ -294,9 +294,9 @@ class InvoiceController {
       return InvoiceValidationResult(
         isValid: false,
         errorMessage: 'لا يمكن إتمام هذا التعديل!\n\n'
-            'رصيد العميل "${oldCustomer.name}" الحالي: ${currentCustomerDebt.toStringAsFixed(0)}\n'
+            'رصيد العميل "${oldCustomer.name}" الحالي: ${formatNumber(currentCustomerDebt)}\n'
             'المبلغ الذي سيُخصم: $debtToDeduct\n'
-            'الرصيد المتوقع: ${expectedNewBalance.toStringAsFixed(0)} (سالب!)\n\n'
+            'الرصيد المتوقع: ${formatNumber(expectedNewBalance)} (سالب!)\n\n'
             'السبب: $reason\n'
             'الحل: $solution',
       );
@@ -463,7 +463,7 @@ class InvoiceController {
 
         if (data.discount >= currentTotalAmount) {
           throw Exception(
-              'نسبة الخصم خاطئة! (الخصم: ${data.discount.toStringAsFixed(2)} الإجمالي: ${currentTotalAmount.toStringAsFixed(2)})');
+              'نسبة الخصم خاطئة! (الخصم: ${formatNumber(data.discount)} الإجمالي: ${formatNumber(currentTotalAmount)})');
         }
 
         String newStatus = 'محفوظة';

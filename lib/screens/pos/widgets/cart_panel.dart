@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../../providers/pos_provider.dart';
-import '../../../services/database_service.dart';
+import '../../../widgets/formatters.dart';
+import '../pos_receipts_screen.dart';
 
 class CartPanel extends StatefulWidget {
   const CartPanel({super.key});
@@ -21,7 +22,7 @@ class _CartPanelState extends State<CartPanel> {
   bool _showSuggestions = false;
   
   // Number formatter with thousands separator
-  static final _numberFormat = NumberFormat('#,###', 'ar');
+  static final _numberFormat = NumberFormat('#,##0', 'en');
   String _formatNumber(num value) => _numberFormat.format(value.toInt());
 
   @override
@@ -61,7 +62,7 @@ class _CartPanelState extends State<CartPanel> {
                       ),
                     ]),
                     Row(children: [
-                      IconButton(onPressed: () => _showQuickInvoicesHistory(context), icon: const Icon(Icons.history, color: Colors.grey, size: 20), tooltip: 'الفواتير السريعة'),
+                      IconButton(onPressed: () => _showQuickInvoicesHistory(context), icon: const Icon(Icons.history, color: Colors.grey, size: 20), tooltip: 'إيصالات الكاشير'),
                       if (cartItems.isNotEmpty)
                         TextButton(
                           onPressed: () {
@@ -113,7 +114,7 @@ class _CartPanelState extends State<CartPanel> {
                               visualDensity: VisualDensity.compact,
                               leading: CircleAvatar(radius: 12, backgroundColor: Colors.blue[50], child: const Icon(Icons.person, size: 14, color: Colors.blue)),
                               title: Text(customer.name, style: const TextStyle(fontSize: 13)),
-                              subtitle: customer.currentTotalDebt > 0 ? Text('دين: ${customer.currentTotalDebt.toStringAsFixed(0)}', style: TextStyle(fontSize: 10, color: Colors.orange[700])) : null,
+                              subtitle: customer.currentTotalDebt > 0 ? Text('دين: ${_formatNumber(customer.currentTotalDebt)}', style: TextStyle(fontSize: 10, color: Colors.orange[700])) : null,
                               onTap: () {
                                 _customerController.text = customer.name;
                                 provider.selectCustomer(customer);
@@ -342,8 +343,9 @@ class _CartPanelState extends State<CartPanel> {
                         child: TextField(
                           controller: _discountController,
                           keyboardType: TextInputType.number,
+                          inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                           textAlign: TextAlign.center,
-                          onChanged: (v) => provider.setDiscount(double.tryParse(v) ?? 0),
+                          onChanged: (v) => provider.setDiscount(double.tryParse(v.replaceAll(',', '')) ?? 0),
                           decoration: InputDecoration(isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)), hintText: '0'),
                           style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                         ),
@@ -365,8 +367,9 @@ class _CartPanelState extends State<CartPanel> {
                             child: TextField(
                               controller: _paidController,
                               keyboardType: TextInputType.number,
+                              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                               textAlign: TextAlign.center,
-                              onChanged: (v) => provider.setPaidAmount(double.tryParse(v) ?? 0),
+                              onChanged: (v) => provider.setPaidAmount(double.tryParse(v.replaceAll(',', '')) ?? 0),
                               decoration: InputDecoration(isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)), hintText: '0'),
                               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                             ),
@@ -388,6 +391,7 @@ class _CartPanelState extends State<CartPanel> {
                             child: TextField(
                               controller: _tenderedController,
                               keyboardType: TextInputType.number,
+                              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                               textAlign: TextAlign.center,
                               onChanged: (v) => setState(() => _tendered = double.tryParse(v.replaceAll(',', '')) ?? 0),
                               decoration: InputDecoration(isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)), hintText: '0'),
@@ -459,59 +463,9 @@ class _CartPanelState extends State<CartPanel> {
     );
   }
 
+  /// 🧾 إيصالات الكاشير (بحث، تفاصيل، إعادة طباعة، مرتجع) — على طريقة الأنظمة العالمية
   void _showQuickInvoicesHistory(BuildContext context) {
-    showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: Colors.transparent, builder: (context) => const _QuickInvoicesSheet());
-  }
-}
-
-class _QuickInvoicesSheet extends StatefulWidget {
-  const _QuickInvoicesSheet();
-  @override
-  State<_QuickInvoicesSheet> createState() => _QuickInvoicesSheetState();
-}
-
-class _QuickInvoicesSheetState extends State<_QuickInvoicesSheet> {
-  List<Map<String, dynamic>> _invoices = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() { super.initState(); _loadInvoices(); }
-
-  Future<void> _loadInvoices() async {
-    try {
-      final db = await DatabaseService().database;
-      final result = await db.rawQuery('SELECT id, invoice_number, customer_name, total_amount, payment_type, created_at FROM invoices ORDER BY created_at DESC LIMIT 50');
-      setState(() { _invoices = result; _isLoading = false; });
-    } catch (e) { setState(() => _isLoading = false); }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.6,
-      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      child: Column(children: [
-        Container(margin: const EdgeInsets.only(top: 10), width: 36, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-        Padding(padding: const EdgeInsets.all(12), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          const Text('الفواتير السريعة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, size: 20)),
-        ])),
-        const Divider(height: 1),
-        Expanded(child: _isLoading ? const Center(child: CircularProgressIndicator()) : _invoices.isEmpty ? const Center(child: Text('لا توجد فواتير')) : ListView.builder(
-          itemCount: _invoices.length,
-          itemBuilder: (context, index) {
-            final inv = _invoices[index];
-            return ListTile(
-              dense: true,
-              leading: CircleAvatar(radius: 16, backgroundColor: inv['payment_type'] == 'نقد' ? Colors.green[100] : Colors.orange[100], child: Icon(inv['payment_type'] == 'نقد' ? Icons.payments : Icons.receipt_long, size: 16, color: inv['payment_type'] == 'نقد' ? Colors.green : Colors.orange)),
-              title: Text('فاتورة #${inv['invoice_number'] ?? inv['id']}', style: const TextStyle(fontSize: 13)),
-              subtitle: Text(inv['customer_name'] ?? 'عميل', style: const TextStyle(fontSize: 11)),
-              trailing: Text((inv['total_amount'] as num).toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            );
-          },
-        )),
-      ]),
-    );
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PosReceiptsScreen()));
   }
 }
 

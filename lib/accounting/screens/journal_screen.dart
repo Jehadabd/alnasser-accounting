@@ -8,6 +8,7 @@ import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../ledger.dart';
 import 'acc_ui.dart';
+import '../../widgets/formatters.dart';
 
 const Map<String, String> sourceTypeLabels = {
   'invoice': 'فاتورة بيع',
@@ -366,6 +367,7 @@ class _ManualEntryScreenState extends State<ManualEntryScreen> {
             child: TextField(
               controller: l.debit,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               decoration: const InputDecoration(labelText: 'مدين'),
               onChanged: (_) => setState(() {}),
             ),
@@ -376,6 +378,7 @@ class _ManualEntryScreenState extends State<ManualEntryScreen> {
             child: TextField(
               controller: l.credit,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               decoration: const InputDecoration(labelText: 'دائن'),
               onChanged: (_) => setState(() {}),
             ),

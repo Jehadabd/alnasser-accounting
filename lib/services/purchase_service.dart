@@ -55,21 +55,142 @@ class PurchaseService with ChangeNotifier {
     return id;
   }
 
+  /// تعديل بيانات المورد الوصفية فقط (الاسم، الهاتف، العنوان، العملة المفضلة،
+  /// شروط الدفع، أيام الآجل، الملاحظات).
+  ///
+  /// 🛡️ كانت تكتب toMap() كاملاً، بما فيه total_debt_iqd/usd وعدّادات الفواتير
+  /// والدفعات من كائن الشاشة — وقد يكون قديماً — فتطمس الرصيد المشتق من دفتر
+  /// المورد (supplier_transactions). هذه الأعمدة يملكها SupplierDebtReconciler وحده.
   Future<void> updateSupplier(Supplier supplier) async {
+    if (supplier.id == null) {
+      throw ArgumentError('لا يمكن تعديل مورد بلا معرّف');
+    }
     final db = await _db.database;
+    final map = supplier.toMap();
+    for (final k in const [
+      'id',
+      'created_at',
+      'total_debt_iqd',
+      'total_debt_usd',
+      'total_purchases',
+      'current_balance',
+      'total_invoices',
+      'total_payments',
+    ]) {
+      map.remove(k);
+    }
+    map['updated_at'] = DateTime.now().toIso8601String();
     await db.update(
       'suppliers',
-      supplier.toMap(),
+      map,
       where: 'id = ?',
       whereArgs: [supplier.id],
     );
+    ActivityLog.log('تعديل', 'الموردون', 'تعديل بيانات المورد ${supplier.name}');
     notifyListeners();
   }
 
+  static Future<bool> _tableExists(DatabaseExecutor d, String table) async {
+    final r = await d.rawQuery(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", [table]);
+    return r.isNotEmpty;
+  }
+
+  /// سبب منع حذف المورد (نص عربي)، أو null إن كان الحذف آمناً.
+  ///
+  /// لا يُحذف مورد له أي أثر مالي أو مستندي: فواتير شراء (حتى المسودات)،
+  /// دفعات، حركات في دفتره، مرتجعات، طلبات شراء، قيود، استحقاقات، أو رصيد غير صفري.
+  /// (الجداول المرتبطة معرّفة بـ ON DELETE CASCADE، فالحذف كان سيمحو سجله المالي.)
+  Future<String?> supplierDeleteBlocker(int supplierId, [DatabaseExecutor? executor]) async {
+    final DatabaseExecutor d = executor ?? await _db.database;
+
+    // -1 = تعذّر العدّ ⇒ نمنع الحذف احتياطاً
+    Future<int> count(String table, String where, List<Object?> args) async {
+      try {
+        if (!await _tableExists(d, table)) return 0;
+        final r = await d.rawQuery('SELECT COUNT(*) AS c FROM $table WHERE $where', args);
+        return (r.first['c'] as num?)?.toInt() ?? 0;
+      } catch (_) {
+        return -1;
+      }
+    }
+
+    final s = await d.query('suppliers',
+        columns: ['total_debt_iqd', 'total_debt_usd'], where: 'id = ?', whereArgs: [supplierId], limit: 1);
+    if (s.isEmpty) return 'المورد غير موجود (ربما حُذف مسبقاً)';
+    final double iqd = (s.first['total_debt_iqd'] as num?)?.toDouble() ?? 0.0;
+    final double usd = (s.first['total_debt_usd'] as num?)?.toDouble() ?? 0.0;
+
+    final invoices = await count('purchase_invoices', 'supplier_id = ?', [supplierId]);
+    final payments = await count('supplier_payments', 'supplier_id = ?', [supplierId]);
+    final returns = await count('purchase_returns', 'supplier_id = ?', [supplierId]);
+    final txs = await count(
+        'supplier_transactions', 'supplier_id = ? AND COALESCE(is_deleted, 0) = 0', [supplierId]);
+    final orders = await count('orders', "party_type = 'supplier' AND party_id = ?", [supplierId]);
+    final journal = await count('journal_lines', "party_type = 'supplier' AND party_id = ?", [supplierId]);
+    final dues = await count('due_items', "party_type = 'supplier' AND party_id = ?", [supplierId]);
+
+    if ([invoices, payments, returns, txs, orders, journal, dues].any((c) => c < 0)) {
+      return 'تعذّر التحقق من ارتباطات المورد، لذلك لم يُحذف. أعد المحاولة لاحقاً.';
+    }
+
+    final reasons = <String>[];
+    if (invoices > 0) reasons.add('$invoices فاتورة شراء');
+    if (payments > 0) reasons.add('$payments دفعة');
+    if (returns > 0) reasons.add('$returns مرتجع مشتريات');
+    if (orders > 0) reasons.add('$orders طلب شراء');
+    if (dues > 0) reasons.add('$dues استحقاق');
+    if (journal > 0) reasons.add('قيود محاسبية مرتبطة به');
+    if (txs > 0 && reasons.isEmpty) reasons.add('$txs حركة في كشف حسابه');
+    if (iqd.abs() > 0.01 || usd.abs() > 0.01) reasons.add('رصيد غير صفري');
+    if (reasons.isEmpty) return null;
+    return 'لا يمكن حذف هذا المورد لأن لديه: ${reasons.join('، ')}.\n'
+        'حذفه يُفقد سجله المالي. يمكنك تعديل بياناته بدلاً من حذفه.';
+  }
+
+  /// حذف مورد لا أثر مالياً له. يرمي [SupplierDeleteBlocked] إن كان له أي أثر.
   Future<void> deleteSupplier(int id) async {
     final db = await _db.database;
-    await db.delete('suppliers', where: 'id = ?', whereArgs: [id]);
+    String? name;
+    await db.transaction((txn) async {
+      // 🛡️ الفحص داخل المعاملة نفسها: لا فاتورة أو دفعة تُضاف بين الفحص والحذف
+      final blocker = await supplierDeleteBlocker(id, txn);
+      if (blocker != null) throw SupplierDeleteBlocked(blocker);
+      final r = await txn.query('suppliers', columns: ['name'], where: 'id = ?', whereArgs: [id], limit: 1);
+      name = r.isEmpty ? null : r.first['name'] as String?;
+      if (await _tableExists(txn, 'supplier_delegates')) {
+        await txn.delete('supplier_delegates', where: 'supplier_id = ?', whereArgs: [id]);
+      }
+      if (await _tableExists(txn, 'party_links')) {
+        await txn.delete('party_links', where: 'supplier_id = ?', whereArgs: [id]);
+      }
+      if (await _tableExists(txn, 'product_details')) {
+        await txn.update('product_details', {'default_supplier_id': null},
+            where: 'default_supplier_id = ?', whereArgs: [id]);
+      }
+      await txn.delete('suppliers', where: 'id = ?', whereArgs: [id]);
+    });
+    ActivityLog.log('حذف', 'الموردون', 'حذف المورد ${name ?? '#$id'}');
     notifyListeners();
+  }
+
+  /// إجمالي فواتير الشراء المؤكدة لكل عملة (لبطاقة «حجم المشتريات»).
+  ///
+  /// عمود suppliers.total_purchases لا يحدّثه أي مسار، فكان الرقم صفراً دائماً.
+  Future<Map<String, double>> getConfirmedPurchaseTotals({int? supplierId}) async {
+    final db = await _db.database;
+    final String bySupplier = supplierId == null ? '' : ' AND supplier_id = ?';
+    final rows = await db.rawQuery(
+      "SELECT COALESCE(currency, 'IQD') AS cur, COALESCE(SUM(total_amount), 0) AS total "
+      "FROM purchase_invoices WHERE status = 'confirmed'$bySupplier "
+      "GROUP BY COALESCE(currency, 'IQD')",
+      supplierId == null ? <Object?>[] : <Object?>[supplierId],
+    );
+    final out = <String, double>{};
+    for (final r in rows) {
+      out['${r['cur']}'] = (r['total'] as num?)?.toDouble() ?? 0.0;
+    }
+    return out;
   }
 
   // --- Purchase Invoices ---
@@ -128,13 +249,47 @@ class PurchaseService with ChangeNotifier {
       'supplier_payments',
       where: 'supplier_id = ?',
       whereArgs: [supplierId],
-      orderBy: 'date DESC',
+      orderBy: 'date DESC, id DESC',
     );
-    return List.generate(maps.length, (i) => SupplierPayment.fromMap(maps[i]));
+    return List.generate(maps.length, (i) => SupplierPayment.fromMap(_normalizePaymentRow(maps[i])));
+  }
+
+  /// 🛡️ receipt_number عمود نصّي (TEXT) فيُقرأ '12' لا 12، والنموذج يتوقع int؛
+  /// كان ذلك يرمي TypeError فتفشل شاشة المورد كلها عند أول سند دفع.
+  static Map<String, dynamic> _normalizePaymentRow(Map<String, dynamic> row) {
+    final rn = row['receipt_number'];
+    if (rn == null || rn is int) return row;
+    final m = Map<String, dynamic>.from(row);
+    m['receipt_number'] = rn is num ? rn.toInt() : int.tryParse('$rn'.trim());
+    return m;
+  }
+
+  /// 🛡️ قاعدة جديدة تُنشئ supplier_payments من createTables بلا عمودي
+  /// receipt_number و delegate_id (وبـ payment_number NOT NULL)، فكان تسجيل أي
+  /// دفعة لمورد يفشل بـ «no such column». نكمّل الأعمدة الناقصة قبل الكتابة.
+  static bool _paymentColumnsEnsured = false;
+  Future<Set<String>> _ensurePaymentColumns(DatabaseExecutor d) async {
+    Future<Set<String>> cols() async => {
+          for (final c in await d.rawQuery('PRAGMA table_info(supplier_payments)'))
+            ('${c['name']}').toLowerCase(),
+        };
+    var have = await cols();
+    if (!_paymentColumnsEnsured) {
+      if (!have.contains('receipt_number')) {
+        await d.execute('ALTER TABLE supplier_payments ADD COLUMN receipt_number TEXT');
+      }
+      if (!have.contains('delegate_id')) {
+        await d.execute('ALTER TABLE supplier_payments ADD COLUMN delegate_id INTEGER');
+      }
+      _paymentColumnsEnsured = true;
+      have = await cols();
+    }
+    return have;
   }
 
   Future<int> _getNextReceiptNumber() async {
     final db = await _db.database;
+    await _ensurePaymentColumns(db);
     // 🛡️ receipt_number عمود نصّي؛ قراءته مباشرةً كـ int كانت ترمي استثناءً
     // عند أول سند. نحوّله صراحةً قبل أخذ الأكبر.
     final result = await db.rawQuery(
@@ -457,9 +612,14 @@ class PurchaseService with ChangeNotifier {
     
     await db.transaction((txn) async {
       // 1. Insert Payment with receipt number
+      final cols = await _ensurePaymentColumns(txn);
       final paymentMap = payment.toMap();
       paymentMap.remove('id');
-      paymentMap['receipt_number'] = receiptNumber;
+      paymentMap['receipt_number'] = '$receiptNumber';
+      // تعريف createTables يجعل payment_number إلزامياً (NOT NULL بلا قيمة افتراضية)
+      if (cols.contains('payment_number')) paymentMap['payment_number'] = '$receiptNumber';
+      // لا نكتب عموداً غير موجود في هذا المخطط
+      paymentMap.removeWhere((k, _) => !cols.contains(k.toLowerCase()));
       final paymentId = await txn.insert('supplier_payments', paymentMap);
 
       // 2. 🛡️ تُسجَّل الدفعة كحركة في دفتر المورد، والرصيد يُشتق من مجموع
@@ -482,6 +642,14 @@ class PurchaseService with ChangeNotifier {
   }
 }
 
+
+/// يُرمى عند محاولة حذف مورد له أثر مالي؛ [message] جاهزة للعرض.
+class SupplierDeleteBlocked implements Exception {
+  SupplierDeleteBlocked(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
 
 /// 🏬 امتداد فاتورة الشراء (مثل سهل): المخزن المستلم والصندوق/البنك المدفوع منه.
 /// جدول محلي `purchase_invoice_ext`؛ الفاتورة نفسها ودين المورد لا يتغيران.

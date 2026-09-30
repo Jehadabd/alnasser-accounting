@@ -48,6 +48,7 @@ class GlobalShortcuts extends StatelessWidget {
         const SingleActivator(LogicalKeyboardKey.f8): () => _go('/suppliers', AppPermissions.suppliers),
         const SingleActivator(LogicalKeyboardKey.f9): () => _go('/debts_hub', AppPermissions.collection),
         const SingleActivator(LogicalKeyboardKey.keyK, control: true): () {
+          if (!AuthService().isLoggedIn) return; // لا بحث قبل تسجيل الدخول
           final ctx = navigatorKey.currentContext;
           if (ctx != null) showGlobalSearch(ctx);
         },

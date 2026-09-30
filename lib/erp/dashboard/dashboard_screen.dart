@@ -133,7 +133,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   StatCard(
                       label: 'ديون العملاء',
                       value: fmtMoney(_ar),
-                      hint: '$_debtors عميل مدين',
+                      hint: '${fmtQty(_debtors)} عميل مدين',
                       icon: Icons.people_alt_rounded,
                       color: ErpColors.red),
                   StatCard(
@@ -150,7 +150,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       color: ErpColors.purple),
                   StatCard(
                       label: 'مواد تحت الحد الأدنى',
-                      value: '$_lowStock',
+                      value: fmtQty(_lowStock),
                       icon: Icons.warning_amber_rounded,
                       color: _lowStock > 0 ? ErpColors.red : ErpColors.green),
                   StatCard(label: 'سعر الدولار', value: fmtMoney(_usdRate), icon: Icons.attach_money_rounded, color: ErpColors.green),
@@ -191,7 +191,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final todaySales = _n(_today, 'totalSales');
     final monthSales = _n(_month, 'totalSales');
     final cards = <Widget>[
-      _hero('مبيعات اليوم', fmtMoney(todaySales), '${_today['invoiceCount'] ?? 0} فاتورة', Icons.today_rounded,
+      _hero('مبيعات اليوم', fmtMoney(todaySales), '${fmtQty((_today['invoiceCount'] as num?) ?? 0)} فاتورة', Icons.today_rounded,
           const [Color(0xFF0F3460), Color(0xFF1B6CA8)]),
       if (_showProfit)
         _hero('ربح اليوم', fmtMoney(_n(_today, 'netProfit')),

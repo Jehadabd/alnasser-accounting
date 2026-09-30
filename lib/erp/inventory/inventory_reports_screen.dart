@@ -143,7 +143,7 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     _rowIds = [for (final r in rows) r.productId];
     _footer = null;
     _stats = [
-      StatCard(label: 'مواد متحركة', value: '${rows.where((r) => r.moved).length}', icon: Icons.swap_vert, color: ErpColors.blue),
+      StatCard(label: 'مواد متحركة', value: fmtQty(rows.where((r) => r.moved).length), icon: Icons.swap_vert, color: ErpColors.blue),
       StatCard(label: 'قيمة الوارد (بالكلفة)', value: fmtMoney(tin), icon: Icons.south_west, color: ErpColors.green),
       StatCard(label: 'قيمة الصادر (بالكلفة)', value: fmtMoney(tout), icon: Icons.north_east, color: ErpColors.red),
     ];
@@ -160,7 +160,7 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     _rowIds = [for (final r in rows) r['id'] as int];
     _footer = ['الإجمالي', '', '', '', fmtMoney(total)];
     _stats = [
-      StatCard(label: 'عدد المواد', value: '${rows.length}', icon: Icons.category_outlined, color: ErpColors.purple),
+      StatCard(label: 'عدد المواد', value: fmtQty(rows.length), icon: Icons.category_outlined, color: ErpColors.purple),
       StatCard(label: 'القيمة بالكلفة الحالية', value: fmtMoney(total), icon: Icons.payments_outlined, color: ErpColors.green),
     ];
   }
@@ -215,7 +215,7 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     _rowIds = [for (final r in rows) r['id'] as int];
     _footer = ['الإجمالي', '', '', '', '', '', fmtMoney(total)];
     _stats = [
-      StatCard(label: 'مواد راكدة', value: '${rows.length}', icon: Icons.hourglass_bottom, color: ErpColors.orange),
+      StatCard(label: 'مواد راكدة', value: fmtQty(rows.length), icon: Icons.hourglass_bottom, color: ErpColors.orange),
       StatCard(label: 'رأس مال مجمّد', value: fmtMoney(total), icon: Icons.ac_unit_rounded, color: ErpColors.red),
     ];
   }
@@ -240,7 +240,7 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     _rowIds = [for (final r in rows) r['id'] as int];
     _footer = null;
     _stats = [
-      StatCard(label: 'مواد', value: '${rows.length}', icon: Icons.warning_amber_rounded, color: ErpColors.red),
+      StatCard(label: 'مواد', value: fmtQty(rows.length), icon: Icons.warning_amber_rounded, color: ErpColors.red),
     ];
   }
 
@@ -262,8 +262,8 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     _footer = null;
     final expired = rows.where((r) => parseDate(r['expiry_date']).isBefore(now)).length;
     _stats = [
-      StatCard(label: 'منتهية', value: '$expired', icon: Icons.dangerous_outlined, color: ErpColors.red),
-      StatCard(label: 'قريبة الانتهاء', value: '${rows.length - expired}', icon: Icons.schedule, color: ErpColors.gold),
+      StatCard(label: 'منتهية', value: fmtQty(expired), icon: Icons.dangerous_outlined, color: ErpColors.red),
+      StatCard(label: 'قريبة الانتهاء', value: fmtQty(rows.length - expired), icon: Icons.schedule, color: ErpColors.gold),
     ];
   }
 
@@ -273,7 +273,7 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     if (!ok) return;
     try {
       final n = await QuoteOrderService().autoReorder();
-      if (mounted) showOk(context, n == 0 ? 'لا توجد مواد تحتاج طلباً (أو لها طلبات مفتوحة)' : 'أُنشئ $n طلب شراء');
+      if (mounted) showOk(context, n == 0 ? 'لا توجد مواد تحتاج طلباً (أو لها طلبات مفتوحة)' : 'أُنشئ ${fmtQty(n)} طلب شراء');
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -489,7 +489,7 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
           const EmptyState('لا توجد نتائج', icon: Icons.analytics_outlined)
         else
           ErpSection(
-            title: '${_rows.length} سطر',
+            title: '${fmtQty(_rows.length)} سطر',
             icon: Icons.table_rows_rounded,
             color: r.color,
             child: SimpleTable(

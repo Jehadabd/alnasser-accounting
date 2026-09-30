@@ -8,6 +8,9 @@ class StatCard extends StatelessWidget {
   final String? trend;
   final bool isPositiveTrend;
 
+  /// سطر ثانٍ أصغر تحت القيمة (مثلاً المبلغ بالدولار تحت الدينار).
+  final String? subValue;
+
   const StatCard({
     super.key,
     required this.title,
@@ -16,6 +19,7 @@ class StatCard extends StatelessWidget {
     required this.color,
     this.trend,
     this.isPositiveTrend = true,
+    this.subValue,
   });
 
   @override
@@ -59,15 +63,36 @@ class StatCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF1E293B), // Slate 800
-                    fontFamily: 'Segoe UI', // Good number font
+                // الأرقام الكبيرة تُصغَّر لتتسع بدل أن تفيض خارج البطاقة
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Text(
+                    value,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1E293B), // Slate 800
+                      fontFamily: 'Segoe UI', // Good number font
+                    ),
                   ),
                 ),
+                if (subValue != null)
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(
+                      subValue!,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF475569),
+                        fontFamily: 'Segoe UI',
+                      ),
+                    ),
+                  ),
                 if (trend != null) ...[
                   const SizedBox(height: 4),
                   Row(

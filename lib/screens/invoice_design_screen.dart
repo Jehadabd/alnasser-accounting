@@ -515,7 +515,9 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
                         case 'details': sampleData = 'منتج ${index + 1}'; break;
                         case 'quantity': sampleData = '${(index + 1) * 5}'; break;
                         case 'unitsCount': sampleData = '${index + 1}×12'; break;
-                        case 'price': sampleData = '${(index + 1) * 1000}'; break;
+                        case 'priceBeforeDiscount': sampleData = index == 0 ? '1,000' : ''; break;
+                        case 'discount': sampleData = index == 0 ? '10%' : (index == 2 ? 'هدية' : ''); break;
+                        case 'price': sampleData = index == 0 ? '900' : (index == 2 ? '0' : '${(index + 1) * 1000}'); break;
                         case 'amount': sampleData = '${(index + 1) * 5000}'; break;
                         case 'weight': sampleData = '${(index + 1) * 0.5} كغ'; break;
                         case 'expiry': sampleData = '2026/06'; break;
@@ -789,6 +791,11 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
                       Text(
                         'اختر الأعمدة التي تريد إظهارها في الفاتورة وحدد عرض كل عمود',
                         style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '🏷️ عمودا «السعر قبل الخصم» و«الخصم» يُطبعان فقط في الفواتير التي فيها صنف مخصوم أو هدية.',
+                        style: TextStyle(fontSize: 12, color: Colors.green[700]),
                       ),
                       const SizedBox(height: 16),
                       ..._invoiceDesign.columns.map((column) => _buildColumnItem(column)),

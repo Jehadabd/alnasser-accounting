@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/product.dart';
+import '../accounting/screens/acc_ui.dart' show fmtMoney;
 import '../screens/product_entry_screen.dart'; // للانتقال للتعديل اذا لزم
 
 class AlertsDisplayDialog extends StatefulWidget {
@@ -82,7 +83,7 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> with SingleTi
                       children: [
                         const Icon(Icons.inventory_2_outlined),
                         const SizedBox(width: 8),
-                        Text('مواد أوشكت على النفاذ (${widget.lowStockProducts.length})'),
+                        Text('مواد أوشكت على النفاذ (${fmtMoney(widget.lowStockProducts.length)})'),
                       ],
                     ),
                   ),
@@ -92,7 +93,7 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> with SingleTi
                       children: [
                         const Icon(Icons.timer_off_outlined),
                         const SizedBox(width: 8),
-                        Text('مواد راكدة (${widget.stagnantProducts.length})'),
+                        Text('مواد راكدة (${fmtMoney(widget.stagnantProducts.length)})'),
                       ],
                     ),
                   ),
@@ -102,7 +103,7 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> with SingleTi
                       children: [
                         const Icon(Icons.event_busy_outlined),
                         const SizedBox(width: 8),
-                        Text(' تحذير صلاحية المنتجات (${widget.expiryProducts.length})'),
+                        Text(' تحذير صلاحية المنتجات (${fmtMoney(widget.expiryProducts.length)})'),
                       ],
                     ),
                   ),
@@ -178,13 +179,13 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> with SingleTi
         Color bgColor = Colors.red[50]!;
 
         if (alertType == 'low_stock') {
-          subtitle = 'المخزون الحالي: ${product.stockQuantity} ${product.unit}\n'
-                     'حد التنبيه: ${product.alertQuantity ?? 0} ${product.alertUnit ?? product.unit}';
+          subtitle = 'المخزون الحالي: ${fmtMoney(product.stockQuantity)} ${product.unit}\n'
+                     'حد التنبيه: ${fmtMoney(product.alertQuantity ?? 0)} ${product.alertUnit ?? product.unit}';
           icon = Icons.warning_amber;
           color = Colors.red;
           bgColor = Colors.red[50]!;
         } else if (alertType == 'stagnant') {
-          subtitle = 'المخزون: ${product.stockQuantity} ${product.unit}\n'
+          subtitle = 'المخزون: ${fmtMoney(product.stockQuantity)} ${product.unit}\n'
                      'لم يتم بيعها منذ أكثر من 30 يوماً';
           icon = Icons.history_toggle_off;
           color = Colors.amber[800]!;

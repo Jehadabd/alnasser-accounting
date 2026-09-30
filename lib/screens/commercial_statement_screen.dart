@@ -247,8 +247,8 @@ class _CommercialStatementScreenState extends State<CommercialStatementScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildSummaryItem('فواتير دين', '$totalDebtInvoices', Colors.blue),
-                _buildSummaryItem('فواتير نقد', '$totalCashInvoices', Colors.blueGrey),
+                _buildSummaryItem('فواتير دين', _formatCurrency(totalDebtInvoices), Colors.blue),
+                _buildSummaryItem('فواتير نقد', _formatCurrency(totalCashInvoices), Colors.blueGrey),
               ],
             ),
             // الفواتير المحولة
@@ -264,9 +264,9 @@ class _CommercialStatementScreenState extends State<CommercialStatementScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     if (convertedToCash > 0)
-                      _buildSummaryItem('تحولت لنقد', '$convertedToCash', Colors.purple),
+                      _buildSummaryItem('تحولت لنقد', _formatCurrency(convertedToCash), Colors.purple),
                     if (convertedToDebt > 0)
-                      _buildSummaryItem('تحولت لدين', '$convertedToDebt', Colors.deepOrange),
+                      _buildSummaryItem('تحولت لدين', _formatCurrency(convertedToDebt), Colors.deepOrange),
                   ],
                 ),
               ),

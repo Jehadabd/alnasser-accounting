@@ -89,7 +89,7 @@ class PdfService {
             pw.Container(
               alignment: pw.Alignment.center,
               child: pw.Text(
-                'إجمالي عدد العملاء: ${customers.length}',
+                'إجمالي عدد العملاء: ${fmt(customers.length)}',
                 style: pw.TextStyle(
                   fontSize: 16,
                   fontWeight: pw.FontWeight.bold,
@@ -936,21 +936,21 @@ class PdfService {
                   children: [
                     pw.Column(children: [
                       pw.Text('فواتير دين', style: const pw.TextStyle(fontSize: 9)),
-                      pw.Text('${summary['totalDebtInvoices'] ?? 0}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                      pw.Text(fmt((summary['totalDebtInvoices'] as num?) ?? 0), style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
                     ]),
                     pw.Column(children: [
                       pw.Text('فواتير نقد', style: const pw.TextStyle(fontSize: 9)),
-                      pw.Text('${summary['totalCashInvoices'] ?? 0}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                      pw.Text(fmt((summary['totalCashInvoices'] as num?) ?? 0), style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
                     ]),
                     if ((summary['convertedToCash'] ?? 0) > 0)
                       pw.Column(children: [
                         pw.Text('تحولت لنقد', style: const pw.TextStyle(fontSize: 9)),
-                        pw.Text('${summary['convertedToCash']}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.purple)),
+                        pw.Text(fmt((summary['convertedToCash'] as num?) ?? 0), style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.purple)),
                       ]),
                     if ((summary['convertedToDebt'] ?? 0) > 0)
                       pw.Column(children: [
                         pw.Text('تحولت لدين', style: const pw.TextStyle(fontSize: 9)),
-                        pw.Text('${summary['convertedToDebt']}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.deepOrange)),
+                        pw.Text(fmt((summary['convertedToDebt'] as num?) ?? 0), style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.deepOrange)),
                       ]),
                   ],
                 ),

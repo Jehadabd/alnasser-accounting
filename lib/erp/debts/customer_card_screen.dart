@@ -172,7 +172,7 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
                 value: '${s.collectionRatio.toStringAsFixed(1)}%',
                 icon: Icons.speed,
                 color: ErpColors.blue),
-            StatCard(label: 'عدد الفواتير', value: '${s.invoicesCount}', icon: Icons.receipt, color: ErpColors.purple),
+            StatCard(label: 'عدد الفواتير', value: fmtQty(s.invoicesCount), icon: Icons.receipt, color: ErpColors.purple),
             StatCard(
                 label: 'آخر تسديد',
                 value: s.lastPaymentAmount == null ? '—' : fmtMoney(s.lastPaymentAmount!),
@@ -591,7 +591,7 @@ class _CustomersDirectoryScreenState extends State<CustomersDirectoryScreen> {
     final total = v.fold(0.0, (s, r) => s + d0(r['balance']));
     return ErpPage(
       title: 'دليل العملاء',
-      subtitle: '${v.length} عميل — مجموع الأرصدة ${fmtMoney(total)}',
+      subtitle: '${fmtQty(v.length)} عميل — مجموع الأرصدة ${fmtMoney(total)}',
       icon: Icons.contacts_outlined,
       actions: [
         IconButton(

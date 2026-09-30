@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
 import '../models/invoice.dart';
+import '../accounting/screens/acc_ui.dart' show fmtMoney;
 import 'create_invoice_screen.dart';
 
 class SavedInvoicesScreen extends StatelessWidget {
@@ -60,7 +61,7 @@ class SavedInvoicesScreen extends StatelessWidget {
                         ],
                       ),
                       trailing: Text(
-                        '${invoice.totalAmount.toStringAsFixed(2)} دينار',
+                        '${fmtMoney(invoice.totalAmount)} دينار',
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,

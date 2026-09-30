@@ -1,6 +1,22 @@
 // screens/login_screen.dart
+//
+// 🔐 شاشة الدخول — تظهر في كل فتح للبرنامج.
+//   • أول تشغيل (لا مستخدمين): إنشاء حساب المدير. المدير هو حساب الترخيص نفسه:
+//     اسم المستخدم = اسم مستخدم الترخيص، وكلمة السر تُتحقق من سيرفر التراخيص
+//     (بلا إنترنت: تُقبل بعد كتابتها مرتين وتصير كلمة سر المدير على هذا الجهاز).
+//   • بعدها: دخول المدير أو الموظف، وكل موظف يرى ما تسمح به صلاحياته فقط.
+//   • الوضع التجريبي يُفتح ويُغلق من هنا (لا من الإعدادات).
+
+import 'dart:io' show exit;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+
 import '../services/auth_service.dart';
+import '../services/demo_mode.dart';
+import '../services/license_service.dart';
+
+enum _Mode { loading, demo, setupAdmin, login }
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -10,30 +26,68 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const _navy = Color(0xFF0F3460);
+  static const _navyDark = Color(0xFF020F2B);
+  static const _accent = Color(0xFF00B4D8);
+
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
   final AuthService _authService = AuthService();
-  
+  final LicenseService _license = LicenseService();
+
+  _Mode _mode = _Mode.loading;
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
+  String? _licenseUser;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    _licenseUser = _license.getStoredLicense()?.username;
+    if (DemoMode.isOn) {
+      setState(() => _mode = _Mode.demo);
+      return;
+    }
+    bool hasUsers = true;
+    try {
+      hasUsers = await _authService.hasAnyUsers();
+    } catch (_) {}
+    if (!mounted) return;
+    if (hasUsers) {
+      _usernameController.text = await _authService.lastUsername() ?? _licenseUser ?? '';
+      if (!mounted) return;
+      setState(() => _mode = _Mode.login);
+    } else {
+      _usernameController.text = _licenseUser ?? '';
+      setState(() => _mode = _Mode.setupAdmin);
+    }
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  // ─────────────────────────── الدخول ───────────────────────────
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
-    
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
-    
-    final user = await _authService.login(
-      _usernameController.text.trim(),
-      _passwordController.text,
-    );
-    
+    final user = await _authService.login(_usernameController.text.trim(), _passwordController.text);
     if (!mounted) return;
-    
     if (user != null) {
       Navigator.pushReplacementNamed(context, '/main');
     } else {
@@ -44,226 +98,514 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  // ─────────────────────────── إنشاء المدير ───────────────────────────
+
+  Future<void> _createAdmin() async {
+    if (!_formKey.currentState!.validate()) return;
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    final check = _licenseUser == null
+        ? const LicensePasswordCheck(LicensePasswordStatus.noLicense)
+        : await _license.checkAccountPassword(password);
+    if (!mounted) return;
+
+    switch (check.status) {
+      case LicensePasswordStatus.ok:
+        await _finishAdmin(username, password);
+        return;
+      case LicensePasswordStatus.wrong:
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'كلمة سر الترخيص غير صحيحة. اكتب نفس كلمة السر التي فعّلت بها البرنامج.';
+        });
+        return;
+      case LicensePasswordStatus.rejected:
+        setState(() {
+          _isLoading = false;
+          _errorMessage = check.message ?? 'رفض سيرفر التراخيص الطلب';
+        });
+        return;
+      case LicensePasswordStatus.offline:
+      case LicensePasswordStatus.noLicense:
+        setState(() => _isLoading = false);
+        final ok = await _confirmOfflineAdmin(password, noLicense: check.status == LicensePasswordStatus.noLicense);
+        if (ok == true) {
+          setState(() => _isLoading = true);
+          await _finishAdmin(username, password);
+        }
+        return;
+    }
+  }
+
+  /// بلا إنترنت: تُكتب كلمة السر مرة ثانية للتأكيد وتصير كلمة سر المدير على هذا الجهاز.
+  Future<bool?> _confirmOfflineAdmin(String password, {required bool noLicense}) {
+    _confirmController.clear();
+    String? err;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Row(children: [
+            Icon(Icons.wifi_off, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('لا يوجد اتصال للتحقق'),
+          ]),
+          content: SizedBox(
+            width: 380,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(noLicense
+                  ? 'لا توجد بيانات ترخيص للتحقق منها على هذا الجهاز.'
+                  : 'تعذّر الاتصال بسيرفر التراخيص للتحقق من كلمة السر.'),
+              const SizedBox(height: 6),
+              const Text('يمكنك إنشاء حساب المدير الآن: اكتب كلمة السر مرة ثانية للتأكيد، وستكون كلمة سر المدير على هذا الجهاز.'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _confirmController,
+                obscureText: true,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: 'تأكيد كلمة السر',
+                  errorText: err,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            FilledButton(
+              onPressed: () {
+                if (_confirmController.text != password) {
+                  setD(() => err = 'كلمتا السر غير متطابقتين');
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('إنشاء حساب المدير'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _finishAdmin(String username, String password) async {
+    final created = await _authService.createAdmin(username, password);
+    if (!mounted) return;
+    if (created == null) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'تعذّر إنشاء حساب المدير';
+      });
+      return;
+    }
+    await _authService.login(username, password);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('تم إنشاء حساب المدير. أضف موظفيك من: الإعدادات ← الموظفون والصلاحيات'),
+      backgroundColor: Colors.green,
+      duration: Duration(seconds: 5),
+    ));
+    Navigator.pushReplacementNamed(context, '/main');
+  }
+
+  // ─────────────────────────── نسيت كلمة السر ───────────────────────────
+
   void _showForgotPasswordDialog() {
+    final usernameController = TextEditingController(text: _usernameController.text);
     final recoveryController = TextEditingController();
     final newPasswordController = TextEditingController();
-    final usernameController = TextEditingController();
-    
+    String? err;
+    bool busy = false;
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Row(children: [
             Icon(Icons.lock_reset, color: Colors.orange),
             SizedBox(width: 8),
             Text('استعادة كلمة السر'),
+          ]),
+          content: SizedBox(
+            width: 400,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text(
+                '• المدير: اكتب كلمة سر الترخيص (يحتاج إنترنت) أو كلمة الجوكر.\n'
+                '• الموظف: يطلب من المدير تغيير كلمة سره من شاشة الموظفين.',
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: usernameController,
+                decoration: InputDecoration(
+                  labelText: 'اسم المستخدم',
+                  prefixIcon: const Icon(Icons.person),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: recoveryController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: 'كلمة سر الترخيص أو كلمة الجوكر',
+                  prefixIcon: const Icon(Icons.key),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: newPasswordController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: 'كلمة السر الجديدة',
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  errorText: err,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final user = usernameController.text.trim();
+                      final rec = recoveryController.text;
+                      final np = newPasswordController.text;
+                      if (user.isEmpty || rec.isEmpty || np.isEmpty) {
+                        setD(() => err = 'املأ الحقول الثلاثة');
+                        return;
+                      }
+                      setD(() {
+                        busy = true;
+                        err = null;
+                      });
+                      var allowed = await _authService.verifyRecoveryPassword(rec);
+                      if (!allowed) {
+                        final admin = await _authService.adminUser();
+                        if (admin != null && admin.username == user) {
+                          final c = await _license.checkAccountPassword(rec);
+                          allowed = c.status == LicensePasswordStatus.ok;
+                          if (c.status == LicensePasswordStatus.offline) {
+                            setD(() {
+                              busy = false;
+                              err = 'لا يوجد إنترنت للتحقق من كلمة سر الترخيص';
+                            });
+                            return;
+                          }
+                        }
+                      }
+                      if (!allowed) {
+                        setD(() {
+                          busy = false;
+                          err = 'كلمة الاسترداد غير صحيحة لهذا المستخدم';
+                        });
+                        return;
+                      }
+                      final ok = await _authService.resetPassword(user, np);
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(ok ? 'تم تغيير كلمة السر — ادخل بالكلمة الجديدة' : 'اسم المستخدم غير موجود'),
+                        backgroundColor: ok ? Colors.green : Colors.red,
+                      ));
+                    },
+              child: const Text('تغيير كلمة السر'),
+            ),
           ],
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: usernameController,
-              decoration: InputDecoration(
-                labelText: 'اسم المستخدم',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                prefixIcon: const Icon(Icons.person),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: recoveryController,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: 'كلمة سر الجوكر / الاسترداد',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                prefixIcon: const Icon(Icons.key),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: newPasswordController,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: 'كلمة السر الجديدة',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                prefixIcon: const Icon(Icons.lock_outline),
-              ),
-            ),
-          ],
-        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────── الوضع التجريبي ───────────────────────────
+
+  void _enterDemo() {
+    _authService.loginDemo();
+    Navigator.pushReplacementNamed(context, '/main');
+  }
+
+  Future<void> _switchDemo({required bool enable, required String message, bool regenerate = false}) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('الوضع التجريبي'),
+        content: Text(message),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('متابعة وإغلاق البرنامج')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await DemoMode.setForNextLaunch(enable);
+    if (regenerate) await DemoMode.requestRegenerate();
+    exit(0);
+  }
+
+  // ─────────────────────────── الواجهة ───────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+            colors: [_navyDark, _navy, Color(0xFF16508A)],
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple),
-            onPressed: () async {
-              final isValid = await _authService.verifyRecoveryPassword(recoveryController.text);
-              if (isValid) {
-                final success = await _authService.resetPassword(
-                  usernameController.text.trim(),
-                  newPasswordController.text,
-                );
-                if (mounted) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(success ? 'تم تغيير كلمة السر بنجاح' : 'فشل تغيير كلمة السر'),
-                      backgroundColor: success ? Colors.green : Colors.red,
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Builder(builder: (context) {
+              final wide = MediaQuery.of(context).size.width >= 820;
+              return ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: wide ? 860 : 440),
+                child: Material(
+                  color: Colors.white,
+                  elevation: 12,
+                  borderRadius: BorderRadius.circular(22),
+                  clipBehavior: Clip.antiAlias,
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (wide) SizedBox(width: 340, child: _brandPanel()),
+                        Expanded(child: Padding(padding: const EdgeInsets.all(32), child: _formPanel())),
+                      ],
                     ),
-                  );
-                }
-              } else {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('كلمة سر الاسترداد غير صحيحة'), backgroundColor: Colors.red),
-                  );
-                }
-              }
-            },
-            child: const Text('تغيير كلمة السر', style: TextStyle(color: Colors.white)),
+                  ),
+                ),
+              );
+            }),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _brandPanel() {
+    final lic = _license.getStoredLicense();
+    return Container(
+      padding: const EdgeInsets.all(28),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [_navyDark, _navy]),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.storefront_rounded, color: _accent, size: 44),
+          const SizedBox(height: 12),
+          const Text('الناصر',
+              style: TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.bold, letterSpacing: 2)),
+          const Text('المبيعات • الديون • المخزون • المحاسبة',
+              style: TextStyle(color: Color(0xFFB8C4DA), fontSize: 13)),
+          const SizedBox(height: 28),
+          _bullet(Icons.verified_user_outlined, 'كل موظف يدخل باسمه وكلمة سره'),
+          _bullet(Icons.tune, 'يرى ما تسمح به صلاحياته فقط'),
+          _bullet(Icons.history, 'كل عملية تُسجَّل باسم من قام بها'),
+          const Spacer(),
+          if (lic != null) ...[
+            const Divider(color: Colors.white24),
+            Text('الترخيص: ${lic.username}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            if (lic.expires.length >= 10)
+              Text('صالح حتى: ${lic.expires.substring(0, 10)}',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          ],
         ],
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
-    super.dispose();
+  Widget _bullet(IconData i, String t) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(children: [
+          Icon(i, color: _accent, size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text(t, style: const TextStyle(color: Colors.white, fontSize: 13.5))),
+        ]),
+      );
+
+  Widget _formPanel() {
+    switch (_mode) {
+      case _Mode.loading:
+        return const SizedBox(height: 320, child: Center(child: CircularProgressIndicator()));
+      case _Mode.demo:
+        return _demoPanel();
+      case _Mode.setupAdmin:
+      case _Mode.login:
+        return _credentialsForm();
+    }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1E1E2E),
-      body: Center(
-        child: SingleChildScrollView(
-          child: Container(
-            width: 400,
-            padding: const EdgeInsets.all(32),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, 10)),
-              ],
-            ),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Logo / Icon
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF5D5FEF).withOpacity(0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.storefront, size: 48, color: Color(0xFF5D5FEF)),
-                  ),
-                  const SizedBox(height: 24),
-                  
-                  const Text(
-                    'تسجيل الدخول',
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2E)),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('أدخل بيانات الدخول للمتابعة', style: TextStyle(color: Colors.grey[600])),
-                  
-                  const SizedBox(height: 32),
-                  
-                  // Error Message
-                  if (_errorMessage != null)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.red[50],
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.red[200]!),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.error_outline, color: Colors.red),
-                          const SizedBox(width: 8),
-                          Expanded(child: Text(_errorMessage!, style: const TextStyle(color: Colors.red))),
-                        ],
-                      ),
-                    ),
-                  
-                  // Username Field
-                  TextFormField(
-                    controller: _usernameController,
-                    decoration: InputDecoration(
-                      labelText: 'اسم المستخدم',
-                      prefixIcon: const Icon(Icons.person_outline),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      filled: true,
-                      fillColor: Colors.grey[50],
-                    ),
-                    validator: (val) => val == null || val.isEmpty ? 'أدخل اسم المستخدم' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Password Field
-                  TextFormField(
-                    controller: _passwordController,
-                    obscureText: _obscurePassword,
-                    decoration: InputDecoration(
-                      labelText: 'كلمة السر',
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      suffixIcon: IconButton(
-                        icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
-                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                      ),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      filled: true,
-                      fillColor: Colors.grey[50],
-                    ),
-                    validator: (val) => val == null || val.isEmpty ? 'أدخل كلمة السر' : null,
-                    onFieldSubmitted: (_) => _login(),
-                  ),
-                  
-                  const SizedBox(height: 8),
-                  
-                  // Forgot Password
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: _showForgotPasswordDialog,
-                      child: const Text('نسيت كلمة السر؟', style: TextStyle(color: Color(0xFF5D5FEF))),
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 24),
-                  
-                  // Login Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _login,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF5D5FEF),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: _isLoading
-                          ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                          : const Text('تسجيل الدخول', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
+  Widget _credentialsForm() {
+    final setup = _mode == _Mode.setupAdmin;
+    return Form(
+      key: _formKey,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(setup ? 'إنشاء حساب المدير' : 'تسجيل الدخول',
+              style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _navy)),
+          const SizedBox(height: 6),
+          Text(
+            setup
+                ? 'أول تشغيل: المدير هو حساب الترخيص نفسه. اكتب كلمة السر التي فعّلت بها البرنامج، وسنتحقق منها عبر الإنترنت.'
+                : 'أدخل اسم المستخدم وكلمة السر للمتابعة.',
+            style: TextStyle(color: Colors.grey[700], height: 1.5),
+          ),
+          const SizedBox(height: 24),
+          if (_errorMessage != null)
+            Container(
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.red[200]!),
               ),
+              child: Row(children: [
+                const Icon(Icons.error_outline, color: Colors.red),
+                const SizedBox(width: 8),
+                Expanded(child: Text(_errorMessage!, style: const TextStyle(color: Colors.red))),
+              ]),
+            ),
+          TextFormField(
+            controller: _usernameController,
+            readOnly: setup && _licenseUser != null && _licenseUser!.isNotEmpty,
+            autofocus: !setup && _usernameController.text.isEmpty,
+            decoration: InputDecoration(
+              labelText: setup ? 'اسم المستخدم (حساب الترخيص)' : 'اسم المستخدم',
+              prefixIcon: Icon(setup ? Icons.admin_panel_settings_outlined : Icons.person_outline),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              filled: true,
+              fillColor: Colors.grey[50],
+            ),
+            validator: (val) => val == null || val.trim().isEmpty ? 'أدخل اسم المستخدم' : null,
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _passwordController,
+            obscureText: _obscurePassword,
+            autofocus: !setup && _usernameController.text.isNotEmpty,
+            decoration: InputDecoration(
+              labelText: setup ? 'كلمة سر الترخيص' : 'كلمة السر',
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: IconButton(
+                icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+              ),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              filled: true,
+              fillColor: Colors.grey[50],
+            ),
+            validator: (val) => val == null || val.isEmpty ? 'أدخل كلمة السر' : null,
+            onFieldSubmitted: (_) => setup ? _createAdmin() : _login(),
+          ),
+          if (!setup)
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: TextButton(
+                onPressed: _showForgotPasswordDialog,
+                child: const Text('نسيت كلمة السر؟'),
+              ),
+            )
+          else
+            const SizedBox(height: 16),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 52,
+            child: FilledButton(
+              onPressed: _isLoading ? null : (setup ? _createAdmin : _login),
+              style: FilledButton.styleFrom(
+                backgroundColor: _navy,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: _isLoading
+                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : Text(setup ? 'تحقق وأنشئ حساب المدير' : 'دخول',
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
             ),
           ),
-        ),
+          if (!kIsWeb) ...[
+            const SizedBox(height: 20),
+            const Divider(),
+            TextButton.icon(
+              onPressed: () => _switchDemo(
+                enable: true,
+                message: 'سيُغلق البرنامج الآن. افتحه من جديد لتدخل الوضع التجريبي.\n\n'
+                    'قاعدة منفصلة فيها سنة من البيانات الوهمية للتجربة وتدريب الموظفين. '
+                    'قاعدتك الحقيقية لا تُفتح ولا تُلمس، والمزامنة والشبكة ورفع البيانات تتوقف في هذا الوضع.\n'
+                    'في أول فتح تُنشأ البيانات (بضع دقائق).',
+              ),
+              icon: const Icon(Icons.science_outlined, color: Colors.orange),
+              label: const Text('تجربة البرنامج ببيانات وهمية', style: TextStyle(color: Colors.orange)),
+            ),
+          ],
+        ],
       ),
+    );
+  }
+
+  Widget _demoPanel() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(children: [
+          const Icon(Icons.science_outlined, color: Colors.orange, size: 30),
+          const SizedBox(width: 8),
+          Text('الوضع التجريبي', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.orange.shade800)),
+        ]),
+        const SizedBox(height: 8),
+        Text(
+          'أنت على قاعدة البيانات التجريبية: بيانات وهمية لسنة كاملة للتجربة والتدريب. '
+          'قاعدتك الحقيقية محفوظة كما هي ولا تُلمس.',
+          style: TextStyle(color: Colors.grey[700], height: 1.5),
+        ),
+        const SizedBox(height: 24),
+        SizedBox(
+          height: 52,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange.shade700),
+            onPressed: _enterDemo,
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: const Text('دخول للتجربة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => _switchDemo(
+            enable: false,
+            message: 'سيُغلق البرنامج الآن. افتحه من جديد لتعود إلى بياناتك الحقيقية.',
+          ),
+          icon: const Icon(Icons.exit_to_app, color: Colors.green),
+          label: const Text('العودة إلى البيانات الحقيقية'),
+        ),
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: () => _switchDemo(
+            enable: true,
+            regenerate: true,
+            message: 'سيُغلق البرنامج الآن. عند فتحه تُحذف البيانات التجريبية فقط وتُنشأ من جديد.',
+          ),
+          icon: const Icon(Icons.restart_alt, color: Colors.red),
+          label: const Text('إعادة البيانات التجريبية من الصفر', style: TextStyle(color: Colors.red)),
+        ),
+      ],
     );
   }
 }

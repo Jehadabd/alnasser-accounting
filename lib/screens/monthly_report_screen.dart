@@ -301,7 +301,7 @@ class _MonthlyReportScreenState extends State<MonthlyReportScreen> {
       _MetricTileData('صافي الربح', '${_fmt(netProfit)} د.ع', Icons.trending_up, const Color(0xFF059669), const Color(0xFFECFDF5)),
       _MetricTileData('إجمالي المرتجعات', '${_fmt(totalReturns)} د.ع', Icons.remove_shopping_cart, const Color(0xFFD97706), const Color(0xFFFFFBEB)),
       _MetricTileData('نسبة الربح', '${profitPercent.toStringAsFixed(1)}%', Icons.percent, const Color(0xFF7C3AED), const Color(0xFFF5F3FF)),
-      _MetricTileData('عدد الفواتير', '$invoiceCount فاتورة', Icons.receipt_long, const Color(0xFF0284C7), const Color(0xFFF0F9FF)),
+      _MetricTileData('عدد الفواتير', '${_fmt(invoiceCount)} فاتورة', Icons.receipt_long, const Color(0xFF0284C7), const Color(0xFFF0F9FF)),
       _MetricTileData('متوسط الفاتورة', '${_fmt(avgInvoiceValue)} د.ع', Icons.analytics, const Color(0xFF0D9488), const Color(0xFFF0FDF4)),
     ];
 
@@ -606,7 +606,7 @@ class _MonthlyReportScreenState extends State<MonthlyReportScreen> {
           Row(
             children: [
               Expanded(child: Text('التكلفة: ${_fmt(sCost)} د.ع', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFDC2626)))),
-              Expanded(child: Text('الفواتير: $sInv (نسبة الربح ${sMargin.toStringAsFixed(1)}%)', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7C3AED)))),
+              Expanded(child: Text('الفواتير: ${_fmt(sInv)} (نسبة الربح ${sMargin.toStringAsFixed(1)}%)', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7C3AED)))),
             ],
           ),
         ],
@@ -766,7 +766,7 @@ class _MonthlyReportScreenState extends State<MonthlyReportScreen> {
               customer['customer_name']?.toString() ?? 'عميل غير معروف',
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
             ),
-            subtitle: Text('$invCount فاتورة'),
+            subtitle: Text('${_fmt((invCount as num?) ?? 0)} فاتورة'),
             trailing: Text(
               '${_fmt(purchases)} د.ع',
               style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF059669), fontSize: 14),
@@ -1155,7 +1155,7 @@ class LineChartPainter extends CustomPainter {
               style: const TextStyle(color: Color(0xFFFCA5A5), fontSize: 10, fontWeight: FontWeight.bold),
             ),
             TextSpan(
-              text: '• الفواتير: $invVal فاتورة',
+              text: '• الفواتير: ${fmt(invVal)} فاتورة',
               style: const TextStyle(color: Color(0xFFC4B5FD), fontSize: 10, fontWeight: FontWeight.bold),
             ),
           ],

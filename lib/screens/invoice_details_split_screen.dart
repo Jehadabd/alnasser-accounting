@@ -18,7 +18,11 @@ class InvoiceDetailsSplitScreen extends StatefulWidget {
 }
 
 class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
+  static final NumberFormat _moneyFmt = NumberFormat('#,##0.##', 'en_US');
+  static final NumberFormat _qtyFmt = NumberFormat('#,##0.###', 'en_US');
+
   bool _isLoading = true;
+  String? _error;
   PurchaseInvoice? _invoice;
   List<PurchaseInvoiceItem> _items = [];
 
@@ -29,19 +33,58 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
   }
 
   Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
     final service = context.read<PurchaseService>();
-    
-    _items = await service.getInvoiceItems(widget.invoiceId);
-    _invoice = await service.getInvoiceById(widget.invoiceId);
-    
-    setState(() => _isLoading = false);
+    try {
+      final items = await service.getInvoiceItems(widget.invoiceId);
+      final invoice = await service.getInvoiceById(widget.invoiceId);
+      // 🛡️ الشاشة قد تُغلق أثناء التحميل (setState بعد الإغلاق يرمي خطأ)
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _invoice = invoice;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = 'تعذّر تحميل الفاتورة: $e';
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    if (_invoice == null) return const Scaffold(body: Center(child: Text('الفاتورة غير موجودة')));
+    if (_error != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('تفاصيل الفاتورة')),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_error ?? '', textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _loadData,
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة المحاولة'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_invoice == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('تفاصيل الفاتورة')),
+        body: const Center(child: Text('الفاتورة غير موجودة')),
+      );
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
@@ -54,15 +97,16 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
           IconButton(
             icon: const Icon(Icons.edit, color: Colors.blue),
             tooltip: 'تعديل الفاتورة',
-            onPressed: () {
-              Navigator.push(
+            onPressed: () async {
+              await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => CreatePurchaseInvoiceScreen(
                     existingInvoice: _invoice,
                   ),
                 ),
-              ).then((_) => _loadData()); // Reload after edit
+              );
+              if (mounted) _loadData(); // Reload after edit
             },
           ),
         ],
@@ -204,6 +248,7 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
 
   Color _getStatusColor(String status) {
     switch (status) {
+      case 'cancelled': return Colors.red;
       case 'draft': return Colors.grey;
       case 'confirmed': return Colors.blue;
       case 'partial': return Colors.orange;
@@ -275,7 +320,7 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
               return ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                 title: Text(item.productName ?? 'منتج غير معروف', style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('${item.quantity} ${item.unitName} × ${_formatNumber(item.unitPrice)}'),
+                subtitle: Text('${_qtyFmt.format(item.quantity)} ${item.unitName} × ${_formatNumber(item.unitPrice)}'),
                 trailing: Text(
                   '${_formatNumber(item.totalPrice)} ${_invoice!.currency}',
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
@@ -288,7 +333,6 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
     );
   }
 
-  String _formatNumber(double number) {
-    return NumberFormat("#,##0", "en_US").format(number);
-  }
+  // #,##0.## — مبالغ الدولار تحتفظ بكسورها (كانت تُقرَّب لرقم صحيح)
+  String _formatNumber(double number) => _moneyFmt.format(number);
 }

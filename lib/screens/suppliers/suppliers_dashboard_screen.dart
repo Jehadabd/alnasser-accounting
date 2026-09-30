@@ -5,12 +5,11 @@ import '../../services/purchase_service.dart';
 import '../../widgets/stat_card.dart';
 import '../../widgets/supplier_rich_card.dart';
 import '../supplier_details_screen.dart';
-import '../../accounting/screens/acc_ui.dart' show requirePermission;
+import '../../accounting/screens/acc_ui.dart' show requirePermission, fmtMoney;
 import '../../models/app_user.dart' show AppPermissions;
 import '../../erp/debts/receipt_screen.dart' show SupplierPaymentScreen;
 import '../../erp/purchases/purchase_return_screen.dart' show PurchaseReturnEditorScreen, PurchaseReturnsListScreen;
 import '../../erp/sales/quotes_orders_screen.dart' show OrdersScreen;
-import 'package:intl/intl.dart' as intl;
 
 class SuppliersDashboardScreen extends StatefulWidget {
   const SuppliersDashboardScreen({super.key});
@@ -23,8 +22,11 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
   final _searchController = TextEditingController();
   List<Supplier> _suppliers = [];
   List<Supplier> _filteredSuppliers = [];
+  Map<String, double> _purchaseTotals = const {};
   bool _isLoading = true;
-  String _filterType = 'all'; // all, with_debt, no_debt
+  bool _isRefreshing = false;
+  String? _loadError;
+  String _filterType = 'all'; // all, with_debt, no_debt, credit
 
   @override
   void initState() {
@@ -32,32 +34,71 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
     _loadSuppliers();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadSuppliers() async {
-    setState(() => _isLoading = true);
-    final suppliers = await context.read<PurchaseService>().getSuppliers();
-    setState(() {
-      _suppliers = suppliers;
-      _applyFilter();
-      _isLoading = false;
-    });
+    if (_isRefreshing) return;
+    _isRefreshing = true;
+    final service = context.read<PurchaseService>();
+    try {
+      final suppliers = await service.getSuppliers();
+      Map<String, double> totals = const {};
+      try {
+        totals = await service.getConfirmedPurchaseTotals();
+      } catch (_) {
+        // بطاقة إحصائية ثانوية: فشلها لا يمنع عرض الموردين
+      }
+      if (!mounted) return;
+      setState(() {
+        _suppliers = suppliers;
+        _purchaseTotals = totals;
+        _filteredSuppliers = _computeFiltered();
+        _isLoading = false;
+        _loadError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _loadError = 'تعذّر تحميل الموردين: $e';
+      });
+    } finally {
+      _isRefreshing = false;
+    }
+  }
+
+  static bool _hasCredit(Supplier s) => s.totalDebtIqd < -0.01 || s.totalDebtUsd < -0.01;
+
+  bool _matchesFilter(Supplier s, String type) {
+    switch (type) {
+      case 'with_debt':
+        return s.hasDebt;
+      case 'no_debt':
+        return !s.hasDebt;
+      case 'credit':
+        return _hasCredit(s);
+      default:
+        return true;
+    }
+  }
+
+  List<Supplier> _computeFiltered() {
+    final query = _searchController.text.trim().toLowerCase();
+    return _suppliers.where((s) {
+      final matchesSearch = query.isEmpty ||
+          s.name.toLowerCase().contains(query) ||
+          (s.phone ?? '').contains(query) ||
+          (s.address ?? '').toLowerCase().contains(query);
+      return matchesSearch && _matchesFilter(s, _filterType);
+    }).toList();
   }
 
   void _applyFilter() {
-    final query = _searchController.text.toLowerCase();
-    _filteredSuppliers = _suppliers.where((s) {
-      final matchesSearch = s.name.toLowerCase().contains(query) ||
-          (s.phone?.contains(query) ?? false);
-      
-      switch (_filterType) {
-        case 'with_debt':
-          return matchesSearch && s.hasDebt;
-        case 'no_debt':
-          return matchesSearch && !s.hasDebt;
-        default:
-          return matchesSearch;
-      }
-    }).toList();
-    setState(() {});
+    setState(() => _filteredSuppliers = _computeFiltered());
   }
 
   Widget _quickAction(IconData icon, String label, Color color, VoidCallback onTap) {
@@ -76,31 +117,34 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Stats Calculations
-    final totalDebt = _suppliers.fold(0.0, (sum, s) => sum + s.totalDebtIqd); // Focus on IQD for dashboard summary
-    final totalPayments = _suppliers.fold(0.0, (sum, s) => sum + s.totalPayments); // This is count, we need Amount if available. Supplier model has totalPayments as int count. 
-    // Wait, Supplier model has `totalPaid`? No, it has `totalPayments` (int) and `totalPurchases` (double).
-    // Let's use totalPurchases for "Volume" stat.
-    final totalPurchases = _suppliers.fold(0.0, (sum, s) => sum + s.totalPurchases);
+    // 📊 الإحصاءات — كل عملة على حدة (لا يُجمع الدينار مع الدولار)
+    // إجمالي الديون = ما علينا للموردين (الأرصدة الموجبة فقط؛ السالب رصيد لنا عندهم)
+    final debtIqd = _suppliers.fold(0.0, (sum, s) => sum + (s.totalDebtIqd > 0 ? s.totalDebtIqd : 0.0));
+    final debtUsd = _suppliers.fold(0.0, (sum, s) => sum + (s.totalDebtUsd > 0 ? s.totalDebtUsd : 0.0));
+    // حجم المشتريات من فواتير الشراء المؤكدة نفسها (عمود total_purchases لا يُحدَّث)
+    final purchasesIqd = _purchaseTotals['IQD'] ?? 0.0;
+    final purchasesUsd = _purchaseTotals['USD'] ?? 0.0;
     final totalInvoices = _suppliers.fold(0, (sum, s) => sum + s.totalInvoices);
-    
+
     return Scaffold(
       backgroundColor: const Color(0xFFF7F9FC), // Light Slate Background
       appBar: AppBar(
         title: const Row(
           children: [
             SizedBox(
-              width: 32, height: 32,
+              width: 32,
+              height: 32,
               child: CircleAvatar(
-                backgroundColor: Color(0xFF3B82F6),
-                child: Text('N', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                backgroundColor: Color(0xFF455A64),
+                child: Icon(Icons.factory, color: Colors.white, size: 18),
               ),
             ),
             SizedBox(width: 12),
-            Text('نظام الموردين الذكي', style: TextStyle(color: Color(0xFF1E293B), fontWeight: FontWeight.bold, fontSize: 18)),
+            Text('الموردون', style: TextStyle(color: Color(0xFF1E293B), fontWeight: FontWeight.bold, fontSize: 18)),
           ],
         ),
         backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF1E293B),
         elevation: 0,
         centerTitle: false,
         bottom: PreferredSize(
@@ -108,8 +152,9 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
           child: Container(color: Colors.grey[200], height: 1),
         ),
         actions: [
-           IconButton(
+          IconButton(
             icon: const Icon(Icons.refresh, color: Colors.grey),
+            tooltip: 'تحديث',
             onPressed: _loadSuppliers,
           ),
           const SizedBox(width: 16),
@@ -117,305 +162,261 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ⚡ أعمال الموردين في مكان واحد (كانت موزعة على المخزون والمحاسبة والتحصيل)
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _quickAction(Icons.outbox, 'دفعة لمورد', Colors.orange, () {
-                        if (!requirePermission(context, AppPermissions.suppliers)) return;
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => const SupplierPaymentScreen()))
-                            .then((_) => _loadSuppliers());
-                      }),
-                      _quickAction(Icons.shopping_cart_checkout, 'طلبات المشتريات', Colors.purple, () {
-                        if (!requirePermission(context, AppPermissions.suppliers)) return;
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const OrdersScreen(orderType: 'purchase')));
-                      }),
-                      _quickAction(Icons.assignment_return_outlined, 'مرتجع مشتريات', Colors.deepOrange, () {
-                        if (!requirePermission(context, AppPermissions.suppliers)) return;
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchaseReturnEditorScreen()))
-                            .then((_) => _loadSuppliers());
-                      }),
-                      _quickAction(Icons.history, 'سجل مرتجعات المشتريات', Colors.blueGrey, () {
-                        if (!requirePermission(context, AppPermissions.suppliers)) return;
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchaseReturnsListScreen()));
-                      }),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-
-                  // STATS GRID
-                  LayoutBuilder(builder: (context, constraints) {
-                    final width = constraints.maxWidth;
-                    int crossAxisCount = width > 1200 ? 4 : (width > 800 ? 2 : 1);
-                    
-                    return GridView.count(
-                      crossAxisCount: crossAxisCount,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisSpacing: 16,
-                      mainAxisSpacing: 16,
-                      childAspectRatio: 2.2, // Wide cards
+          : _loadError != null
+              ? _buildErrorState()
+              : RefreshIndicator(
+                  onRefresh: _loadSuppliers,
+                  child: SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 96),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        StatCard(
-                          title: 'إجمالي الديون',
-                          value: '${_formatNumber(totalDebt)} IQD',
-                          icon: Icons.monetization_on_outlined,
-                          color: Colors.red,
+                        // ⚡ أعمال الموردين في مكان واحد (كانت موزعة على المخزون والمحاسبة والتحصيل)
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            _quickAction(Icons.outbox, 'دفعة لمورد', Colors.orange, () {
+                              if (!requirePermission(context, AppPermissions.suppliers)) return;
+                              Navigator.push(context, MaterialPageRoute(builder: (_) => const SupplierPaymentScreen()))
+                                  .then((_) => _loadSuppliers());
+                            }),
+                            _quickAction(Icons.shopping_cart_checkout, 'طلبات المشتريات', Colors.purple, () {
+                              if (!requirePermission(context, AppPermissions.suppliers)) return;
+                              Navigator.push(context,
+                                  MaterialPageRoute(builder: (_) => const OrdersScreen(orderType: 'purchase')));
+                            }),
+                            _quickAction(Icons.assignment_return_outlined, 'مرتجع مشتريات', Colors.deepOrange, () {
+                              if (!requirePermission(context, AppPermissions.suppliers)) return;
+                              Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchaseReturnEditorScreen()))
+                                  .then((_) => _loadSuppliers());
+                            }),
+                            _quickAction(Icons.history, 'سجل مرتجعات المشتريات', Colors.blueGrey, () {
+                              if (!requirePermission(context, AppPermissions.suppliers)) return;
+                              Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchaseReturnsListScreen()))
+                                  .then((_) => _loadSuppliers());
+                            }),
+                          ],
                         ),
-                        StatCard(
-                          title: 'حجم المشتريات',
-                          value: '${_formatNumber(totalPurchases)} IQD',
-                          icon: Icons.shopping_bag_outlined,
-                          color: Colors.blue,
-                        ),
-                        StatCard(
-                          title: 'إجمالي الفواتير',
-                          value: '$totalInvoices',
-                          icon: Icons.receipt_long_outlined,
-                          color: Colors.orange,
-                        ),
-                        StatCard(
-                          title: 'عدد الموردين',
-                          value: '${_suppliers.length}',
-                          icon: Icons.people_outline,
-                          color: Colors.purple,
-                        ),
-                      ],
-                    );
-                  }),
-                  
-                  const SizedBox(height: 32),
-                  
-                  // SECTION TITLE + SEARCH
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'الموردون المعتمدون',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1E293B),
-                        ),
-                      ),
-                      Container(
-                        width: 300,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.grey[200]!),
-                        ),
-                        child: TextField(
-                          controller: _searchController,
-                          onChanged: (_) => _applyFilter(),
-                          decoration: InputDecoration(
-                            hintText: 'بحث...',
-                            prefixIcon: const Icon(Icons.search, size: 20, color: Colors.grey),
-                            border: InputBorder.none,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                            suffixIcon: _searchController.text.isNotEmpty
-                                ? IconButton(
-                                    icon: const Icon(Icons.clear, size: 16),
-                                    onPressed: () {
-                                      _searchController.clear();
-                                      _applyFilter();
-                                    },
-                                  )
-                                : null,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+                        const SizedBox(height: 24),
 
-                  // SUPPLIERS GRID
-                  LayoutBuilder(builder: (context, constraints) {
-                    final width = constraints.maxWidth;
-                    // Responsive grid: 3 cards on wide, 2 on medium, 1 on mobile
-                    int crossAxisCount = width > 1400 ? 5 : (width > 1100 ? 4 : (width > 700 ? 3 : 1));
-                    
-                    if (_filteredSuppliers.isEmpty) {
-                      return _buildEmptyState();
-                    }
+                        // STATS GRID
+                        LayoutBuilder(builder: (context, constraints) {
+                          final width = constraints.maxWidth;
+                          final int crossAxisCount = width > 1200 ? 4 : (width > 800 ? 2 : 1);
 
-                    return GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        childAspectRatio: 0.8, // Slightly more compact height
-                        crossAxisSpacing: 16,
-                        mainAxisSpacing: 16,
-                      ),
-                      itemCount: _filteredSuppliers.length,
-                      itemBuilder: (context, index) {
-                        return SupplierRichCard(
-                          supplier: _filteredSuppliers[index],
-                          onTap: () {
-                             Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => SupplierDetailsScreen(supplier: _filteredSuppliers[index]),
+                          return GridView(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: crossAxisCount,
+                              crossAxisSpacing: 16,
+                              mainAxisSpacing: 16,
+                              // ارتفاع ثابت يتسع لسطر الدولار الإضافي في أي عرض
+                              mainAxisExtent: 132,
+                            ),
+                            children: [
+                              StatCard(
+                                title: 'إجمالي الديون علينا',
+                                value: '${fmtMoney(debtIqd)} د.ع',
+                                subValue: debtUsd > 0.01 ? '\$ ${fmtMoney(debtUsd)}' : null,
+                                icon: Icons.monetization_on_outlined,
+                                color: Colors.red,
                               ),
-                            ).then((_) => _loadSuppliers());
-                          },
-                          onDelete: () {
-                            // TODO: Show Delete Confirmation
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('الحذف غير مفعل في هذه النسخة التجريبية UI')),
-                            );
-                          },
-                          onEdit: () {
-                             // Edit Logic
-                          },
-                        );
-                      },
-                    );
-                  }),
-                ],
-              ),
-            ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddSupplierDialog(),
+                              StatCard(
+                                title: 'حجم المشتريات المؤكدة',
+                                value: '${fmtMoney(purchasesIqd)} د.ع',
+                                subValue: purchasesUsd > 0.01 ? '\$ ${fmtMoney(purchasesUsd)}' : null,
+                                icon: Icons.shopping_bag_outlined,
+                                color: Colors.blue,
+                              ),
+                              StatCard(
+                                title: 'الفواتير المؤكدة',
+                                value: fmtMoney(totalInvoices),
+                                icon: Icons.receipt_long_outlined,
+                                color: Colors.orange,
+                              ),
+                              StatCard(
+                                title: 'عدد الموردين',
+                                value: fmtMoney(_suppliers.length),
+                                subValue: '${fmtMoney(_suppliers.where((s) => s.hasDebt).length)} لهم دين علينا',
+                                icon: Icons.people_outline,
+                                color: Colors.purple,
+                              ),
+                            ],
+                          );
+                        }),
+
+                        const SizedBox(height: 32),
+
+                        // SECTION TITLE + SEARCH
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 16,
+                          runSpacing: 12,
+                          children: [
+                            const Text(
+                              'الموردون المعتمدون',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF1E293B),
+                              ),
+                            ),
+                            Container(
+                              width: 300,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.grey[200]!),
+                              ),
+                              child: TextField(
+                                controller: _searchController,
+                                onChanged: (_) => _applyFilter(),
+                                decoration: InputDecoration(
+                                  hintText: 'بحث بالاسم أو الهاتف أو العنوان...',
+                                  prefixIcon: const Icon(Icons.search, size: 20, color: Colors.grey),
+                                  border: InputBorder.none,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                  suffixIcon: _searchController.text.isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(Icons.clear, size: 16),
+                                          onPressed: () {
+                                            _searchController.clear();
+                                            _applyFilter();
+                                          },
+                                        )
+                                      : null,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+
+                        // FILTER CHIPS
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _filterChip('all', 'الكل'),
+                            _filterChip('with_debt', 'لهم دين علينا'),
+                            _filterChip('no_debt', 'بدون دين'),
+                            _filterChip('credit', 'لنا رصيد عندهم'),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+
+                        // SUPPLIERS GRID
+                        LayoutBuilder(builder: (context, constraints) {
+                          final width = constraints.maxWidth;
+                          // عدد الأعمدة حسب أقل عرض مريح للبطاقة (كانت 3 أعمدة عند 700px
+                          // فتضيق البطاقة ويتداخل محتواها)
+                          final int fit = ((width + 16) / (SupplierRichCard.minWidth + 16)).floor();
+                          final int crossAxisCount = fit < 1 ? 1 : (fit > 5 ? 5 : fit);
+
+                          if (_filteredSuppliers.isEmpty) {
+                            return _buildEmptyState();
+                          }
+
+                          return GridView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: crossAxisCount,
+                              // ارتفاع ثابت بدل نسبة العرض: لا فيضان عند الشاشات الضيقة
+                              mainAxisExtent: SupplierRichCard.preferredHeight,
+                              crossAxisSpacing: 16,
+                              mainAxisSpacing: 16,
+                            ),
+                            itemCount: _filteredSuppliers.length,
+                            itemBuilder: (context, index) {
+                              // 🛡️ يُلتقط المورد لحظة البناء: القائمة قد تتغير (تحديث/بحث)
+                              //    قبل الضغط، فالفهرس وحده قد يشير لمورد آخر أو يتجاوز الحد
+                              final supplier = _filteredSuppliers[index];
+                              return SupplierRichCard(
+                                supplier: supplier,
+                                onTap: () => _openSupplier(supplier),
+                                onEdit: () => _editSupplier(supplier),
+                                onDelete: () => _deleteSupplier(supplier),
+                              );
+                            },
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addSupplier,
         backgroundColor: const Color(0xFF3B82F6),
-        child: const Icon(Icons.add, size: 32),
+        foregroundColor: Colors.white,
+        tooltip: 'إضافة مورد جديد',
+        icon: const Icon(Icons.add),
+        label: const Text('مورد جديد'),
       ),
     );
   }
 
-  void _showAddSupplierDialog({Supplier? supplier}) {
-    final isEdit = supplier != null;
-    final nameController = TextEditingController(text: supplier?.name ?? '');
-    final phoneController = TextEditingController(text: supplier?.phone ?? '');
-    final addressController = TextEditingController(text: supplier?.address ?? '');
-    String currency = supplier?.currency ?? 'IQD';
-    String paymentTerms = supplier?.paymentTerms ?? 'cash';
+  Widget _filterChip(String type, String label) {
+    final count = _suppliers.where((s) => _matchesFilter(s, type)).length;
+    return ChoiceChip(
+      label: Text('$label ($count)'),
+      selected: _filterType == type,
+      onSelected: (_) {
+        _filterType = type;
+        _applyFilter();
+      },
+    );
+  }
 
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              Icon(isEdit ? Icons.edit : Icons.person_add, color: const Color(0xFF455A64)),
-              const SizedBox(width: 8),
-              Text(isEdit ? 'تعديل مورد' : 'إضافة مورد جديد', style: const TextStyle(fontFamily: 'Cairo')),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'اسم المورد *',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.person),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: phoneController,
-                  decoration: const InputDecoration(
-                    labelText: 'رقم الهاتف',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.phone),
-                  ),
-                  keyboardType: TextInputType.phone,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: addressController,
-                  decoration: const InputDecoration(
-                    labelText: 'العنوان',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.location_on),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: currency,
-                  decoration: const InputDecoration(
-                    labelText: 'العملة المفضلة',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.attach_money),
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'IQD', child: Text('IQD - دينار عراقي')),
-                    DropdownMenuItem(value: 'USD', child: Text('USD - دولار أمريكي')),
-                  ],
-                  onChanged: isEdit ? null : (val) => setDialogState(() => currency = val!),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: paymentTerms,
-                  decoration: const InputDecoration(
-                    labelText: 'شروط الدفع',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.payment),
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'cash', child: Text('نقدي')),
-                    DropdownMenuItem(value: 'credit', child: Text('آجل')),
-                  ],
-                  onChanged: (val) => setDialogState(() => paymentTerms = val!),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إلغاء'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF455A64)),
-              onPressed: () async {
-                if (nameController.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('الرجاء إدخال اسم المورد')),
-                  );
-                  return;
-                }
+  Future<void> _openSupplier(Supplier supplier) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => SupplierDetailsScreen(supplier: supplier)),
+    );
+    if (mounted) _loadSuppliers();
+  }
 
-                final now = DateTime.now();
-                final newSupplier = Supplier(
-                  id: supplier?.id,
-                  name: nameController.text.trim(),
-                  phone: phoneController.text.trim(),
-                  address: addressController.text.trim(),
-                  currency: currency,
-                  paymentTerms: paymentTerms,
-                  totalDebtIqd: supplier?.totalDebtIqd ?? 0.0,
-                  totalDebtUsd: supplier?.totalDebtUsd ?? 0.0,
-                  totalInvoices: supplier?.totalInvoices ?? 0,
-                  totalPayments: supplier?.totalPayments ?? 0,
-                  createdAt: supplier?.createdAt ?? now,
-                  updatedAt: now,
-                );
+  Future<void> _addSupplier() async {
+    if (!requirePermission(context, AppPermissions.suppliers)) return;
+    final saved = await showSupplierFormDialog(context);
+    if (saved != null && mounted) _loadSuppliers();
+  }
 
-                final purchaseService = context.read<PurchaseService>();
-                if (isEdit) {
-                  await purchaseService.updateSupplier(newSupplier);
-                } else {
-                  await purchaseService.addSupplier(newSupplier);
-                }
+  Future<void> _editSupplier(Supplier supplier) async {
+    if (!requirePermission(context, AppPermissions.suppliers)) return;
+    final saved = await showSupplierFormDialog(context, supplier: supplier);
+    if (saved != null && mounted) _loadSuppliers();
+  }
 
-                Navigator.pop(context);
+  Future<void> _deleteSupplier(Supplier supplier) async {
+    if (!requirePermission(context, AppPermissions.suppliers)) return;
+    final deleted = await confirmAndDeleteSupplier(context, supplier);
+    if (deleted && mounted) _loadSuppliers();
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 56, color: Colors.red[300]),
+            const SizedBox(height: 12),
+            Text(_loadError ?? '', textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () {
+                setState(() => _isLoading = true);
                 _loadSuppliers();
               },
-              child: Text(isEdit ? 'حفظ التعديلات' : 'إضافة'),
+              icon: const Icon(Icons.refresh),
+              label: const Text('إعادة المحاولة'),
             ),
           ],
         ),
@@ -424,6 +425,7 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
   }
 
   Widget _buildEmptyState() {
+    final noSuppliers = _suppliers.isEmpty;
     return Container(
       height: 300,
       width: double.infinity,
@@ -435,18 +437,22 @@ class _SuppliersDashboardScreenState extends State<SuppliersDashboardScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.search_off, size: 64, color: Colors.grey[300]),
+          Icon(noSuppliers ? Icons.store_mall_directory_outlined : Icons.search_off, size: 64, color: Colors.grey[300]),
           const SizedBox(height: 16),
           Text(
-            'لا توجد نتائج',
+            noSuppliers ? 'لا يوجد موردون بعد' : 'لا توجد نتائج',
             style: TextStyle(fontSize: 18, color: Colors.grey[500], fontWeight: FontWeight.bold),
           ),
+          if (noSuppliers) ...[
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: _addSupplier,
+              icon: const Icon(Icons.add),
+              label: const Text('إضافة أول مورد'),
+            ),
+          ],
         ],
       ),
     );
-  }
-
-  String _formatNumber(double number) {
-    return intl.NumberFormat.compact().format(number);
   }
 }

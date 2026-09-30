@@ -31,6 +31,7 @@ import '../services/settings_manager.dart'; // 📋 For company info in WhatsApp
 import '../erp/debts/customer_card_screen.dart';
 import '../erp/debts/receipt_screen.dart';
 import '../erp/pickers.dart' show PartyLite;
+import '../widgets/formatters.dart';
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
@@ -1523,7 +1524,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                         const SizedBox(height: 8),
                         Text('الرصيد المسجل: ${formatCurrency(report.recordedBalance)} دينار'),
                         Text('الرصيد المحسوب: ${formatCurrency(report.calculatedBalance)} دينار'),
-                        Text('عدد المعاملات: ${report.transactionCount}'),
+                        Text('عدد المعاملات: ${formatCurrency(report.transactionCount)}'),
                         if ((report.recordedBalance - report.calculatedBalance).abs() > 0.01)
                           Text(
                             'الفرق: ${formatCurrency((report.recordedBalance - report.calculatedBalance).abs())} دينار',
@@ -1659,7 +1660,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                 style: TextStyle(color: Colors.red[700], fontSize: 12),
                               ),
                               Text(
-                                'الفرق: ${issue.difference.toStringAsFixed(2)} دينار',
+                                'الفرق: ${NumberFormat('#,##0.##', 'en_US').format(issue.difference)} دينار',
                                 style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12),
                               ),
                               if (issue.details.isNotEmpty) ...[
@@ -1771,7 +1772,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       style: TextStyle(color: Colors.red[700], fontSize: 12),
                     ),
                     Text(
-                      'الفرق: ${issue.difference.toStringAsFixed(0)} دينار',
+                      'الفرق: ${NumberFormat('#,##0', 'en_US').format(issue.difference)} دينار',
                       style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13),
                     ),
                   ],
@@ -2515,11 +2516,11 @@ class TransactionListTile extends StatelessWidget {
                   context: context,
                   builder: (context) {
                     bool isDebt = transaction.amountChanged >= 0;
-                    amountController.text = transaction.amountChanged.abs().toString();
+                    amountController.text = NumberFormat('#,##0.##', 'en_US').format(transaction.amountChanged.abs());
                     double previewBalance = (transaction.newBalanceAfterTransaction ?? 0);
 
                     void computePreview() {
-                      final entered = double.tryParse(amountController.text.trim()) ?? transaction.amountChanged.abs();
+                      final entered = double.tryParse(amountController.text.trim().replaceAll(',', '')) ?? transaction.amountChanged.abs();
                       final signed = isDebt ? entered : -entered;
                       final delta = signed - transaction.amountChanged;
                       previewBalance = (transaction.newBalanceAfterTransaction ?? 0) + delta;
@@ -2570,6 +2571,7 @@ class TransactionListTile extends StatelessWidget {
                                   controller: amountController,
                                   decoration: const InputDecoration(labelText: 'المبلغ'),
                                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                                   onChanged: (_) => setState(() => computePreview()),
                                 ),
                                 const SizedBox(height: 8),
@@ -2617,7 +2619,7 @@ class TransactionListTile extends StatelessWidget {
                 );
                 if (result != null && (result['ok'] == true)) {
                   final bool isDebtSelected = result['isDebt'] as bool? ?? (transaction.amountChanged >= 0);
-                  final entered = double.tryParse(amountController.text.trim()) ?? transaction.amountChanged.abs();
+                  final entered = double.tryParse(amountController.text.trim().replaceAll(',', '')) ?? transaction.amountChanged.abs();
                   final newAmount = (amountController.text.trim().isEmpty)
                       ? transaction.amountChanged
                       : (isDebtSelected ? entered : -entered);
@@ -2792,7 +2794,7 @@ class GroupedTransactionListTile extends StatelessWidget {
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Text(
-                              '${item.transactionCount} تعديل',
+                              '${_formatCurrency(item.transactionCount)} تعديل',
                               style: TextStyle(fontSize: 10, color: Colors.blue[800]),
                             ),
                           ),
@@ -2964,7 +2966,7 @@ class GroupedTransactionListTile extends StatelessWidget {
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Text(
-                            '${item.transactionCount} معاملة',
+                            '${_formatCurrency(item.transactionCount)} معاملة',
                             style: TextStyle(fontSize: 10, color: isSync ? Colors.blue : color),
                           ),
                         ),
@@ -3113,7 +3115,7 @@ class GroupedTransactionListTile extends StatelessWidget {
                           ],
                         ),
                         Text(
-                          '${item.transactionCount} معاملة',
+                          '${_formatCurrency(item.transactionCount)} معاملة',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],

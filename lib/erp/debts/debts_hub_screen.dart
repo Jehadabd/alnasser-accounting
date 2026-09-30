@@ -79,11 +79,11 @@ class _DebtsHubScreenState extends State<DebtsHubScreen> {
       icon: Icons.account_balance_wallet_outlined,
       actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh))],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
-        StatCard(label: 'ديون العملاء', value: fmtMoney(_receivable), hint: '$_debtors عميل مدين', icon: Icons.people, color: ErpColors.orange),
+        StatCard(label: 'ديون العملاء', value: fmtMoney(_receivable), hint: '${fmtQty(_debtors)} عميل مدين', icon: Icons.people, color: ErpColors.orange),
         StatCard(label: 'المحصّل هذا الشهر', value: fmtMoney(_monthCollected), icon: Icons.savings, color: ErpColors.green),
         StatCard(label: 'استحقاقات متأخرة', value: fmtMoney(_due['overdue'] ?? 0), icon: Icons.warning_amber, color: ErpColors.red,
             onTap: () => _go(const DueItemsScreen())),
-        StatCard(label: 'تجاوزوا السقف', value: '$_over', icon: Icons.block, color: ErpColors.purple,
+        StatCard(label: 'تجاوزوا السقف', value: fmtQty(_over), icon: Icons.block, color: ErpColors.purple,
             onTap: () => _go(const OverLimitScreen())),
       ]),
       body: HubSections(sections: [

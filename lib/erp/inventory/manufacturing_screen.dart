@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import '../../accounting/ledger.dart';
 import '../../accounting/screens/acc_ui.dart';
 import '../erp_common.dart';
+import '../../widgets/formatters.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import '../stock_helpers.dart';
@@ -401,6 +402,7 @@ class _BomModelEditorScreenState extends State<BomModelEditorScreen> {
                             initialValue: fmtQty(c.qty),
                             textAlign: TextAlign.center,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                             decoration: InputDecoration(
                                 isDense: true, labelText: 'الكمية (${c.product.baseUnitName})', border: const OutlineInputBorder()),
                             onChanged: (v) => setState(() => c.qty = parseMoney(v) ?? 0),
@@ -450,6 +452,7 @@ class _BomModelEditorScreenState extends State<BomModelEditorScreen> {
                     child: TextFormField(
                       initialValue: _exps[i].amount == 0 ? '' : fmtMoney(_exps[i].amount),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                       decoration: const InputDecoration(isDense: true, labelText: 'المبلغ', border: OutlineInputBorder()),
                       onChanged: (v) => setState(() => _exps[i].amount = parseMoney(v) ?? 0),
                     ),

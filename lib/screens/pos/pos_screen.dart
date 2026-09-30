@@ -6,6 +6,7 @@ import '../../widgets/camera_barcode_scanner_dialog.dart';
 import 'widgets/categories_sidebar.dart';
 import 'widgets/products_grid.dart';
 import 'widgets/cart_panel.dart';
+import 'pos_receipts_screen.dart';
 import '../../models/app_settings.dart';
 import '../../services/settings_manager.dart';
 import '../../widgets/app_side_nav.dart';
@@ -122,6 +123,14 @@ class _POSScreenState extends State<POSScreen> {
           elevation: 0,
           foregroundColor: Colors.black,
           actions: [
+            // 🧾 الإيصالات: بحث، تفاصيل، إعادة طباعة، مرتجع
+            TextButton.icon(
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const PosReceiptsScreen()))
+                  .then((_) => _focusNode.requestFocus()),
+              icon: const Icon(Icons.receipt_long, color: Color(0xFF4F46E5)),
+              label: const Text('الإيصالات', style: TextStyle(color: Color(0xFF4F46E5), fontWeight: FontWeight.bold)),
+            ),
             IconButton(
               tooltip: 'مسح باركود للكاميرا',
               icon: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF4F46E5)),

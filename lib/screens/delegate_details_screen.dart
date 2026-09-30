@@ -28,18 +28,34 @@ class _DelegateDetailsScreenState extends State<DelegateDetailsScreen> {
   }
 
   Future<void> _loadData() async {
+    final delegateId = _delegate.id;
+    if (delegateId == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
     setState(() => _isLoading = true);
     final purchaseService = context.read<PurchaseService>();
-    
-    // We need a method to get invoices by delegateId. 
-    final invoices = await purchaseService.getInvoicesForDelegate(_delegate.id!);
-    
-    if (mounted) {
+    try {
+      final invoices = await purchaseService.getInvoicesForDelegate(delegateId);
+      if (!mounted) return;
       setState(() {
         _invoices = invoices;
         _isLoading = false;
       });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذّر تحميل فواتير المندوب: $e'), backgroundColor: Colors.red),
+      );
     }
+  }
+
+  static final intl.NumberFormat _moneyFmt = intl.NumberFormat('#,##0.##', 'en_US');
+
+  String _initial(String name) {
+    final t = name.trim();
+    return t.isEmpty ? '?' : t[0].toUpperCase();
   }
 
   @override
@@ -80,7 +96,7 @@ class _DelegateDetailsScreenState extends State<DelegateDetailsScreen> {
                           radius: 40,
                           backgroundColor: Colors.white,
                           child: Text(
-                            _delegate.name[0].toUpperCase(),
+                            _initial(_delegate.name),
                             style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Color(0xFF2563EB)),
                           ),
                         ),
@@ -89,7 +105,7 @@ class _DelegateDetailsScreenState extends State<DelegateDetailsScreen> {
                           _delegate.name,
                           style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
                         ),
-                        if (_delegate.phone != null) ...[
+                        if ((_delegate.phone ?? '').trim().isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -146,15 +162,22 @@ class _DelegateDetailsScreenState extends State<DelegateDetailsScreen> {
                           leading: const Icon(Icons.receipt, color: Colors.blue),
                           title: Text('فاتورة #${invoice.invoiceNumber}'),
                           subtitle: Text(intl.DateFormat('yyyy-MM-dd').format(invoice.date)),
-                          trailing: Text('${invoice.totalAmount} ${invoice.currency}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                          onTap: () {
-                             Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => InvoiceDetailsSplitScreen(invoiceId: invoice.id!),
-                              ),
-                            );
-                          },
+                          // بفواصل الآلاف ورمز العملة (كان يظهر 150000.0 IQD)
+                          trailing: Text(
+                            '${_moneyFmt.format(invoice.totalAmount)} ${invoice.currency == 'USD' ? '\$' : 'د.ع'}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          onTap: invoice.id == null
+                              ? null
+                              : () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => InvoiceDetailsSplitScreen(invoiceId: invoice.id!),
+                                    ),
+                                  );
+                                  if (mounted) _loadData();
+                                },
                         );
                       },
                     ),

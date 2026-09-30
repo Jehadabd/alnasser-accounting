@@ -10,6 +10,7 @@ import '../../services/auth_service.dart';
 import '../ledger.dart';
 import '../vouchers_service.dart';
 import 'acc_ui.dart';
+import '../../widgets/formatters.dart';
 
 class VouchersScreen extends StatefulWidget {
   const VouchersScreen({super.key, this.initialNew = false});
@@ -324,6 +325,7 @@ class _VoucherFormScreenState extends State<VoucherFormScreen> {
               controller: _amount,
               autofocus: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
               decoration: const InputDecoration(
                   labelText: 'المبلغ (دينار)', filled: true, fillColor: Colors.white),

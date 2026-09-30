@@ -220,7 +220,7 @@ class _PersonDetailsScreenState extends State<PersonDetailsScreen> {
                 child: _buildHeaderInfo(
                   icon: Icons.receipt_long,
                   title: 'الفواتير',
-                  value: '${_calculateTotalInvoices()}',
+                  value: _fmt(_calculateTotalInvoices()),
                   color: const Color(0xFFFF9800),
                 ),
               ),
@@ -229,7 +229,7 @@ class _PersonDetailsScreenState extends State<PersonDetailsScreen> {
                 child: _buildHeaderInfo(
                   icon: Icons.account_balance_wallet,
                   title: 'المعاملات',
-                  value: '${_calculateTotalTransactions()}',
+                  value: _fmt(_calculateTotalTransactions()),
                   color: const Color(0xFF9C27B0),
                 ),
               ),

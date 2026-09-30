@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'invoice_entry_layout_screen.dart'; // 🧩
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:flutter/services.dart';
@@ -36,7 +37,6 @@ import '../services/license_service.dart';
 import '../accounting/screens/acc_ui.dart' show requirePermission;
 import '../models/app_user.dart' show AppPermissions;
 import '../erp/erp_settings_screen.dart';
-import '../services/demo_mode.dart';
 import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 
 import '../models/account_statement_item.dart';
@@ -746,23 +746,92 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     );
   }
 
-  /// 🧪 تبديل الوضع التجريبي: يُحفظ للإقلاع القادم ثم يُغلق البرنامج (القاعدة المفتوحة لا تتغير أثناء العمل).
-  Future<void> _switchDemo({required bool enable, required String message, bool regenerate = false}) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('الوضع التجريبي'),
-        content: Text(message),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('متابعة وإغلاق البرنامج')),
-        ],
-      ),
+  // 🧭 الإعدادات مقسّمة إلى أقسام (قائمة جانبية + محتوى) بدل صفحة واحدة طويلة.
+  //    🧪 الوضع التجريبي انتقل إلى شاشة الدخول.
+  int _settingsSection = 0;
+
+  Widget _buildSectionedSettings(List<_SettingsSection> sections) {
+    final idx = _settingsSection.clamp(0, sections.length - 1);
+    final current = sections[idx];
+    final wide = MediaQuery.of(context).size.width >= 900;
+
+    final content = ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Row(children: [
+          Icon(current.icon, color: primaryColor, size: 28),
+          const SizedBox(width: 10),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(current.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            Text(current.description, style: const TextStyle(color: Colors.black54)),
+          ]),
+        ]),
+        const SizedBox(height: 16),
+        ...current.cards,
+      ],
     );
-    if (ok != true) return;
-    await DemoMode.setForNextLaunch(enable);
-    if (regenerate) await DemoMode.requestRegenerate();
-    exit(0);
+
+    if (!wide) {
+      return Column(children: [
+        SizedBox(
+          height: 56,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            children: [
+              for (var i = 0; i < sections.length; i++)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 8),
+                  child: ChoiceChip(
+                    avatar: Icon(sections[i].icon, size: 18),
+                    label: Text(sections[i].title),
+                    selected: i == idx,
+                    onSelected: (_) => setState(() => _settingsSection = i),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(child: content),
+      ]);
+    }
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        width: 270,
+        color: Colors.white,
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+          children: [
+            for (var i = 0; i < sections.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Material(
+                  color: i == idx ? primaryColor.withOpacity(0.10) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                  child: ListTile(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    leading: Icon(sections[i].icon, color: i == idx ? primaryColor : Colors.black54),
+                    title: Text(sections[i].title,
+                        style: TextStyle(fontWeight: i == idx ? FontWeight.bold : FontWeight.w500)),
+                    subtitle: Text(sections[i].description,
+                        maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5)),
+                    onTap: () => setState(() => _settingsSection = i),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      const VerticalDivider(width: 1),
+      Expanded(
+        child: Align(
+          alignment: AlignmentDirectional.topStart,
+          child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 980), child: content),
+        ),
+      ),
+    ]);
   }
 
   Widget _buildSettingsCard({
@@ -1310,9 +1379,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           if (AppSideNav.shouldShow(context, _appSettings))
             const AppSideNav(currentRoute: '/general_settings'),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(16.0),
-              children: [
+            child: _buildSectionedSettings(<_SettingsSection>[
+        _SettingsSection(
+          'الحساب والموظفون',
+          Icons.verified_user_outlined,
+          'الترخيص ونقل الجهاز، الموظفون والصلاحيات',
+          [
           // 🔐 قسم إدارة الترخيص ونقل الجهاز
           _buildSettingsCard(
             icon: Icons.vpn_key_rounded,
@@ -1340,148 +1412,188 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               ],
             ),
           ),
-
-          // 📦 قسم استعادة النسخة الاحتياطية لقاعدة البيانات
-          _buildSettingsCard(
-            icon: Icons.settings_backup_restore_rounded,
-            iconColor: Colors.blue.shade700,
-            title: 'استعادة النسخة الاحتياطية لقاعدة البيانات',
-            child: Column(
-              children: [
-                _buildActionTile(
-                  icon: Icons.folder_open_rounded,
-                  iconColor: Colors.blue.shade700,
-                  title: 'استعادة قاعدة البيانات من ملف (.db)',
-                  subtitle: 'استعادة الفواتير والديون والبيانات بعد تغيير الجهاز أو من ملف محفوض (مثل تيليجرام)',
-                  onTap: _restoreDatabaseFromFile,
-                ),
-              ],
-            ),
-          ),
-
-          // 🧭 قسم إعدادات الواجهة والشريط الجانبي
-          _buildSettingsCard(
-            icon: Icons.view_sidebar_rounded,
-            iconColor: const Color(0xFF1E1E2E),
-            title: 'شريط التنقل الجانبي',
-            child: Column(
-              children: [
-                SwitchListTile(
-                  title: const Text('إظهار شريط التنقل الجانبي دائماً', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                  subtitle: const Text('يظهر تلقائياً على الشاشات الكبيرة (تابلت/ديسكتوب). يمكنك تفعيله هنا للهواتف أيضاً.', style: TextStyle(fontSize: 12)),
-                  value: _showSideNav,
-                  activeColor: const Color(0xFF1E1E2E),
-                  onChanged: (val) {
-                    setState(() => _showSideNav = val);
-                    _saveSettings();
-                  },
-                ),
-              ],
-            ),
-          ),
-
           // 👤 قسم إدارة المستخدمين
           _buildSettingsCard(
             icon: Icons.admin_panel_settings,
             iconColor: Colors.deepPurple,
-            title: 'إدارة المستخدمين والصلاحيات',
+            title: 'الموظفون والصلاحيات',
             child: _buildActionTile(
               icon: Icons.people,
               iconColor: Colors.deepPurple,
-              title: 'المستخدمين والمحاسبين',
-              subtitle: 'إضافة Admin، إضافة محاسبين، تحديد الصلاحيات',
+              title: 'إدارة الموظفين',
+              subtitle: 'المدير هو حساب الترخيص. أضف موظفاً، حدّد صلاحياته، غيّر كلمة سره',
               onTap: () {
                 Navigator.pushNamed(context, '/user_management');
               },
             ),
           ),
-
-          // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
+          ],
+        ),
+        _SettingsSection(
+          'الفاتورة والطباعة',
+          Icons.receipt_long_outlined,
+          'تصميم الفاتورة، إعدادات الفاتورة، الطابعات',
+          [
+          // 🧾 تصميم الفاتورة
           _buildSettingsCard(
-            icon: Icons.tune,
+            icon: Icons.receipt_long,
             iconColor: Colors.indigo,
-            title: 'الشبكة والطباعة والسجل',
-            child: Column(
-              children: [
-                _buildActionTile(
-                  icon: Icons.lan,
-                  iconColor: Colors.blue,
-                  title: 'الشبكة المحلية',
-                  subtitle: 'جهاز مستقل، حاسبة السيرفر، أو طرفية',
-                  onTap: () {
-                    if (requirePermission(context, AppPermissions.networkSettings)) {
-                      Navigator.pushNamed(context, '/network_settings');
-                    }
-                  },
+            title: 'تصميم الفاتورة',
+            child: Column(children: [
+              _buildActionTile(
+                icon: Icons.design_services,
+                iconColor: Colors.indigo,
+                title: 'تخصيص الفاتورة المطبوعة',
+                subtitle: 'أعمدة الجدول (ومنها السعر قبل الخصم والخصم)، اللوجو، اسم الشركة، العنوان، وأرقام الهاتف',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const InvoiceDesignScreen()),
+                  ).then((_) => _loadSettings());
+                },
+              ),
+              const Divider(height: 1),
+              _buildActionTile(
+                icon: Icons.view_week_outlined,
+                iconColor: Colors.teal,
+                title: 'أعمدة شاشة إنشاء الفاتورة',
+                subtitle: 'اختر الأعمدة الظاهرة أثناء إدخال الفاتورة وعرض كل عمود (مع معاينة)',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const InvoiceEntryLayoutScreen()),
                 ),
-                _buildActionTile(
-                  icon: Icons.local_printshop_outlined,
-                  iconColor: Colors.teal,
-                  title: 'إعدادات الطباعة والمخزون',
-                  subtitle: 'A4 أو 80mm، ملصقات الباركود، باركود الميزان، حسابات الجرد',
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ErpSettingsScreen())),
-                ),
-                _buildActionTile(
-                  icon: Icons.manage_search,
-                  iconColor: Colors.purple,
-                  title: 'سجل حركات النظام',
-                  subtitle: 'من فعل ماذا ومتى',
-                  onTap: () {
-                    if (requirePermission(context, AppPermissions.manageUsers)) {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityLogScreen()));
-                    }
-                  },
-                ),
-              ],
-            ),
+              ),
+            ]),
           ),
-
-          // 🧪 الوضع التجريبي: قاعدة منفصلة ببيانات سنة وهمية
+          // 📝 إعدادات الفاتورة
           _buildSettingsCard(
-            icon: Icons.science_outlined,
-            iconColor: Colors.orange,
-            title: DemoMode.isOn ? 'الوضع التجريبي (مفعّل الآن)' : 'الوضع التجريبي',
+            icon: Icons.receipt_long,
+            iconColor: Colors.indigo,
+            title: 'إعدادات الفاتورة',
             child: Column(
               children: [
-                if (!DemoMode.isOn)
-                  _buildActionTile(
-                    icon: Icons.play_circle_outline,
-                    iconColor: Colors.orange,
-                    title: 'فتح الوضع التجريبي',
-                    subtitle: 'قاعدة منفصلة فيها سنة من البيانات الوهمية للتجربة والتدريب. قاعدتك الحقيقية لا تُلمس.',
-                    onTap: () => _switchDemo(
-                      enable: true,
-                      message: 'سيُغلق البرنامج الآن. افتحه من جديد لتدخل الوضع التجريبي.\n'
-                          'في أول فتح تُنشأ البيانات الوهمية (بضع دقائق). المزامنة والشبكة ورفع البيانات تتوقف في هذا الوضع.',
-                    ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('التمرير التلقائي مع الفاتورة'),
+                  subtitle: Text(
+                    'عند إضافة عنصر جديد، تتمرر الشاشة تلقائياً لإظهار الصف الجديد والمجاميع',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
-                if (DemoMode.isOn) ...[
-                  _buildActionTile(
-                    icon: Icons.exit_to_app,
-                    iconColor: Colors.green,
-                    title: 'العودة إلى البيانات الحقيقية',
-                    subtitle: 'يُغلق البرنامج، وعند فتحه تعود إلى قاعدتك الحقيقية كما تركتها.',
-                    onTap: () => _switchDemo(
-                      enable: false,
-                      message: 'سيُغلق البرنامج الآن. افتحه من جديد لتعود إلى بياناتك الحقيقية.',
-                    ),
+                  value: _autoScrollInvoice,
+                  activeColor: primaryColor,
+                  onChanged: (value) {
+                    setState(() {
+                      _autoScrollInvoice = value;
+                    });
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('السماح ببيع المنتجات النافذة'),
+                  subtitle: Text(
+                    'عند تفعيل هذا الخيار، يمكنك بيع المنتجات حتى لو كان رصيدها صفراً. عند تعطيله، سيمنع النظام البيع إذا لم تتوفر كمية كافية.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
-                  _buildActionTile(
-                    icon: Icons.restart_alt,
-                    iconColor: Colors.red,
-                    title: 'إعادة البيانات التجريبية من الصفر',
-                    subtitle: 'تُحذف القاعدة التجريبية فقط وتُولَّد بيانات جديدة في الفتح القادم.',
-                    onTap: () => _switchDemo(
-                      enable: true,
-                      regenerate: true,
-                      message: 'سيُغلق البرنامج الآن. عند فتحه تُحذف البيانات التجريبية وتُنشأ من جديد.',
-                    ),
+                  value: _allowNegativeStock,
+                  activeColor: Colors.orange,
+                  onChanged: (value) {
+                    setState(() {
+                      _allowNegativeStock = value;
+                    });
+                  },
+                ),
+                
+                const SizedBox(height: 16),
+                const Divider(),
+                
+                // 📱 رقم الجهاز للفواتير
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.devices, color: Colors.indigo),
+                      const SizedBox(width: 16),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('رقم هذا الجهاز للفواتير', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            Text(
+                              'يُستخدم لتمييز فواتير هذا الجهاز عن الأجهزة الأخرى في الترقيم',
+                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(
+                        width: 80,
+                        child: TextFormField(
+                          controller: _invoiceDeviceController,
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          onChanged: (val) {
+                            // Automatically parsed on save
+                          },
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
+                
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 8),
+                
+                // 💰 طريقة حساب التكلفة
+                const Text(
+                  'طريقة حساب سعر التكلفة',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+                const SizedBox(height: 8),
+                
+                // الخيار الأول: آخر سعر شراء
+                RadioListTile<String>(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('آخر سعر شراء', style: TextStyle(fontWeight: FontWeight.w500)),
+                  subtitle: Text(
+                    'يتم تحديث سعر التكلفة مباشرة بآخر سعر شراء من المورد. أبسط وأوضح.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  value: 'last_purchase',
+                  groupValue: _costingMethod,
+                  activeColor: Colors.green,
+                  onChanged: (value) {
+                    setState(() {
+                      _costingMethod = value!;
+                    });
+                  },
+                ),
+                
+                // الخيار الثاني: المتوسط المرجح
+                RadioListTile<String>(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('المتوسط المرجح (AVCO)', style: TextStyle(fontWeight: FontWeight.w500)),
+                  subtitle: Text(
+                    'يحسب متوسط التكلفة بناءً على المخزون الحالي والجديد. مفيد لتنعيم تقلبات الأسعار.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  value: 'avco',
+                  groupValue: _costingMethod,
+                  activeColor: Colors.blue,
+                  onChanged: (value) {
+                    setState(() {
+                      _costingMethod = value!;
+                    });
+                  },
+                ),
               ],
             ),
           ),
-
           // 🖨️ إعدادات الطابعات
           _buildSettingsCard(
             icon: Icons.print,
@@ -1693,313 +1805,13 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               ],
             ),
           ),
-
-          // �🔔 قسم التنبيهات
-          _buildSettingsCard(
-            icon: Icons.notifications_active,
-            iconColor: Colors.orange,
-            title: 'إعدادات التنبيهات',
-            child: _buildActionTile(
-              icon: Icons.notifications,
-              iconColor: Colors.orange,
-              title: 'تنبيهات المخزون والركود',
-              subtitle: 'تحديد متى تظهر تنبيهات نقص المخزون والمواد الراكدة',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const AlertSettingsScreen()),
-                ).then((_) => _loadSettings());
-              },
-            ),
-          ),
-          
-          // 🧾 تصميم الفاتورة
-          _buildSettingsCard(
-            icon: Icons.receipt_long,
-            iconColor: Colors.indigo,
-            title: 'تصميم الفاتورة',
-            child: _buildActionTile(
-              icon: Icons.design_services,
-              iconColor: Colors.indigo,
-              title: 'تخصيص الفاتورة',
-              subtitle: 'تعديل أعمدة الجدول، اللوجو، اسم الشركة، العنوان، وأرقام الهاتف',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const InvoiceDesignScreen()),
-                ).then((_) => _loadSettings());
-              },
-            ),
-          ),
-
-          // 📱 إعدادات اتجاه الشاشة (الأندرويد والجوال)
-          if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
-            _buildSettingsCard(
-              icon: Icons.screen_rotation,
-              iconColor: Colors.purple,
-              title: 'اتجاه الشاشة (الجوال والتابلت)',
-              child: Column(
-                children: [
-                  RadioListTile<String>(
-                    title: const Text('أفقي ثابت (Landscape)'),
-                    subtitle: const Text('تثبيت الشاشة بالوضع الأفقي فقط وتفادي التدوير التلقائي'),
-                    value: 'landscape',
-                    groupValue: _screenOrientation,
-                    onChanged: (val) => _changeOrientation(val!),
-                  ),
-                  const Divider(height: 1),
-                  RadioListTile<String>(
-                    title: const Text('عرض تلقائي (Auto-Rotate)'),
-                    subtitle: const Text('السماح بالتدوير التلقائي حسب وضع الجوال ومستشعر الدوران'),
-                    value: 'auto',
-                    groupValue: _screenOrientation,
-                    onChanged: (val) => _changeOrientation(val!),
-                  ),
-                ],
-              ),
-            ),
-
-          // 🔥 إعدادات مزامنة Firebase (تظهر فقط إذا كانت المزامنة مشمولة في الترخيص)
-          if (_isSyncAllowed)
-            _buildSettingsCard(
-              icon: Icons.sync,
-              iconColor: Colors.orange,
-              title: 'مزامنة Firebase',
-              child: Column(
-                children: [
-                  _buildActionTile(
-                    icon: Icons.cloud_sync,
-                    iconColor: Colors.orange,
-                    title: 'إعدادات المزامنة بين الأجهزة',
-                    subtitle: 'إدارة أجهزة نقاط البيع، تتبع حالة المزامنة، ومطابقة البيانات',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const FirebaseSyncSettingsScreen()),
-                      ).then((_) => _loadSettings());
-                    },
-                  ),
-                  const Divider(height: 1),
-                  _buildActionTile(
-                    icon: Icons.admin_panel_settings,
-                    iconColor: Colors.deepOrange,
-                    title: 'إعداد ربط Firebase مخصص',
-                    subtitle: 'تغيير مشروع الفايربيس وربط قاعدة بيانات جديدة (للمسؤولين فقط)',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const FirebaseCustomSetupScreen()),
-                      ).then((_) => _loadSettings());
-                    },
-                  ),
-                  const Divider(height: 1),
-                  _buildActionTile(
-                    icon: Icons.language_rounded,
-                    iconColor: const Color(0xFF0288D1),
-                    title: 'استضافة ورفع نسخة المتصفح (Web App)',
-                    subtitle: 'معالج مصور لرفع متجرك مجاناً وافتتاحه من أي جوال أو جهاز عبر رابط خاص بك',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-
-          // 📤 إعدادات رفع قاعدة البيانات إلى تيليغرام
-          _buildSettingsCard(
-            icon: Icons.telegram,
-            iconColor: Colors.blue,
-            title: 'النسخ الاحتياطي - تيليغرام',
-            child: _buildActionTile(
-              icon: Icons.cloud_upload,
-              iconColor: Colors.blue,
-              title: 'إعدادات رفع قاعدة البيانات',
-              subtitle: 'ربط البوت والقناة لرفع النسخ الاحتياطية والتقارير',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const TelegramSettingsScreen()),
-                ).then((_) => _loadSettings());
-              },
-            ),
-          ),
-
-          // 💬 إعدادات Discord Webhook
-          _buildSettingsCard(
-            icon: Icons.chat_bubble,
-            iconColor: const Color(0xFF5865F2),
-            title: 'النسخ الاحتياطي - Discord',
-            child: _buildActionTile(
-              icon: Icons.webhook,
-              iconColor: const Color(0xFF5865F2),
-              title: 'إعدادات Discord Webhook',
-              subtitle: 'إرسال النسخ الاحتياطية إلى Discord (بديل سهل لـ Telegram)',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const DiscordSettingsScreen()),
-                ).then((_) => _loadSettings());
-              },
-            ),
-          ),
-
-          // ☁️ النسخ الاحتياطي السحابي - Dropbox
-          _buildSettingsCard(
-            icon: Icons.cloud,
-            iconColor: Colors.lightBlue,
-            title: 'النسخ الاحتياطي السحابي - Dropbox',
-            child: _buildActionTile(
-              icon: Icons.cloud_upload,
-              iconColor: Colors.lightBlue,
-              title: 'النسخ الاحتياطي إلى Dropbox',
-              subtitle: 'نسخ احتياطي تلقائي مع تدوير النسخ (حذف الأقدم تلقائياً)',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const DropboxBackupScreen()),
-                );
-              },
-            ),
-          ),
-
-          // 📝 إعدادات الفاتورة
-          _buildSettingsCard(
-            icon: Icons.receipt_long,
-            iconColor: Colors.indigo,
-            title: 'إعدادات الفاتورة',
-            child: Column(
-              children: [
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('التمرير التلقائي مع الفاتورة'),
-                  subtitle: Text(
-                    'عند إضافة عنصر جديد، تتمرر الشاشة تلقائياً لإظهار الصف الجديد والمجاميع',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  value: _autoScrollInvoice,
-                  activeColor: primaryColor,
-                  onChanged: (value) {
-                    setState(() {
-                      _autoScrollInvoice = value;
-                    });
-                  },
-                ),
-                const Divider(),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('السماح ببيع المنتجات النافذة'),
-                  subtitle: Text(
-                    'عند تفعيل هذا الخيار، يمكنك بيع المنتجات حتى لو كان رصيدها صفراً. عند تعطيله، سيمنع النظام البيع إذا لم تتوفر كمية كافية.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  value: _allowNegativeStock,
-                  activeColor: Colors.orange,
-                  onChanged: (value) {
-                    setState(() {
-                      _allowNegativeStock = value;
-                    });
-                  },
-                ),
-                
-                const SizedBox(height: 16),
-                const Divider(),
-                
-                // 📱 رقم الجهاز للفواتير
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.devices, color: Colors.indigo),
-                      const SizedBox(width: 16),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('رقم هذا الجهاز للفواتير', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                            Text(
-                              'يُستخدم لتمييز فواتير هذا الجهاز عن الأجهزة الأخرى في الترقيم',
-                              style: TextStyle(fontSize: 12, color: Colors.grey),
-                            ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(
-                        width: 80,
-                        child: TextFormField(
-                          controller: _invoiceDeviceController,
-                          keyboardType: TextInputType.number,
-                          textAlign: TextAlign.center,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                          ),
-                          onChanged: (val) {
-                            // Automatically parsed on save
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 16),
-                const Divider(),
-                const SizedBox(height: 8),
-                
-                // 💰 طريقة حساب التكلفة
-                const Text(
-                  'طريقة حساب سعر التكلفة',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                ),
-                const SizedBox(height: 8),
-                
-                // الخيار الأول: آخر سعر شراء
-                RadioListTile<String>(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('آخر سعر شراء', style: TextStyle(fontWeight: FontWeight.w500)),
-                  subtitle: Text(
-                    'يتم تحديث سعر التكلفة مباشرة بآخر سعر شراء من المورد. أبسط وأوضح.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  value: 'last_purchase',
-                  groupValue: _costingMethod,
-                  activeColor: Colors.green,
-                  onChanged: (value) {
-                    setState(() {
-                      _costingMethod = value!;
-                    });
-                  },
-                ),
-                
-                // الخيار الثاني: المتوسط المرجح
-                RadioListTile<String>(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('المتوسط المرجح (AVCO)', style: TextStyle(fontWeight: FontWeight.w500)),
-                  subtitle: Text(
-                    'يحسب متوسط التكلفة بناءً على المخزون الحالي والجديد. مفيد لتنعيم تقلبات الأسعار.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  value: 'avco',
-                  groupValue: _costingMethod,
-                  activeColor: Colors.blue,
-                  onChanged: (value) {
-                    setState(() {
-                      _costingMethod = value!;
-                    });
-                  },
-                ),
-              ],
-            ),
-          ),
-          
-
-          
-
+          ],
+        ),
+        _SettingsSection(
+          'الأسعار والأرباح',
+          Icons.trending_up,
+          'حساب الأرباح، التسعير، تنبيهات المخزون',
+          [
           _buildSettingsCard(
             icon: Icons.monetization_on,
             iconColor: Colors.green,
@@ -2064,9 +1876,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               ],
             ),
           ),
-          
-
-
           // 📈 إعدادات التسعير
           _buildSettingsCard(
             icon: Icons.auto_graph,
@@ -2139,8 +1948,251 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               ],
             ),
           ),
+          // �🔔 قسم التنبيهات
+          _buildSettingsCard(
+            icon: Icons.notifications_active,
+            iconColor: Colors.orange,
+            title: 'إعدادات التنبيهات',
+            child: _buildActionTile(
+              icon: Icons.notifications,
+              iconColor: Colors.orange,
+              title: 'تنبيهات المخزون والركود',
+              subtitle: 'تحديد متى تظهر تنبيهات نقص المخزون والمواد الراكدة',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const AlertSettingsScreen()),
+                ).then((_) => _loadSettings());
+              },
+            ),
+          ),
+          ],
+        ),
+        _SettingsSection(
+          'النسخ الاحتياطي والمزامنة',
+          Icons.cloud_sync_outlined,
+          'استعادة القاعدة، تيليغرام، ديسكورد، دروب بوكس، المزامنة',
+          [
+          // 📦 قسم استعادة النسخة الاحتياطية لقاعدة البيانات
+          _buildSettingsCard(
+            icon: Icons.settings_backup_restore_rounded,
+            iconColor: Colors.blue.shade700,
+            title: 'استعادة النسخة الاحتياطية لقاعدة البيانات',
+            child: Column(
+              children: [
+                _buildActionTile(
+                  icon: Icons.folder_open_rounded,
+                  iconColor: Colors.blue.shade700,
+                  title: 'استعادة قاعدة البيانات من ملف (.db)',
+                  subtitle: 'استعادة الفواتير والديون والبيانات بعد تغيير الجهاز أو من ملف محفوض (مثل تيليجرام)',
+                  onTap: _restoreDatabaseFromFile,
+                ),
+              ],
+            ),
+          ),
+          // 📤 إعدادات رفع قاعدة البيانات إلى تيليغرام
+          _buildSettingsCard(
+            icon: Icons.telegram,
+            iconColor: Colors.blue,
+            title: 'النسخ الاحتياطي - تيليغرام',
+            child: _buildActionTile(
+              icon: Icons.cloud_upload,
+              iconColor: Colors.blue,
+              title: 'إعدادات رفع قاعدة البيانات',
+              subtitle: 'ربط البوت والقناة لرفع النسخ الاحتياطية والتقارير',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const TelegramSettingsScreen()),
+                ).then((_) => _loadSettings());
+              },
+            ),
+          ),
+          // 💬 إعدادات Discord Webhook
+          _buildSettingsCard(
+            icon: Icons.chat_bubble,
+            iconColor: const Color(0xFF5865F2),
+            title: 'النسخ الاحتياطي - Discord',
+            child: _buildActionTile(
+              icon: Icons.webhook,
+              iconColor: const Color(0xFF5865F2),
+              title: 'إعدادات Discord Webhook',
+              subtitle: 'إرسال النسخ الاحتياطية إلى Discord (بديل سهل لـ Telegram)',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const DiscordSettingsScreen()),
+                ).then((_) => _loadSettings());
+              },
+            ),
+          ),
+          // ☁️ النسخ الاحتياطي السحابي - Dropbox
+          _buildSettingsCard(
+            icon: Icons.cloud,
+            iconColor: Colors.lightBlue,
+            title: 'النسخ الاحتياطي السحابي - Dropbox',
+            child: _buildActionTile(
+              icon: Icons.cloud_upload,
+              iconColor: Colors.lightBlue,
+              title: 'النسخ الاحتياطي إلى Dropbox',
+              subtitle: 'نسخ احتياطي تلقائي مع تدوير النسخ (حذف الأقدم تلقائياً)',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const DropboxBackupScreen()),
+                );
+              },
+            ),
+          ),
+          // 🔥 إعدادات مزامنة Firebase (تظهر فقط إذا كانت المزامنة مشمولة في الترخيص)
+          if (_isSyncAllowed)
+            _buildSettingsCard(
+              icon: Icons.sync,
+              iconColor: Colors.orange,
+              title: 'مزامنة Firebase',
+              child: Column(
+                children: [
+                  _buildActionTile(
+                    icon: Icons.cloud_sync,
+                    iconColor: Colors.orange,
+                    title: 'إعدادات المزامنة بين الأجهزة',
+                    subtitle: 'إدارة أجهزة نقاط البيع، تتبع حالة المزامنة، ومطابقة البيانات',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const FirebaseSyncSettingsScreen()),
+                      ).then((_) => _loadSettings());
+                    },
+                  ),
+                  const Divider(height: 1),
+                  _buildActionTile(
+                    icon: Icons.admin_panel_settings,
+                    iconColor: Colors.deepOrange,
+                    title: 'إعداد ربط Firebase مخصص',
+                    subtitle: 'تغيير مشروع الفايربيس وربط قاعدة بيانات جديدة (للمسؤولين فقط)',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const FirebaseCustomSetupScreen()),
+                      ).then((_) => _loadSettings());
+                    },
+                  ),
+                  const Divider(height: 1),
+                  _buildActionTile(
+                    icon: Icons.language_rounded,
+                    iconColor: const Color(0xFF0288D1),
+                    title: 'استضافة ورفع نسخة المتصفح (Web App)',
+                    subtitle: 'معالج مصور لرفع متجرك مجاناً وافتتاحه من أي جوال أو جهاز عبر رابط خاص بك',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
 
-
+          ],
+        ),
+        _SettingsSection(
+          'الواجهة',
+          Icons.dashboard_customize_outlined,
+          'الشريط الجانبي واتجاه الشاشة',
+          [
+          // 🧭 قسم إعدادات الواجهة والشريط الجانبي
+          _buildSettingsCard(
+            icon: Icons.view_sidebar_rounded,
+            iconColor: const Color(0xFF1E1E2E),
+            title: 'شريط التنقل الجانبي',
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('إظهار شريط التنقل الجانبي دائماً', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  subtitle: const Text('يظهر تلقائياً على الشاشات الكبيرة (تابلت/ديسكتوب). يمكنك تفعيله هنا للهواتف أيضاً.', style: TextStyle(fontSize: 12)),
+                  value: _showSideNav,
+                  activeColor: const Color(0xFF1E1E2E),
+                  onChanged: (val) {
+                    setState(() => _showSideNav = val);
+                    _saveSettings();
+                  },
+                ),
+              ],
+            ),
+          ),
+          // 📱 إعدادات اتجاه الشاشة (الأندرويد والجوال)
+          if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
+            _buildSettingsCard(
+              icon: Icons.screen_rotation,
+              iconColor: Colors.purple,
+              title: 'اتجاه الشاشة (الجوال والتابلت)',
+              child: Column(
+                children: [
+                  RadioListTile<String>(
+                    title: const Text('أفقي ثابت (Landscape)'),
+                    subtitle: const Text('تثبيت الشاشة بالوضع الأفقي فقط وتفادي التدوير التلقائي'),
+                    value: 'landscape',
+                    groupValue: _screenOrientation,
+                    onChanged: (val) => _changeOrientation(val!),
+                  ),
+                  const Divider(height: 1),
+                  RadioListTile<String>(
+                    title: const Text('عرض تلقائي (Auto-Rotate)'),
+                    subtitle: const Text('السماح بالتدوير التلقائي حسب وضع الجوال ومستشعر الدوران'),
+                    value: 'auto',
+                    groupValue: _screenOrientation,
+                    onChanged: (val) => _changeOrientation(val!),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        _SettingsSection(
+          'النظام والأدوات',
+          Icons.build_circle_outlined,
+          'الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
+          [
+          // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
+          _buildSettingsCard(
+            icon: Icons.tune,
+            iconColor: Colors.indigo,
+            title: 'الشبكة والطباعة والسجل',
+            child: Column(
+              children: [
+                _buildActionTile(
+                  icon: Icons.lan,
+                  iconColor: Colors.blue,
+                  title: 'الشبكة المحلية',
+                  subtitle: 'جهاز مستقل، حاسبة السيرفر، أو طرفية',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.networkSettings)) {
+                      Navigator.pushNamed(context, '/network_settings');
+                    }
+                  },
+                ),
+                _buildActionTile(
+                  icon: Icons.local_printshop_outlined,
+                  iconColor: Colors.teal,
+                  title: 'إعدادات الطباعة والمخزون',
+                  subtitle: 'A4 أو 80mm، ملصقات الباركود، باركود الميزان، حسابات الجرد',
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ErpSettingsScreen())),
+                ),
+                _buildActionTile(
+                  icon: Icons.manage_search,
+                  iconColor: Colors.purple,
+                  title: 'سجل حركات النظام',
+                  subtitle: 'من فعل ماذا ومتى',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.manageUsers)) {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityLogScreen()));
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
           // 🧠 البحث الذكي
           _buildSettingsCard(
             icon: Icons.psychology,
@@ -2174,7 +2226,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               ],
             ),
           ),
-          
           // 🛡️ أدوات الحماية والتدقيق المالي
           _buildSettingsCard(
             icon: Icons.verified_user,
@@ -2209,8 +2260,9 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               ],
             ),
           ),
-        ],
-      ),
+          ],
+        ),
+            ]),
           ),
         ],
       ),
@@ -2617,7 +2669,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                     } else if (r.issues.isNotEmpty) {
                       issueText = r.issues.first;
                     } else if (r.calculatedBalance != r.recordedBalance) {
-                      issueText = 'الرصيد المسجل (${r.recordedBalance.toStringAsFixed(0)}) ≠ المحسوب (${r.calculatedBalance.toStringAsFixed(0)})';
+                      issueText = 'الرصيد المسجل (${NumberFormat('#,##0', 'en').format(r.recordedBalance)}) ≠ المحسوب (${NumberFormat('#,##0', 'en').format(r.calculatedBalance)})';
                     } else {
                       issueText = 'مشكلة في البيانات';
                     }
@@ -2634,7 +2686,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                             ...r.invoiceIssues.take(3).map((inv) => Padding(
                               padding: const EdgeInsets.only(right: 16, top: 2),
                               child: Text(
-                                '📄 فاتورة #${inv.invoiceId}: فرق ${inv.difference.toStringAsFixed(0)} دينار',
+                                '📄 فاتورة #${inv.invoiceId}: فرق ${NumberFormat('#,##0', 'en').format(inv.difference)} دينار',
                                 style: TextStyle(fontSize: 10, color: Colors.red[400]),
                               ),
                             )),
@@ -3400,4 +3452,13 @@ class _BrandsManagementDialogState extends State<_BrandsManagementDialog> {
       ],
     );
   }
+}
+
+/// قسم في شاشة الإعدادات: عنوان، أيقونة، وصف قصير، وبطاقاته
+class _SettingsSection {
+  const _SettingsSection(this.title, this.icon, this.description, this.cards);
+  final String title;
+  final IconData icon;
+  final String description;
+  final List<Widget> cards;
 }

@@ -10,6 +10,7 @@ import '../../accounting/screens/vouchers_screen.dart';
 import '../../accounting/vouchers_service.dart';
 import '../currency_service.dart';
 import '../erp_common.dart';
+import '../../widgets/formatters.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import 'accounting_plus_service.dart';
@@ -547,6 +548,8 @@ class _CompoundVoucherEditorScreenState extends State<CompoundVoucherEditorScree
             child: TextFormField(
               initialValue: l.fcAmount == null || l.fcAmount == 0 ? '' : fmtMoney(l.fcAmount!),
               decoration: deco('المبلغ ${l.currency}'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               onChanged: (v) => setState(() {
                 l.fcAmount = parseMoney(v) ?? 0;
                 _recalcFc(l);
@@ -558,6 +561,8 @@ class _CompoundVoucherEditorScreenState extends State<CompoundVoucherEditorScree
             child: TextFormField(
               initialValue: fmtMoney(l.fxRate ?? 0),
               decoration: deco('السعر'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               onChanged: (v) => setState(() {
                 l.fxRate = parseMoney(v) ?? 0;
                 _recalcFc(l);
@@ -580,6 +585,8 @@ class _CompoundVoucherEditorScreenState extends State<CompoundVoucherEditorScree
             child: TextFormField(
               initialValue: l.debit == 0 ? '' : fmtMoney(l.debit),
               decoration: deco('مدين'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               onChanged: (v) => setState(() => l.debit = parseMoney(v) ?? 0),
             ),
           ),
@@ -588,6 +595,8 @@ class _CompoundVoucherEditorScreenState extends State<CompoundVoucherEditorScree
             child: TextFormField(
               initialValue: l.credit == 0 ? '' : fmtMoney(l.credit),
               decoration: deco('دائن'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
               onChanged: (v) => setState(() => l.credit = parseMoney(v) ?? 0),
             ),
           ),

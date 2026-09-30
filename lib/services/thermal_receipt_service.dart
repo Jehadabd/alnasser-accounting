@@ -14,7 +14,7 @@ import 'package:intl/intl.dart';
 /// بيانات صنف في الإيصال
 class ReceiptItem {
   final String name;
-  final int quantity;
+  final num quantity; // قد تكون كسرية (متر/كغم)
   final double price;
   final String? unit;
 
@@ -39,6 +39,8 @@ class ReceiptData {
   final double paidAmount;
   final String? customerName;
   final String paymentType;
+  /// 🔁 إعادة طباعة: يُكتب «نسخة» تحت الرقم كما في أنظمة البيع العالمية
+  final bool isCopy;
 
   ReceiptData({
     required this.invoiceId,
@@ -50,6 +52,7 @@ class ReceiptData {
     required this.paidAmount,
     this.customerName,
     required this.paymentType,
+    this.isCopy = false,
   });
 
   double get remainingAmount => (total - paidAmount).clamp(0, double.infinity);
@@ -246,6 +249,8 @@ class ThermalReceiptService {
                           textDirection: pw.TextDirection.rtl
                         ),
                       ),
+                      if (receipt.isCopy)
+                        pw.Text('نسخة', style: boldStyle, textDirection: pw.TextDirection.rtl),
                     ],
                   ),
                   pw.SizedBox(height: 1),
@@ -315,7 +320,7 @@ class ThermalReceiptService {
                     ),
                     pw.SizedBox(
                       width: 25,
-                      child: pw.Text('${item.quantity}', style: baseStyle, textAlign: pw.TextAlign.center),
+                      child: pw.Text(_formatNumber(item.quantity.toDouble()), style: baseStyle, textAlign: pw.TextAlign.center),
                     ),
                     pw.SizedBox(
                       width: 45,

@@ -125,7 +125,7 @@ class _OverdueDebtsScreenState extends State<OverdueDebtsScreen> {
                     _buildSummaryItem(
                       icon: Icons.people,
                       label: 'عدد العملاء',
-                      value: '${_overdueDebts.length}',
+                      value: _fmt(_overdueDebts.length),
                     ),
                     _buildSummaryItem(
                       icon: Icons.account_balance_wallet,

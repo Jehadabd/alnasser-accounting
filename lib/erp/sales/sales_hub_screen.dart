@@ -127,8 +127,8 @@ class _SalesHubScreenState extends State<SalesHubScreen> {
         HubSection('السجلات', [
           HubTile('سجل المرتجعات', Icons.history, ErpColors.muted, () => _go(const SalesReturnsListScreen()),
               subtitle: 'طباعة وإلغاء', permission: AppPermissions.salesDocs),
-          HubTile('القوائم غير المسددة', Icons.receipt_outlined, ErpColors.red, () => _go(const OpenInvoicesScreen()),
-              subtitle: 'القوائم الآجلة وما بقي منها', permission: AppPermissions.debtReports),
+          HubTile('الفواتير غير المسددة', Icons.receipt_outlined, ErpColors.red, () => _go(const OpenInvoicesScreen()),
+              subtitle: 'الفواتير الآجلة وما بقي منها', permission: AppPermissions.debtReports),
         ]),
         HubSection('أدوات البيع', [
           HubTile('البائعون والعمولات', Icons.badge, ErpColors.gold, () => _go(const SellersScreen()),

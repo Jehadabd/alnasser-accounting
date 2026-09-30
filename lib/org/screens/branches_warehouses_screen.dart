@@ -8,6 +8,7 @@ import '../../accounting/screens/acc_ui.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../org_service.dart';
+import '../../widgets/formatters.dart';
 
 class BranchesWarehousesScreen extends StatefulWidget {
   const BranchesWarehousesScreen({super.key, this.initialTab = 0});
@@ -279,7 +280,7 @@ class _BranchesWarehousesScreenState extends State<BranchesWarehousesScreen> {
                       leading: const Icon(Icons.swap_horiz, color: AccColors.blue),
                       title: Text('تحويل ${t['transfer_number']}: ${t['from_name']} ← ${t['to_name']}'),
                       subtitle: Text('${fmtDate(DateTime.parse(t['transfer_date'] as String))} • '
-                          '${t['items']} مادة${(t['notes'] as String?)?.isNotEmpty == true ? ' • ${t['notes']}' : ''}'),
+                          '${fmtMoney((t['items'] as num?) ?? 0)} مادة${(t['notes'] as String?)?.isNotEmpty == true ? ' • ${t['notes']}' : ''}'),
                       onTap: () async {
                         final items = await _svc.transferItems(t['id'] as int);
                         if (!mounted) return;
@@ -294,7 +295,7 @@ class _BranchesWarehousesScreenState extends State<BranchesWarehousesScreen> {
                                   ListTile(
                                     dense: true,
                                     title: Text('${it['name']}'),
-                                    trailing: Text('${it['quantity']} ${it['unit'] ?? ''}'),
+                                    trailing: Text('${fmtMoney((it['quantity'] as num?) ?? 0)} ${it['unit'] ?? ''}'),
                                   ),
                               ]),
                             ),
@@ -366,7 +367,7 @@ class _WarehouseStockScreenState extends State<WarehouseStockScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(children: [
-              Text('${rows.length} مادة — قيمة البضاعة بالكلفة: '),
+              Text('${fmtMoney(rows.length)} مادة — قيمة البضاعة بالكلفة: '),
               MoneyText(value, bold: true),
             ]),
           ),
@@ -381,7 +382,7 @@ class _WarehouseStockScreenState extends State<WarehouseStockScreen> {
                 tileColor: Colors.white,
                 dense: true,
                 title: Text('${r['name']}'),
-                trailing: Text('${q % 1 == 0 ? q.toStringAsFixed(0) : q.toStringAsFixed(2)} ${r['unit'] ?? ''}',
+                trailing: Text('${fmtMoney(q)} ${r['unit'] ?? ''}',
                     style: TextStyle(fontWeight: FontWeight.bold, color: q < 0 ? AccColors.red : AccColors.text)),
               );
             },
@@ -460,7 +461,7 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
           style: FilledButton.styleFrom(backgroundColor: AccColors.navy, padding: const EdgeInsets.all(16)),
           onPressed: _saving || count == 0 ? null : _save,
           icon: const Icon(Icons.check),
-          label: Text('تنفيذ التحويل ($count مادة)'),
+          label: Text('تنفيذ التحويل (${fmtMoney(count)} مادة)'),
         ),
       ),
       body: Column(children: [
@@ -520,15 +521,16 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
               return ListTile(
                 tileColor: (_qty[id] ?? 0) > 0 ? AccColors.cyan.withOpacity(0.08) : Colors.white,
                 title: Text('${r['name']}'),
-                subtitle: Text('المتوفر: ${avail.toStringAsFixed(avail % 1 == 0 ? 0 : 2)} ${r['unit'] ?? ''}'),
+                subtitle: Text('المتوفر: ${fmtMoney(avail)} ${r['unit'] ?? ''}'),
                 trailing: SizedBox(
                   width: 110,
                   child: TextField(
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                     textAlign: TextAlign.center,
                     decoration: const InputDecoration(hintText: 'الكمية', isDense: true),
                     onChanged: (v) {
-                      final q = double.tryParse(v) ?? 0;
+                      final q = double.tryParse(v.replaceAll(',', '')) ?? 0;
                       setState(() {
                         if (q <= 0) {
                           _qty.remove(id);

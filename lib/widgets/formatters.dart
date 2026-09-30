@@ -38,7 +38,24 @@ class ThousandSeparatorInputFormatter extends TextInputFormatter {
 }
 
 class ThousandSeparatorDecimalInputFormatter extends TextInputFormatter {
+  ThousandSeparatorDecimalInputFormatter({this.allowNegative = false});
+
+  /// يسمح بإشارة سالب في البداية (للأرصدة/الفروقات).
+  final bool allowNegative;
+
   final NumberFormat _intFormatter = NumberFormat('#,##0', 'en_US');
+
+  static String _latinDigits(String s) {
+    const ar = '٠١٢٣٤٥٦٧٨٩';
+    const fa = '۰۱۲۳۴۵۶۷۸۹';
+    final b = StringBuffer();
+    for (final ch in s.split('')) {
+      var i = ar.indexOf(ch);
+      if (i < 0) i = fa.indexOf(ch);
+      b.write(i >= 0 ? '$i' : (ch == '٫' ? '.' : ch));
+    }
+    return b.toString();
+  }
 
   @override
   TextEditingValue formatEditUpdate(
@@ -49,9 +66,18 @@ class ThousandSeparatorDecimalInputFormatter extends TextInputFormatter {
       return newValue;
     }
 
+    final String raw = _latinDigits(newValue.text);
+    final bool negative = allowNegative && raw.trimLeft().startsWith('-');
+    if (negative && raw.trim() == '-') {
+      return const TextEditingValue(
+        text: '-',
+        selection: TextSelection.collapsed(offset: 1),
+      );
+    }
+
     // 1. Remove all non-numeric characters except one dot
     // Allows digits (0-9) and one decimal point
-    String sanitized = newValue.text.replaceAll(RegExp(r'[^0-9.]'), '');
+    String sanitized = raw.replaceAll(RegExp(r'[^0-9.]'), '');
     
     // Handle multiple dots: keep only the first one
     if (sanitized.indexOf('.') != sanitized.lastIndexOf('.')) {
@@ -95,6 +121,9 @@ class ThousandSeparatorDecimalInputFormatter extends TextInputFormatter {
 
     if (decPart != null) {
       formatted += '.$decPart';
+    }
+    if (negative) {
+      formatted = '-$formatted';
     }
 
     // Calculate selection position relative to the end to maintain position

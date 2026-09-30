@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../models/product.dart';
 import '../services/product_cost_service.dart';
+import '../accounting/screens/acc_ui.dart' show fmtMoney;
 
 class ProductHierarchyDetailsScreen extends StatelessWidget {
   final Product product;
@@ -249,7 +250,7 @@ class ProductHierarchyDetailsScreen extends StatelessWidget {
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          cost != null ? '${cost.toStringAsFixed(2)} د.ع' : 'غير محدد',
+                          cost != null ? '${fmtMoney(cost)} د.ع' : 'غير محدد',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,

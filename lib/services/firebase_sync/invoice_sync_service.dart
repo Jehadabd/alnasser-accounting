@@ -75,6 +75,7 @@ class InvoiceSyncService {
     'quantity_individual', 'quantity_large_unit', 'applied_price', 'applied_price_cents', 'item_total', 'item_total_cents',
     'sale_type', 'units_in_large_unit', 'unique_id',
     'product_sync_uuid', // 🔄 ربط ذري بالمنتج عبر sync_uuid (لخصم المخزون)
+    'price_before_discount', 'discount_type', 'discount_value', // 🏷️ خصم السطر
   };
 
   /// 🚀 بدء مزامنة الفواتير: رفع المعلّق، ثم الاستماع الدائم للوارد.

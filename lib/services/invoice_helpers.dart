@@ -67,7 +67,7 @@ String buildUnitConversionString(InvoiceItem item, List<Product> allProducts) {
 bool isInvoiceItemComplete(InvoiceItem item) {
   return (item.productName.isNotEmpty &&
       (item.quantityIndividual != null || item.quantityLargeUnit != null) &&
-      item.appliedPrice > 0 &&
-      item.itemTotal > 0 &&
+      (item.appliedPrice > 0 || item.isGift) && // 🎁 الهدية سعرها صفر
+      (item.itemTotal > 0 || item.isGift) &&
       (item.saleType != null && item.saleType!.isNotEmpty));
 }

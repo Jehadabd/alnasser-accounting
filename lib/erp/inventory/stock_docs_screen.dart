@@ -135,7 +135,7 @@ class _StockDocsListScreenState extends State<StockDocsListScreen> {
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
         StatCard(label: 'قيمة الإدخالات', value: fmtMoney(inVal), icon: Icons.south_west_rounded, color: ErpColors.green),
         StatCard(label: 'قيمة الإخراجات', value: fmtMoney(outVal), icon: Icons.north_east_rounded, color: ErpColors.red),
-        StatCard(label: 'عدد المستندات', value: '${_rows.length}', icon: Icons.description_outlined, color: ErpColors.blue),
+        StatCard(label: 'عدد المستندات', value: fmtQty(_rows.length), icon: Icons.description_outlined, color: ErpColors.blue),
       ]),
       body: Column(children: [
         Padding(
@@ -271,7 +271,7 @@ class _StockDocEditorScreenState extends State<StockDocEditorScreen> {
     final ok = await confirmDialog(
       context,
       'حفظ ${stockDocLabels[widget.docType]}',
-      '${valid.length} مادة بقيمة ${fmtMoney(total)}.\n'
+      '${fmtQty(valid.length)} مادة بقيمة ${fmtMoney(total)}.\n'
           'سيُحدَّث المخزون ويُنشأ القيد المحاسبي تلقائياً. هل تريد المتابعة؟',
     );
     if (!ok || !mounted) return;
@@ -499,7 +499,7 @@ class _StockDocViewScreenState extends State<StockDocViewScreen> {
             padding: const EdgeInsets.all(16),
             child: Wrap(spacing: 10, runSpacing: 10, children: [
               StatCard(label: 'القيمة', value: fmtMoney(d0(h['total_cost']).abs()), icon: Icons.payments_outlined, color: color),
-              StatCard(label: 'عدد المواد', value: '${_items.length}', icon: Icons.format_list_numbered, color: ErpColors.blue),
+              StatCard(label: 'عدد المواد', value: fmtQty(_items.length), icon: Icons.format_list_numbered, color: ErpColors.blue),
               StatCard(
                   label: 'الحالة',
                   value: posted ? 'مرحّل' : 'ملغى',

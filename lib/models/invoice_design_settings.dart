@@ -59,10 +59,12 @@ class InvoiceColumnConfig {
       const InvoiceColumnConfig(id: 'details', label: 'التفاصيل', visible: true, widthFlex: 2.0, order: 2),
       const InvoiceColumnConfig(id: 'quantity', label: 'العدد', visible: true, widthFlex: 1.2, order: 3),
       const InvoiceColumnConfig(id: 'unitsCount', label: 'عدد الوحدات', visible: true, widthFlex: 1.0, order: 4),
-      const InvoiceColumnConfig(id: 'price', label: 'السعر', visible: true, widthFlex: 1.1, order: 5),
-      const InvoiceColumnConfig(id: 'amount', label: 'المبلغ', visible: true, widthFlex: 1.4, order: 6),
-      const InvoiceColumnConfig(id: 'weight', label: 'الوزن', visible: false, widthFlex: 1.0, order: 7),
-      const InvoiceColumnConfig(id: 'expiry', label: 'تاريخ الانتهاء', visible: false, widthFlex: 1.2, order: 8),
+      const InvoiceColumnConfig(id: 'priceBeforeDiscount', label: 'السعر قبل الخصم', visible: true, widthFlex: 1.1, order: 5),
+      const InvoiceColumnConfig(id: 'discount', label: 'الخصم', visible: true, widthFlex: 0.9, order: 6),
+      const InvoiceColumnConfig(id: 'price', label: 'السعر', visible: true, widthFlex: 1.1, order: 7),
+      const InvoiceColumnConfig(id: 'amount', label: 'المبلغ', visible: true, widthFlex: 1.4, order: 8),
+      const InvoiceColumnConfig(id: 'weight', label: 'الوزن', visible: false, widthFlex: 1.0, order: 9),
+      const InvoiceColumnConfig(id: 'expiry', label: 'تاريخ الانتهاء', visible: false, widthFlex: 1.2, order: 10),
     ];
   }
 }
@@ -141,6 +143,18 @@ class InvoiceDesignSettings {
     }
     if (cols.isEmpty) {
       cols = InvoiceColumnConfig.defaultColumns();
+    } else {
+      // 🆕 أعمدة أُضيفت بعد حفظ التصميم (مثل «السعر قبل الخصم» و«الخصم»):
+      //    تُضاف قبل «السعر» بترتيبه الحالي، ظاهرة، ويمكن إخفاؤها من تصميم الفاتورة.
+      final have = cols.map((c) => c.id).toSet();
+      final priceIdx = cols.indexWhere((c) => c.id == 'price');
+      final priceOrder = priceIdx >= 0 ? cols[priceIdx].order : cols.last.order;
+      var insertAt = priceIdx >= 0 ? priceIdx : cols.length;
+      for (final d in InvoiceColumnConfig.defaultColumns()) {
+        if (have.contains(d.id)) continue;
+        // نفس ترتيب «السعر» وقبله في القائمة ⇒ يظهران قبله (الترتيب مستقر)
+        cols.insert(insertAt++, d.copyWith(order: priceOrder));
+      }
     }
     
     return InvoiceDesignSettings(

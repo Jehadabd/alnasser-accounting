@@ -8,6 +8,8 @@ class AppUser {
   final String role; // 'admin' | 'accountant'
   final DateTime createdAt;
   final List<String> permissions;
+  final String? displayName; // اسم الموظف للعرض (اختياري)
+  final DateTime? lastLoginAt;
 
   AppUser({
     this.id,
@@ -16,10 +18,18 @@ class AppUser {
     required this.role,
     required this.createdAt,
     this.permissions = const [],
+    this.displayName,
+    this.lastLoginAt,
   });
 
   bool get isAdmin => role == 'admin';
   bool get isAccountant => role == 'accountant';
+
+  /// الاسم الظاهر: اسم الموظف إن وُجد وإلا اسم المستخدم
+  String get shownName => (displayName != null && displayName!.trim().isNotEmpty) ? displayName! : username;
+
+  /// وصف الدور للواجهة: «مدير» أو «موظف»
+  String get roleLabel => isAdmin ? 'مدير' : 'موظف';
 
   bool hasPermission(String permissionKey) {
     if (isAdmin) return true; // Admin has all permissions
@@ -42,8 +52,10 @@ class AppUser {
       username: map['username'],
       passwordHash: map['password_hash'],
       role: map['role'],
-      createdAt: DateTime.parse(map['created_at']),
+      createdAt: DateTime.tryParse('${map['created_at']}') ?? DateTime.now(),
       permissions: permissions ?? [],
+      displayName: map['display_name'] as String?,
+      lastLoginAt: DateTime.tryParse('${map['last_login_at'] ?? ''}'),
     );
   }
 
@@ -62,6 +74,8 @@ class AppUser {
       role: role ?? this.role,
       createdAt: createdAt ?? this.createdAt,
       permissions: permissions ?? this.permissions,
+      displayName: displayName,
+      lastLoginAt: lastLoginAt,
     );
   }
 }
@@ -72,12 +86,12 @@ class AppPermissions {
   static const String posAccess = 'pos_access'; // الكاشير
   static const String debtRegister = 'debt_register'; // سجل الديون
   static const String productEntry = 'product_entry'; // إدخال البضاعة
-  static const String createInvoice = 'create_invoice'; // إنشاء قائمة
+  static const String createInvoice = 'create_invoice'; // إنشاء فاتورة
   static const String lateCustomers = 'late_customers'; // المتأخرين عن الديون
   static const String shareDebtsPdf = 'share_debts_pdf'; // مشاركة الديون PDF
   static const String uploadDatabase = 'upload_database'; // رفع قاعدة البيانات
   static const String settings = 'settings'; // الإعدادات
-  static const String editInvoices = 'edit_invoices'; // تعديل القوائم
+  static const String editInvoices = 'edit_invoices'; // تعديل الفواتير
   static const String editProducts = 'edit_products'; // تعديل البضاعة
   static const String monthlyInventory = 'monthly_inventory'; // الجرد الشهري
   static const String reports = 'reports'; // التقارير
@@ -114,12 +128,12 @@ class AppPermissions {
     posAccess: 'الوصول للكاشير',
     debtRegister: 'سجل الديون',
     productEntry: 'إدخال البضاعة',
-    createInvoice: 'إنشاء قائمة',
+    createInvoice: 'إنشاء فاتورة',
     lateCustomers: 'المتأخرين عن الديون',
     shareDebtsPdf: 'مشاركة الديون PDF',
     uploadDatabase: 'رفع قاعدة البيانات',
     settings: 'الإعدادات',
-    editInvoices: 'تعديل القوائم',
+    editInvoices: 'تعديل الفواتير',
     editProducts: 'تعديل البضاعة',
     monthlyInventory: 'الجرد الشهري',
     reports: 'التقارير',

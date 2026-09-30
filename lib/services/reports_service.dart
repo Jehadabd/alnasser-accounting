@@ -1,6 +1,7 @@
 // services/reports_service.dart
 // خدمة التقارير المتقدمة - منفصلة عن database_service لتخفيف الحمل
 import 'dart:convert';
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:sqflite/sqflite.dart'; // ✅ Added for Sqflite.firstIntValue
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'database_service.dart';
@@ -1695,10 +1696,7 @@ class ReportsService {
   
   /// تنسيق الأرقام
   String _formatNumber(num value) {
-    if (value == value.toInt()) {
-      return value.toInt().toString();
-    }
-    return value.toStringAsFixed(2);
+    return NumberFormat('#,##0.##', 'en_US').format(value);
   }
   // ═══════════════════════════════════════════════════════════════════════════
   // 📊 تقارير المنتجات (Product Reports)

@@ -118,10 +118,10 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
         label: const Text('جلسة جديدة', style: TextStyle(color: Colors.white)),
       ),
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
-        StatCard(label: 'جلسات مفتوحة', value: '$drafts', icon: Icons.pending_actions_rounded, color: ErpColors.orange),
+        StatCard(label: 'جلسات مفتوحة', value: fmtQty(drafts), icon: Icons.pending_actions_rounded, color: ErpColors.orange),
         StatCard(
             label: 'جلسات معتمدة',
-            value: '${_rows.length - drafts}',
+            value: fmtQty(_rows.length - drafts),
             icon: Icons.verified_rounded,
             color: ErpColors.green),
       ]),
@@ -178,7 +178,7 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
                                 const SizedBox(height: 4),
                                 Text(
                                   '${fmtDate(parseDate(r['count_date']))} • ${r['warehouse_name'] ?? 'الكمية الكلية'} • '
-                                  'معدود $counted من $n',
+                                  'معدود ${fmtQty(counted)} من ${fmtQty(n)}',
                                   style: const TextStyle(color: ErpColors.muted, fontSize: 12),
                                 ),
                               ]),
@@ -315,7 +315,7 @@ class _StockCountEditorScreenState extends State<StockCountEditorScreen> {
     final ok = await confirmDialog(
       context,
       'اعتماد الجرد',
-      'سيُسجَّل مستند «تسوية جرد» بفروقات $n مادة معدودة (مقابل الكمية الحالية لحظة الاعتماد).\n'
+      'سيُسجَّل مستند «تسوية جرد» بفروقات ${fmtQty(n)} مادة معدودة (مقابل الكمية الحالية لحظة الاعتماد).\n'
           'المواد غير المعدودة لا تتغير. متابعة؟',
       color: ErpColors.green,
     );
@@ -401,7 +401,7 @@ class _StockCountEditorScreenState extends State<StockCountEditorScreen> {
       ],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
         StatCard(
-            label: 'المعدود', value: '${counted.length} / ${_items.length}', icon: Icons.checklist_rounded, color: ErpColors.blue),
+            label: 'المعدود', value: '${fmtQty(counted.length)} / ${fmtQty(_items.length)}', icon: Icons.checklist_rounded, color: ErpColors.blue),
         StatCard(label: 'فائض (تقديري)', value: fmtMoney(plus), icon: Icons.trending_up_rounded, color: ErpColors.green),
         StatCard(label: 'عجز (تقديري)', value: fmtMoney(minus), icon: Icons.trending_down_rounded, color: ErpColors.red),
       ]),

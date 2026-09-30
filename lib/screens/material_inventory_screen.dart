@@ -137,7 +137,7 @@ class _MaterialInventoryScreenState extends State<MaterialInventoryScreen> {
            } else {
              int count = (remaining / multiplier).floor();
              if (count > 0) {
-               parts.add('$count ${unit['name']}');
+               parts.add('${_formatCurrency(count)} ${unit['name']}');
                remaining -= (count * multiplier);
              }
            }
@@ -238,7 +238,7 @@ class _MaterialInventoryScreenState extends State<MaterialInventoryScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'عدد المواد: ${_products.length}',
+                        'عدد المواد: ${_formatCurrency(_products.length)}',
                         style: const TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                     ],

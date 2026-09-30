@@ -140,6 +140,7 @@ class InvoicePdfService {
                   // جدول الفاتورة الديناميكي: يستخدم إعدادات الأعمدة من InvoiceDesignSettings
                   _buildDynamicInvoiceTable(
                     pageItems: pageItems,
+                    anyLineDiscount: invoiceItems.any((it) => it.hasLineDiscount), // 🏷️
                     pageIndex: pageIndex,
                     itemsPerPage: itemsPerPage,
                     allProducts: allProducts,
@@ -565,6 +566,7 @@ class InvoicePdfService {
   /// بناء جدول الفاتورة الديناميكي بناءً على إعدادات الأعمدة
   static pw.Widget _buildDynamicInvoiceTable({
     required List<InvoiceItem> pageItems,
+    bool anyLineDiscount = false,
     required int pageIndex,
     required int itemsPerPage,
     required List<Product> allProducts,
@@ -572,7 +574,10 @@ class InvoicePdfService {
     required AppSettings appSettings,
   }) {
     // الحصول على الأعمدة المرئية مرتبة
-    final visibleColumns = appSettings.invoiceDesign.visibleColumns;
+    // 🏷️ عمودا «السعر قبل الخصم» و«الخصم» يظهران فقط إن كان في الفاتورة سطر مخصوم أو هدية
+    final visibleColumns = appSettings.invoiceDesign.visibleColumns
+        .where((c) => anyLineDiscount || (c.id != 'discount' && c.id != 'priceBeforeDiscount'))
+        .toList();
     
     // إذا لم تُحدد أعمدة، استخدم الافتراضية
     if (visibleColumns.isEmpty) {
@@ -651,6 +656,9 @@ class InvoicePdfService {
         return headerCell(shapedLabel, font, color: PdfColor.fromInt(appSettings.itemPriceColor), fontSettings: appSettings.fontSettings.price);
       case 'amount':
         return headerCell(shapedLabel, font, color: PdfColor.fromInt(appSettings.itemTotalColor), fontSettings: appSettings.fontSettings.amount);
+      case 'priceBeforeDiscount':
+      case 'discount':
+        return headerCell(shapedLabel, font, fontSettings: appSettings.fontSettings.price);
       case 'weight':
         return headerCell(shapedLabel, font, fontSettings: appSettings.fontSettings.quantity);
       case 'expiry':
@@ -679,6 +687,15 @@ class InvoicePdfService {
         return dataCell(formatNumber(item.appliedPrice, forceDecimal: true), font, color: PdfColor.fromInt(appSettings.itemPriceColor), fontSettings: appSettings.fontSettings.price);
       case 'amount':
         return dataCell(formatNumber(item.itemTotal, forceDecimal: true), font, color: PdfColor.fromInt(appSettings.itemTotalColor), fontSettings: appSettings.fontSettings.amount);
+      case 'priceBeforeDiscount':
+        // سعر الوحدة قبل الخصم (فارغ للسطر بلا خصم)
+        return dataCell(
+            item.hasLineDiscount ? formatNumber(item.priceBeforeDiscount ?? item.appliedPrice, forceDecimal: true) : '',
+            font,
+            fontSettings: appSettings.fontSettings.price);
+      case 'discount':
+        // «10%» أو مبلغ الخصم للوحدة أو «هدية»
+        return dataCell(ArabicShaper.shape(item.discountLabel), font, fontSettings: appSettings.fontSettings.price);
       case 'weight':
         final weight = product?.baseWeight;
         if (weight != null && weight > 0) {

@@ -79,7 +79,7 @@ class InvoiceBridge {
     if (await hasPendingDraft()) {
       if (!context.mounted) return null;
       final ok = await confirmDialog(context, 'فاتورة غير محفوظة',
-          'في شاشة «إنشاء قائمة» فاتورة لم تُحفظ بعد. فتح هذا المستند سيستبدلها. متابعة؟');
+          'في شاشة «إنشاء فاتورة» فاتورة لم تُحفظ بعد. فتح هذا المستند سيستبدلها. متابعة؟');
       if (!ok) return null;
     }
     final now = DateTime.now();

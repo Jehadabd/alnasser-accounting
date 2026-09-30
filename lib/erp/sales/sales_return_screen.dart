@@ -351,7 +351,7 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
     final total = _rows.where((r) => r['status'] == 'posted').fold(0.0, (s, r) => s + d0(r['total']));
     return ErpPage(
       title: 'مرتجعات المبيعات',
-      subtitle: '${_rows.length} مرتجع — ${fmtMoney(total)}',
+      subtitle: '${fmtQty(_rows.length)} مرتجع — ${fmtMoney(total)}',
       icon: Icons.assignment_return,
       actions: [
         ...exportActions(context,

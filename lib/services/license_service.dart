@@ -147,7 +147,9 @@ class LicenseService {
   Future<Map<String, dynamic>> _callApi(Map<String, dynamic> data) async {
     print('🔐 [LICENSE] Calling API...');
     print('🔐 [LICENSE] URL: $_apiUrl');
-    print('🔐 [LICENSE] Data: $data');
+    final safeLog = Map<String, dynamic>.from(data);
+    if (safeLog.containsKey('password')) safeLog['password'] = '***'; // لا تُطبع كلمة السر
+    print('🔐 [LICENSE] Data: $safeLog');
     
     try {
       if (kIsWeb) {
@@ -766,6 +768,30 @@ class LicenseService {
     });
   }
   
+  /// 👤 التحقق من كلمة سر حساب الترخيص (لإنشاء حساب المدير أو استعادة كلمة سره).
+  /// لا يغيّر شيئاً في الترخيص المحفوظ؛ يسأل السيرفر فقط هل الكلمة صحيحة.
+  Future<LicensePasswordCheck> checkAccountPassword(String password) async {
+    final license = getStoredLicense();
+    if (license == null) return const LicensePasswordCheck(LicensePasswordStatus.noLicense);
+    if (password.isEmpty) return const LicensePasswordCheck(LicensePasswordStatus.wrong);
+    if (!await hasInternetConnection()) return const LicensePasswordCheck(LicensePasswordStatus.offline);
+    final response = await _callApi({
+      'action': 'validate',
+      'username': license.username,
+      'password': password,
+      'deviceId': await generateDeviceId(),
+    });
+    if (response['success'] == true) return const LicensePasswordCheck(LicensePasswordStatus.ok);
+    final err = '${response['error'] ?? ''}';
+    if (err == 'WRONG_PASSWORD' || err == 'USER_NOT_FOUND') {
+      return const LicensePasswordCheck(LicensePasswordStatus.wrong);
+    }
+    if (err == 'NETWORK_ERROR' || err.startsWith('HTTP_') || err == 'INVALID_RESPONSE') {
+      return const LicensePasswordCheck(LicensePasswordStatus.offline);
+    }
+    return LicensePasswordCheck(LicensePasswordStatus.rejected, '${response['message'] ?? err}');
+  }
+
   /// التصفير الذاتي للجهاز وتسجيل الخروج
   Future<LicenseResult> selfUnbindDevice(String password) async {
     final license = getStoredLicense();
@@ -817,6 +843,14 @@ class LicenseService {
 }
 
 // ========== Data Classes ==========
+
+enum LicensePasswordStatus { ok, wrong, offline, rejected, noLicense }
+
+class LicensePasswordCheck {
+  const LicensePasswordCheck(this.status, [this.message]);
+  final LicensePasswordStatus status;
+  final String? message;
+}
 
 class LicenseData {
   final String username;

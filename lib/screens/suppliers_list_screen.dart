@@ -6,6 +6,7 @@ import 'supplier_details_screen.dart';
 import '../models/app_settings.dart';
 import '../services/settings_manager.dart';
 import '../widgets/app_side_nav.dart';
+import 'package:intl/intl.dart' show NumberFormat; // 🔢 فواصل الآلاف
 
 /// شاشة قائمة الموردين (Odoo-Style Kanban View)
 class SuppliersListScreen extends StatefulWidget {
@@ -513,6 +514,6 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
     } else if (number >= 1000) {
       return '${(number / 1000).toStringAsFixed(0)}K';
     }
-    return number.toStringAsFixed(0);
+    return NumberFormat('#,##0', 'en').format(number);
   }
 }

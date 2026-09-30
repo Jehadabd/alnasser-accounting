@@ -2218,6 +2218,8 @@ class DatabaseService {
     String? customerName,
     required double discount,
     required double paidAmount,
+    int? createdByUserId,
+    String? createdByUsername,
   }) async {
     final db = await database;
     await PeriodLock.assertOpen(DateTime.now(), db); // 🔒 تثبيت الإدخالات
@@ -2265,24 +2267,34 @@ class DatabaseService {
       createdAt: DateTime.now(),
       lastModifiedAt: DateTime.now(),
       customerId: resolvedCustomerId,
+      createdByUserId: createdByUserId,
+      createdByUsername: createdByUsername, // 👤 الكاشير الذي باع (يظهر في الإيصالات)
     );
 
+    // 📦 نفس اصطلاح شاشة «إنشاء فاتورة»: البيع بوحدة كبيرة (كرتون/باكيت...) يُحفظ
+    //    بعدد الوحدات الكبيرة وسعرها، لا بعدد القطع × سعر الكرتون (كان يضخّم
+    //    مجموع السطر والأرباح في فواتير الكاشير). الكمية الواردة بالوحدة الأساسية.
     List<InvoiceItem> invoiceItems = items.map((i) {
-      final qty = (i['quantity'] as num).toDouble();
+      final baseQty = (i['quantity'] as num).toDouble();
       final price = (i['price'] as num).toDouble();
+      final units = (i['units_in_large_unit'] as num?)?.toDouble() ?? 1.0;
+      final isLarge = units > 1;
+      final soldQty = isLarge ? baseQty / units : baseQty;
+      final baseCost = (i['cost_price'] as num?)?.toDouble();
       return InvoiceItem(
         invoiceId: 0,
         productId: i['product_id'],
         productName: i['product_name'],
-        quantityIndividual: qty,
+        quantityIndividual: isLarge ? null : soldQty,
+        quantityLargeUnit: isLarge ? soldQty : null,
         unit: i['unit'] ?? 'piece',
         unitPrice: price,
         appliedPrice: price,
-        costPrice: (i['cost_price'] as num?)?.toDouble(),
-        actualCostPrice: (i['cost_price'] as num?)?.toDouble(),
+        costPrice: baseCost == null ? null : baseCost * baseQty,
+        actualCostPrice: baseCost == null ? null : (isLarge ? baseCost * units : baseCost),
         saleType: i['sale_type'],
-        unitsInLargeUnit: (i['units_in_large_unit'] as num?)?.toDouble(),
-        itemTotal: qty * price,
+        unitsInLargeUnit: isLarge ? units : null,
+        itemTotal: soldQty * price,
       );
     }).toList();
 

@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart' as intl;
 import '../services/firebase_sync/firebase_sync_config.dart';
 import '../services/firebase_sync/sync_diagnostics.dart'; // 🩺
 import 'package:firebase_auth/firebase_auth.dart';
@@ -1540,15 +1541,15 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       Text(
-                        'الرصيد المسجل: ${issue['recordedBalance']?.toStringAsFixed(2) ?? 0}',
+                        'الرصيد المسجل: ${intl.NumberFormat('#,##0.##', 'en_US').format((issue['recordedBalance'] as num?) ?? 0)}',
                         style: const TextStyle(fontSize: 12),
                       ),
                       Text(
-                        'الرصيد المحسوب: ${issue['calculatedBalance']?.toStringAsFixed(2) ?? 0}',
+                        'الرصيد المحسوب: ${intl.NumberFormat('#,##0.##', 'en_US').format((issue['calculatedBalance'] as num?) ?? 0)}',
                         style: const TextStyle(fontSize: 12),
                       ),
                       Text(
-                        'الفرق: ${issue['difference']?.toStringAsFixed(2) ?? 0}',
+                        'الفرق: ${intl.NumberFormat('#,##0.##', 'en_US').format((issue['difference'] as num?) ?? 0)}',
                         style: const TextStyle(fontSize: 12, color: Colors.red),
                       ),
                     ],
@@ -2557,7 +2558,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                                 isCustomer
                                     ? 'عميل: $name'
                                     : 'معاملة: $name'
-                                        '${amount != null ? ' (${amount.abs().toStringAsFixed(0)})' : ''}',
+                                        '${amount != null ? ' (${intl.NumberFormat('#,##0', 'en_US').format(amount.abs())})' : ''}',
                               ),
                               subtitle: Text(
                                 'المحاولات: $retryCount'

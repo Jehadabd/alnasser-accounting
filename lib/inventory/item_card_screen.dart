@@ -17,6 +17,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../accounting/screens/acc_ui.dart';
 import '../erp/erp_common.dart';
+import '../widgets/formatters.dart';
 import '../erp/erp_ui.dart';
 import '../erp/inventory/barcode_labels.dart';
 import '../erp/inventory/inventory_reports.dart';
@@ -273,7 +274,7 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
     final showCost = AuthService().hasPermission(AppPermissions.viewCostProfit);
     return ErpPage(
       title: 'بطاقات المواد',
-      subtitle: '${_rows.length} مادة',
+      subtitle: '${fmtQty(_rows.length)} مادة',
       icon: Icons.inventory,
       actions: exportActions(context,
           title: 'بطاقات المواد',
@@ -630,6 +631,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
           controller: _c[k],
           maxLines: maxLines,
           keyboardType: number ? const TextInputType.numberWithOptions(decimal: true) : null,
+          inputFormatters: number ? [ThousandSeparatorDecimalInputFormatter()] : null,
           textDirection: number ? TextDirection.ltr : null,
           decoration: InputDecoration(
               labelText: label, isDense: true, filled: true, fillColor: Colors.white, border: const OutlineInputBorder()),
@@ -889,6 +891,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
                   child: TextField(
                     controller: _price[i],
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                     textDirection: TextDirection.ltr,
                     decoration: const InputDecoration(
                         labelText: 'السعر', isDense: true, filled: true, fillColor: Colors.white, border: OutlineInputBorder()),
@@ -1075,7 +1078,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
         ),
         if (_trackSerial)
           ErpSection(
-            title: 'الأرقام التسلسلية (${_serials.where((s) => s['status'] == 'in_stock').length} في المخزن)',
+            title: 'الأرقام التسلسلية (${fmtQty(_serials.where((s) => s['status'] == 'in_stock').length)} في المخزن)',
             icon: Icons.pin_outlined,
             color: ErpColors.blue,
             trailing: TextButton.icon(

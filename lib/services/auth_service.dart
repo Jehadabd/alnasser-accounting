@@ -34,24 +34,69 @@ class AuthService {
     return digest.toString();
   }
 
-  /// تهيئة الجلسة من SharedPreferences
-  Future<void> initSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final sessionJson = prefs.getString(_sessionKey);
-    
-    if (sessionJson != null) {
-      try {
-        final Map<String, dynamic> sessionData = jsonDecode(sessionJson);
-        final userId = sessionData['user_id'];
-        
-        if (userId != null) {
-          _currentUser = await _getUserById(userId);
-        }
-      } catch (e) {
-        // Session corrupted, clear it
-        await prefs.remove(_sessionKey);
-      }
+  /// 🔐 لا استرجاع تلقائي للجلسة: تسجيل الدخول مطلوب في كل فتح للبرنامج.
+  /// (تبقى الدالة للتوافق؛ لا تفعل شيئاً.)
+  Future<void> initSession() async {}
+
+  /// آخر اسم مستخدم دخل من هذا الجهاز (لملء حقل الدخول فقط — ليس جلسة).
+  Future<String?> lastUsername() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final sessionJson = prefs.getString(_sessionKey);
+      if (sessionJson == null) return null;
+      final data = jsonDecode(sessionJson);
+      return data is Map ? data['username'] as String? : null;
+    } catch (_) {
+      return null;
     }
+  }
+
+  /// 🧪 الوضع التجريبي: قاعدته منفصلة وبلا مستخدمين ⇒ دخول مؤقت بصلاحيات المدير
+  /// في الذاكرة فقط (لا يُكتب شيء في جدول المستخدمين).
+  void loginDemo() {
+    _currentUser = AppUser(
+      id: null,
+      username: 'تجريبي',
+      passwordHash: '',
+      role: 'admin',
+      createdAt: DateTime.now(),
+      permissions: AppPermissions.allKeys,
+    );
+  }
+
+  /// حساب المدير (حساب الترخيص) إن وُجد.
+  Future<AppUser?> adminUser() async {
+    final db = await _db.database;
+    final r = await db.query('users', where: "role = 'admin'", orderBy: 'id', limit: 1);
+    if (r.isEmpty) return null;
+    return AppUser.fromMap(r.first, permissions: AppPermissions.allKeys);
+  }
+
+  /// كل المستخدمين: المدير أولاً ثم الموظفون.
+  Future<List<AppUser>> getAllUsers() async {
+    final db = await _db.database;
+    final rows = await db.query('users', orderBy: "CASE WHEN role = 'admin' THEN 0 ELSE 1 END, username");
+    final out = <AppUser>[];
+    for (final row in rows) {
+      out.add(AppUser.fromMap(row, permissions: await _getUserPermissions(row['id'] as int)));
+    }
+    return out;
+  }
+
+  /// تغيير كلمة سر مستخدم (المدير للموظفين، أو المستخدم لنفسه).
+  Future<bool> setPassword(int userId, String newPassword) async {
+    final db = await _db.database;
+    final n = await db.update('users', {'password_hash': _hashPassword(newPassword)},
+        where: 'id = ?', whereArgs: [userId]);
+    return n > 0;
+  }
+
+  /// هل كلمة السر هذه صحيحة لهذا المستخدم؟ (لتأكيد العمليات الحساسة)
+  Future<bool> checkPassword(int userId, String password) async {
+    final db = await _db.database;
+    final r = await db.query('users',
+        columns: ['id'], where: 'id = ? AND password_hash = ?', whereArgs: [userId, _hashPassword(password)]);
+    return r.isNotEmpty;
   }
 
   /// حفظ الجلسة
@@ -61,12 +106,6 @@ class AuthService {
       'user_id': user.id,
       'username': user.username,
     }));
-  }
-
-  /// مسح الجلسة
-  Future<void> _clearSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_sessionKey);
   }
 
   /// هل يوجد أي مستخدمين في النظام؟
@@ -92,17 +131,28 @@ class AuthService {
     
     final permissions = await _getUserPermissions(result.first['id'] as int);
     _currentUser = AppUser.fromMap(result.first, permissions: permissions);
+    await _touchLastLogin(_currentUser!.id);
     await _saveSession(_currentUser!);
     ActivityLog.log('دخول', 'تسجيل الدخول', 'دخول المستخدم ${_currentUser!.username}');
     
     return _currentUser;
   }
 
-  /// تسجيل الخروج
+  Future<void> _touchLastLogin(int? userId) async {
+    if (userId == null) return;
+    try {
+      final db = await _db.database;
+      await db.update('users', {'last_login_at': DateTime.now().toIso8601String()},
+          where: 'id = ?', whereArgs: [userId]);
+    } catch (_) {} // عمود اختياري (يضيفه SchemaHealer/ErpSchema)
+  }
+
+  /// تسجيل الخروج (يبقى اسم آخر مستخدم لملء حقل الدخول)
   Future<void> logout() async {
-    if (_currentUser != null) await ActivityLog.log('خروج', 'تسجيل الدخول', 'خروج المستخدم ${_currentUser!.username}');
+    if (_currentUser != null && _currentUser!.id != null) {
+      await ActivityLog.log('خروج', 'تسجيل الدخول', 'خروج المستخدم ${_currentUser!.username}');
+    }
     _currentUser = null;
-    await _clearSession();
   }
 
   /// إنشاء مستخدم Admin
@@ -208,7 +258,9 @@ class AuthService {
   /// حذف مستخدم
   Future<bool> deleteUser(int userId) async {
     final db = await _db.database;
-    final count = await db.delete('users', where: 'id = ?', whereArgs: [userId]);
+    // حساب المدير (حساب الترخيص) لا يُحذف
+    final count = await db.delete('users', where: "id = ? AND role != 'admin'", whereArgs: [userId]);
+    if (count > 0) await db.delete('user_permissions', where: 'user_id = ?', whereArgs: [userId]);
     return count > 0;
   }
 
@@ -228,9 +280,10 @@ class AuthService {
     }
   }
 
-  /// فحص صلاحية معينة للمستخدم الحالي
+  /// فحص صلاحية معينة للمستخدم الحالي.
+  /// 🔐 بلا مستخدم مسجّل = لا صلاحيات (الدخول إلزامي قبل أي شاشة).
   bool hasPermission(String permissionKey) {
-    if (_currentUser == null) return true; // No users = full access
+    if (_currentUser == null) return false;
     return _currentUser!.hasPermission(permissionKey);
   }
 }

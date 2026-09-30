@@ -224,7 +224,7 @@ class _CustomerProductsDialogState extends State<CustomerProductsDialog> {
                     ),
                     _buildSummaryItem(
                       'عدد المنتجات',
-                      '${_products.length}',
+                      _fmt(_products.length),
                       Colors.orange,
                     ),
                   ],

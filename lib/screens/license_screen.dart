@@ -3,6 +3,8 @@
 
 import 'package:flutter/material.dart';
 import '../services/license_service.dart';
+import '../services/auth_service.dart';
+import '../services/demo_mode.dart';
 
 class LicenseScreen extends StatefulWidget {
   const LicenseScreen({super.key});
@@ -50,8 +52,25 @@ class _LicenseScreenState extends State<LicenseScreen> {
           await _showWarningDialog(result.warning!);
         }
         
-        // الانتقال للتطبيق
-        Navigator.of(context).pushReplacementNamed('/');
+        // 👤 حساب الترخيص هو حساب المدير: أول تفعيل بلا مستخدمين ⇒ يُنشأ المدير
+        //    بنفس اسم وكلمة سر الترخيص (تحقق منهما السيرفر للتو) ويدخل مباشرة.
+        var route = '/login';
+        if (!DemoMode.isOn) {
+          try {
+            final auth = AuthService();
+            if (!await auth.hasAnyUsers()) {
+              final user = _licenseService.getStoredLicense()?.username ?? _usernameController.text.trim();
+              final created = await auth.createAdmin(user, _passwordController.text);
+              if (created != null && await auth.login(user, _passwordController.text) != null) {
+                route = '/main';
+              }
+            }
+          } catch (e) {
+            debugPrint('تعذّر إنشاء حساب المدير تلقائياً: $e');
+          }
+        }
+        if (!mounted) return;
+        Navigator.of(context).pushReplacementNamed(route);
       } else {
         setState(() {
           _errorMessage = _getErrorMessage(result.error, result.message);
@@ -342,8 +361,8 @@ class _LicenseCheckScreenState extends State<LicenseCheckScreen> {
           await _showWarningDialog(result.warningMessage!);
         }
         
-        // الانتقال للتطبيق
-        Navigator.of(context).pushReplacementNamed('/main');
+        // الانتقال لشاشة الدخول (الدخول مطلوب في كل فتح للبرنامج)
+        Navigator.of(context).pushReplacementNamed('/login');
       } else {
         // التعامل مع سبب الحظر
         switch (result.reason) {

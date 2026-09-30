@@ -347,7 +347,7 @@ class _PeopleReportsScreenState extends State<PeopleReportsScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'عدد الفواتير: ${person.totalInvoices}',
+                          'عدد الفواتير: ${_fmt(person.totalInvoices)}',
                           style: TextStyle(
                             fontSize: 14,
                             color: Colors.grey[600],

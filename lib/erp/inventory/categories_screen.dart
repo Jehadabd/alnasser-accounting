@@ -189,7 +189,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
       return;
     }
     if (c.count > 0) {
-      showError(context, 'القسم فيه ${c.count} مادة — انقلها إلى قسم آخر أولاً');
+      showError(context, 'القسم فيه ${fmtQty(c.count)} مادة — انقلها إلى قسم آخر أولاً');
       return;
     }
     final ok = await confirmDialog(context, 'حذف القسم', 'حذف القسم «${c.name}»؟', color: ErpColors.red);
@@ -221,9 +221,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
         await f(id);
         n++;
       }
-      if (mounted) showOk(context, '$done ($n)');
+      if (mounted) showOk(context, '$done (${fmtQty(n)})');
     } catch (e) {
-      if (mounted) showError(context, 'توقف بعد $n مادة: $e');
+      if (mounted) showError(context, 'توقف بعد ${fmtQty(n)} مادة: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
       await _load();
@@ -243,7 +243,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
     final picked = await showDialog<int>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: Text('نقل ${_sel.length} مادة إلى قسم'),
+        title: Text('نقل ${fmtQty(_sel.length)} مادة إلى قسم'),
         children: [
           SimpleDialogOption(onPressed: () => Navigator.pop(ctx, -1), child: const Text('— بلا قسم —')),
           for (final c in cats) SimpleDialogOption(onPressed: () => Navigator.pop(ctx, c.id), child: Text(c.name)),
@@ -331,7 +331,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
           leading: Icon(c.children.isEmpty ? Icons.folder_outlined : Icons.folder_copy_rounded,
               color: depth == 0 ? ErpColors.navy : ErpColors.blue),
           title: Text(c.name, style: TextStyle(fontWeight: depth == 0 ? FontWeight.bold : FontWeight.w500)),
-          subtitle: Text(c.children.isEmpty ? '${c.count} مادة' : '${c.count} مادة • ${c.total} مع الفروع',
+          subtitle: Text(c.children.isEmpty ? '${fmtQty(c.count)} مادة' : '${fmtQty(c.count)} مادة • ${fmtQty(c.total)} مع الفروع',
               style: const TextStyle(fontSize: 11)),
           onTap: () {
             setState(() {
@@ -384,7 +384,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
         });
         _loadProducts();
       }),
-      _chipTile('بلا قسم ($_uncategorized)', Icons.help_outline_rounded, _selectedNone, () {
+      _chipTile('بلا قسم (${fmtQty(_uncategorized)})', Icons.help_outline_rounded, _selectedNone, () {
         setState(() {
           _selectedNone = true;
           _selectedCat = null;
@@ -425,7 +425,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
                     _loadProducts();
                   })),
           const SizedBox(width: 8),
-          Text('${_sel.length} / ${_products.length}', style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text('${fmtQty(_sel.length)} / ${fmtQty(_products.length)}', style: const TextStyle(fontWeight: FontWeight.bold)),
           IconButton(
             tooltip: 'تحديد الكل',
             icon: const Icon(Icons.select_all_rounded),

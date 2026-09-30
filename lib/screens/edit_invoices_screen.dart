@@ -23,6 +23,7 @@ import 'package:alnaser/models/app_settings.dart';
 import '../services/smart_search/smart_search.dart'; // 🧠 البحث الذكي
 import 'dart:async'; // Added for Timer
 import '../widgets/app_side_nav.dart';
+import '../widgets/formatters.dart'; // 🔢 فواصل الآلاف
 
 class EditInvoicesScreen extends StatefulWidget {
   const EditInvoicesScreen({super.key});
@@ -311,7 +312,7 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
         onWillPop: _onWillPop,
         child: Scaffold(
           appBar: AppBar(
-            title: const Text('تعديل القوائم (الفواتير)'),
+            title: const Text('تعديل الفواتير'),
             // The title style is now managed by appBarTheme.titleTextStyle
           ),
         body: Row(
@@ -784,12 +785,12 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
                       ),
                     const SizedBox(height: 8),
                     Row(children:[
-                      Expanded(child: TextField(controller: qtyCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'الكمية'))),
+                      Expanded(child: TextField(controller: qtyCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [ThousandSeparatorDecimalInputFormatter()], decoration: const InputDecoration(labelText: 'الكمية'))),
                       const SizedBox(width: 8),
-                      Expanded(child: TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'السعر'))),
+                      Expanded(child: TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [ThousandSeparatorDecimalInputFormatter()], decoration: const InputDecoration(labelText: 'السعر'))),
                     ]),
                   ] else ...[
-                    TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'مبلغ التسوية')),
+                    TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [ThousandSeparatorDecimalInputFormatter()], decoration: const InputDecoration(labelText: 'مبلغ التسوية')),
                   ],
                   const SizedBox(height: 8),
                   TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: 'ملاحظة (اختياري)')),
@@ -805,14 +806,14 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
               double delta = 0; int? productId; String? productName; double? qty; double? price;
               if (byItem) {
                 if (selectedProduct == null) throw 'اختر منتجاً';
-                qty = double.tryParse(qtyCtrl.text.trim());
-                price = double.tryParse(priceCtrl.text.trim());
+                qty = double.tryParse(qtyCtrl.text.replaceAll(',', '').trim());
+                price = double.tryParse(priceCtrl.text.replaceAll(',', '').trim());
                 if (qty == null || price == null) throw 'أدخل الكمية والسعر بشكل صحيح';
                 delta = (qty * price).toDouble();
                 productId = selectedProduct!.id;
                 productName = selectedProduct!.name;
               } else {
-                final v = double.tryParse(amountCtrl.text.trim());
+                final v = double.tryParse(amountCtrl.text.replaceAll(',', '').trim());
                 if (v == null) throw 'أدخل مبلغاً صحيحاً';
                 delta = v;
               }

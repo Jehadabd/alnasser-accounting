@@ -17,8 +17,11 @@ import '../stock_helpers.dart';
 import 'purchase_return_service.dart';
 
 class PurchaseReturnEditorScreen extends StatefulWidget {
-  const PurchaseReturnEditorScreen({super.key, this.invoiceId});
+  const PurchaseReturnEditorScreen({super.key, this.invoiceId, this.supplier});
   final int? invoiceId;
+
+  /// مورد مختار مسبقاً (عند الفتح من صفحة المورد) — يُتجاهل إن مُرّرت فاتورة.
+  final PartyLite? supplier;
   @override
   State<PurchaseReturnEditorScreen> createState() => _PurchaseReturnEditorScreenState();
 }
@@ -45,25 +48,40 @@ class _PurchaseReturnEditorScreenState extends State<PurchaseReturnEditorScreen>
   @override
   void initState() {
     super.initState();
-    if (widget.invoiceId != null) _loadInvoice(widget.invoiceId!);
+    if (widget.invoiceId != null) {
+      _loadInvoice(widget.invoiceId!);
+    } else if (widget.supplier != null) {
+      _setSupplier(widget.supplier!);
+    }
   }
 
   Future<void> _pickSupplier() async {
     final s = await Pickers.supplier(context);
     if (s == null) return;
-    final inv = await _svc.supplierInvoices(s.id);
-    final db = await erpDb();
-    final cur = await db.query('suppliers', columns: ['currency'], where: 'id = ?', whereArgs: [s.id], limit: 1);
-    if (!mounted) return;
-    setState(() {
-      _supplier = s;
-      _invoices = inv;
-      _invoiceId = null;
-      _invoiceLabel = null;
-      _returnable = const {};
-      _currency = cur.isEmpty ? 'IQD' : ((cur.first['currency'] as String?) ?? 'IQD');
-    });
-    await _loadRate();
+    await _setSupplier(s);
+  }
+
+  Future<void> _setSupplier(PartyLite s) async {
+    try {
+      final inv = await _svc.supplierInvoices(s.id);
+      final db = await erpDb();
+      final cur = await db.query('suppliers', columns: ['currency'], where: 'id = ?', whereArgs: [s.id], limit: 1);
+      if (!mounted) return;
+      final changed = _supplier?.id != s.id;
+      setState(() {
+        // 🛡️ مواد فاتورة المورد السابق لا تبقى في مرتجع مورد آخر
+        if (changed && _invoiceId != null) _lines.clear();
+        _supplier = s;
+        _invoices = inv;
+        _invoiceId = null;
+        _invoiceLabel = null;
+        _returnable = const {};
+        _currency = cur.isEmpty ? 'IQD' : ((cur.first['currency'] as String?) ?? 'IQD');
+      });
+      await _loadRate();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
   }
 
   Future<void> _loadRate() async {
@@ -71,12 +89,24 @@ class _PurchaseReturnEditorScreenState extends State<PurchaseReturnEditorScreen>
       _rate.text = '1';
       return;
     }
-    final db = await erpDb();
-    final r = await CurrencyService.rateAt(db, _currency, _date);
-    if (mounted) setState(() => _rate.text = fmtMoney(r));
+    try {
+      final db = await erpDb();
+      final r = await CurrencyService.rateAt(db, _currency, _date);
+      if (mounted) setState(() => _rate.text = fmtMoney(r));
+    } catch (e) {
+      if (mounted) showError(context, 'تعذّر جلب سعر الصرف: $e');
+    }
   }
 
   Future<void> _loadInvoice(int id) async {
+    try {
+      await _loadInvoiceInner(id);
+    } catch (e) {
+      if (mounted) showError(context, 'تعذّر تحميل فاتورة الشراء: $e');
+    }
+  }
+
+  Future<void> _loadInvoiceInner(int id) async {
     final h = await _svc.invoiceHeader(id);
     if (h == null) {
       if (mounted) showError(context, 'فاتورة الشراء غير موجودة');
@@ -360,8 +390,12 @@ class _PurchaseReturnsListScreenState extends State<PurchaseReturnsListScreen> {
   }
 
   Future<void> _load() async {
-    final r = await PurchaseReturnService().list(from: _from, to: _to);
-    if (mounted) setState(() => _rows = r);
+    try {
+      final r = await PurchaseReturnService().list(from: _from, to: _to);
+      if (mounted) setState(() => _rows = r);
+    } catch (e) {
+      if (mounted) showError(context, 'تعذّر تحميل المرتجعات: $e');
+    }
   }
 
   String _mode(Map<String, Object?> r) {
@@ -419,10 +453,18 @@ class _PurchaseReturnsListScreenState extends State<PurchaseReturnsListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final total = _rows.where((r) => r['status'] == 'posted').fold(0.0, (s, r) => s + d0(r['total']));
+    // المجموع لكل عملة على حدة (كان يجمع الدينار والدولار في رقم واحد)
+    final totals = <String, double>{};
+    for (final r in _rows.where((r) => r['status'] == 'posted')) {
+      final cur = '${r['currency'] ?? 'IQD'}';
+      totals[cur] = (totals[cur] ?? 0) + d0(r['total']);
+    }
+    final totalText = totals.isEmpty
+        ? '0'
+        : totals.entries.map((e) => '${fmtMoney(e.value)} ${e.key == 'IQD' ? 'د.ع' : e.key}').join(' + ');
     return ErpPage(
       title: 'مرتجعات المشتريات',
-      subtitle: '${_rows.length} مرتجع — ${fmtMoney(total)}',
+      subtitle: '${_rows.length} مرتجع — $totalText',
       icon: Icons.assignment_return_outlined,
       actions: [
         ...exportActions(context,

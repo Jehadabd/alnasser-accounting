@@ -211,7 +211,7 @@ class _DueItemsScreenState extends State<DueItemsScreen> with SingleTickerProvid
             value: fmtMoney(_kpi['open'] ?? 0),
             icon: Icons.account_balance_wallet,
             color: ErpColors.green,
-            hint: '${(_kpi['count'] ?? 0).toStringAsFixed(0)} استحقاق'),
+            hint: '${fmtQty((_kpi['count'] ?? 0).round())} استحقاق'),
       ]),
       body: Column(children: [
         Material(
@@ -419,7 +419,7 @@ class _DueItemFormScreenState extends State<DueItemFormScreen> {
         affectBalance: _affect && _kind != 'installment',
       );
       if (!mounted) return;
-      showOk(context, 'حُفظ ${ids.length} استحقاق');
+      showOk(context, 'حُفظ ${fmtQty(ids.length)} استحقاق');
       Navigator.pop(context, true);
     } catch (e) {
       if (mounted) showError(context, e);

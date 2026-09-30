@@ -4,6 +4,7 @@
 //
 // القاعدة الذهبية: لا يُكتب قيد غير متوازن أبداً (مجموع المدين = مجموع الدائن).
 
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:sqflite/sqflite.dart';
 
 import '../services/database_service.dart';
@@ -115,7 +116,7 @@ class UnbalancedEntryException implements Exception {
   final double credit;
   @override
   String toString() =>
-      'القيد غير متوازن: مدين ${debit.toStringAsFixed(2)} ≠ دائن ${credit.toStringAsFixed(2)}';
+      'القيد غير متوازن: مدين ${NumberFormat('#,##0.00', 'en').format(debit)} ≠ دائن ${NumberFormat('#,##0.00', 'en').format(credit)}';
 }
 
 class LedgerException implements Exception {

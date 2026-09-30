@@ -426,7 +426,7 @@ class FinancialIntegrityGuard {
 
     // 10. شرط: لكل صنف، السعر > 0
     for (final item in completeItems) {
-      if (item.appliedPrice <= 0) {
+      if (item.appliedPrice <= 0 && !item.isGift) {
         failures.add(GuardResult.fail(
           'PS09', 'السعر صفر أو سالب للصنف "${item.productName}"',
         ));
@@ -439,7 +439,7 @@ class FinancialIntegrityGuard {
         ));
       }
       // 12. شرط: itemTotal > 0
-      if (item.itemTotal <= 0) {
+      if (item.itemTotal <= 0 && !item.isGift) {
         failures.add(GuardResult.fail(
           'PS11', 'إجمالي الصنف "${item.productName}" صفر أو سالب',
         ));
@@ -555,7 +555,7 @@ class FinancialIntegrityGuard {
     // 5. هل عدد الأصناف المحفوظة = العدد المتوقع؟
     final savedItems = await invoiceDao.getInvoiceItems(savedInvoice.id!);
     final completeSavedItems = savedItems.where((i) =>
-      i.productName.isNotEmpty && i.itemTotal > 0).toList();
+      i.productName.isNotEmpty && (i.itemTotal > 0 || i.isGift)).toList();
     if (completeSavedItems.length != expectedItemsCount) {
       anomalies.add(GuardResult.fail(
         'PO05', 'عدد الأصناف المحفوظة (${completeSavedItems.length}) ≠ المتوقع ($expectedItemsCount)',
@@ -715,7 +715,7 @@ class FinancialIntegrityGuard {
     // 1. تغيير كبير غير منطقي في المبلغ الإجمالي
     final oldTotal = oldInvoice.totalAmount;
     final newItems = newData.invoiceItems.where((i) =>
-      i.productName.isNotEmpty && i.itemTotal > 0).toList();
+      i.productName.isNotEmpty && (i.itemTotal > 0 || i.isGift)).toList();
     final newItemsTotal = newItems.fold(0.0, (s, i) => s + i.itemTotal);
     final newTotal = newItemsTotal + newData.loadingFee - newData.discount;
 
@@ -1295,14 +1295,14 @@ class FinancialIntegrityGuard {
     } else {
       // 5. لكل صنف سعر > 0 وكمية > 0
       for (final item in items) {
-        if (item.appliedPrice <= 0) {
+        if (item.appliedPrice <= 0 && !item.isGift) {
           failures.add(GuardResult.fail('MGR07', 'السعر صفر أو سالب للصنف "${item.productName}"'));
         }
         final qty = item.quantityIndividual ?? item.quantityLargeUnit ?? 0;
         if (qty <= 0) {
           failures.add(GuardResult.fail('MGR08', 'الكمية صفر أو سالبة للصنف "${item.productName}"'));
         }
-        if (item.itemTotal <= 0) {
+        if (item.itemTotal <= 0 && !item.isGift) {
           failures.add(GuardResult.fail('MGR09', 'إجمالي الصنف "${item.productName}" صفر أو سالب'));
         }
       }

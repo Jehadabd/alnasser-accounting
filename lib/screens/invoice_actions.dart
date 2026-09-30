@@ -116,8 +116,8 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
                              (item.quantityLargeUnit != null && item.quantityLargeUnit! > 0);
     return (item.productName.isNotEmpty &&
         hasValidQuantity &&
-        item.appliedPrice > 0 &&
-        item.itemTotal > 0 &&
+        (item.appliedPrice > 0 || item.isGift) && // 🎁 الهدية سعرها صفر
+        (item.itemTotal > 0 || item.isGift) &&
         (item.saleType != null && item.saleType!.isNotEmpty));
   }
   
@@ -292,6 +292,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
   /// بناء جدول الفاتورة الديناميكي بناءً على إعدادات الأعمدة
   pw.Widget _buildDynamicTableForPdf({
     required List<Map<String, dynamic>> pageRows,
+    bool anyLineDiscount = false,
     required int pageIndex,
     required int itemsPerPage,
     required List<Product> allProducts,
@@ -299,7 +300,10 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     required AppSettings appSettings,
   }) {
     // الحصول على الأعمدة المرئية مرتبة
-    final visibleColumns = appSettings.invoiceDesign.visibleColumns;
+    // 🏷️ «السعر قبل الخصم» و«الخصم» فقط إن كان في الفاتورة صنف مخصوم أو هدية
+    final visibleColumns = appSettings.invoiceDesign.visibleColumns
+        .where((c) => anyLineDiscount || (c.id != 'discount' && c.id != 'priceBeforeDiscount'))
+        .toList();
     
     // إذا لم تُحدد أعمدة، استخدم الافتراضية
     if (visibleColumns.isEmpty) {
@@ -393,6 +397,9 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         return _headerCell(label, font, color: PdfColor.fromInt(appSettings.itemPriceColor));
       case 'amount':
         return _headerCell(label, font, color: PdfColor.fromInt(appSettings.itemTotalColor));
+      case 'priceBeforeDiscount':
+      case 'discount':
+        return _headerCell(label, font);
       case 'weight':
         return _headerCell(label, font);
       case 'expiry':
@@ -421,6 +428,12 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         return _dataCell(formatNumber(item.appliedPrice, forceDecimal: true), font, color: PdfColor.fromInt(appSettings.itemPriceColor));
       case 'amount':
         return _dataCell(formatNumber(item.itemTotal, forceDecimal: true), font, color: PdfColor.fromInt(appSettings.itemTotalColor));
+      case 'priceBeforeDiscount':
+        return _dataCell(
+            item.hasLineDiscount ? formatNumber(item.priceBeforeDiscount ?? item.appliedPrice, forceDecimal: true) : '',
+            font);
+      case 'discount':
+        return _dataCell(item.discountLabel, font);
       case 'weight':
         final weight = product?.baseWeight;
         if (weight != null && weight > 0) {
@@ -956,6 +969,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
                         // جدول الفاتورة الديناميكي بناءً على إعدادات الأعمدة
                         _buildDynamicTableForPdf(
                           pageRows: pageRows,
+                          anyLineDiscount: itemsForPdf.any((it) => it.hasLineDiscount), // 🏷️
                           pageIndex: pageIndex,
                           itemsPerPage: itemsPerPage,
                           allProducts: allProducts,

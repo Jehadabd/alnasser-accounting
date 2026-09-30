@@ -402,6 +402,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
   Future<void> _testProfitCalculation() async {
     try {
       final result = await _databaseService.testProfitCalculation(widget.product.id!);
+      String n(Object? v) => v is num ? NumberFormat('#,##0.##', 'en_US').format(v) : '${v ?? ''}';
       
       if (mounted) {
         showDialog(
@@ -413,11 +414,11 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('تكلفة المنتج: ${result['product_cost_price']} د.ع'),
-                  Text('الكمية الإجمالية: ${result['total_quantity']}'),
-                  Text('إجمالي المبيعات: ${result['total_sales']} د.ع'),
-                  Text('إجمالي التكلفة: ${result['total_cost']} د.ع'),
-                  Text('إجمالي الربح: ${result['total_profit']} د.ع'),
+                  Text('تكلفة المنتج: ${n(result['product_cost_price'])} د.ع'),
+                  Text('الكمية الإجمالية: ${n(result['total_quantity'])}'),
+                  Text('إجمالي المبيعات: ${n(result['total_sales'])} د.ع'),
+                  Text('إجمالي التكلفة: ${n(result['total_cost'])} د.ع'),
+                  Text('إجمالي الربح: ${n(result['total_profit'])} د.ع'),
                   const Divider(),
                   Text('صيغة الحساب: ${result['calculation_formula']}'),
                   Text('التحقق: ${result['verification']}'),
@@ -436,10 +437,10 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text('فاتورة #${item['invoice_number'] ?? item['invoice_id']} - ${item['date']}'),
-                          Text('الكمية: ${item['quantity']}'),
-                          Text('التكلفة: ${item['cost_price']} د.ع'),
-                          Text('سعر البيع: ${item['selling_price']} د.ع'),
-                          Text('الربح: ${item['profit']} د.ع'),
+                          Text('الكمية: ${n(item['quantity'])}'),
+                          Text('التكلفة: ${n(item['cost_price'])} د.ع'),
+                          Text('سعر البيع: ${n(item['selling_price'])} د.ع'),
+                          Text('الربح: ${n(item['profit'])} د.ع'),
                         ],
                       ),
                     )

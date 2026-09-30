@@ -26,6 +26,7 @@
 
 import 'dart:convert';
 
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:sqflite/sqflite.dart';
 
 import '../services/database_service.dart';
@@ -42,10 +43,12 @@ class PostingSummary {
   int unchanged = 0;
   final List<String> errors = [];
 
+  static final NumberFormat _nf = NumberFormat('#,##0', 'en');
+
   @override
   String toString() =>
-      'جديد $created، معدّل $updated، محذوف $deleted، بلا تغيير $unchanged'
-      '${errors.isEmpty ? '' : '، أخطاء ${errors.length}'}';
+      'جديد ${_nf.format(created)}، معدّل ${_nf.format(updated)}، محذوف ${_nf.format(deleted)}، بلا تغيير ${_nf.format(unchanged)}'
+      '${errors.isEmpty ? '' : '، أخطاء ${_nf.format(errors.length)}'}';
 }
 
 /// مصدر واحد جاهز للترحيل.

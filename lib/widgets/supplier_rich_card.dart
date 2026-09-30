@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import '../models/supplier.dart';
 import 'package:intl/intl.dart' as intl;
 
+/// بطاقة مورد في لوحة الموردين.
+///
+/// الرصيد يُعرض بالعملتين (الدينار والدولار) لأن دين المورد يُحسب لكل عملة على
+/// حدة؛ كانت تعرض عملته المفضلة فقط، فمورد عليه دين بالدولار وحده يظهر «0 د.ع».
 class SupplierRichCard extends StatelessWidget {
   final Supplier supplier;
   final VoidCallback onTap;
@@ -16,16 +20,21 @@ class SupplierRichCard extends StatelessWidget {
     required this.onEdit,
   });
 
+  /// الارتفاع الذي تحتاجه البطاقة (يُمرَّر لـ mainAxisExtent في الشبكة).
+  static const double preferredHeight = 300;
+
+  /// أقل عرض مريح للبطاقة (لحساب عدد الأعمدة).
+  static const double minWidth = 260;
+
+  static final intl.NumberFormat _money = intl.NumberFormat('#,##0.##', 'en_US');
+
   @override
   Widget build(BuildContext context) {
-    final hasDebt = supplier.hasDebt;
-    final totalBalance = supplier.totalDebt;
-    final totalPaid = supplier.totalPayments.toDouble(); // Assuming we track this
-    final totalVolume = totalBalance + totalPaid;
-    final progress = totalVolume > 0 ? (totalPaid / totalVolume) : 0.0;
-    
-    // Determine currency logic safely
-    final currencySymbol = supplier.currency == 'USD' ? '\$' : 'د.ع';
+    final iqd = supplier.totalDebtIqd;
+    final usd = supplier.totalDebtUsd;
+    final preferUsd = supplier.currency == 'USD';
+    final showIqd = iqd.abs() > 0.01 || (usd.abs() <= 0.01 && !preferUsd);
+    final showUsd = usd.abs() > 0.01 || (iqd.abs() <= 0.01 && preferUsd);
 
     return GestureDetector(
       onTap: onTap,
@@ -42,195 +51,203 @@ class SupplierRichCard extends StatelessWidget {
           ],
           border: Border.all(color: Colors.grey.withOpacity(0.1)),
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: Stack(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // DELETE BUTTON HOVER EFFECT (Simulated by simple position)
-              Positioned(
-                top: 12,
-                left: 12,
-                child: IconButton(
-                  icon: Icon(Icons.delete_outline, color: Colors.grey[400], size: 20),
-                  onPressed: onDelete,
-                  tooltip: 'حذف المورد',
-                  style: IconButton.styleFrom(
-                    backgroundColor: Colors.grey[50],
-                    hoverColor: Colors.red.withOpacity(0.1),
-                    focusColor: Colors.red.withOpacity(0.1),
+              // HEADER
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Avatar
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF455A64), Color(0xFF607D8B)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF455A64).withOpacity(0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        supplier.name.trim().isNotEmpty ? supplier.name.trim()[0].toUpperCase() : '?',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ),
-
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // HEADER
-                    Row(
+                  const SizedBox(width: 16),
+                  // Info
+                  Expanded(
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Avatar
-                        Container(
-                          width: 56,
-                          height: 56,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF455A64), Color(0xFF607D8B)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF455A64).withOpacity(0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Center(
-                            child: Text(
-                              supplier.name.isNotEmpty ? supplier.name[0].toUpperCase() : '?',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        // Info
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                supplier.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF1E293B),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue[50],
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  supplier.paymentTerms == 'credit' ? 'آجل' : 'نقدي', // Simplified category logic
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.blue[700],
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    
-                    const Spacer(),
-
-                    // STATS ROW
-                    Container(
-                      margin: const EdgeInsets.symmetric(vertical: 16),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          _buildMiniStat('الفواتير', '${supplier.totalInvoices}'),
-                          // Note: totalPayments might need updates in Supplier model to be accurate
-                          _buildMiniStat('المدفوعات', '${supplier.totalPayments}'), 
-                        ],
-                      ),
-                    ),
-
-                    // FINANCIALS
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
                         Text(
-                          'الرصيد المتبقي',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                        ),
-                        Text(
-                          '${_formatCurrency(supplier.totalDebt)} $currencySymbol',
-                          style: TextStyle(
+                          supplier.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
-                            color: hasDebt ? const Color(0xFFEF4444) : const Color(0xFF10B981), // Red if debt, Green if clean
+                            color: Color(0xFF1E293B),
                           ),
+                        ),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: [
+                            _chip(supplier.paymentTerms == 'credit' ? 'آجل' : 'نقدي', Colors.blue),
+                            _chip(preferUsd ? 'دولار' : 'دينار', Colors.blueGrey),
+                          ],
                         ),
                       ],
                     ),
+                  ),
+                ],
+              ),
 
-                    const SizedBox(height: 8),
+              const Spacer(),
 
-                    // PROGRESS BAR
-                    Stack(
-                      children: [
-                        Container(
-                          height: 6,
-                          width: double.infinity,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                        FractionallySizedBox(
-                          widthFactor: progress.clamp(0.0, 1.0),
-                          child: Container(
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF3B82F6), // Blue 500
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    
-                    // ACTION BUTTON
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: onTap,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: const Color(0xFF334155),
-                          elevation: 0,
-                          side: BorderSide(color: Colors.grey[200]!),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                        child: const Text(
-                          'عرض التفاصيل',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                        ),
-                      ),
-                    ),
+              // STATS ROW
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildMiniStat('الفواتير المؤكدة', '${supplier.totalInvoices}'),
+                    _buildMiniStat('الدفعات', '${supplier.totalPayments}'),
                   ],
                 ),
               ),
+
+              // FINANCIALS
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'الرصيد',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (showIqd) _balanceLine(iqd, 'د.ع'),
+                        if (showUsd) _balanceLine(usd, '\$'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 12),
+
+              // ACTIONS: التفاصيل + تعديل + حذف
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: onTap,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: const Color(0xFF334155),
+                        elevation: 0,
+                        side: BorderSide(color: Colors.grey[200]!),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: const Text(
+                        'عرض التفاصيل',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: Icon(Icons.edit_outlined, color: Colors.blueGrey[400], size: 20),
+                    onPressed: onEdit,
+                    tooltip: 'تعديل بيانات المورد',
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.delete_outline, color: Colors.red[300], size: 20),
+                    onPressed: onDelete,
+                    tooltip: 'حذف المورد',
+                    hoverColor: Colors.red.withOpacity(0.1),
+                  ),
+                ],
+              ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// موجب = دين علينا للمورد (أحمر)، سالب = رصيد لنا عنده (أخضر).
+  Widget _balanceLine(double amount, String symbol) {
+    final Color color;
+    final String suffix;
+    if (amount > 0.01) {
+      color = const Color(0xFFEF4444);
+      suffix = '';
+    } else if (amount < -0.01) {
+      color = const Color(0xFF10B981);
+      suffix = ' (لنا)';
+    } else {
+      color = const Color(0xFF10B981);
+      suffix = '';
+    }
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: AlignmentDirectional.centerEnd,
+      child: Text(
+        '${_money.format(amount.abs())} $symbol$suffix',
+        maxLines: 1,
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(String text, MaterialColor color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color[50],
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          color: color[700],
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -249,9 +266,5 @@ class SupplierRichCard extends StatelessWidget {
         ),
       ],
     );
-  }
-
-  String _formatCurrency(double amount) {
-    return intl.NumberFormat("#,##0", "en_US").format(amount);
   }
 }

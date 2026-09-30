@@ -273,12 +273,12 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
       
       if (widget.initialCost != null) {
         // Assume cost is the base cost and unit price. User can edit.
-        _baseCostController.text = widget.initialCost!.toString();
+        _baseCostController.text = NumberFormat('#,##0.##', 'en_US').format(widget.initialCost!);
         // Default margin 20%? or just same? Let's same for now.
-        _basePriceController.text = widget.initialCost!.toString();
+        _basePriceController.text = NumberFormat('#,##0.##', 'en_US').format(widget.initialCost!);
         
         // Also pre-fill the "Current Invoice" buy fields
-        _currentBuyCostController.text = widget.initialCost!.toString();
+        _currentBuyCostController.text = NumberFormat('#,##0.##', 'en_US').format(widget.initialCost!);
       }
       
       if (widget.initialUnit != null) {
@@ -292,7 +292,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
       }
       
       if (widget.initialQty != null) {
-        _currentBuyQtyController.text = widget.initialQty!.toString();
+        _currentBuyQtyController.text = NumberFormat('#,##0.##', 'en_US').format(widget.initialQty!);
         _stockController.text = '0'; 
       }
     }
@@ -367,7 +367,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
       setState(() {
         _selectedExistingProduct = matched;
         _invoiceUnitController.text = matched!.unit;
-        _invoicePriceController.text = (matched.costPrice ?? 0).toString();
+        _invoicePriceController.text = NumberFormat('#,##0.##', 'en_US').format(matched.costPrice ?? 0);
         if (searchController != null) {
           searchController.text = matched.name;
         }
@@ -425,7 +425,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         
         // 4. Set buy cost to original invoice cost
         if (_invoiceOriginalCost > 0) {
-           _currentBuyCostController.text = _invoiceOriginalCost.toStringAsFixed(0);
+           _currentBuyCostController.text = NumberFormat('#,##0', 'en_US').format(_invoiceOriginalCost);
         }
 
         // 5. Trigger calculation immediately
@@ -458,8 +458,8 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
     final sellPerBase = costPerBase * 1.10; 
     
     setState(() {
-      _baseCostController.text = costPerBase.toStringAsFixed(0);
-      _basePriceController.text = sellPerBase.toStringAsFixed(0);
+      _baseCostController.text = NumberFormat('#,##0', 'en_US').format(costPerBase);
+      _basePriceController.text = NumberFormat('#,##0', 'en_US').format(sellPerBase);
     });
   }
 
@@ -545,7 +545,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
               setState(() {
                 _selectedExistingProduct = product;
                 _invoiceUnitController.text = product.unit;
-                _invoicePriceController.text = (product.costPrice ?? 0).toString();
+                _invoicePriceController.text = NumberFormat('#,##0.##', 'en_US').format(product.costPrice ?? 0);
               });
             },
             optionsViewBuilder: (context, onSelected, options) {
@@ -590,7 +590,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                           leading: const Icon(Icons.inventory_2_outlined, color: kPrimaryColor),
                           title: Text(option.name, style: const TextStyle(fontWeight: FontWeight.bold)),
                           subtitle: Text(
-                            '${option.unit} - التكلفة: ${option.costPrice ?? option.price1}${option.barcode != null && option.barcode!.isNotEmpty ? " | باركود: ${option.barcode}" : ""}',
+                            '${option.unit} - التكلفة: ${NumberFormat('#,##0.##', 'en_US').format(option.costPrice ?? option.price1)}${option.barcode != null && option.barcode!.isNotEmpty ? " | باركود: ${option.barcode}" : ""}',
                             style: const TextStyle(fontSize: 12),
                           ),
                           onTap: () => onSelected(option),
@@ -781,6 +781,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                              controller: _invoicePriceController, 
                              label: 'سعر الشراء', 
                              keyboardType: TextInputType.number,
+                             inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                              onChanged: (_) => setState(() {}), // لتحديث حساب التكلفة
                            ),
                          ),
@@ -1243,9 +1244,9 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                            decoration: const InputDecoration(labelText: 'الوحدة المشتراة', border: OutlineInputBorder()),
                         )),
                         const SizedBox(width: 12),
-                        Expanded(child: ModernTextField(controller: _currentBuyQtyController, label: 'الكمية', keyboardType: TextInputType.number)),
+                        Expanded(child: ModernTextField(controller: _currentBuyQtyController, label: 'الكمية', keyboardType: TextInputType.number, inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
                         const SizedBox(width: 12),
-                        Expanded(child: ModernTextField(controller: _currentBuyCostController, label: 'سعر الشراء', hint: 'سعر الوحدة المختارة')),
+                        Expanded(child: ModernTextField(controller: _currentBuyCostController, label: 'سعر الشراء', hint: 'سعر الوحدة المختارة', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
                       ],
                     ),
                  ],

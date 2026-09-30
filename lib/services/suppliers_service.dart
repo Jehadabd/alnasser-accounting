@@ -15,6 +15,7 @@ import 'database_service.dart';
 import 'database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 import '../services/database/dao/supplier_dao.dart';
 import '../services/database/dao/supplier_delegate_dao.dart';
+import 'package:intl/intl.dart' show NumberFormat; // 🔢 فواصل الآلاف
 
 typedef SupplierInvoice = PurchaseInvoice;
 typedef SupplierReceipt = SupplierPayment;
@@ -451,7 +452,7 @@ class SuppliersService {
               [newCostPerPiece, DateTime.now().toIso8601String(), productId],
             );
           }
-          updatedProducts.add('$productName: ${oldCost.toStringAsFixed(2)} -> ${newCostPerPiece.toStringAsFixed(2)}');
+          updatedProducts.add('$productName: ${NumberFormat('#,##0.##', 'en').format(oldCost)} -> ${NumberFormat('#,##0.##', 'en').format(newCostPerPiece)}');
         }
       } catch (e) {
         print('Error updating product $productId: $e');

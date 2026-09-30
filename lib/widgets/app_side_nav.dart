@@ -29,9 +29,9 @@ class AppSideNav extends StatelessWidget {
     final allItems = [
       _NavItem(route: '/pos', title: 'الكاشير', icon: Icons.point_of_sale, color: const Color(0xFFFF5722),
           permission: AppPermissions.posAccess, isFullAppOnly: true),
-      _NavItem(route: '/create_invoice', title: 'إنشاء قائمة', icon: Icons.list_alt, color: const Color(0xFF2196F3),
+      _NavItem(route: '/create_invoice', title: 'إنشاء فاتورة', icon: Icons.list_alt, color: const Color(0xFF2196F3),
           permission: AppPermissions.createInvoice, isFullAppOnly: true),
-      _NavItem(route: '/edit_invoices', title: 'تعديل القوائم', icon: Icons.edit_note, color: const Color(0xFF8D6E63),
+      _NavItem(route: '/edit_invoices', title: 'تعديل الفواتير', icon: Icons.edit_note, color: const Color(0xFF8D6E63),
           permission: AppPermissions.editInvoices, isFullAppOnly: true),
       _NavItem(route: '/debt_register', title: 'سجل الديون', icon: Icons.book, color: const Color(0xFF4A90E2),
           permission: AppPermissions.debtRegister),
@@ -51,7 +51,12 @@ class AppSideNav extends StatelessWidget {
           permission: AppPermissions.settings),
     ];
 
-    final items = isDebtsOnly ? allItems.where((item) => !item.isFullAppOnly).toList() : allItems;
+    // 👤 الموظف يرى فقط ما تسمح به صلاحياته
+    final auth = AuthService();
+    final items = allItems
+        .where((item) => !(isDebtsOnly && item.isFullAppOnly))
+        .where((item) => item.permission == null || auth.hasPermission(item.permission!))
+        .toList();
 
     return Container(
       width: 72,

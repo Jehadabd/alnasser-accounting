@@ -12,6 +12,8 @@ import '../models/purchase_invoice_item.dart';
 import '../models/supplier_delegate.dart';
 import '../services/purchase_service.dart';
 import '../erp/pickers.dart' show CashBoxDropdown, WarehouseDropdown;
+import '../erp/erp_common.dart' show PeriodLock, parseMoney, fmtQty, confirmDialog, currentUserId;
+import '../widgets/formatters.dart' show ThousandSeparatorDecimalInputFormatter;
 import '../services/database_service.dart';
 import '../widgets/quick_product_creation_dialog.dart';
 import '../services/ocr_service_factory.dart';
@@ -55,6 +57,24 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   int? _cashBoxId;
   final _delegateNameController = TextEditingController();
   List<SupplierDelegate> _delegates = []; // For auto-complete or check
+  // متحكم حقل الإكمال التلقائي — نربط به مستمعاً واحداً فقط (كان يُضاف مستمع
+  // جديد في كل إعادة بناء)
+  TextEditingController? _delegateFieldController;
+  // 🛡️ في التعديل لا يُغيَّر المورد: تغييره كان يُبقي مساهمة الفاتورة على دين
+  //    المورد القديم ويضيفها للجديد (دين مزدوج).
+  bool _supplierLocked = false;
+
+  static String _normCurrency(String? c) => c == 'USD' ? 'USD' : 'IQD';
+
+  static final intl.NumberFormat _moneyFmt = intl.NumberFormat('#,##0.##', 'en_US');
+
+  /// «نقد» = مدفوعة بالكامل: المسدد يتبع الإجمالي كلما تغيّرت المواد
+  /// (كان يُضبط مرة واحدة عند اختيار «نقد» فيبقى 0 أو قيمة قديمة ⇒ دين وهمي).
+  void _syncCashPaid() {
+    if (_paymentType == 'نقد') {
+      _paidAmountController.text = _moneyFmt.format(_totalAmount);
+    }
+  }
 
   @override
   void initState() {
@@ -67,76 +87,127 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       _notesController.text = inv.notes ?? '';
       _invoiceDate = inv.date;
       _dueDate = inv.dueDate;
-      _currency = inv.currency;
+      _currency = _normCurrency(inv.currency);
       _attachmentPath = inv.attachmentPath;
-      _paidAmountController.text = inv.paidAmount.toString();
+      _paidAmountController.text = _moneyFmt.format(inv.paidAmount);
       _paymentType = inv.isPaid ? 'نقد' : (inv.paidAmount > 0 ? 'دين' : (inv.totalAmount == 0 ? 'نقد' : 'دين'));
     } else if (_selectedSupplier != null) {
-      _currency = _selectedSupplier!.currency;
+      _currency = _normCurrency(_selectedSupplier!.currency);
     }
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _invoiceNumberController.dispose();
+    _notesController.dispose();
+    _paidAmountController.dispose();
+    _delegateNameController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
-    setState(() => _isLoading = true);
-    
     final purchaseService = context.read<PurchaseService>();
     final dbService = DatabaseService();
-    
-    final suppliers = await purchaseService.getSuppliers();
-    final products = await dbService.getAllProducts();
-    
-    setState(() {
-      _suppliers = suppliers;
-      _products = products;
-      // Find matching supplier from loaded list (to match dropdown items by reference)
-      if (widget.existingInvoice != null) {
-        try {
-          _selectedSupplier = _suppliers.firstWhere((s) => s.id == widget.existingInvoice!.supplierId);
-          _currency = _selectedSupplier!.currency;
-          _loadDelegatesForSupplier(_selectedSupplier!.id!);
-        } catch (_) {}
-      } else if (_selectedSupplier != null) {
-        _selectedSupplier = _suppliers.firstWhere(
-          (s) => s.id == _selectedSupplier!.id,
-          orElse: () => _selectedSupplier!,
-        );
-        _currency = _selectedSupplier!.currency;
-        _loadDelegatesForSupplier(_selectedSupplier!.id!);
-      }
-      _isLoading = false;
-    });
 
-    if (widget.existingInvoice != null) {
-      _loadExistingItems(widget.existingInvoice!.id!);
-      _loadExt(widget.existingInvoice!.id!);
+    try {
+      final suppliers = await purchaseService.getSuppliers();
+      final products = await dbService.getAllProducts();
+      if (!mounted) return;
+
+      int? delegatesFor;
+      setState(() {
+        _suppliers = suppliers;
+        _products = products;
+        // Find matching supplier from loaded list (to match dropdown items by reference)
+        final existing = widget.existingInvoice;
+        if (existing != null) {
+          final idx = _suppliers.indexWhere((s) => s.id == existing.supplierId);
+          if (idx != -1) {
+            _selectedSupplier = _suppliers[idx];
+            _supplierLocked = true;
+            delegatesFor = _selectedSupplier!.id;
+          }
+          // 🛡️ عملة الفاتورة تبقى عملتها: كانت تُستبدل بعملة المورد المفضلة
+          //    فتتحول فاتورة دولار إلى دينار بالمبلغ نفسه عند أي تعديل.
+          _currency = _normCurrency(existing.currency);
+        } else if (_selectedSupplier != null) {
+          final pre = _selectedSupplier!;
+          final idx = _suppliers.indexWhere((s) => s.id == pre.id);
+          if (idx != -1) {
+            _selectedSupplier = _suppliers[idx];
+          } else {
+            // 🛡️ قيمة ليست ضمن عناصر القائمة المنسدلة تُسقط الشاشة
+            _suppliers = [..._suppliers, pre];
+          }
+          _currency = _normCurrency(_selectedSupplier!.currency);
+          delegatesFor = _selectedSupplier!.id;
+        }
+        _isLoading = false;
+      });
+
+      if (delegatesFor != null) _loadDelegatesForSupplier(delegatesFor!);
+      final existingId = widget.existingInvoice?.id;
+      if (existingId != null) {
+        _loadExistingItems(existingId);
+        _loadExt(existingId);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذّر تحميل البيانات: $e'), backgroundColor: Colors.red),
+      );
     }
   }
 
   Future<void> _loadExistingItems(int invoiceId) async {
     final purchaseService = context.read<PurchaseService>();
-    final items = await purchaseService.getInvoiceItems(invoiceId);
-    
-    // Refresh product names for display
-    final dbService = DatabaseService();
-    final allProducts = await dbService.getAllProducts();
-    
-    final updatedItems = items.map((item) {
-      final p = allProducts.firstWhere((p) => p.id == item.productId, orElse: () => Product(name: 'محذوف', unit: 'piece', unitPrice: 0, price1: 0, createdAt: DateTime.now(), lastModifiedAt: DateTime.now(), categoryId: 0, isWeighable: false));
-      return item.copyWith(productName: p.name);
-    }).toList();
+    try {
+      final items = await purchaseService.getInvoiceItems(invoiceId);
 
-    setState(() {
-      _items = updatedItems;
-    });
+      // Refresh product names for display
+      final dbService = DatabaseService();
+      final allProducts = await dbService.getAllProducts();
+
+      final updatedItems = items.map((item) {
+        final p = allProducts.firstWhere((p) => p.id == item.productId, orElse: () => Product(name: 'محذوف', unit: 'piece', unitPrice: 0, price1: 0, createdAt: DateTime.now(), lastModifiedAt: DateTime.now(), categoryId: 0, isWeighable: false));
+        return item.copyWith(productName: p.name);
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _items = updatedItems;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذّر تحميل مواد الفاتورة: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   Future<void> _loadDelegatesForSupplier(int supplierId) async {
     final purchaseService = context.read<PurchaseService>();
-    final delegates = await purchaseService.getDelegatesForSupplier(supplierId);
-    setState(() {
-      _delegates = delegates;
-    });
+    try {
+      final delegates = await purchaseService.getDelegatesForSupplier(supplierId);
+      if (!mounted || _selectedSupplier?.id != supplierId) return;
+      String? prefill;
+      // 🛡️ في التعديل: اسم مندوب الفاتورة يظهر في الحقل، وإلا كان الحفظ يفكّ
+      //    ربطه بصمت (delegateId = null).
+      final delegateId = widget.existingInvoice?.delegateId;
+      if (delegateId != null && _delegateNameController.text.isEmpty) {
+        final i = delegates.indexWhere((d) => d.id == delegateId);
+        if (i != -1) prefill = delegates[i].name;
+      }
+      setState(() => _delegates = delegates);
+      if (prefill != null) {
+        _delegateNameController.text = prefill;
+        _delegateFieldController?.text = prefill;
+      }
+    } catch (_) {
+      // المندوب اختياري: فشل تحميل القائمة لا يمنع إدخال الفاتورة
+    }
   }
 
   double get _totalAmount => _items.fold(0, (sum, item) => sum + item.totalPrice);
@@ -240,7 +311,8 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       // Use timestamp to guarantee uniqueness and avoid PathExistsException
       final uniqueName = '${baseName}_$timestamp$ext'; 
       final savedFile = await originalFile.copy('${attachmentsDir.path}/$uniqueName');
-      
+      if (!mounted) return;
+
       setState(() {
         _attachmentPath = savedFile.path;
       });
@@ -254,11 +326,14 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     setState(() => _isLoading = true);
     
     try {
-      // 🚀 Use Ensemble AI Service (InvoiceNet Logic)
-      final ensemble = context.read<EnsembleAIService>(); // Ensure it's in provider or instance
-      // Fallback if not provided (temp fix for hot reload safety):
-      final aiService = EnsembleAIService(); 
-      
+      // 🚀 Use Ensemble AI Service (InvoiceNet Logic) — من المزوّد إن وُجد
+      EnsembleAIService aiService;
+      try {
+        aiService = context.read<EnsembleAIService>();
+      } catch (_) {
+        aiService = EnsembleAIService();
+      }
+
       final result = await aiService.extractInvoiceData(file);
 
       if (result.containsKey('error')) {
@@ -315,6 +390,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
          String pName = matchedProduct?.name ?? name;
          String pUnit = extractedUnit.isNotEmpty ? extractedUnit : (matchedProduct?.unit ?? 'قطعة');
 
+         // 🛡️ كمية صفرية أو سالبة من القراءة الآلية: قسمة على صفر ⇒ سعر لا نهائي
+         if (qty <= 0) qty = 1.0;
+
          _items.add(PurchaseInvoiceItem(
             productId: pId,
             productName: pName,
@@ -326,7 +404,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
          ));
          addedCount++;
       }
+      _syncCashPaid();
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('✅ تم استخراج $addedCount صنفاً بنجاح!'),
@@ -335,6 +415,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       );
 
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('⚠️ تنبيه: $e'),
@@ -343,7 +424,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         ),
       );
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -392,12 +473,18 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                     value: s,
                     child: Text(s.name, overflow: TextOverflow.ellipsis),
                   )).toList(),
-                  onChanged: (val) {
-                    setState(() {
-                      _selectedSupplier = val;
-                      _currency = val?.currency ?? 'IQD';
-                    });
-                  },
+                  onChanged: _supplierLocked
+                      ? null
+                      : (val) {
+                          setState(() {
+                            _selectedSupplier = val;
+                            _currency = _normCurrency(val?.currency);
+                            // 🛡️ مندوبو المورد السابق لا يُربطون بفاتورة المورد الجديد
+                            _delegates = [];
+                          });
+                          final id = val?.id;
+                          if (id != null) _loadDelegatesForSupplier(id);
+                        },
                   validator: (val) => val == null ? 'اختر المورد' : null,
                 ),
               ),
@@ -480,10 +567,8 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                   ],
                   onChanged: (val) {
                     setState(() {
-                      _paymentType = val!;
-                      if (_paymentType == 'نقد') {
-                        _paidAmountController.text = _totalAmount.toString();
-                      }
+                      _paymentType = val ?? 'دين';
+                      _syncCashPaid();
                     });
                   },
                 ),
@@ -499,7 +584,14 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                     prefixIcon: Icon(Icons.money),
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
-                  keyboardType: TextInputType.number,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                  validator: (v) {
+                    final paid = parseMoney(v) ?? 0.0;
+                    if (paid < 0) return 'مبلغ غير صالح';
+                    if (paid > _totalAmount + 0.01) return 'أكبر من إجمالي الفاتورة';
+                    return null;
+                  },
                 ),
               ),
             ],
@@ -533,13 +625,16 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               _delegateNameController.text = selection;
             },
             fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-              // Sync with our controller
-              if (_delegateNameController.text.isNotEmpty && controller.text.isEmpty) {
-                controller.text = _delegateNameController.text;
+              // Sync with our controller — مستمع واحد لكل متحكم (لا يتراكم مع كل بناء)
+              if (!identical(_delegateFieldController, controller)) {
+                _delegateFieldController = controller;
+                if (_delegateNameController.text.isNotEmpty && controller.text.isEmpty) {
+                  controller.text = _delegateNameController.text;
+                }
+                controller.addListener(() {
+                  _delegateNameController.text = controller.text;
+                });
               }
-              controller.addListener(() {
-                _delegateNameController.text = controller.text;
-              });
 
               return TextField(
                 controller: controller,
@@ -684,7 +779,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
           Expanded(
             flex: 1,
             child: Text(
-              '${item.quantity}',
+              fmtQty(item.quantity),
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
@@ -722,8 +817,12 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             width: 40,
             child: IconButton(
               icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+              tooltip: 'حذف المادة',
               onPressed: () {
-                setState(() => _items.removeAt(index));
+                setState(() {
+                  _items.removeAt(index);
+                  _syncCashPaid();
+                });
               },
             ),
           ),
@@ -825,20 +924,24 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               }
               
               // 2. Update the invoice item
-              _items[index] = PurchaseInvoiceItem(
-                productId: product.id!,
-                productName: product.name,
-                quantity: quantity,
-                unitPrice: price,
-                totalPrice: quantity * price,
-                unitName: unit,
-                conversionFactor: 1.0, // Factor calculation handled in save or could be improved here
-              );
-              
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('تم تعريف المنتج بنجاح')),
-              );
+              //    🛡️ معامل التحويل من هرم وحدات المادة (كان ثابتاً 1.0 ⇒ شراء
+              //    «كرتون» يُدخل للمخزون قطعة واحدة بكلفة الكرتون كاملة)
+              if (index < _items.length) {
+                _items[index] = PurchaseInvoiceItem(
+                  productId: product.id ?? -1,
+                  productName: product.name,
+                  quantity: quantity,
+                  unitPrice: price,
+                  totalPrice: quantity * price,
+                  unitName: unit,
+                  conversionFactor: _conversionFactorFor(product, unit),
+                );
+              }
+              _syncCashPaid();
            });
+           ScaffoldMessenger.of(this.context).showSnackBar(
+             const SnackBar(content: Text('تم تعريف المنتج بنجاح')),
+           );
         },
       ),
     );
@@ -851,56 +954,27 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         existingProducts: _products,
         onProductSelected: (product, quantity, price, unit) async {
           // Calculate Conversion Factor from Unit Hierarchy
-          // If we bought 'Carton' (unit) and Product base unit is 'Piece' (product.unit)
-          // We need to find the cumulative factor from hierarchy
-          double factor = 1.0;
-          
-          final baseUnit = product.unit == 'piece' ? 'قطعة' : 
-                          (product.unit == 'meter' ? 'متر' : product.unit);
-          
-          if (unit != baseUnit && unit != product.unit) {
-            // Check unit hierarchy for conversion factor
-            final hierarchy = product.getUnitHierarchyList();
-            double cumulativeFactor = 1.0;
-            
-            for (var level in hierarchy) {
-              final unitName = level['unit_name']?.toString() ?? '';
-              final qty = (level['quantity'] as num?)?.toDouble() ?? 1.0;
-              
-              if (unitName.isNotEmpty) {
-                cumulativeFactor *= qty;
-                
-                // If this is the unit we're buying, use this cumulative factor
-                if (unitName == unit) {
-                  factor = cumulativeFactor;
-                  break;
-                }
-              }
-            }
-            
-            // Fallback to piecesPerUnit if hierarchy doesn't match
-            if (factor == 1.0 && product.piecesPerUnit != null && product.piecesPerUnit! > 1) {
-              factor = product.piecesPerUnit!.toDouble();
-            }
-          }
+          final double factor = _conversionFactorFor(product, unit);
 
           // Handle New Product Creation
-          if (product.id == -1) {
+          if (product.id == null || product.id == -1) {
              final dbService = DatabaseService();
              try {
                final newId = await dbService.insertProduct(product);
                product = product.copyWith(id: newId);
-               
+               if (!mounted) return;
                setState(() {
                  _products.add(product);
                });
              } catch (e) {
-               ScaffoldMessenger.of(context).showSnackBar(
+               if (!mounted) return;
+               ScaffoldMessenger.of(this.context).showSnackBar(
                  SnackBar(content: Text('فشل إنشاء المنتج الجديد: $e')),
                );
                return;
              }
           }
+          if (!mounted) return;
           
           setState(() {
             // DEBUG: Print conversion factor and base values
@@ -922,17 +996,56 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               // baseUnitCost: price / factor, // (implicit via getter)
               conversionFactor: factor,
             ));
+            _syncCashPaid();
           });
         },
       ),
     );
   }
 
-  void _saveInvoice({required bool confirm}) async {
+  /// كم وحدة أساسية في الوحدة المشتراة (كرتون = 24 قطعة مثلاً) من هرم وحدات المادة.
+  double _conversionFactorFor(Product product, String unit) {
+    double factor = 1.0;
+    final baseUnit = product.unit == 'piece' ? 'قطعة' :
+                    (product.unit == 'meter' ? 'متر' : product.unit);
+    if (unit == baseUnit || unit == product.unit) return 1.0;
+
+    // Check unit hierarchy for conversion factor
+    final hierarchy = product.getUnitHierarchyList();
+    double cumulativeFactor = 1.0;
+    for (var level in hierarchy) {
+      final unitName = level['unit_name']?.toString() ?? '';
+      final qty = (level['quantity'] as num?)?.toDouble() ?? 1.0;
+      if (unitName.isNotEmpty) {
+        cumulativeFactor *= qty;
+        // If this is the unit we're buying, use this cumulative factor
+        if (unitName == unit) {
+          factor = cumulativeFactor;
+          break;
+        }
+      }
+    }
+
+    // Fallback to piecesPerUnit if hierarchy doesn't match
+    if (factor == 1.0 && product.piecesPerUnit != null && product.piecesPerUnit! > 1) {
+      factor = product.piecesPerUnit!.toDouble();
+    }
+    return factor > 0 ? factor : 1.0;
+  }
+
+  Future<void> _saveInvoice({required bool confirm}) async {
+    // 🛡️ منع الحفظ المزدوج: الضغط مرتين قبل إعادة البناء كان يُنشئ فاتورتين
+    if (_isSaving) return;
     if (!_formKey.currentState!.validate()) return;
     if (_items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('الرجاء إضافة منتجات أولاً')),
+      );
+      return;
+    }
+    if (_items.any((item) => item.quantity <= 0 || item.unitPrice < 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يوجد مادة بكمية صفر أو سعر سالب — صحّحها أو احذفها'), backgroundColor: Colors.orange),
       );
       return;
     }
@@ -953,6 +1066,57 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
  
     try {
       final purchaseService = context.read<PurchaseService>();
+      final existing = widget.existingInvoice;
+      final supplier = _selectedSupplier!;
+      final supplierId = supplier.id;
+      if (supplierId == null) throw 'المورد المختار غير محفوظ';
+
+      // 🔒 تثبيت الإدخالات: لا إضافة ولا تعديل بتاريخ داخل فترة مثبّتة
+      if (!await PeriodLock.guard(context, _invoiceDate)) return;
+      if (!mounted) return;
+      if (existing != null && !await PeriodLock.guard(context, existing.date)) return;
+      if (!mounted) return;
+
+      // 💰 المبلغ المسدد: «نقد» = الإجمالي كاملاً دائماً
+      final double total = _totalAmount;
+      final double paidAmount = _paymentType == 'نقد' ? total : (parseMoney(_paidAmountController.text) ?? 0.0);
+      if (paidAmount < 0 || paidAmount > total + 0.01) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('المبلغ المسدد يجب أن يكون بين صفر وإجمالي الفاتورة'), backgroundColor: Colors.orange),
+        );
+        return;
+      }
+
+      // ⚠️ فاتورة مؤكدة تُحفظ كمسودة = إلغاء أثرها على المخزون ورصيد المورد
+      if (existing != null && existing.status == 'confirmed' && !confirm) {
+        final ok = await confirmDialog(
+          context,
+          'تحويل الفاتورة إلى مسودة',
+          'هذه الفاتورة مؤكدة. حفظها كمسودة يُلغي أثرها: تُخرج كمياتها من المخزون ويُلغى دينها على المورد.\n'
+              'للإبقاء عليها مؤكدة اضغط «تأكيد واستلام» بدلاً من ذلك.',
+          ok: 'حفظ كمسودة',
+          color: Colors.orange,
+        );
+        if (!ok || !mounted) return;
+      }
+
+      // 🔁 رقم فاتورة مكرر لنفس المورد (إدخال الفاتورة الورقية مرتين)
+      final number = _invoiceNumberController.text.trim();
+      if (number.isNotEmpty) {
+        final sameSupplier = await purchaseService.getInvoicesForSupplier(supplierId);
+        final dup = sameSupplier.any((i) => i.id != existing?.id && i.invoiceNumber.trim() == number);
+        if (dup) {
+          if (!mounted) return;
+          final ok = await confirmDialog(
+            context,
+            'رقم فاتورة مكرر',
+            'يوجد لدى المورد «${supplier.name}» فاتورة بالرقم $number مسبقاً.\nهل تريد الحفظ على أي حال؟',
+            ok: 'حفظ على أي حال',
+            color: Colors.orange,
+          );
+          if (!ok || !mounted) return;
+        }
+      }
 
       // 1️⃣ Handle Delegate (Find or Create)
       int? finalDelegateId;
@@ -967,35 +1131,34 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         } else {
           // Create new delegate automatically
           finalDelegateId = await purchaseService.addDelegate(SupplierDelegate(
-            supplierId: _selectedSupplier!.id!,
+            supplierId: supplierId,
             name: delegateName,
           ));
         }
       }
 
-      // 2️⃣ Handle Paid Amount
-      final paidAmount = double.tryParse(_paidAmountController.text) ?? 0.0;
-
       final invoice = PurchaseInvoice(
-        invoiceNumber: _invoiceNumberController.text.isNotEmpty
-            ? _invoiceNumberController.text
+        invoiceNumber: number.isNotEmpty
+            ? number
             : 'INV-${DateTime.now().millisecondsSinceEpoch}',
-        supplierId: _selectedSupplier!.id!,
+        supplierId: supplierId,
         delegateId: finalDelegateId, // 👤 Link delegate
-        totalAmount: _totalAmount,
+        totalAmount: total,
         paidAmount: paidAmount, // 💰 Set paid amount
         currency: _currency,
         status: confirm ? 'confirmed' : 'draft',
         date: _invoiceDate,
         dueDate: _dueDate,
-        notes: _notesController.text.isNotEmpty ? _notesController.text : null,
+        createdByUserId: existing?.createdByUserId ?? currentUserId(),
+        notes: _notesController.text.trim().isNotEmpty ? _notesController.text.trim() : null,
+        lastModifiedAt: DateTime.now(),
         attachmentPath: _attachmentPath,
       );
 
-      if (widget.existingInvoice != null) {
-        final oldItems = await purchaseService.getInvoiceItems(widget.existingInvoice!.id!);
+      if (existing != null && existing.id != null) {
+        final oldItems = await purchaseService.getInvoiceItems(existing.id!);
         await purchaseService.updatePurchaseInvoiceWithReversal(
-          widget.existingInvoice!,
+          existing,
           invoice,
           oldItems,
           _items,
@@ -1014,21 +1177,23 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pop(context);
+        Navigator.pop(context, true);
+        return;
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('حدث خطأ: $e'), backgroundColor: Colors.red),
         );
-        setState(() => _isSaving = false);
       }
+    } finally {
+      // يُعاد تفعيل الأزرار في كل خروج مبكر أو خطأ (النجاح يغلق الشاشة)
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  String _formatNumber(double number) {
-    return intl.NumberFormat('#,##0').format(number);
-  }
+  // #,##0.## — الدولار يحتفظ بكسوره (كان يُقرَّب لأقرب رقم صحيح في العرض)
+  String _formatNumber(double number) => _moneyFmt.format(number);
 }
 
 class _TableHeadersDelegate extends SliverPersistentHeaderDelegate {

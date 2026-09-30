@@ -148,7 +148,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
     final ok = await confirmDialog(
       context,
       'تنفيذ تعديل الأسعار',
-      'سيتغير ${_preview.length} سعراً لـ $products مادة، وتُزامَن المواد مع الفروع.\n'
+      'سيتغير ${fmtQty(_preview.length)} سعراً لـ ${fmtQty(products)} مادة، وتُزامَن المواد مع الفروع.\n'
           'يمكنك التراجع عن الدفعة كاملة من «سجل الدفعات».',
       color: ErpColors.green,
     );
@@ -178,7 +178,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
     if (!ok) return;
     try {
       final n = await _tools.undoBatch(batch);
-      if (mounted) showOk(context, 'أُعيد $n سعراً');
+      if (mounted) showOk(context, 'أُعيد ${fmtQty(n)} سعراً');
       await _loadProducts();
       await _loadBatches();
     } catch (e) {
@@ -196,7 +196,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
     if (!ok) return;
     try {
       final n = await _tools.refreshAllMarkups();
-      if (mounted) showOk(context, 'تحدّث $n سعراً');
+      if (mounted) showOk(context, 'تحدّث ${fmtQty(n)} سعراً');
       await _loadProducts();
       await _loadBatches();
     } catch (e) {
@@ -286,8 +286,8 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
           const SizedBox(height: 8),
           Text(
             _selected.isEmpty
-                ? 'سيُطبَّق على كل المواد المعروضة (${_products.length})'
-                : 'سيُطبَّق على ${_selected.length} مادة محددة',
+                ? 'سيُطبَّق على كل المواد المعروضة (${fmtQty(_products.length)})'
+                : 'سيُطبَّق على ${fmtQty(_selected.length)} مادة محددة',
             style: const TextStyle(color: ErpColors.muted),
           ),
         ]),
@@ -381,7 +381,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
             const SizedBox(width: 8),
             Expanded(
               child: PrimaryButton(
-                label: 'تنفيذ (${_preview.length})',
+                label: 'تنفيذ (${fmtQty(_preview.length)})',
                 icon: Icons.done_all_rounded,
                 color: ErpColors.green,
                 busy: _busy,
@@ -408,11 +408,11 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
         Padding(
           padding: const EdgeInsets.all(12),
           child: Row(children: [
-            StatusBadge('معاينة: ${_preview.length} تغيير', color: ErpColors.purple),
+            StatusBadge('معاينة: ${fmtQty(_preview.length)} تغيير', color: ErpColors.purple),
             const SizedBox(width: 8),
-            StatusBadge('↑ $up', color: ErpColors.green),
+            StatusBadge('↑ ${fmtQty(up)}', color: ErpColors.green),
             const SizedBox(width: 8),
-            StatusBadge('↓ $down', color: ErpColors.red),
+            StatusBadge('↓ ${fmtQty(down)}', color: ErpColors.red),
             const Spacer(),
             TextButton.icon(
                 onPressed: () => setState(() => _preview = const []),
@@ -463,7 +463,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
       Padding(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
         child: Row(children: [
-          Text('${_products.length} مادة', style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text('${fmtQty(_products.length)} مادة', style: const TextStyle(fontWeight: FontWeight.bold)),
           const Spacer(),
           TextButton(
               onPressed: () => setState(() => _selected.addAll(_products.map((p) => p.id))), child: const Text('تحديد الكل')),
@@ -515,7 +515,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
               backgroundColor: ErpColors.purple.withOpacity(.12),
               child: Text('$no', style: const TextStyle(color: ErpColors.purple, fontWeight: FontWeight.bold)),
             ),
-            title: Text('دفعة #$no — ${b['n']} تغيير'),
+            title: Text('دفعة #$no — ${fmtQty(d0(b['n']))} تغيير'),
             subtitle: Text('${fmtDate(parseDate(b['at']))} • ${b['by'] ?? ''}'),
             trailing: TextButton.icon(
               onPressed: () => _undo(no),

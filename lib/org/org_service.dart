@@ -8,6 +8,7 @@
 // التحويل حركتان متعاكستان (−من، +إلى) فلا تتغير الكمية الكلية للمادة أبداً،
 // ولا يتأثر أي منطق مخزون قائم (الكاشير، المزامنة، الجرد).
 
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:sqflite/sqflite.dart';
 
 import '../services/database/business/stock_ledger.dart';
@@ -228,7 +229,8 @@ class OrgService {
     for (final l in valid) {
       final a = available[l.productId] ?? 0;
       if (l.quantity > a + 1e-6) {
-        throw OrgException('الكمية المطلوبة من المادة #${l.productId} (${l.quantity}) أكبر من المتوفر ($a)');
+        final nf = NumberFormat('#,##0.##', 'en');
+        throw OrgException('الكمية المطلوبة من المادة #${l.productId} (${nf.format(l.quantity)}) أكبر من المتوفر (${nf.format(a)})');
       }
     }
 

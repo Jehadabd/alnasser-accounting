@@ -107,7 +107,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       if (!_isDebt && newBalance < -0.01) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('خطأ: التسديد سيجعل الرصيد سالباً (${newBalance.toStringAsFixed(2)})'),
+            content: Text('خطأ: التسديد سيجعل الرصيد سالباً (${NumberFormat('#,##0.##', 'en_US').format(newBalance)})'),
             backgroundColor: Colors.red,
           ),
         );

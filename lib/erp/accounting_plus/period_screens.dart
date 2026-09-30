@@ -95,7 +95,7 @@ class _PeriodCloseScreenState extends State<PeriodCloseScreen> {
         builder: (ctx, setS) => AlertDialog(
           title: Text('إقفال السنة المالية $_year'),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('سيُسجَّل قيد إقفال بتاريخ 31/12/$_year يصفّر ${_preview.length} حساب إيرادات ومصاريف '
+            Text('سيُسجَّل قيد إقفال بتاريخ 31/12/$_year يصفّر ${fmtQty(_preview.length)} حساب إيرادات ومصاريف '
                 'ويرحّل ${net >= 0 ? 'صافي الربح' : 'صافي الخسارة'} ${fmtMoney(net.abs())} إلى الأرباح المحتجزة.'),
             const SizedBox(height: 8),
             CheckboxListTile(
@@ -189,7 +189,7 @@ class _PeriodCloseScreenState extends State<PeriodCloseScreen> {
                   value: fmtMoney(net.abs()),
                   icon: net >= 0 ? Icons.trending_up : Icons.trending_down,
                   color: net >= 0 ? ErpColors.green : ErpColors.red),
-              StatCard(label: 'حسابات ستُقفل', value: '${_preview.length}', icon: Icons.list_alt, color: ErpColors.blue),
+              StatCard(label: 'حسابات ستُقفل', value: fmtQty(_preview.length), icon: Icons.list_alt, color: ErpColors.blue),
             ]),
             const SizedBox(height: 10),
             if (_preview.isNotEmpty)
@@ -306,7 +306,7 @@ class _FxRevaluationScreenState extends State<FxRevaluationScreen> {
       icon: Icons.currency_exchange_rounded,
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
         StatCard(label: 'سعر الدولار', value: fmtMoney(_rate), icon: Icons.attach_money, color: ErpColors.green),
-        StatCard(label: 'موردون متأثرون', value: '${_rows.length}', icon: Icons.people_outline, color: ErpColors.blue),
+        StatCard(label: 'موردون متأثرون', value: fmtQty(_rows.length), icon: Icons.people_outline, color: ErpColors.blue),
         StatCard(
             label: total >= 0 ? 'خسارة فروقات' : 'ربح فروقات',
             value: fmtMoney(total.abs()),
@@ -479,7 +479,7 @@ class _AccountGroupsScreenState extends State<AccountGroupsScreen> {
             Padding(
               padding: const EdgeInsetsDirectional.only(end: 8),
               child: ChoiceChip(
-                label: Text('${x['name']} (${x['n']})'),
+                label: Text('${x['name']} (${fmtQty(d0(x['n']))})'),
                 selected: _sel == x['id'],
                 onSelected: (_) {
                   _sel = x['id'] as int;
@@ -672,6 +672,17 @@ class _CalculatorDialogState extends State<_CalculatorDialog> {
     return v.toStringAsFixed(6).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
   }
 
+  /// للعرض فقط: فواصل الآلاف على الجزء الصحيح.
+  String _grp(String s) {
+    final neg = s.startsWith('-');
+    final t = neg ? s.substring(1) : s;
+    final i = t.indexOf('.');
+    final ip = i < 0 ? t : t.substring(0, i);
+    final dp = i < 0 ? '' : t.substring(i);
+    final g = ip.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
+    return '${neg ? '-' : ''}$g$dp';
+  }
+
   void _digit(String d) => setState(() {
         if (_fresh || _display == '0') {
           _display = d == '.' ? '0.' : d;
@@ -710,7 +721,7 @@ class _CalculatorDialogState extends State<_CalculatorDialog> {
   void _equals() => setState(() {
         if (_acc == null || _op == null) return;
         final r = _apply(_acc!, _op!, _cur);
-        _tape.insert(0, '${_fmt(_acc!)} $_op ${_fmt(_cur)} = ${r.isNaN ? 'خطأ' : _fmt(r)}');
+        _tape.insert(0, '${_grp(_fmt(_acc!))} $_op ${_grp(_fmt(_cur))} = ${r.isNaN ? 'خطأ' : _grp(_fmt(r))}');
         _display = r.isNaN ? '0' : _fmt(r);
         _acc = null;
         _op = null;
@@ -766,10 +777,10 @@ class _CalculatorDialogState extends State<_CalculatorDialog> {
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text(_op == null ? '' : '${_fmt(_acc ?? 0)} $_op', style: const TextStyle(color: Colors.white70)),
+                Text(_op == null ? '' : '${_grp(_fmt(_acc ?? 0))} $_op', style: const TextStyle(color: Colors.white70)),
                 Directionality(
                   textDirection: TextDirection.ltr,
-                  child: SelectableText(_display,
+                  child: SelectableText(_grp(_display),
                       style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
                 ),
               ]),

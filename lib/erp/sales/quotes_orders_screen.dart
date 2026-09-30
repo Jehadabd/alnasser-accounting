@@ -465,7 +465,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             onPressed: () async {
               try {
                 final n = await QuoteOrderService().autoReorder();
-                if (mounted) showOk(context, n == 0 ? 'لا توجد مواد تحتاج طلباً' : 'أُنشئ $n طلب شراء');
+                if (mounted) showOk(context, n == 0 ? 'لا توجد مواد تحتاج طلباً' : 'أُنشئ ${fmtQty(n)} طلب شراء');
                 _load();
               } catch (e) {
                 if (mounted) showError(context, e);

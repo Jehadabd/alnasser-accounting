@@ -9,6 +9,7 @@ import '../accounting_reports.dart';
 import '../ledger.dart';
 import '../posting_engine.dart';
 import 'acc_ui.dart';
+import '../../widgets/formatters.dart';
 
 class AccountingSettingsScreen extends StatefulWidget {
   const AccountingSettingsScreen({super.key});
@@ -27,7 +28,7 @@ class _AccountingSettingsScreenState extends State<AccountingSettingsScreen> {
     super.initState();
     DatabaseService().database.then((db) async {
       final r = await Ledger.usdRate(db);
-      if (mounted) _rate.text = r.toStringAsFixed(0);
+      if (mounted) _rate.text = fmtMoney(r);
     });
   }
 
@@ -109,6 +110,7 @@ class _AccountingSettingsScreenState extends State<AccountingSettingsScreen> {
                     child: TextField(
                       controller: _rate,
                       keyboardType: TextInputType.number,
+                      inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
                       decoration: const InputDecoration(
                           labelText: 'دينار لكل دولار',
                           helperText: 'يُستعمل لتقييم ديون ومشتريات الموردين بالدولار في الدفتر'),

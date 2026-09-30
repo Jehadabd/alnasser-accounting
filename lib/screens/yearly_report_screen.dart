@@ -541,7 +541,7 @@ class _YearlyReportScreenState extends State<YearlyReportScreen>
                 ),
                 _buildMetricTile(
                   title: 'عدد الفواتير',
-                  value: '$invoiceCount فاتورة',
+                  value: '${_fmt(invoiceCount)} فاتورة',
                   icon: Icons.receipt_long_rounded,
                   color: const Color(0xFF4F46E5),
                   bgTint: const Color(0xFFEEF2FF),
@@ -555,7 +555,7 @@ class _YearlyReportScreenState extends State<YearlyReportScreen>
                 ),
                 _buildMetricTile(
                   title: 'العملاء الجدد',
-                  value: '$newCustomers عميل',
+                  value: '${_fmt(newCustomers)} عميل',
                   icon: Icons.person_add_alt_1_rounded,
                   color: const Color(0xFF7C3AED),
                   bgTint: const Color(0xFFF5F3FF),
@@ -846,7 +846,7 @@ class _YearlyReportScreenState extends State<YearlyReportScreen>
                     Row(
                       children: [
                         Expanded(child: Text('التكلفة: ${_fmt(sCost)} د.ع', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFDC2626)))),
-                        Expanded(child: Text('الفواتير: $sInv (نسبة الربح ${sMargin.toStringAsFixed(1)}%)', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7C3AED)))),
+                        Expanded(child: Text('الفواتير: ${_fmt(sInv)} (نسبة الربح ${sMargin.toStringAsFixed(1)}%)', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7C3AED)))),
                       ],
                     ),
                   ],
@@ -923,7 +923,7 @@ class _YearlyReportScreenState extends State<YearlyReportScreen>
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
-                                    '$invCount فاتورة',
+                                    '${_fmt(invCount)} فاتورة',
                                     style: TextStyle(
                                       fontSize: 11,
                                       color: _selectedChartMetric == 'invoices' ? const Color(0xFF7C3AED) : const Color(0xFF64748B),
@@ -1174,7 +1174,7 @@ class _YearlyReportScreenState extends State<YearlyReportScreen>
                         children: [
                           Text('المبيعات: ${_fmt(sales)} د.ع', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF334155))),
                           Text('الكمية: ${_fmt(qty)}', style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                          Text('$count فاتورة', style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+                          Text('${_fmt(count)} فاتورة', style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
                         ],
                       ),
                     ],
@@ -1371,7 +1371,7 @@ class _YearlyReportScreenState extends State<YearlyReportScreen>
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  '$count فواتير شراء',
+                                  '${_fmt(count)} فواتير شراء',
                                   style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
                                 ),
                               ],
@@ -2070,7 +2070,7 @@ class LineChartPainter extends CustomPainter {
               style: const TextStyle(color: Color(0xFFFCA5A5), fontSize: 10, fontWeight: FontWeight.bold),
             ),
             TextSpan(
-              text: '• الفواتير: $invVal فاتورة',
+              text: '• الفواتير: ${fmt(invVal)} فاتورة',
               style: const TextStyle(color: Color(0xFFC4B5FD), fontSize: 10, fontWeight: FontWeight.bold),
             ),
           ],

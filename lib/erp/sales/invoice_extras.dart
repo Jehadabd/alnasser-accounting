@@ -280,7 +280,7 @@ class _SellersScreenState extends State<SellersScreen> {
           headers: () => ['البائع', 'عدد الفواتير', 'المبيعات', 'العمولة'],
           rows: () => [
                 for (final r in _report)
-                  ['${r['seller_name']}', '${r['n']}', fmtMoney(d0(r['sales'])), fmtMoney(d0(r['commission']))],
+                  ['${r['seller_name']}', fmtQty(d0(r['n'])), fmtMoney(d0(r['sales'])), fmtMoney(d0(r['commission']))],
               ]),
       floatingActionButton: FloatingActionButton(
         backgroundColor: ErpColors.navy,
@@ -309,7 +309,7 @@ class _SellersScreenState extends State<SellersScreen> {
                   numericColumns: const {1, 2, 3},
                   rows: [
                     for (final r in _report)
-                      ['${r['seller_name']}', '${r['n']}', fmtMoney(d0(r['sales'])), fmtMoney(d0(r['commission']))],
+                      ['${r['seller_name']}', fmtQty(d0(r['n'])), fmtMoney(d0(r['sales'])), fmtMoney(d0(r['commission']))],
                   ],
                 ),
         ),

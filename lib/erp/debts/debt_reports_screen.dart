@@ -76,7 +76,7 @@ class _AgingScreenState extends State<AgingScreen> {
   List<String> get _footer {
     final v = _visible;
     return [
-      'المجموع (${v.length})',
+      'المجموع (${fmtQty(v.length)})',
       fmtMoney(v.fold(0.0, (s, r) => s + r.balance)),
       for (var i = 0; i < _periods; i++) fmtMoney(v.fold(0.0, (s, r) => s + r.buckets[i])),
       fmtMoney(v.fold(0.0, (s, r) => s + r.credit)),
@@ -389,7 +389,7 @@ class _OpenInvoicesScreenState extends State<OpenInvoicesScreen> {
     final total = _visible.fold(0.0, (s, r) => s + r.remaining);
     return ErpPage(
       title: 'الفواتير غير المسددة',
-      subtitle: '${_visible.length} فاتورة — المتبقي ${fmtMoney(total)} (التسديدات تُخصم من الأقدم أولاً)',
+      subtitle: '${fmtQty(_visible.length)} فاتورة — المتبقي ${fmtMoney(total)} (التسديدات تُخصم من الأقدم أولاً)',
       icon: Icons.receipt_outlined,
       actions: exportActions(context, title: 'الفواتير غير المسددة', headers: () => _headers, rows: () => _data),
       body: Column(children: [
@@ -430,7 +430,7 @@ class _OverLimitScreenState extends State<OverLimitScreen> {
   Widget build(BuildContext context) {
     return ErpPage(
       title: 'المتجاوزون لسقف الدين',
-      subtitle: '${_rows.length} عميل',
+      subtitle: '${fmtQty(_rows.length)} عميل',
       icon: Icons.block,
       actions: exportActions(context,
           title: 'المتجاوزون لسقف الدين',

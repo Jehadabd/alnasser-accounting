@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart' show NumberFormat;
 
 import '../../utils/uuid_helper.dart';
 import '../database_service.dart';
@@ -89,7 +90,7 @@ class LiveCustomerMatch {
     }
     if (!debtMatch) {
       r.add(
-          'الدين: هنا ${localDebt.toStringAsFixed(0)} ≠ $peerDeviceName ${peerDebt.toStringAsFixed(0)}');
+          'الدين: هنا ${NumberFormat('#,##0', 'en_US').format(localDebt)} ≠ $peerDeviceName ${NumberFormat('#,##0', 'en_US').format(peerDebt)}');
     }
     if (!localConsistent) {
       r.add('الرصيد المحلي لا يساوي مجموع معاملاته');

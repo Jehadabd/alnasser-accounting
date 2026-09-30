@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../accounting/ledger.dart';
 import '../accounting/screens/acc_ui.dart';
 import 'erp_common.dart';
+import '../widgets/formatters.dart';
 import 'erp_ui.dart';
 import 'pickers.dart';
 import 'stock_helpers.dart';
@@ -261,6 +262,7 @@ class _DocLinesEditorState extends State<DocLinesEditor> {
         initialValue: value == 0 ? '' : fmtMoney(value),
         enabled: !widget.readOnly,
         keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+        inputFormatters: [ThousandSeparatorDecimalInputFormatter(allowNegative: true)],
         textDirection: TextDirection.ltr,
         decoration: InputDecoration(
           labelText: label,

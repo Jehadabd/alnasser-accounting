@@ -198,7 +198,7 @@ class _ProductCard extends StatelessWidget {
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
-                              '${product.stockQuantity.toStringAsFixed(0)} ${product.unit}',
+                              '${NumberFormat('#,##0.###', 'en').format(product.stockQuantity)} ${product.unit}',
                               style: TextStyle(
                                 fontSize: 10,
                                 color: Colors.red[700],
@@ -208,7 +208,7 @@ class _ProductCard extends StatelessWidget {
                           )
                         else
                            Text(
-                              '${product.stockQuantity.toInt()}',
+                              NumberFormat('#,##0.###', 'en').format(product.stockQuantity),
                               style: TextStyle(
                                 fontSize: 11,
                                 color: Colors.grey[500],

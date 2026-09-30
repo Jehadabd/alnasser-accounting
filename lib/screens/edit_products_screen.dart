@@ -179,7 +179,7 @@ class _EditProductsScreenState extends State<EditProductsScreen> {
                     style: TextStyle(color: Colors.grey[600], fontSize: 12),
                   ),
                   Text(
-                    '${_filteredProducts.length}',
+                    intl.NumberFormat('#,##0', 'en_US').format(_filteredProducts.length),
                     style: const TextStyle(
                       color: kPrimaryColor,
                       fontSize: 20,
@@ -419,7 +419,7 @@ class _EditProductsScreenState extends State<EditProductsScreen> {
                                       crossAxisAlignment: CrossAxisAlignment.end,
                                       children: [
                                         Text(
-                                          '${product.price1.toStringAsFixed(0)}',
+                                          intl.NumberFormat('#,##0', 'en_US').format(product.price1),
                                           style: const TextStyle(
                                             fontWeight: FontWeight.w900,
                                             color: kPrimaryColor,
@@ -676,7 +676,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     final barcodeController = TextEditingController(text: item['barcode'] ?? '');
     final labelController = TextEditingController(text: item['variant_label'] ?? '');
     final priceController = TextEditingController(
-      text: item['sell_price'] != null ? item['sell_price'].toString() : '',
+      text: item['sell_price'] is num ? intl.NumberFormat('#,##0.##', 'en_US').format(item['sell_price'] as num) : (item['sell_price']?.toString() ?? ''),
     );
     
     return Container(

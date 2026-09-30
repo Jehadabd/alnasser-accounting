@@ -178,7 +178,7 @@ class _TransactionsListDialogState extends State<TransactionsListDialog> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'عدد المعاملات: ${_transactions.length}',
+                      'عدد المعاملات: ${_fmt(_transactions.length)}',
                       style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
                     Text(

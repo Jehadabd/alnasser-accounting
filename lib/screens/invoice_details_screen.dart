@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/invoice.dart';
 import '../models/invoice_item.dart';
 import '../services/database_service.dart';
+import '../accounting/screens/acc_ui.dart' show fmtMoney;
 
 class InvoiceDetailsScreen extends StatefulWidget {
   final int invoiceId;
@@ -264,7 +265,7 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
                 ),
               ),
               Text(
-                '${item.itemTotal.toStringAsFixed(2)} د.ع',
+                '${fmtMoney(item.itemTotal)} د.ع',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -278,7 +279,7 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
             children: [
               Expanded(
                 child: Text(
-                  'الكمية: ${quantity.toStringAsFixed(2)} ${item.unit}',
+                  'الكمية: ${fmtMoney(quantity)} ${item.unit}',
                   style: const TextStyle(
                     fontSize: 14,
                     color: Color(0xFF666666),
@@ -286,7 +287,7 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
                 ),
               ),
               Text(
-                'السعر: ${item.appliedPrice.toStringAsFixed(2)} د.ع',
+                'السعر: ${fmtMoney(item.appliedPrice)} د.ع',
                 style: const TextStyle(
                   fontSize: 14,
                   color: Color(0xFF666666),
@@ -331,12 +332,12 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
                   children: [
                     Expanded(
                       child: Text(
-                        'التكلفة: ${costPrice.toStringAsFixed(2)} د.ع',
+                        'التكلفة: ${fmtMoney(costPrice)} د.ع',
                         style: const TextStyle(fontSize: 12, color: Color(0xFF666666)),
                       ),
                     ),
                     Text(
-                      'الربح/الوحدة: ${profitPerUnit.toStringAsFixed(2)} د.ع',
+                      'الربح/الوحدة: ${fmtMoney(profitPerUnit)} د.ع',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -347,7 +348,7 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'الربح الإجمالي: ${totalProfit.toStringAsFixed(2)} د.ع',
+                  'الربح الإجمالي: ${fmtMoney(totalProfit)} د.ع',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
@@ -373,23 +374,23 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
         child: Column(
           children: [
             _buildSummaryRow(
-                'المجموع', '${_invoice!.totalAmount.toStringAsFixed(2)} د.ع'),
+                'المجموع', '${fmtMoney(_invoice!.totalAmount)} د.ع'),
             if (_invoice!.discount > 0)
               _buildSummaryRow(
-                  'الخصم', '${_invoice!.discount.toStringAsFixed(2)} د.ع'),
+                  'الخصم', '${fmtMoney(_invoice!.discount)} د.ع'),
             if (_invoice!.returnAmount > 0)
               _buildSummaryRow('المرتجع',
-                  '${_invoice!.returnAmount.toStringAsFixed(2)} د.ع'),
+                  '${fmtMoney(_invoice!.returnAmount)} د.ع'),
             const Divider(),
             _buildSummaryRow(
               'المدفوع',
-              '${_invoice!.amountPaidOnInvoice.toStringAsFixed(2)} د.ع',
+              '${fmtMoney(_invoice!.amountPaidOnInvoice)} د.ع',
               isTotal: true,
             ),
             if (_invoice!.amountPaidOnInvoice < _invoice!.totalAmount)
               _buildSummaryRow(
                 'المتبقي',
-                '${(_invoice!.totalAmount - _invoice!.amountPaidOnInvoice).toStringAsFixed(2)} د.ع',
+                '${fmtMoney(_invoice!.totalAmount - _invoice!.amountPaidOnInvoice)} د.ع',
                 color: const Color(0xFFF44336),
               ),
           ],

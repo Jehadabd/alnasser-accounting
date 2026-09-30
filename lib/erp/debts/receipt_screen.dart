@@ -168,7 +168,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Widget build(BuildContext context) {
     return ErpPage(
       title: 'وصل قبض',
-      subtitle: _lines.length > 1 ? 'وصل مركّب — ${_lines.length} عملاء' : 'قبض من عميل مع حسم وعمولة تحصيل',
+      subtitle: _lines.length > 1 ? 'وصل مركّب — ${fmtQty(_lines.length)} عملاء' : 'قبض من عميل مع حسم وعمولة تحصيل',
       icon: Icons.receipt_long,
       body: ListView(
         padding: const EdgeInsets.only(bottom: 90),
@@ -366,7 +366,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
     final total = _rows.fold<double>(0, (s, r) => s + d0(r['total_amount']));
     return ErpPage(
       title: widget.customerName == null ? 'سجل وصولات القبض' : 'وصولات ${widget.customerName}',
-      subtitle: '${_rows.length} وصل — المجموع ${fmtMoney(total)}',
+      subtitle: '${fmtQty(_rows.length)} وصل — المجموع ${fmtMoney(total)}',
       icon: Icons.history_edu,
       actions: [
         ...exportActions(context,

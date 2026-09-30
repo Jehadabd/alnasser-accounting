@@ -40,6 +40,44 @@ class InvoiceItem {
   // 🔄 ربط ذري للمنتج عبر sync_uuid (لمزامنة المخزون بين الأجهزة)
   String? productSyncUuid;
 
+  // 🏷️ خصم السطر (للعرض والطباعة): السعر قبل الخصم ونوع الخصم وقيمته.
+  //    السعر المطبّق appliedPrice يبقى هو «الصافي» وكل الحسابات المالية عليه.
+  double? priceBeforeDiscount; // سعر الوحدة قبل الخصم
+  String? discountType; // 'percent' | 'amount' | 'gift'
+  double? discountValue; // النسبة % أو مبلغ الخصم من سعر الوحدة
+
+  /// 🎁 هدية مجانية: تخرج من المخزون بسعر صفر (كلفتها تُحسب)
+  bool get isGift => discountType == 'gift' && appliedPriceCents == 0;
+
+  /// هل على السطر خصم فعلي؟
+  bool get hasLineDiscount =>
+      isGift || (priceBeforeDiscount != null && priceBeforeDiscount! > appliedPrice + 0.004);
+
+  /// الكمية المباعة (بوحدة البيع)
+  double get soldQuantity =>
+      (quantityLargeUnit ?? 0) > 0 ? quantityLargeUnit! : (quantityIndividual ?? 0);
+
+  /// مجموع خصم السطر (خصم الوحدة × الكمية)
+  double get lineDiscountTotal {
+    if (!hasLineDiscount || priceBeforeDiscount == null) return 0;
+    return (priceBeforeDiscount! - appliedPrice) * soldQuantity;
+  }
+
+  /// نص عمود «الخصم»: «10%» أو «1,000» أو «هدية»
+  String get discountLabel {
+    if (isGift) return 'هدية';
+    if (!hasLineDiscount) return '';
+    final perUnit = priceBeforeDiscount! - appliedPrice;
+    if (discountType == 'percent') {
+      // النسبة كما أُدخلت ما دامت تطابق السعر الحالي؛ وإلا تُحسب من السعرين
+      final v = discountValue;
+      final consistent = v != null && (priceBeforeDiscount! * (1 - v / 100) - appliedPrice).abs() < 0.011;
+      final pct = consistent ? v : (perUnit / priceBeforeDiscount! * 100);
+      return '${NumberFormat('#,##0.##', 'en_US').format(pct)}%';
+    }
+    return _formatNumber(perUnit);
+  }
+
   // Controllers for UI binding
   late TextEditingController productNameController;
   late TextEditingController quantityIndividualController;
@@ -68,6 +106,9 @@ class InvoiceItem {
     this.unitsInLargeUnit,
     String? uniqueId, // أضف هذا
     this.productSyncUuid, // 🔄 ربط ذري للمنتج عبر sync_uuid
+    this.priceBeforeDiscount,
+    this.discountType,
+    this.discountValue,
   })  : unitPriceCents = unitPriceCents ?? (unitPrice * 100).round(),
         appliedPriceCents = appliedPriceCents ?? (appliedPrice * 100).round(),
         itemTotalCents = itemTotalCents ?? (itemTotal * 100).round(),
@@ -124,6 +165,10 @@ class InvoiceItem {
       'units_in_large_unit': unitsInLargeUnit,
       'unique_id': uniqueId, // أضف هذا
       'product_sync_uuid': productSyncUuid, // 🔄 ربط ذري للمنتج عبر sync_uuid
+      // 🏷️ خصم السطر (أعمدة تضيفها ErpSchema؛ تُرسل فقط إن وُجد خصم)
+      if (discountType != null) 'price_before_discount': priceBeforeDiscount,
+      if (discountType != null) 'discount_type': discountType,
+      if (discountType != null) 'discount_value': discountValue,
     };
   }
 
@@ -193,6 +238,9 @@ class InvoiceItem {
       unitsInLargeUnit: (map['units_in_large_unit'] as num?)?.toDouble(),
       uniqueId: map['unique_id'] ?? 'item_${DateTime.now().microsecondsSinceEpoch}',
       productSyncUuid: map['product_sync_uuid'] as String?,
+      priceBeforeDiscount: (map['price_before_discount'] as num?)?.toDouble(),
+      discountType: map['discount_type'] as String?,
+      discountValue: (map['discount_value'] as num?)?.toDouble(),
     );
   }
 
@@ -218,6 +266,9 @@ class InvoiceItem {
     double? unitsInLargeUnit,
     String? uniqueId,
     String? productSyncUuid,
+    Object? priceBeforeDiscount = _sentinel,
+    Object? discountType = _sentinel,
+    Object? discountValue = _sentinel,
   }) {
     return InvoiceItem(
       id: id ?? this.id,
@@ -241,6 +292,10 @@ class InvoiceItem {
       unitsInLargeUnit: unitsInLargeUnit ?? this.unitsInLargeUnit,
       uniqueId: uniqueId ?? this.uniqueId,
       productSyncUuid: productSyncUuid ?? this.productSyncUuid,
+      priceBeforeDiscount:
+          priceBeforeDiscount == _sentinel ? this.priceBeforeDiscount : priceBeforeDiscount as double?,
+      discountType: discountType == _sentinel ? this.discountType : discountType as String?,
+      discountValue: discountValue == _sentinel ? this.discountValue : discountValue as double?,
     );
   }
 }

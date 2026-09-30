@@ -1,11 +1,16 @@
 // screens/invoice_history_screen.dart
-// شاشة عرض سجل تعديلات الفاتورة
+// 🕘 سجل تعديلات الفاتورة — خط زمني واضح لصاحب المحل (للعرض فقط)
+//
+// • الأحدث في الأعلى، و«إنشاء الفاتورة» في أسفل الخط الزمني بأرقامها الأصلية.
+// • لكل حدث: التاريخ والوقت، من قام به، وسطر ملخّص لما تغيّر.
+// • التفاصيل عند الضغط: جدول بيانات الفاتورة (قبل ← بعد) وجدول الأصناف
+//   (مضاف بالأخضر، محذوف بالأحمر، معدّل بقيمته القديمة والجديدة).
+// المنطق والمقارنة في invoice_history/invoice_history_model.dart
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-import 'dart:convert';
+
 import '../services/database_service.dart';
-import '../services/database/dao/audit_dao.dart'; // 🗜️ قراءة أصناف اللقطات (مضغوطة أو نصاً)
+import 'invoice_history/invoice_history_model.dart';
 
 class InvoiceHistoryScreen extends StatefulWidget {
   final int invoiceId;
@@ -21,70 +26,112 @@ class InvoiceHistoryScreen extends StatefulWidget {
   State<InvoiceHistoryScreen> createState() => _InvoiceHistoryScreenState();
 }
 
+class _KindStyle {
+  final Color color;
+  final IconData icon;
+  const _KindStyle(this.color, this.icon);
+}
+
 class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
-  final DatabaseService _db = DatabaseService();
-  List<Map<String, dynamic>> _snapshots = [];
-  Map<String, dynamic>? _currentInvoiceMap;
+  static const Color _primary = Color(0xFF3F51B5);
+  static const Color _pageBg = Color(0xFFF4F6FA);
+  static const Color _border = Color(0xFFE3E7EE);
+  static const Color _textDark = Color(0xFF263238);
+  static const double _dotSize = 40;
+
   bool _isLoading = true;
   String? _errorMessage;
-  // 🔢 الرقم التجاري للفاتورة (لعرضه في العنوان بدلاً من الـ id الداخلي)
-  String? _invoiceDisplayNumber;
+  InvoiceHistoryData? _data;
+  final Set<int> _expanded = <int>{};
 
   @override
   void initState() {
     super.initState();
-    _loadSnapshots();
+    _load();
   }
 
-  Future<void> _loadSnapshots() async {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // تحميل البيانات (قراءة فقط)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// قراءة جدول ثانوي بأمان: غيابه أو اختلاف أعمدته لا يُفشل الشاشة
+  Future<List<Map<String, dynamic>>> _safeRows(
+      Future<List<Map<String, Object?>>> Function() run) async {
+    try {
+      final rows = await run();
+      return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+    } catch (e) {
+      debugPrint('⚠️ سجل التعديلات: تعذّرت قراءة جزء من البيانات: $e');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> _load() async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
     try {
-      final snapshots = await _db.getInvoiceSnapshots(widget.invoiceId);
-      
-      // Fetch current invoice state
-      final currentInvoice = await _db.getInvoiceById(widget.invoiceId);
-      final currentItems = await _db.getInvoiceItems(widget.invoiceId);
+      final db = await DatabaseService().database;
+      final int id = widget.invoiceId;
 
-      // 🔢 حفظ الرقم التجاري لعرضه في العنوان
-      if (currentInvoice != null &&
-          currentInvoice.invoiceNumber != null &&
-          currentInvoice.invoiceNumber!.isNotEmpty) {
-        _invoiceDisplayNumber = currentInvoice.invoiceNumber;
-      }
-      
-      Map<String, dynamic>? currentMap;
-      if (currentInvoice != null) {
-        currentMap = {
-          'invoice_id': currentInvoice.id,
-          'snapshot_type': 'current',
-          'customer_name': currentInvoice.customerName,
-          'customer_phone': currentInvoice.customerPhone,
-          'customer_address': currentInvoice.customerAddress,
-          'invoice_date': currentInvoice.invoiceDate.toIso8601String(),
-          'payment_type': currentInvoice.paymentType,
-          'total_amount': currentInvoice.totalAmount,
-          'discount': currentInvoice.discount,
-          'amount_paid': currentInvoice.amountPaidOnInvoice,
-          'loading_fee': currentInvoice.loadingFee,
-          // نفس التنظيف المطبَّق على اللقطات، فتبقى المقارنة متكافئة
-          'items_json': AuditDao.buildSnapshotItemsJson(
-              currentItems.map((i) => i.toMap()).toList()),
-          'created_at': currentInvoice.lastModifiedAt.toIso8601String(),
-          'invoice_notes': currentInvoice.notes ?? '',
-          'created_by': currentInvoice.createdByUsername, // Assuming invoice has this field now or tracked elsewhere
-        };
-      }
+      final invoiceRows = await _safeRows(() => db.query('invoices',
+          where: 'id = ?', whereArgs: [id], limit: 1));
+      final Map<String, dynamic>? invoice =
+          invoiceRows.isEmpty ? null : invoiceRows.first;
 
+      final List<Map<String, dynamic>> itemRows = invoice == null
+          ? <Map<String, dynamic>>[]
+          : await _safeRows(() => db.query('invoice_items',
+              where: 'invoice_id = ?', whereArgs: [id], orderBy: 'id ASC'));
+
+      // النسخ المحفوظة: المصدر الأساسي (الأصناف نص JSON قديم أو BLOB مضغوط)
+      final snapshotRaw = await db.query(
+        'invoice_snapshots',
+        where: 'invoice_id = ?',
+        whereArgs: [id],
+        orderBy: 'version_number ASC, id ASC',
+      );
+      final List<Map<String, dynamic>> snapshots =
+          snapshotRaw.map((r) => Map<String, dynamic>.from(r)).toList();
+
+      final List<Map<String, dynamic>> adjustments = await _safeRows(() =>
+          db.query('invoice_adjustments',
+              where: 'invoice_id = ?',
+              whereArgs: [id],
+              orderBy: 'created_at ASC, id ASC'));
+
+      // احتياطي للفواتير التي لا تملك أي نسخة محفوظة
+      final List<Map<String, dynamic>> auditRows = snapshots.isEmpty
+          ? await _safeRows(() => db.query('financial_audit_log',
+              where: "entity_type = 'invoice' AND entity_id = ? "
+                  "AND operation_type IN ('invoice_create', 'invoice_update')",
+              whereArgs: [id],
+              orderBy: 'created_at ASC, id ASC'))
+          : <Map<String, dynamic>>[];
+
+      final InvoiceHistoryData data = InvoiceHistoryBuilder.build(
+        snapshots: snapshots,
+        invoice: invoice,
+        currentItems: itemRows,
+        adjustments: adjustments,
+        auditRows: auditRows,
+      );
+
+      if (!mounted) return;
       setState(() {
-        _snapshots = snapshots;
-        _currentInvoiceMap = currentMap;
+        _data = data;
         _isLoading = false;
+        _expanded.clear();
+        // افتح أحدث تغيير تلقائياً ليظهر الفرق مباشرة
+        if (data.events.isNotEmpty &&
+            data.events.first.kind != HistEventKind.created) {
+          _expanded.add(0);
+        }
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'خطأ في تحميل سجل التعديلات: $e';
         _isLoading = false;
@@ -92,728 +139,53 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
     }
   }
 
-  // مقارنة نسختين وإرجاع قائمة التغييرات
-  List<Map<String, dynamic>> _compareSnapshots(Map<String, dynamic> before, Map<String, dynamic> after) {
-    List<Map<String, dynamic>> changes = [];
-    
-    // مقارنة الإجمالي
-    final totalBefore = _toDouble(before['total_amount']);
-    final totalAfter = _toDouble(after['total_amount']);
-    if ((totalBefore - totalAfter).abs() > 0.01) {
-      changes.add({
-        'field': 'إجمالي الفاتورة',
-        'before': totalBefore,
-        'after': totalAfter,
-        'icon': Icons.receipt,
-        'color': Colors.blue,
-      });
-    }
-    
-    // مقارنة المبلغ المسدد
-    final paidBefore = _toDouble(before['amount_paid'] ?? before['amount_paid_on_invoice']);
-    final paidAfter = _toDouble(after['amount_paid'] ?? after['amount_paid_on_invoice']);
-    if ((paidBefore - paidAfter).abs() > 0.01) {
-      changes.add({
-        'field': 'المبلغ المسدد',
-        'before': paidBefore,
-        'after': paidAfter,
-        'icon': Icons.payments,
-        'color': Colors.green,
-      });
-    }
-    
-    // مقارنة الخصم
-    final discountBefore = _toDouble(before['discount']);
-    final discountAfter = _toDouble(after['discount']);
-    if ((discountBefore - discountAfter).abs() > 0.01) {
-      changes.add({
-        'field': 'الخصم',
-        'before': discountBefore,
-        'after': discountAfter,
-        'icon': Icons.discount,
-        'color': Colors.orange,
-      });
-    }
-    
-    // مقارنة أجور التحميل
-    final loadingBefore = _toDouble(before['loading_fee']);
-    final loadingAfter = _toDouble(after['loading_fee']);
-    if ((loadingBefore - loadingAfter).abs() > 0.01) {
-      changes.add({
-        'field': 'أجور التحميل',
-        'before': loadingBefore,
-        'after': loadingAfter,
-        'icon': Icons.local_shipping,
-        'color': Colors.purple,
-      });
-    }
-    
-    // مقارنة نوع الدفع
-    final paymentTypeBefore = (before['payment_type'] ?? '').toString().trim();
-    final paymentTypeAfter = (after['payment_type'] ?? '').toString().trim();
-    if (paymentTypeBefore != paymentTypeAfter && paymentTypeBefore.isNotEmpty && paymentTypeAfter.isNotEmpty) {
-      changes.add({
-        'field': 'نوع الدفع',
-        'before': paymentTypeBefore,
-        'after': paymentTypeAfter,
-        'icon': Icons.credit_card,
-        'color': Colors.teal,
-        'isText': true,
-      });
-    }
-    
-    // مقارنة العميل
-    final customerBefore = (before['customer_name'] ?? '').toString().trim();
-    final customerAfter = (after['customer_name'] ?? '').toString().trim();
-    if (customerBefore != customerAfter && customerBefore.isNotEmpty && customerAfter.isNotEmpty) {
-      changes.add({
-        'field': 'العميل',
-        'before': customerBefore,
-        'after': customerAfter,
-        'icon': Icons.person,
-        'color': Colors.indigo,
-        'isText': true,
-      });
-    }
-    
-    // مقارنة التاريخ (تجاهل الوقت)
-    final dateBeforeStr = before['invoice_date']?.toString();
-    final dateAfterStr = after['invoice_date']?.toString();
-    if (dateBeforeStr != null && dateAfterStr != null) {
-      final dateBefore = DateTime.tryParse(dateBeforeStr);
-      final dateAfter = DateTime.tryParse(dateAfterStr);
-      if (dateBefore != null && dateAfter != null) {
-        // مقارنة السنة والشهر واليوم فقط
-        final isSameDay = dateBefore.year == dateAfter.year && 
-                          dateBefore.month == dateAfter.month && 
-                          dateBefore.day == dateAfter.day;
-        if (!isSameDay) {
-          changes.add({
-            'field': 'تاريخ الفاتورة',
-            'before': _formatDateOnly(dateBeforeStr),
-            'after': _formatDateOnly(dateAfterStr),
-            'icon': Icons.calendar_today,
-            'color': Colors.brown,
-            'isText': true,
-          });
-        }
-      }
-    }
-    
-    // مقارنة الملاحظات
-    // مقارنة الملاحظات
-    // ⚡ FIX: Use 'invoice_notes' instead of 'notes' to avoid comparing system logs
-    final notesBefore = (before['invoice_notes'] ?? '').toString().trim();
-    final notesAfter = (after['invoice_notes'] ?? '').toString().trim();
-    if (notesBefore != notesAfter) {
-       if (notesBefore.isEmpty && notesAfter.isEmpty) {
-         // تجاهل
-       } else {
-        changes.add({
-          'field': 'الملاحظات',
-          'before': notesBefore.isEmpty ? '(فارغ)' : notesBefore,
-          'after': notesAfter.isEmpty ? '(فارغ)' : notesAfter,
-          'icon': Icons.note,
-          'color': Colors.grey,
-          'isText': true,
-        });
-       }
-    }
-    
-    // مقارنة الأصناف
-    final itemsChanges = _compareItems(
-        AuditDao.decodeSnapshotItemRows(before['items_json'] ?? before['items']),
-        AuditDao.decodeSnapshotItemRows(after['items_json'] ?? after['items']));
-    if (itemsChanges.isNotEmpty) {
-      changes.add({
-        'field': 'الأصناف',
-        'itemsChanges': itemsChanges,
-        'icon': Icons.inventory_2,
-        'color': Colors.cyan,
-        'isItems': true,
-      });
-    }
-    
-    return changes;
-  }
-  
-  // مقارنة الأصناف
-  List<Map<String, dynamic>> _compareItems(dynamic beforeData, dynamic afterData) {
-    List<Map<String, dynamic>> changes = [];
-    
-    List<dynamic> itemsBefore = [];
-    List<dynamic> itemsAfter = [];
-    
-    try {
-      if (beforeData is String) {
-        itemsBefore = jsonDecode(beforeData);
-      } else if (beforeData is List) {
-        itemsBefore = beforeData;
-      }
-      
-      if (afterData is String) {
-        itemsAfter = jsonDecode(afterData);
-      } else if (afterData is List) {
-        itemsAfter = afterData;
-      }
-    } catch (e) {
-      return changes;
-    }
-    
-    // إنشاء خريطة للأصناف
-    Map<String, dynamic> beforeMap = {};
-    Map<String, dynamic> afterMap = {};
-    
-    // استخدام الاسم كمعرف أساسي
-    for (var item in itemsBefore) {
-      final key = (item['product_name'] ?? '').toString().trim();
-      if (key.isNotEmpty) beforeMap[key] = item;
-    }
-    
-    for (var item in itemsAfter) {
-      final key = (item['product_name'] ?? '').toString().trim();
-      if (key.isNotEmpty) afterMap[key] = item;
-    }
-    
-    // العناصر المحذوفة
-    for (var key in beforeMap.keys) {
-      if (!afterMap.containsKey(key)) {
-        final item = beforeMap[key];
-        changes.add({
-          'type': 'removed',
-          'name': key,
-          'quantity': item['quantity_individual'] ?? item['quantity_large_unit'] ?? 0,
-          'total': item['item_total'] ?? 0,
-        });
-      }
-    }
-    
-    // العناصر المضافة
-    for (var key in afterMap.keys) {
-      if (!beforeMap.containsKey(key)) {
-        final item = afterMap[key];
-        changes.add({
-          'type': 'added',
-          'name': key,
-          'quantity': item['quantity_individual'] ?? item['quantity_large_unit'] ?? 0,
-          'total': item['item_total'] ?? 0,
-        });
-      }
-    }
-    
-    // العناصر المعدلة
-    for (var key in beforeMap.keys) {
-      if (afterMap.containsKey(key)) {
-        final before = beforeMap[key];
-        final after = afterMap[key];
-        
-        // مقارنة مع التقريب
-        final qtyBefore = _toDouble(before['quantity_individual'] ?? before['quantity_large_unit']);
-        final qtyAfter = _toDouble(after['quantity_individual'] ?? after['quantity_large_unit']);
-        
-        final priceBefore = _toDouble(before['applied_price'] ?? before['unit_price']);
-        final priceAfter = _toDouble(after['applied_price'] ?? after['unit_price']);
-        
-        final totalBefore = _toDouble(before['item_total']);
-        final totalAfter = _toDouble(after['item_total']);
-        
-        bool isModified = false;
-        if ((qtyBefore - qtyAfter).abs() > 0.001) isModified = true;
-        if ((priceBefore - priceAfter).abs() > 0.001) isModified = true;
-        // Total usually follows, but explicit check is good
-        if ((totalBefore - totalAfter).abs() > 0.01) isModified = true; 
-        
-        if (isModified) {
-          changes.add({
-            'type': 'modified',
-            'name': key,
-            'qtyBefore': qtyBefore,
-            'qtyAfter': qtyAfter,
-            'totalBefore': totalBefore,
-            'totalAfter': totalAfter,
-            'priceBefore': priceBefore,
-            'priceAfter': priceAfter,
-          });
-        }
-      }
-    }
-    
-    return changes;
-  }
-  
-  double _toDouble(dynamic value) {
-    if (value == null) return 0;
-    if (value is num) return value.toDouble();
-    return double.tryParse(value.toString()) ?? 0;
-  }
-  
-  String _formatDateOnly(String? dateStr) {
-    if (dateStr == null || dateStr.isEmpty) return 'غير محدد';
-    try {
-      final date = DateTime.parse(dateStr);
-      return DateFormat('yyyy/MM/dd', 'en_US').format(date);
-    } catch (e) {
-      return dateStr;
-    }
-  }
-
-
-  String _formatDate(String? dateStr) {
-    if (dateStr == null) return 'غير محدد';
-    try {
-      final date = DateTime.parse(dateStr);
-      return DateFormat('yyyy/MM/dd - HH:mm', 'en_US').format(date);
-    } catch (e) {
-      return dateStr;
-    }
-  }
-
-  String _getSnapshotTypeLabel(String type) {
-    switch (type) {
-      case 'original':
-        return '📄 النسخة الأصلية';
-      case 'before_edit':
-        return '✏️ قبل التعديل';
-      case 'after_edit':
-        return '✅ بعد التعديل';
-      default:
-        return type;
-    }
-  }
-
-  Color _getSnapshotColor(String type) {
-    switch (type) {
-      case 'original':
-        return Colors.blue;
-      case 'before_edit':
-        return Colors.orange;
-      case 'after_edit':
-        return Colors.green;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  String _formatCurrency(dynamic value) {
-    if (value == null) return '0';
-    final number = (value is num) ? value : double.tryParse(value.toString()) ?? 0;
-    return NumberFormat('#,##0', 'en_US').format(number);
-  }
-
-  void _showSnapshotDetails(Map<String, dynamic> snapshot) {
-    // تحليل الأصناف
-    List<dynamic> items = [];
-    try {
-      if (snapshot['items_json'] != null) {
-        items = AuditDao.decodeSnapshotItemRows(snapshot['items_json']);
-      }
-    } catch (e) {
-      print('خطأ في تحليل الأصناف: $e');
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(
-              Icons.receipt_long,
-              color: _getSnapshotColor(snapshot['snapshot_type'] ?? ''),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _getSnapshotTypeLabel(snapshot['snapshot_type'] ?? ''),
-                style: const TextStyle(fontSize: 16),
-              ),
-            ),
-          ],
-        ),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildInfoCard('معلومات الفاتورة', [
-                  _buildDetailRow('العميل', snapshot['customer_name'] ?? '-'),
-                  _buildDetailRow('الهاتف', snapshot['customer_phone'] ?? '-'),
-                  _buildDetailRow('التاريخ', _formatDate(snapshot['invoice_date'])),
-                  _buildDetailRow('نوع الدفع', snapshot['payment_type'] ?? '-'),
-                ]),
-                const SizedBox(height: 12),
-                _buildInfoCard('المبالغ', [
-                  _buildDetailRow('الإجمالي', '${_formatCurrency(snapshot['total_amount'])} د.ع'),
-                  _buildDetailRow('الخصم', '${_formatCurrency(snapshot['discount'])} د.ع'),
-                  _buildDetailRow('أجور التحميل', '${_formatCurrency(snapshot['loading_fee'])} د.ع'),
-                  _buildDetailRow('المدفوع', '${_formatCurrency(snapshot['amount_paid'])} د.ع'),
-                ]),
-                if (items.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  _buildItemsTable(items),
-                ],
-                const SizedBox(height: 8),
-                Text(
-                  'تاريخ الحفظ: ${_formatDate(snapshot['created_at'])}',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                if (snapshot['notes'] != null && snapshot['notes'].toString().isNotEmpty)
-                  Text(
-                    'ملاحظات: ${snapshot['notes']}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إغلاق'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // بناء جدول الأصناف بشكل منظم
-  Widget _buildItemsTable(List<dynamic> items) {
-    return Card(
-      elevation: 0,
-      color: Colors.grey[100],
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.inventory_2, size: 18, color: Colors.cyan[700]),
-                const SizedBox(width: 8),
-                Text(
-                  'الأصناف (${items.length})',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-              ],
-            ),
-            const Divider(),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                headingRowHeight: 36,
-                dataRowMinHeight: 32,
-                dataRowMaxHeight: 40,
-                columnSpacing: 16,
-                horizontalMargin: 8,
-                headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-                columns: const [
-                  DataColumn(label: Text('ت', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('المبلغ', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('ID', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('التفاصيل', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('العدد', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('نوع البيع', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('السعر', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('عدد الوحدات', style: TextStyle(fontWeight: FontWeight.bold))),
-                ],
-                rows: List<DataRow>.generate(
-                  items.length,
-                  (index) {
-                    final item = items[index];
-                    final productId = item['product_id']?.toString() ?? '-';
-                    final productName = item['product_name'] ?? '-';
-                    final quantity = item['quantity_individual'] ?? item['quantity_large_unit'] ?? 0;
-                    final saleType = item['sale_type'] ?? (item['quantity_individual'] != null ? 'مفرد' : 'جملة');
-                    // 🔧 إصلاح: استخدام applied_price بدلاً من unit_price لأنه السعر الفعلي المطبق
-                    final appliedPrice = item['applied_price'] ?? item['unit_price'] ?? 0;
-                    // 🔧 إصلاح: عرض الكمية الفعلية (quantity) بدلاً من units_in_large_unit
-                    final displayQuantity = item['quantity_individual'] ?? item['quantity_large_unit'] ?? 0;
-                    final itemTotal = item['item_total'] ?? 0;
-                    
-                    return DataRow(
-                      color: WidgetStateProperty.resolveWith<Color?>((states) {
-                        if (index.isEven) return Colors.grey[50];
-                        return null;
-                      }),
-                      cells: [
-                        DataCell(Text('${index + 1}')),
-                        DataCell(Text(
-                          _formatCurrency(itemTotal),
-                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
-                        )),
-                        DataCell(Text(productId)),
-                        DataCell(Text(productName, style: const TextStyle(fontWeight: FontWeight.w500))),
-                        DataCell(Text(quantity.toString())),
-                        DataCell(Text(saleType)),
-                        DataCell(Text(_formatCurrency(appliedPrice))),
-                        DataCell(Text(displayQuantity.toString())),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInfoCard(String title, List<Widget> children) {
-    return Card(
-      elevation: 0,
-      color: Colors.grey[100],
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-            ),
-            const Divider(),
-            ...children,
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDetailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(color: Colors.grey[700])),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
-        ],
-      ),
-    );
-  }
-
-  // عرض التغييرات بين نسختين
-  void _showChangesDialog(Map<String, dynamic> before, Map<String, dynamic> after, int editNumber) {
-    final changes = _compareSnapshots(before, after);
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.compare_arrows, color: Colors.blue),
-            const SizedBox(width: 8),
-            Text('التعديل رقم $editNumber', style: const TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'تاريخ التعديل: ${_formatDate(after['created_at'])}',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                const SizedBox(height: 12),
-                if (changes.isEmpty)
-                  const Center(
-                    child: Text('لا توجد تغييرات مسجلة', style: TextStyle(color: Colors.grey)),
-                  )
-                else
-                  ...changes.map((change) => _buildChangeWidget(change)),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إغلاق'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // بناء ويدجت لعرض تغيير واحد
-  Widget _buildChangeWidget(Map<String, dynamic> change) {
-    if (change['isItems'] == true) {
-      return _buildItemsChangeWidget(change);
-    }
-    
-    final isText = change['isText'] == true;
-    final icon = change['icon'] as IconData;
-    final color = change['color'] as Color;
-    final field = change['field'] as String;
-    
-    String beforeStr, afterStr;
-    if (isText) {
-      beforeStr = change['before'].toString();
-      afterStr = change['after'].toString();
-    } else {
-      beforeStr = '${_formatCurrency(change['before'])} د.ع';
-      afterStr = '${_formatCurrency(change['after'])} د.ع';
-    }
-    
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      color: color.withOpacity(0.1),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 18, color: color),
-                const SizedBox(width: 8),
-                Text(field, style: TextStyle(fontWeight: FontWeight.bold, color: color)),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('قبل:', style: TextStyle(fontSize: 10, color: Colors.red)),
-                        Text(beforeStr, style: const TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8),
-                  child: Icon(Icons.arrow_forward, size: 16, color: Colors.grey),
-                ),
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('بعد:', style: TextStyle(fontSize: 10, color: Colors.green)),
-                        Text(afterStr, style: const TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // بناء ويدجت لعرض تغييرات الأصناف
-  Widget _buildItemsChangeWidget(Map<String, dynamic> change) {
-    final itemsChanges = change['itemsChanges'] as List<Map<String, dynamic>>;
-    
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      color: Colors.cyan.withOpacity(0.1),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.inventory_2, size: 18, color: Colors.cyan[700]),
-                const SizedBox(width: 8),
-                Text('تغييرات الأصناف', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.cyan[700])),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ...itemsChanges.map((itemChange) {
-              final type = itemChange['type'];
-              IconData icon;
-              Color color;
-              String label;
-              
-              switch (type) {
-                case 'added':
-                  icon = Icons.add_circle;
-                  color = Colors.green;
-                  label = 'إضافة: ${itemChange['name']} (${itemChange['quantity']} × ${_formatCurrency(itemChange['total'])})';
-                  break;
-                case 'removed':
-                  icon = Icons.remove_circle;
-                  color = Colors.red;
-                  label = 'حذف: ${itemChange['name']} (${itemChange['quantity']} × ${_formatCurrency(itemChange['total'])})';
-                  break;
-                case 'modified':
-                  icon = Icons.edit;
-                  color = Colors.orange;
-                  final qtyChanged = itemChange['qtyBefore'] != itemChange['qtyAfter'];
-                  final priceChanged = itemChange['priceBefore'] != itemChange['priceAfter'];
-                  String details = itemChange['name'];
-                  if (qtyChanged) {
-                    details += '\n  الكمية: ${itemChange['qtyBefore']} ← ${itemChange['qtyAfter']}';
-                  }
-                  if (priceChanged) {
-                    details += '\n  السعر: ${_formatCurrency(itemChange['priceBefore'])} ← ${_formatCurrency(itemChange['priceAfter'])}';
-                  }
-                  details += '\n  الإجمالي: ${_formatCurrency(itemChange['totalBefore'])} ← ${_formatCurrency(itemChange['totalAfter'])}';
-                  label = 'تعديل: $details';
-                  break;
-                default:
-                  icon = Icons.help;
-                  color = Colors.grey;
-                  label = 'غير معروف';
-              }
-              
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(icon, size: 16, color: color),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(label, style: TextStyle(fontSize: 12, color: color))),
-                  ],
-                ),
-              );
-            }),
-          ],
-        ),
-      ),
-    );
-  }
+  // ═══════════════════════════════════════════════════════════════════════════
+  // الواجهة
+  // ═══════════════════════════════════════════════════════════════════════════
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('سجل تعديلات الفاتورة #${_invoiceDisplayNumber ?? widget.invoiceId}'),
-        backgroundColor: const Color(0xFF3F51B5),
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'تحديث',
-            onPressed: _loadSnapshots,
-          ),
-        ],
+    final InvoiceHistoryData? data = _data;
+    final String? number = data?.invoiceNumber;
+    final String shownNumber =
+        (number != null && number.isNotEmpty) ? number : '${widget.invoiceId}';
+    final int eventCount = data?.events.length ?? 0;
+    final bool allExpanded = eventCount > 0 && _expanded.length >= eventCount;
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: _pageBg,
+        appBar: AppBar(
+          title: Text('سجل التعديلات — فاتورة #$shownNumber'),
+          backgroundColor: _primary,
+          foregroundColor: Colors.white,
+          actions: [
+            if (eventCount > 1)
+              IconButton(
+                icon: Icon(allExpanded ? Icons.unfold_less : Icons.unfold_more),
+                tooltip: allExpanded ? 'طيّ الكل' : 'عرض تفاصيل الكل',
+                onPressed: () {
+                  setState(() {
+                    if (allExpanded) {
+                      _expanded.clear();
+                    } else {
+                      _expanded
+                        ..clear()
+                        ..addAll(List<int>.generate(eventCount, (i) => i));
+                    }
+                  });
+                },
+              ),
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'تحديث',
+              onPressed: _isLoading ? null : _load,
+            ),
+          ],
+        ),
+        body: _buildBody(),
       ),
-      body: _buildBody(),
     );
   }
 
@@ -821,9 +193,9 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
     if (_isLoading) {
       return const Center(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: Color(0xFF3F51B5)),
+            CircularProgressIndicator(color: _primary),
             SizedBox(height: 16),
             Text('جاري تحميل سجل التعديلات...'),
           ],
@@ -833,277 +205,93 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
 
     if (_errorMessage != null) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 64, color: Colors.red),
-            const SizedBox(height: 16),
-            Text(_errorMessage!, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _loadSnapshots,
-              icon: const Icon(Icons.refresh),
-              label: const Text('إعادة المحاولة'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_snapshots.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.check_circle_outline, size: 80, color: Colors.green[400]),
-            const SizedBox(height: 16),
-            const Text(
-              'لم يتم تعديل هذه الفاتورة',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'الفاتورة بحالتها الأصلية منذ إنشائها',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // تجميع التعديلات بناءً على الجدول الزمني (Timeline)
-    List<Map<String, dynamic>> edits = [];
-    Map<String, dynamic>? originalSnapshot;
-    
-    // 1. تحديد النسخة الأصلية (عادةً الأولى)
-    if (_snapshots.isNotEmpty) {
-       // لأن الترتيب تصاعدي (ASC)، فالأولى هي الأقدم
-       // ولكن قد تكون هناك نسخة original و نسخة before_edit بنفس الوقت تقريباً
-       // سنأخذ أول نسخة كـ Baseline
-       originalSnapshot = _snapshots.first;
-    }
-
-    // 2. بناء الجدول الزمني للحالات
-    List<Map<String, dynamic>> timeline = [];
-    
-    // إضافة الـ Snapshots (تجاهل original إذا كان مكرراً أو سنستخدمه كبداية)
-    // سنضيف كل الـ before_edit snapshots
-    // الـ timestamps هو المفتاح
-    
-    for (var s in _snapshots) {
-      // إذا كانت original، فهي البداية
-      // إذا كانت before_edit، فهي تمثل حالة ما قبل تعديل معين
-      timeline.add(s);
-    }
-    
-    // إضافة الحالة الحالية كآخر نقطة في الزمن
-    if (_currentInvoiceMap != null) {
-      timeline.add(_currentInvoiceMap!);
-    }
-    
-    // 3. مقارنة النقاط المتتالية لاستخراج التعديلات
-    // Loop through timeline[i] -> timeline[i+1]
-    // i=0 is original or first state.
-    // Transition from i -> i+1 IS the edit.
-    
-    // تنظيف الجدول الزمني: إزالة التكرارات المتطابقة جداً (اختياري)
-    // ولكن سنقوم بالمقارنة مباشرة
-    
-    int editCounter = 1;
-    for (int i = 0; i < timeline.length - 1; i++) {
-        final before = timeline[i];
-        final after = timeline[i+1];
-        
-        final changes = _compareSnapshots(before, after);
-        
-        // ⚡ FIX: Filter out empty edits (Ghost Edits)
-        // If there represent no actual changes (e.g. Original vs First Before_Edit), skip it.
-        if (changes.isNotEmpty) {
-           String author = before['created_by'] ?? 'غير معروف'; // The person who saved the 'before' state logic is tricky, usually it's the person who created the 'after' state.
-           // Actually, the 'before' snapshot was saved by the person who *started* the edit session? 
-           // No, 'before_edit' is saved at the moment of saving. 
-           // So, `created_by` in `before` snapshot is the person who performed the PREVIOUS action.
-           // The person who performed THIS action (resulting in `after`) is likely in `after['created_by']` if it's a snapshot, or current user if it's current invoice.
-           
-           // Let's look at `after`.
-           // If `after` is a snapshot, it has `created_by`. 
-           // If `after` is current invoice map, we put `created_by` in it.
-           // So we should use `after['created_by']` as the author of the change.
-           
-           author = after['created_by'] ?? before['created_by'] ?? 'غير معروف';
-
-           edits.add({
-            'before': before,
-            'after': after,
-            'changes': changes, // Store changes here to avoid recalculating
-            'editNumber': editCounter++,
-            'author': author,
-            'date': after['created_at'] 
-          });
-        }
-    }
-    
-    // حساب عدد التعديلات الفعلية
-    final editCount = edits.length;
-
-    return Column(
-      children: [
-        // ملخص
-        Container(
-          padding: const EdgeInsets.all(16),
-          color: Colors.blue[50],
-          child: Row(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.info_outline, color: Colors.blue),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  editCount == 0 
-                      ? 'لا توجد تعديلات مسجلة لهذه الفاتورة' 
-                      : 'تم تعديل هذه الفاتورة $editCount مرة',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
+              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+              const SizedBox(height: 16),
+              Text(_errorMessage!, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة المحاولة'),
               ),
             ],
           ),
         ),
-        // قائمة التعديلات
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: edits.length + (originalSnapshot != null ? 1 : 0),
-            itemBuilder: (context, index) {
-              // عرض النسخة الأصلية أولاً
-              if (originalSnapshot != null && index == 0) {
-                return _buildOriginalCard(originalSnapshot!);
-              }
-              
-              final editIndex = originalSnapshot != null ? index - 1 : index;
-              final edit = edits[editIndex];
-              final before = edit['before'] as Map<String, dynamic>;
-              final after = edit['after'] as Map<String, dynamic>?;
-              final editNumber = edit['editNumber'] as int;
-              final author = edit['author'] as String?;
-              final changes = edit['changes'] as List<Map<String, dynamic>>?;
-              
-              return _buildEditCard(before, after, editNumber, author, changes);
-            },
-          ),
-        ),
-      ],
-    );
-  }
+      );
+    }
 
-  // بطاقة النسخة الأصلية
-  Widget _buildOriginalCard(Map<String, dynamic> snapshot) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-      elevation: 2,
-      color: Colors.blue[50],
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: Colors.blue.withOpacity(0.2),
-          child: const Icon(Icons.description, color: Colors.blue, size: 20),
-        ),
-        title: const Text('📄 النسخة الأصلية', style: TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final InvoiceHistoryData? data = _data;
+    if (data == null || data.events.isEmpty) return _buildEmptyState();
+
+    final List<HistEvent> events = data.events;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 980),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
           children: [
-            Text(_formatDate(snapshot['created_at'])),
-            Text(
-              'الإجمالي: ${_formatCurrency(snapshot['total_amount'])} دينار',
-              style: TextStyle(color: Colors.grey[600], fontSize: 12),
-            ),
+            _buildSummary(data),
+            const SizedBox(height: 16),
+            if (data.editCount == 0 && data.externalCount == 0 && events.length == 1)
+              _buildNoEditsBanner(),
+            for (int i = 0; i < events.length; i++)
+              _buildTimelineRow(events[i], i,
+                  isFirst: i == 0, isLast: i == events.length - 1),
           ],
         ),
-        trailing: const Icon(Icons.chevron_left),
-        onTap: () => _showSnapshotDetails(snapshot),
       ),
     );
   }
 
-  // بطاقة التعديل مع التغييرات
-  Widget _buildEditCard(Map<String, dynamic> before, Map<String, dynamic>? after, int editNumber, String? author, List<Map<String, dynamic>>? precalculatedChanges) {
-    final changes = precalculatedChanges ?? (after != null ? _compareSnapshots(before, after) : <Map<String, dynamic>>[]);
-    
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-      elevation: 2,
-      child: ExpansionTile(
-        leading: CircleAvatar(
-          backgroundColor: Colors.orange.withOpacity(0.2),
-          child: Text(
-            '$editNumber',
-            style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold),
-          ),
-        ),
-        title: Text('التعديل رقم $editNumber', style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(_formatDate(after?['created_at'] ?? before['created_at'])),
-                if (author != null)
-                  Chip(
-                    label: Text('المحاسب: $author', style: const TextStyle(fontSize: 10)),
-                    backgroundColor: Colors.grey[200],
-                    padding: EdgeInsets.zero,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.compact,
-                  ),
-              ],
-            ),
-            if (changes.isNotEmpty)
-              Text(
-                '${changes.length} تغيير',
-                style: const TextStyle(color: Colors.orange, fontSize: 12),
-              ),
-          ],
-        ),
-        trailing: Row(
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              icon: const Icon(Icons.compare_arrows, size: 20),
-              tooltip: 'عرض التغييرات',
-              onPressed: after != null ? () => _showChangesDialog(before, after, editNumber) : null,
+            Icon(Icons.history, size: 76, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            const Text(
+              'لا يوجد سجل تعديلات لهذه الفاتورة',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const Icon(Icons.expand_more),
+            const SizedBox(height: 8),
+            Text(
+              'لم تُحفظ أي نسخة من هذه الفاتورة بعد. يظهر السجل هنا بعد حفظها أو تعديلها.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildNoEditsBanner() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.green.shade200),
+      ),
+      child: Row(
         children: [
-          if (changes.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('لا توجد تغييرات مسجلة', style: TextStyle(color: Colors.grey)),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                children: changes.map((change) => _buildChangePreview(change)).toList(),
-              ),
-            ),
-          // أزرار لعرض التفاصيل
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                TextButton.icon(
-                  icon: const Icon(Icons.visibility, size: 16),
-                  label: const Text('قبل التعديل'),
-                  onPressed: () => _showSnapshotDetails(before),
-                ),
-                if (after != null)
-                  TextButton.icon(
-                    icon: const Icon(Icons.visibility, size: 16),
-                    label: const Text('بعد التعديل'),
-                    onPressed: () => _showSnapshotDetails(after),
-                  ),
-              ],
+          Icon(Icons.check_circle_outline, color: Colors.green.shade700),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'لم تُعدَّل هذه الفاتورة منذ إنشائها.',
+              style: TextStyle(
+                  fontWeight: FontWeight.w600, color: Colors.green.shade900),
             ),
           ),
         ],
@@ -1111,34 +299,796 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
     );
   }
 
-  // معاينة مختصرة للتغيير
-  Widget _buildChangePreview(Map<String, dynamic> change) {
-    if (change['isItems'] == true) {
-      final itemsChanges = change['itemsChanges'] as List<Map<String, dynamic>>;
-      return ListTile(
-        dense: true,
-        leading: Icon(Icons.inventory_2, size: 18, color: Colors.cyan[700]),
-        title: Text('تغييرات الأصناف (${itemsChanges.length})', style: const TextStyle(fontSize: 13)),
+  // ───────────────────────── الملخّص العلوي ─────────────────────────
+
+  Widget _buildSummary(InvoiceHistoryData data) {
+    final String customer = (data.customerName ?? '').isNotEmpty
+        ? data.customerName!
+        : (widget.customerName ?? '').trim();
+    final double? original = data.originalTotal;
+    final double? currentTotal = data.currentTotal;
+    final double? diff = (original != null && currentTotal != null)
+        ? currentTotal - original
+        : null;
+    final DateTime? lastAt = data.lastChangeAt;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history, color: _primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  customer.isEmpty ? 'سجل تعديلات الفاتورة' : 'فاتورة: $customer',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold, color: _textDark),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _statChip(
+                Icons.edit_note,
+                data.editCount == 0
+                    ? 'لم تُعدَّل'
+                    : 'عُدّلت ${_timesText(data.editCount)}',
+                Colors.orange.shade800,
+              ),
+              if (data.externalCount > 0)
+                _statChip(
+                  Icons.sync_alt,
+                  'تغيّرت من خارج شاشة التعديل ${_timesText(data.externalCount)}',
+                  Colors.deepPurple.shade400,
+                ),
+              if (lastAt != null)
+                _statChip(Icons.schedule,
+                    'آخر تغيير: ${HistFmt.dateTime(lastAt)}', Colors.blueGrey.shade700),
+              if (original != null)
+                _statChip(Icons.receipt_long,
+                    'الإجمالي الأصلي: ${HistFmt.number(original)}', Colors.blue.shade700),
+              if (currentTotal != null)
+                _statChip(Icons.payments_outlined,
+                    'الإجمالي الحالي: ${HistFmt.number(currentTotal)}', _primary),
+              if (diff != null && diff.abs() >= 0.005)
+                _statChip(
+                  diff > 0 ? Icons.trending_up : Icons.trending_down,
+                  diff > 0
+                      ? 'زاد الإجمالي ${HistFmt.number(diff)}'
+                      : 'نقص الإجمالي ${HistFmt.number(diff.abs())}',
+                  diff > 0 ? Colors.green.shade700 : Colors.red.shade700,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _timesText(int n) {
+    if (n == 1) return 'مرة واحدة';
+    if (n == 2) return 'مرتين';
+    return n <= 10 ? '$n مرات' : '$n مرة';
+  }
+
+  Widget _statChip(IconData icon, String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withAlpha(18),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withAlpha(70)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              style: TextStyle(
+                  fontSize: 12.5, color: color, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ───────────────────────── الخط الزمني ─────────────────────────
+
+  _KindStyle _kindStyle(HistEventKind kind) {
+    if (kind == HistEventKind.created) {
+      return _KindStyle(Colors.blue.shade700, Icons.note_add_outlined);
+    }
+    if (kind == HistEventKind.external) {
+      return _KindStyle(Colors.deepPurple.shade400, Icons.sync_alt);
+    }
+    if (kind == HistEventKind.adjustment) {
+      return _KindStyle(Colors.teal.shade600, Icons.tune);
+    }
+    return _KindStyle(Colors.orange.shade800, Icons.edit_note);
+  }
+
+  String _title(HistEvent e) {
+    if (e.kind == HistEventKind.created) return 'إنشاء الفاتورة';
+    if (e.kind == HistEventKind.external) return 'تغيير من خارج شاشة التعديل';
+    if (e.kind == HistEventKind.adjustment) return 'تسوية على الفاتورة';
+    return 'تعديل رقم ${e.editNumber}';
+  }
+
+  String _byLabel(String by) {
+    final String v = by.trim();
+    if (v.toLowerCase() == 'system') return 'النظام';
+    return v;
+  }
+
+  Widget _buildTimelineRow(HistEvent e, int index,
+      {required bool isFirst, required bool isLast}) {
+    final _KindStyle style = _kindStyle(e.kind);
+    const double half = _dotSize / 2;
+    return Stack(
+      children: [
+        // خط الزمن الرأسي يربط النقاط
+        if (!(isFirst && isLast))
+          PositionedDirectional(
+            start: half - 1,
+            top: isFirst ? half : 0.0,
+            bottom: isLast ? null : 0.0,
+            height: isLast ? half : null,
+            width: 2,
+            child: Container(color: Colors.grey.shade300),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: _dotSize,
+                height: _dotSize,
+                decoration: BoxDecoration(
+                  color: style.color,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _pageBg, width: 3),
+                ),
+                child: Icon(style.icon, size: 19, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: _buildEventCard(e, index, style)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  BoxDecoration _cardDecoration({Color? highlight}) {
+    return BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+          color: highlight ?? _border, width: highlight != null ? 1.4 : 1),
+      boxShadow: const [
+        BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2)),
+      ],
+    );
+  }
+
+  bool _hasDetails(HistEvent e) {
+    if (e.kind == HistEventKind.created) return e.state != null;
+    if (e.kind == HistEventKind.adjustment) return e.adjustment != null;
+    return e.fields.isNotEmpty ||
+        e.items.isNotEmpty ||
+        e.itemsUnknown ||
+        e.note != null;
+  }
+
+  void _toggle(int index) {
+    setState(() {
+      if (_expanded.contains(index)) {
+        _expanded.remove(index);
+      } else {
+        _expanded.add(index);
+      }
+    });
+  }
+
+  Widget _buildEventCard(HistEvent e, int index, _KindStyle style) {
+    final bool expanded = _expanded.contains(index);
+    final bool hasDetails = _hasDetails(e);
+    final bool newest = index == 0 && e.kind != HistEventKind.created;
+
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: _cardDecoration(highlight: newest ? style.color : null),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: hasDetails ? () => _toggle(index) : null,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildCardHeader(e, style, expanded, hasDetails, newest),
+                    const SizedBox(height: 8),
+                    Text(
+                      e.headline,
+                      style: const TextStyle(
+                          fontSize: 14.5, height: 1.5, color: _textDark),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            alignment: Alignment.topCenter,
+            child: expanded && hasDetails
+                ? Container(
+                    decoration: const BoxDecoration(
+                      border: Border(top: BorderSide(color: _border)),
+                    ),
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                    child: _buildDetails(e),
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCardHeader(HistEvent e, _KindStyle style, bool expanded,
+      bool hasDetails, bool newest) {
+    final double? delta = e.delta;
+    final DateTime? at = e.at;
+    final String? by = e.by;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    _title(e),
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: style.color),
+                  ),
+                  if (newest) _tag('الأحدث', style.color),
+                ],
+              ),
+            ),
+            if (delta != null && delta.abs() >= 0.005) _deltaBadge(delta),
+            if (hasDetails)
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 6),
+                child: Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                    color: Colors.grey.shade600),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 16,
+          runSpacing: 4,
+          children: [
+            _meta(Icons.schedule,
+                at != null ? HistFmt.dateTime(at) : (e.timeNote ?? 'الوقت غير مسجّل')),
+            if (by != null) _meta(Icons.person_outline, 'بواسطة: ${_byLabel(by)}'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _tag(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withAlpha(25),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 11, fontWeight: FontWeight.bold, color: color)),
+    );
+  }
+
+  Widget _deltaBadge(double delta) {
+    final bool up = delta > 0;
+    final Color color = up ? Colors.green.shade700 : Colors.red.shade700;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: up ? Colors.green.shade50 : Colors.red.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withAlpha(90)),
+      ),
+      child: Text(
+        HistFmt.signed(delta),
+        textDirection: TextDirection.ltr,
+        style: TextStyle(
+            fontSize: 12.5, fontWeight: FontWeight.bold, color: color),
+      ),
+    );
+  }
+
+  Widget _meta(IconData icon, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: Colors.grey.shade600),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(text,
+              style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
+        ),
+      ],
+    );
+  }
+
+  // ───────────────────────── التفاصيل ─────────────────────────
+
+  Widget _buildDetails(HistEvent e) {
+    final List<Widget> children = <Widget>[];
+
+    if (e.kind == HistEventKind.created) {
+      final HistState? s = e.state;
+      if (s != null) children.addAll(_buildCreationDetails(s));
+    } else if (e.kind == HistEventKind.adjustment) {
+      final HistAdjustment? a = e.adjustment;
+      if (a != null) children.add(_buildAdjustmentDetails(a));
+    } else {
+      if (e.fields.isNotEmpty) {
+        children.add(_sectionTitle(Icons.receipt_outlined, 'بيانات الفاتورة'));
+        children.add(_buildFieldsTable(e.fields));
+      }
+      if (e.items.isNotEmpty) {
+        if (children.isNotEmpty) children.add(const SizedBox(height: 14));
+        children.add(_sectionTitle(Icons.inventory_2_outlined, 'الأصناف',
+            trailing: _itemsLegend(e.items)));
+        children.add(_buildItemsDiffTable(e.items));
+      }
+      final double? totalAfter = e.totalAfter;
+      if (e.field('total') == null && totalAfter != null) {
+        children.add(Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Text(
+            'الإجمالي بقي كما هو: ${HistFmt.number(totalAfter)}',
+            style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+          ),
+        ));
+      }
+    }
+
+    if (e.itemsUnknown && e.kind != HistEventKind.adjustment) {
+      children.add(_notice(Icons.info_outline,
+          'تفاصيل الأصناف غير محفوظة في هذه النسخة القديمة — تُعرض المبالغ وبيانات الفاتورة فقط.'));
+    }
+    final String? note = e.note;
+    if (note != null) children.add(_notice(Icons.info_outline, note));
+    final String? timeNote = e.timeNote;
+    if (e.at != null && timeNote != null) {
+      children.add(_notice(Icons.schedule, timeNote));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+  }
+
+  Widget _sectionTitle(IconData icon, String title, {Widget? trailing}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 17, color: _primary),
+          const SizedBox(width: 6),
+          Text(title,
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, fontSize: 13.5, color: _primary)),
+          if (trailing != null) ...[
+            const SizedBox(width: 10),
+            Expanded(child: trailing),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _tableBox(Widget table) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _border),
+      ),
+      child: table,
+    );
+  }
+
+  Widget _cell(Widget child) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      child: child,
+    );
+  }
+
+  TableRow _headerRow(List<String> labels) {
+    return TableRow(
+      decoration: const BoxDecoration(color: Color(0xFFF1F3F8)),
+      children: [
+        for (final String l in labels)
+          _cell(Text(l,
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF546E7A)))),
+      ],
+    );
+  }
+
+  /// بيانات الفاتورة: البند | قبل | ← | بعد
+  Widget _buildFieldsTable(List<HistFieldChange> fields) {
+    return _tableBox(Table(
+      columnWidths: const <int, TableColumnWidth>{
+        0: FlexColumnWidth(1.3),
+        1: FlexColumnWidth(2),
+        2: FixedColumnWidth(30),
+        3: FlexColumnWidth(2),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        _headerRow(const <String>['البند', 'قبل', '', 'بعد']),
+        for (final HistFieldChange f in fields)
+          TableRow(
+            decoration: BoxDecoration(
+              color: f.key == 'total' ? const Color(0xFFF7F8FF) : Colors.white,
+              border: const Border(top: BorderSide(color: _border)),
+            ),
+            children: [
+              _cell(Text(f.label,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, color: _textDark))),
+              _cell(Text(
+                f.before,
+                style: TextStyle(color: Colors.red.shade700),
+              )),
+              _cell(Icon(Icons.arrow_forward,
+                  size: 16, color: Colors.grey.shade500)),
+              _cell(Text(
+                f.after,
+                style: TextStyle(
+                    color: Colors.green.shade800, fontWeight: FontWeight.bold),
+              )),
+            ],
+          ),
+      ],
+    ));
+  }
+
+  Widget _itemsLegend(List<HistItemChange> items) {
+    int added = 0;
+    int removed = 0;
+    int changed = 0;
+    for (final HistItemChange c in items) {
+      if (c.kind == HistItemChangeKind.added) added++;
+      if (c.kind == HistItemChangeKind.removed) removed++;
+      if (c.kind == HistItemChangeKind.changed) changed++;
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        if (changed > 0) _tag('معدّل $changed', Colors.orange.shade800),
+        if (added > 0) _tag('مضاف $added', Colors.green.shade700),
+        if (removed > 0) _tag('محذوف $removed', Colors.red.shade700),
+      ],
+    );
+  }
+
+  String _qtyText(HistItem it) => it.unit.isEmpty
+      ? HistFmt.number(it.qty)
+      : '${HistFmt.number(it.qty)} ${it.unit}';
+
+  /// الأصناف: الحالة | الصنف | الكمية | السعر | المجموع
+  Widget _buildItemsDiffTable(List<HistItemChange> items) {
+    return _tableBox(Table(
+      columnWidths: const <int, TableColumnWidth>{
+        0: FixedColumnWidth(84),
+        1: FlexColumnWidth(2.6),
+        2: FlexColumnWidth(1.6),
+        3: FlexColumnWidth(1.6),
+        4: FlexColumnWidth(1.8),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        _headerRow(const <String>['الحالة', 'الصنف', 'الكمية', 'السعر', 'المجموع']),
+        for (final HistItemChange c in items) _itemDiffRow(c),
+      ],
+    ));
+  }
+
+  TableRow _itemDiffRow(HistItemChange c) {
+    Color bg;
+    Color fg;
+    String label;
+    IconData icon;
+    if (c.kind == HistItemChangeKind.added) {
+      bg = Colors.green.shade50;
+      fg = Colors.green.shade800;
+      label = 'مضاف';
+      icon = Icons.add_circle_outline;
+    } else if (c.kind == HistItemChangeKind.removed) {
+      bg = Colors.red.shade50;
+      fg = Colors.red.shade700;
+      label = 'محذوف';
+      icon = Icons.remove_circle_outline;
+    } else {
+      bg = Colors.amber.shade50;
+      fg = Colors.orange.shade900;
+      label = 'معدّل';
+      icon = Icons.edit_outlined;
+    }
+
+    final HistItem? b = c.before;
+    final HistItem? a = c.after;
+    final bool removed = c.kind == HistItemChangeKind.removed;
+    Widget qty;
+    Widget price;
+    Widget total;
+    Widget name;
+    if (c.kind == HistItemChangeKind.changed && b != null && a != null) {
+      qty = _changeCell(_qtyText(b), _qtyText(a), c.qtyChanged || c.unitChanged);
+      price = _changeCell(
+          HistFmt.number(b.price), HistFmt.number(a.price), c.priceChanged);
+      total = _changeCell(
+          HistFmt.number(b.total), HistFmt.number(a.total), c.totalChanged);
+      name = Text(a.name,
+          style: const TextStyle(fontWeight: FontWeight.w600, color: _textDark));
+    } else {
+      final HistItem it = c.item;
+      qty = _plainCell(_qtyText(it), removed);
+      price = _plainCell(HistFmt.number(it.price), removed);
+      total = _plainCell(HistFmt.number(it.total), removed);
+      name = Text(
+        it.name,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: removed ? Colors.red.shade800 : Colors.green.shade900,
+          decoration: removed ? TextDecoration.lineThrough : null,
+        ),
       );
     }
-    
-    final icon = change['icon'] as IconData;
-    final color = change['color'] as Color;
-    final field = change['field'] as String;
-    final isText = change['isText'] == true;
-    
-    String changeText;
-    if (isText) {
-      changeText = '${change['before']} ← ${change['after']}';
-    } else {
-      changeText = '${_formatCurrency(change['before'])} ← ${_formatCurrency(change['after'])}';
+
+    return TableRow(
+      decoration: BoxDecoration(
+        color: bg,
+        border: const Border(top: BorderSide(color: Colors.white, width: 2)),
+      ),
+      children: [
+        _cell(Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: fg),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.bold, color: fg)),
+            ),
+          ],
+        )),
+        _cell(name),
+        _cell(qty),
+        _cell(price),
+        _cell(total),
+      ],
+    );
+  }
+
+  /// قيمة معدّلة: القديمة مشطوبة صغيرة، والجديدة بارزة تحتها
+  Widget _changeCell(String before, String after, bool changed) {
+    if (!changed) {
+      return Text(after, style: const TextStyle(fontSize: 13, color: _textDark));
     }
-    
-    return ListTile(
-      dense: true,
-      leading: Icon(icon, size: 18, color: color),
-      title: Text(field, style: const TextStyle(fontSize: 13)),
-      subtitle: Text(changeText, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          before,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade600,
+            decoration: TextDecoration.lineThrough,
+          ),
+        ),
+        Text(
+          after,
+          style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.bold,
+              color: Colors.orange.shade900),
+        ),
+      ],
+    );
+  }
+
+  Widget _plainCell(String text, bool removed) {
+    return Text(
+      text,
+      style: TextStyle(
+        fontSize: 13,
+        color: removed ? Colors.red.shade800 : Colors.green.shade900,
+        decoration: removed ? TextDecoration.lineThrough : null,
+      ),
+    );
+  }
+
+  /// جدول «اسم ← قيمة» بسيط
+  Widget _kvTable(List<List<String>> rows) {
+    return _tableBox(Table(
+      columnWidths: const <int, TableColumnWidth>{
+        0: FlexColumnWidth(1.2),
+        1: FlexColumnWidth(2.2),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        for (int i = 0; i < rows.length; i++)
+          TableRow(
+            decoration: BoxDecoration(
+              color: i.isEven ? Colors.white : const Color(0xFFF8F9FB),
+            ),
+            children: [
+              _cell(Text(rows[i][0],
+                  style: TextStyle(color: Colors.grey.shade700))),
+              _cell(Text(rows[i][1],
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, color: _textDark))),
+            ],
+          ),
+      ],
+    ));
+  }
+
+  List<Widget> _buildCreationDetails(HistState s) {
+    final List<List<String>> rows = <List<String>>[];
+    final String? customer = s.customerName;
+    if (customer != null) {
+      rows.add(<String>['العميل', customer.isEmpty ? '—' : customer]);
+    }
+    final String? pay = s.paymentType;
+    if (pay != null && pay.isNotEmpty) rows.add(<String>['نوع الدفع', pay]);
+    final DateTime? invDate = s.invoiceDate;
+    if (invDate != null) {
+      rows.add(<String>['تاريخ الفاتورة', HistFmt.date(invDate)]);
+    }
+    if (s.discount != null) {
+      rows.add(<String>['الخصم', HistFmt.number(s.discount)]);
+    }
+    if (s.loadingFee != null) {
+      rows.add(<String>['أجور التحميل', HistFmt.number(s.loadingFee)]);
+    }
+    if (s.paid != null) {
+      rows.add(<String>['المبلغ المدفوع', HistFmt.number(s.paid)]);
+    }
+    if (s.total != null) {
+      rows.add(<String>['الإجمالي', HistFmt.number(s.total)]);
+    }
+
+    final List<Widget> out = <Widget>[];
+    if (rows.isNotEmpty) {
+      out.add(_sectionTitle(Icons.receipt_outlined, 'بيانات الفاتورة الأصلية'));
+      out.add(_kvTable(rows));
+    }
+
+    final List<HistItem>? items = s.items;
+    if (items != null && items.isNotEmpty) {
+      if (out.isNotEmpty) out.add(const SizedBox(height: 14));
+      out.add(_sectionTitle(
+          Icons.inventory_2_outlined, 'الأصناف الأصلية (${items.length})'));
+      out.add(_tableBox(Table(
+        columnWidths: const <int, TableColumnWidth>{
+          0: FlexColumnWidth(2.6),
+          1: FlexColumnWidth(1.6),
+          2: FlexColumnWidth(1.6),
+          3: FlexColumnWidth(1.8),
+        },
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        children: [
+          _headerRow(const <String>['الصنف', 'الكمية', 'السعر', 'المجموع']),
+          for (int i = 0; i < items.length; i++)
+            TableRow(
+              decoration: BoxDecoration(
+                color: i.isEven ? Colors.white : const Color(0xFFF8F9FB),
+                border: const Border(top: BorderSide(color: _border)),
+              ),
+              children: [
+                _cell(Text(items[i].name,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, color: _textDark))),
+                _cell(Text(_qtyText(items[i]))),
+                _cell(Text(HistFmt.number(items[i].price))),
+                _cell(Text(HistFmt.number(items[i].total),
+                    style: const TextStyle(fontWeight: FontWeight.bold))),
+              ],
+            ),
+        ],
+      )));
+    }
+    return out;
+  }
+
+  Widget _buildAdjustmentDetails(HistAdjustment a) {
+    final String? product = a.productName;
+    final double? q = a.qty;
+    final String? unit = a.unit;
+    final double? price = a.price;
+    final String? pay = a.paymentType;
+    final String? note = a.note;
+    final List<List<String>> rows = <List<String>>[
+      <String>['النوع', a.isCredit ? 'تسوية بالنقص (مرتجع)' : 'تسوية بالزيادة'],
+      if (product != null) <String>['الصنف', product],
+      if (q != null)
+        <String>[
+          'الكمية',
+          unit != null ? '${HistFmt.number(q)} $unit' : HistFmt.number(q),
+        ],
+      if (price != null) <String>['السعر', HistFmt.number(price)],
+      <String>['المبلغ', HistFmt.number(a.delta.abs())],
+      if (pay != null) <String>['طريقة التسوية', pay],
+      if (note != null) <String>['ملاحظة', note],
+    ];
+    return _kvTable(rows);
+  }
+
+  Widget _notice(IconData icon, String text) {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFFE082)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: Colors.orange.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                  fontSize: 12.5, color: Colors.brown.shade700, height: 1.4),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

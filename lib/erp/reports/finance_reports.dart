@@ -128,7 +128,7 @@ class _ExpenseAnalysisScreenState extends State<ExpenseAnalysisScreen> {
       ],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
         StatCard(label: 'إجمالي المصاريف', value: fmtMoney(total), icon: Icons.money_off_rounded, color: ErpColors.red),
-        StatCard(label: 'عدد البنود', value: '${_byAcc.length}', icon: Icons.category_outlined, color: ErpColors.blue),
+        StatCard(label: 'عدد البنود', value: fmtQty(_byAcc.length), icon: Icons.category_outlined, color: ErpColors.blue),
         if (top != null)
           StatCard(
               label: 'الأعلى',
@@ -540,7 +540,7 @@ class _SalesDetailReportScreenState extends State<SalesDetailReportScreen> {
         ];
     return ErpPage(
       title: 'تقرير المبيعات التفصيلي',
-      subtitle: '${fmtDate(_from)} — ${fmtDate(_to)} • ${_rows.length} فاتورة',
+      subtitle: '${fmtDate(_from)} — ${fmtDate(_to)} • ${fmtQty(_rows.length)} فاتورة',
       icon: Icons.receipt_long_rounded,
       actions: [
         ...exportActions(context,

@@ -449,8 +449,8 @@ class MyApp extends StatelessWidget {
           '/main': (context) => const _LicenseGuard(child: MainScreen()),
           '/license': (context) => const LicenseScreen(), // 🔐
           '/license_check': (context) => const LicenseCheckScreen(), // 🔐
-          '/password_setup': (context) => const _LicenseGuard(child: PasswordSetupScreen()),
-          '/login': (context) => const _LicenseGuard(child: LoginScreen()), // 👤
+          '/password_setup': (context) => const _LicenseGuard(requireLogin: false, child: PasswordSetupScreen()),
+          '/login': (context) => const _LicenseGuard(requireLogin: false, child: LoginScreen()), // 👤
           '/user_management': (context) => const _LicenseGuard(child: UserManagementScreen()), // 👤
           '/general_settings': (context) => const _LicenseGuard(child: GeneralSettingsScreen()),
           '/debt_register': (context) => const _LicenseGuard(child: HomeScreen()),
@@ -487,7 +487,10 @@ class MyApp extends StatelessWidget {
 /// 🛡️ حارس المسارات المركزي: يمنع فتح أو عرض أي شاشة داخلية إلا بترخيص معتمد وموثّق
 class _LicenseGuard extends StatelessWidget {
   final Widget child;
-  const _LicenseGuard({required this.child});
+  /// 👤 كل الشاشات الداخلية تحتاج مستخدماً مسجّلاً (عدا شاشة الدخول نفسها)
+  final bool requireLogin;
+  const _LicenseGuard({required this.child, this.requireLogin = true});
+  static bool _toLogin = false; // يمنع تكرار التحويل إن أُعيد الرسم قبل الانتقال
 
   @override
   Widget build(BuildContext context) {
@@ -517,6 +520,18 @@ class _LicenseGuard extends StatelessWidget {
           ),
         ),
       );
+    }
+    if (requireLogin && !AuthService().isLoggedIn) {
+      // 🔐 لا مستخدم مسجّل: إلى شاشة الدخول قبل رسم أي بيانات
+      if (!_toLogin) {
+        _toLogin = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _toLogin = false;
+          if (!context.mounted) return;
+          Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+        });
+      }
+      return const Scaffold(backgroundColor: Color(0xFF0F3460), body: SizedBox.shrink());
     }
     return child;
   }
