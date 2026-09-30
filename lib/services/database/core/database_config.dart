@@ -6,6 +6,7 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
+import '../../demo_mode.dart';
 
 /// إعدادات قاعدة البيانات
 class DatabaseConfig {
@@ -18,7 +19,8 @@ class DatabaseConfig {
     // 🌐 الويب: المسار افتراضي — المحرك (IndexedDB) يتجاهله ولا يلمس ملفات
     if (kIsWeb) return databaseName;
     final dir = await getApplicationSupportDirectory();
-    return join(dir.path, databaseName);
+    // 🧪 الوضع التجريبي: قاعدة منفصلة تماماً — الحقيقية لا تُفتح
+    return join(dir.path, DemoMode.isOn ? DemoMode.demoDatabaseName : databaseName);
   }
 
   /// ترحيل قاعدة البيانات من المسار القديم إذا لزم الأمر

@@ -36,6 +36,7 @@ import '../services/license_service.dart';
 import '../accounting/screens/acc_ui.dart' show requirePermission;
 import '../models/app_user.dart' show AppPermissions;
 import '../erp/erp_settings_screen.dart';
+import '../services/demo_mode.dart';
 import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 
 import '../models/account_statement_item.dart';
@@ -745,6 +746,25 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     );
   }
 
+  /// 🧪 تبديل الوضع التجريبي: يُحفظ للإقلاع القادم ثم يُغلق البرنامج (القاعدة المفتوحة لا تتغير أثناء العمل).
+  Future<void> _switchDemo({required bool enable, required String message, bool regenerate = false}) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('الوضع التجريبي'),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('متابعة وإغلاق البرنامج')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await DemoMode.setForNextLaunch(enable);
+    if (regenerate) await DemoMode.requestRegenerate();
+    exit(0);
+  }
+
   Widget _buildSettingsCard({
     required IconData icon,
     required Color iconColor,
@@ -1412,6 +1432,52 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                     }
                   },
                 ),
+              ],
+            ),
+          ),
+
+          // 🧪 الوضع التجريبي: قاعدة منفصلة ببيانات سنة وهمية
+          _buildSettingsCard(
+            icon: Icons.science_outlined,
+            iconColor: Colors.orange,
+            title: DemoMode.isOn ? 'الوضع التجريبي (مفعّل الآن)' : 'الوضع التجريبي',
+            child: Column(
+              children: [
+                if (!DemoMode.isOn)
+                  _buildActionTile(
+                    icon: Icons.play_circle_outline,
+                    iconColor: Colors.orange,
+                    title: 'فتح الوضع التجريبي',
+                    subtitle: 'قاعدة منفصلة فيها سنة من البيانات الوهمية للتجربة والتدريب. قاعدتك الحقيقية لا تُلمس.',
+                    onTap: () => _switchDemo(
+                      enable: true,
+                      message: 'سيُغلق البرنامج الآن. افتحه من جديد لتدخل الوضع التجريبي.\n'
+                          'في أول فتح تُنشأ البيانات الوهمية (بضع دقائق). المزامنة والشبكة ورفع البيانات تتوقف في هذا الوضع.',
+                    ),
+                  ),
+                if (DemoMode.isOn) ...[
+                  _buildActionTile(
+                    icon: Icons.exit_to_app,
+                    iconColor: Colors.green,
+                    title: 'العودة إلى البيانات الحقيقية',
+                    subtitle: 'يُغلق البرنامج، وعند فتحه تعود إلى قاعدتك الحقيقية كما تركتها.',
+                    onTap: () => _switchDemo(
+                      enable: false,
+                      message: 'سيُغلق البرنامج الآن. افتحه من جديد لتعود إلى بياناتك الحقيقية.',
+                    ),
+                  ),
+                  _buildActionTile(
+                    icon: Icons.restart_alt,
+                    iconColor: Colors.red,
+                    title: 'إعادة البيانات التجريبية من الصفر',
+                    subtitle: 'تُحذف القاعدة التجريبية فقط وتُولَّد بيانات جديدة في الفتح القادم.',
+                    onTap: () => _switchDemo(
+                      enable: true,
+                      regenerate: true,
+                      message: 'سيُغلق البرنامج الآن. عند فتحه تُحذف البيانات التجريبية وتُنشأ من جديد.',
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

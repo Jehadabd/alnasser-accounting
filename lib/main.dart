@@ -1,4 +1,5 @@
 // main.dart
+import 'services/demo_mode.dart'; // 🧪
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:flutter/material.dart';
@@ -71,6 +72,9 @@ final GlobalKey<NavigatorState> globalNavigatorKey = GlobalKey<NavigatorState>()
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 🧪 الوضع التجريبي يحدد أي قاعدة تُفتح — يُقرأ قبل أي شيء يلمس القاعدة
+  await DemoMode.load();
+
   // تهيئة GetStorage
   await GetStorage.init();
 
@@ -137,7 +141,7 @@ void main() async {
 
   // 🖧 وضع الشبكة: الطرفية تتصل بالسيرفر وتستبدل مصنع قاعدة البيانات قبل
   //    أي فتح للقاعدة. عند الفشل نعرض شاشة الاتصال بدل البرنامج.
-  if (!kIsWeb) {
+  if (!kIsWeb && !DemoMode.isOn) {
     final lanError = await LanRuntime.beforeDatabase();
     if (lanError != null) {
       runApp(LanConnectionErrorApp(message: lanError));
@@ -178,7 +182,8 @@ void main() async {
     print('🔥 [main.dart] ════════════════════════════════════════');
     print('🔥 [main.dart] بدء تهيئة Firebase...');
     
-    final customOptions = await FirebaseCustomConfig.getCustomOptions();
+    // 🧪 الوضع التجريبي: لا Firebase إطلاقاً (البيانات الوهمية لا تُرفع)
+    final customOptions = DemoMode.isOn ? null : await FirebaseCustomConfig.getCustomOptions();
     if (customOptions != null) {
       print('✅ [main.dart] وجدت إعدادات Firebase المخصصة');
       print('✅ [main.dart] ProjectId: ${customOptions.projectId}');
@@ -326,19 +331,19 @@ void main() async {
 
   // 🔥 تفعيل نظام المطابقة وحل التعارضات عند التشغيل (مالك القاعدة فقط:
   //    المزامنة مع Firebase تعمل على السيرفر وحده، لا على الطرفيات)
-  if (AppNetworkMode.ownsDatabase) ReconciliationPrompt.start();
+  if (AppNetworkMode.ownsDatabase && !DemoMode.isOn) ReconciliationPrompt.start();
 
   runApp(MyApp(initialRoute: initialRoute));
 
   // 🖧 السيرفر يبدأ خدمة الطرفيات + الترحيل المحاسبي التلقائي
-  if (!kIsWeb) {
+  if (!kIsWeb && !DemoMode.isOn) {
     LanRuntime.afterDatabase();
   }
 
   // 🔄 بدء المزامنة تلقائياً عند تشغيل التطبيق (بدون الحاجة للدخول لإعدادات المزامنة).
   //    fire-and-forget: لا نُعلّق الإقلاع؛ التهيئة تحدث في الخلفية.
   //    تتم فقط لو الرخصة مفعّلة (لا داعي للمزامنة على شاشة التفعيل).
-  if (isLicenseActivated && AppNetworkMode.ownsDatabase) {
+  if (isLicenseActivated && AppNetworkMode.ownsDatabase && !DemoMode.isOn) {
     final license = licenseService.getStoredLicense();
     if (license != null && license.isSyncAllowed) {
       FirebaseSyncService().initialize().then((ok) {

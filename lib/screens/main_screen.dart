@@ -21,6 +21,8 @@ import '../services/reports_service.dart'; // ✅ Added
 import '../services/settings_manager.dart'; // ✅ Added
 import '../screens/suppliers/suppliers_dashboard_screen.dart'; // ✅ Added
 import '../widgets/global_search.dart'; // 🔎 Ctrl+K
+import '../services/demo_mode.dart';
+import '../services/demo_seeder.dart';
 import '../services/alert_service.dart'; // 🔔 Added
 import '../models/app_settings.dart';
 import '../widgets/app_side_nav.dart';
@@ -55,7 +57,59 @@ class _MainScreenState extends State<MainScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AppProvider>().initialize();
       // 🔔 تم نقل فحص التنبيهات إلى main.dart بناءً على طلب المستخدم
+      _seedDemoIfNeeded();
     });
+  }
+
+  /// 🧪 أول دخول للوضع التجريبي: توليد سنة من البيانات الوهمية (مرة واحدة).
+  Future<void> _seedDemoIfNeeded() async {
+    if (!DemoMode.isOn || !await DemoSeeder.needsSeed() || !mounted) return;
+    final progress = ValueNotifier<double>(0);
+    final message = ValueNotifier<String>('تحضير...');
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('إنشاء البيانات التجريبية'),
+          content: SizedBox(
+            width: 380,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('نُنشئ سنة كاملة من القوائم والديون والمشتريات والمصاريف الوهمية. '
+                  'قاعدتك الحقيقية لا تُلمس. قد يستغرق ذلك بضع دقائق.'),
+              const SizedBox(height: 16),
+              ValueListenableBuilder<double>(
+                valueListenable: progress,
+                builder: (_, v, __) => LinearProgressIndicator(value: v),
+              ),
+              const SizedBox(height: 8),
+              ValueListenableBuilder<String>(
+                valueListenable: message,
+                builder: (_, m, __) => Text(m, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+    String? error;
+    try {
+      await DemoSeeder.run((p, m) {
+        progress.value = p;
+        message.value = m;
+      });
+    } catch (e) {
+      error = '$e';
+    }
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+    await context.read<AppProvider>().refreshCustomers();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(error == null ? '🧪 البيانات التجريبية جاهزة — جرّب كل شيء بحرية' : 'تعذّر إكمال البيانات التجريبية: $error'),
+      backgroundColor: error == null ? Colors.green : Colors.red,
+    ));
   }
 
   Future<void> _loadSettings() async {
@@ -285,6 +339,12 @@ class _MainScreenState extends State<MainScreen> {
   // Modern specific button for targeted features
   // ☁️ رفع البيانات (Telegram/Dropbox) — صار زراً في الشريط العلوي بدل زر في الشبكة
   Future<void> _uploadData() async {
+    if (DemoMode.isOn) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('الوضع التجريبي: رفع البيانات متوقف (البيانات وهمية)'),
+      ));
+      return;
+    }
     if (!_checkPermission(AppPermissions.uploadDatabase)) return;
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('جاري تحضير النسخة الاحتياطية...');
@@ -728,6 +788,18 @@ class _MainScreenState extends State<MainScreen> {
                 const SyncHealthBanner(),
                 // 🖧 حالة الاتصال بحاسبة السيرفر (طرفية) أو عدد الطرفيات (سيرفر)
                 const LanStatusBanner(),
+                // 🧪 شريط الوضع التجريبي
+                if (DemoMode.isOn)
+                  Container(
+                    width: double.infinity,
+                    color: Colors.orange.shade700,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: const Text(
+                      '🧪 وضع تجريبي — البيانات وهمية، والمزامنة والشبكة ورفع البيانات متوقفة. للخروج: الإعدادات ← الوضع التجريبي',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
                 Expanded(
                   child: ListView(
                     padding: const EdgeInsets.all(16.0),
