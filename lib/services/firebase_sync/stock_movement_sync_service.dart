@@ -21,6 +21,7 @@ import '../database/business/stock_ledger.dart';
 import 'firebase_sync_config.dart';
 import 'firebase_sync_service.dart';
 import 'sync_health.dart';
+import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 
 class StockMovementSyncService {
   static final StockMovementSyncService _instance = StockMovementSyncService._internal();
@@ -158,7 +159,7 @@ class StockMovementSyncService {
             final ref = _firestore.collection(collectionName).doc(uuid);
             if (r['kind'] == StockLedger.openingKind) {
               // أول من يثبّت الرصيد الافتتاحي يربح؛ غيره يتبنّى قيمته
-              final winner = await _firestore.runTransaction<Map<String, dynamic>?>((txn) async {
+              final winner = await runSafeTransaction<Map<String, dynamic>?>(_firestore, label: 'opening', (txn) async {
                 final snap = await txn.get(ref);
                 if (snap.exists) return snap.data();
                 txn.set(ref, doc);
@@ -274,7 +275,7 @@ class StockMovementSyncService {
       try {
         final ref = _firestore.collection(collectionName).doc(uuid);
         final doc = _movementDoc(r, me);
-        final created = await _firestore.runTransaction<bool>((txn) async {
+        final created = await runSafeTransaction<bool>(_firestore, label: 'movement-rebroadcast', (txn) async {
           final snap = await txn.get(ref);
           if (snap.exists) return false;
           txn.set(ref, doc);

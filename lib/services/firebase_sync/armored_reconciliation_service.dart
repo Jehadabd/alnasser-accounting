@@ -50,6 +50,7 @@ import 'firebase_sync_service.dart';
 import '../database_service.dart';
 import '../database/business/customer_visibility.dart';
 import '../database/core/database_helpers.dart';
+import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 
 class ArmoredReconciliationService {
   static final ArmoredReconciliationService _instance =
@@ -401,7 +402,7 @@ class ArmoredReconciliationService {
       final sync = FirebaseSyncService();
       if (sync.isRecovering) return; // بياناتي ليست مرجعاً الآن
       final reqRef = _firestore.collection(_requestsCol).doc(requestId);
-      final claimed = await _firestore.runTransaction<bool>((txn) async {
+      final claimed = await runSafeTransaction<bool>(_firestore, label: 'armored-claim', (txn) async {
         final snap = await txn.get(reqRef);
         final d = snap.data();
         if (d == null || d['status'] != 'pending' || d['nonce'] != nonce) {

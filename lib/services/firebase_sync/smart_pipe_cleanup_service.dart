@@ -19,6 +19,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_sync_config.dart';
+import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 
 /// نتيجة عملية الحذف الذكي
 class PipeCleanupResult {
@@ -345,7 +346,7 @@ class SmartPipeCleanupService {
         if (allRead) {
           // 5. حذف مشروط: فقط إن بقيت النسخة التي فحصناها كما هي
           final expected = data[timestampField];
-          final removed = await _firestore!.runTransaction<bool>((txn) async {
+          final removed = await runSafeTransaction<bool>(_firestore!, label: 'smartpipe-delete', (txn) async {
             final cur = await txn.get(doc.reference);
             final cd = cur.data();
             if (cd == null || cd[timestampField] != expected) return false;

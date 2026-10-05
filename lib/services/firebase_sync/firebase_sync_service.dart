@@ -41,6 +41,8 @@ import '../sync/sync_security.dart';
 import '../../models/transaction.dart'; // Import DebtTransaction model
 import '../../utils/uuid_helper.dart'; // للـ UUID الحتمي
 import '../license_service.dart'; // 🔐 نظام التراخيص
+import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
+import 'sync_breadcrumbs.dart'; // 🧭
 
 /// حالة المزامنة
 enum FirebaseSyncStatus {
@@ -537,6 +539,7 @@ class FirebaseSyncService {
       // 🧾 محرك الفواتير: يجب أن يبدأ قبل السحب الكامل حتى تُرفع الفواتير
       // المعلقة محلياً أولاً (رفع + استماع للوارد + مؤقتات إعادة المحاولة).
       try {
+        SyncCrumb.mark('init: invoices.startSync');
         await InvoiceSyncService().startSync();
       } catch (e) {
         print('⚠️ تعذّر بدء مزامنة الفواتير: $e');
@@ -545,6 +548,7 @@ class FirebaseSyncService {
       // 📦 محرك المنتجات: رفع المعلق + تنزيل الكتالوج + الاستماع الحي —
       // قبل السحب الكامل بنفس المنطق.
       try {
+        SyncCrumb.mark('init: products.startSync');
         await ProductSyncService().startSync();
         print('📦 تم تشغيل محرك مزامنة المنتجات بنجاح');
       } catch (e) {
@@ -553,7 +557,9 @@ class FirebaseSyncService {
 
       // 📦 حركات المخزون (شراء، تعديل يدوي، رصيد افتتاحي) — بعد الكتالوج
       try {
+        SyncCrumb.mark('init: stockMovements.start');
         await StockMovementSyncService().start();
+        SyncCrumb.mark('init: stockMovements.started');
       } catch (e) {
         print('⚠️ تعذّر بدء مزامنة حركات المخزون: $e');
       }
@@ -562,6 +568,7 @@ class FirebaseSyncService {
       // يضمن وصول كل ما فات هذا الجهاز أثناء إيقافه مهما كان سبب فواته من
       // المستمعين اللحظيين.
       try {
+        SyncCrumb.mark('init: performFullCatchUp');
         await performFullCatchUp().timeout(
           const Duration(seconds: 120),
           onTimeout: () => print('⏳ استمرار التهيئة - السحب الكامل ما زال جارياً في الخلفية'),
@@ -579,6 +586,7 @@ class FirebaseSyncService {
 
       // 📱 تسجيل هذا الجهاز في المجموعة
       try {
+        SyncCrumb.mark('init: registerDevice');
         await registerDevice().timeout(const Duration(seconds: 60));
       } catch (e) {
         print('⚠️ خطأ/تأخير في تسجيل الجهاز بالسحابة: $e');
@@ -604,6 +612,7 @@ class FirebaseSyncService {
       _startBackgroundSync();
 
       onProgress?.call(0.95, 'اكتملت التهيئة');
+      SyncCrumb.mark('init: done');
       _isInitialized = true;
       _initFailureRetryable = false;
       _initRetryTimer?.cancel(); // ✅ نجحت التهيئة - لا حاجة لإعادة المحاولة
@@ -4211,7 +4220,7 @@ class FirebaseSyncService {
     if (_recoveryMode) return;
     // حجز الطلب ذرّياً حتى لا يعيد عشرة أجهزة البثّ معاً
     try {
-      final claimed = await _firestore!.runTransaction<bool>((txn) async {
+      final claimed = await runSafeTransaction<bool>(_firestore!, label: 'bootstrap-claim', (txn) async {
         final snap = await txn.get(reqRef);
         if (!snap.exists) return false;
         final data = snap.data() as Map<String, dynamic>?;
@@ -4279,7 +4288,7 @@ class FirebaseSyncService {
 
     Future<bool> createIfAbsent(String coll, String id, Map<String, dynamic> data) async {
       final ref = _firestore!.collection(coll).doc(id);
-      return await _firestore!.runTransaction<bool>((txn) async {
+      return await runSafeTransaction<bool>(_firestore!, label: 'createIfAbsent:$coll', (txn) async {
         final snap = await txn.get(ref);
         if (snap.exists) return false;
         txn.set(ref, data);

@@ -15,6 +15,7 @@ import 'smart_pipe_cleanup_service.dart';
 import 'sync_event_bus.dart';
 import '../database_service.dart';
 import '../database/business/customer_visibility.dart';
+import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 
 /// مزامنة الفواتير عبر Firestore.
 ///
@@ -276,7 +277,7 @@ class InvoiceSyncService {
         final payload = await _buildInvoiceBundlePayload(full, collection);
         if (payload == null) continue;
         final ref = collection.doc(uuid);
-        final created = await _firestore.runTransaction<bool>((txn) async {
+        final created = await runSafeTransaction<bool>(_firestore, label: 'invoice-rebroadcast', (txn) async {
           final snap = await txn.get(ref);
           if (snap.exists) return false;
           txn.set(ref, payload);
@@ -462,7 +463,7 @@ class InvoiceSyncService {
       DocumentReference ref, Map<String, dynamic> payload) async {
     final ver = (payload['version'] as num?)?.toInt() ?? 1;
     final mod = payload['last_modified_at']?.toString() ?? '';
-    return _firestore.runTransaction<bool>((txn) async {
+    return runSafeTransaction<bool>(_firestore, label: 'invoice-upload', (txn) async {
       final snap = await txn.get(ref);
       final d = snap.data() as Map<String, dynamic>?;
       if (d != null) {

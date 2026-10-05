@@ -10,6 +10,7 @@ import 'firebase_sync_config.dart';
 import 'sync_health.dart';
 import 'uuid_helper.dart';
 import '../../models/product.dart';
+import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 
 class ProductSyncService {
   FirebaseFirestore? _firestoreInstance;
@@ -97,7 +98,7 @@ class ProductSyncService {
             }
           }
           final ref = _firestore.collection('products').doc(uuid);
-          await _firestore.runTransaction((txn) async {
+          await runSafeTransaction(_firestore, label: 'product-copy', (txn) async {
             final snap = await txn.get(ref);
             if (!snap.exists) txn.set(ref, payload);
           }).timeout(const Duration(seconds: 30));
@@ -161,7 +162,7 @@ class ProductSyncService {
         final by = r['last_modified_by_device_id'];
         if (by != null) payload['last_modified_by_device_id'] = by;
         final ref = _firestore.collection('products').doc(uuid);
-        final created = await _firestore.runTransaction<bool>((txn) async {
+        final created = await runSafeTransaction<bool>(_firestore, label: 'product-rebroadcast', (txn) async {
           final snap = await txn.get(ref);
           if (snap.exists) return false;
           txn.set(ref, payload);
