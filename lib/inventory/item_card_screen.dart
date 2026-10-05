@@ -28,6 +28,7 @@ import '../models/app_user.dart';
 import '../org/org_service.dart';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
+import 'item_card_editor_screen.dart';
 
 const Map<String, String> itemTypeLabels = {
   'trade': 'للمتاجرة',
@@ -276,6 +277,15 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
       title: 'بطاقات المواد',
       subtitle: '${fmtQty(_rows.length)} مادة',
       icon: Icons.inventory,
+      floatingActionButton: AuthService().hasPermission(AppPermissions.productEntry)
+          ? FloatingActionButton.extended(
+              onPressed: () => Navigator.push(
+                      context, MaterialPageRoute(builder: (_) => const ItemCardEditorScreen()))
+                  .then((_) => _load()),
+              icon: const Icon(Icons.add),
+              label: const Text('مادة جديدة'),
+            )
+          : null,
       actions: exportActions(context,
           title: 'بطاقات المواد',
           headers: () => ['الرقم', 'الرمز', 'المادة', 'القسم', 'النوع', 'المخزون', 'سعر البيع', if (showCost) 'الكلفة'],
@@ -403,7 +413,7 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
                           ],
                         ),
                         onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => ItemCardScreen(productId: r['id'] as int)))
+                                MaterialPageRoute(builder: (_) => ItemCardEditorScreen(productId: r['id'] as int)))
                             .then((_) => _load()),
                       ),
                     );

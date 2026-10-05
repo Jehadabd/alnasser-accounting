@@ -51,6 +51,7 @@ import '../utils/number_formatter.dart'; // 🔢 Number formatting
 import '../erp/erp_common.dart' show PeriodLock, askNumber;
 import '../erp/sales/invoice_side_panel.dart';
 import '../models/invoice_entry_layout.dart'; // 🧩 أعمدة الجدول وعرضها
+import 'invoice_entry_layout_screen.dart';
 import '../widgets/line_discount_dialog.dart'; // 🏷️ خصم السطر
 
 // Helper: format product ID - show raw value without zero-padding
@@ -181,6 +182,510 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   
   // التمرير التلقائي
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _hScrollController = ScrollController(); // 🧩 تمرير أفقي لجدول المواد
+  bool _sidePanelOpen = true; // 🧩 اللوحة الجانبية (المجاميع والدفع) — تُطوى لتوسيع الجدول
+  bool _ensuringEmptyRow = false;
+
+  /// بدون شريط الإدخال العلوي يُكتب في آخر سطر فارغ من الجدول (كما في الإداري)
+  void _ensureTrailingEmptyRow() {
+    if (isViewOnly || InvoiceEntryLayout.current.showEntryBar || _ensuringEmptyRow) return;
+    if (invoiceItems.isNotEmpty && invoiceItems.last.productName.trim().isEmpty) return;
+    _ensuringEmptyRow = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensuringEmptyRow = false;
+      if (!mounted) return;
+      setState(() {
+        invoiceItems.add(InvoiceItem(
+          invoiceId: 0,
+          productName: '',
+          unit: '',
+          unitPrice: 0.0,
+          appliedPrice: 0.0,
+          itemTotal: 0.0,
+          uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+        ));
+        focusNodesList.add(LineItemFocusNodes());
+      });
+    });
+  }
+
+  Future<void> _toggleSidePanel() async {
+    setState(() => _sidePanelOpen = !_sidePanelOpen);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('invoice_side_panel_open', _sidePanelOpen);
+    } catch (_) {}
+  }
+
+  /// شريط المجاميع السفلي حين تُطوى اللوحة الجانبية (مثل أسفل فاتورة الإداري)
+  Widget _buildCompactTotalsBar() {
+    final before = invoiceItems.fold(0.0, (s, it) => s + it.itemTotal);
+    final lineDisc = invoiceItems.fold(0.0, (s, it) => s + it.lineDiscountTotal);
+    final loading = double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0.0;
+    final net = before - discount + loading + (_invoiceAdjustments.isNotEmpty ? _totalSettlementAmount : 0.0);
+    // نفس حساب اللوحة الجانبية: الدين = المدفوع + تسويات نقدية
+    final cashSettlements = _invoiceAdjustments
+        .where((a) => (a.settlementPaymentType ?? 'نقد') == 'نقد')
+        .fold(0.0, (s, a) => s + a.amountDelta);
+    final paid = paymentType == 'نقد'
+        ? net
+        : (double.tryParse(paidAmountController.text.replaceAll(',', '')) ?? 0.0) + cashSettlements;
+    final rest = net - paid;
+    Widget box(String label, double v, Color c, {bool strong = false}) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          decoration: BoxDecoration(
+            color: strong ? c : Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: c.withOpacity(0.5)),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: TextStyle(fontSize: 10.5, color: strong ? Colors.white70 : Colors.black54)),
+            Text(formatNumber(v),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: strong ? Colors.white : c)),
+          ]),
+        );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        border: Border(top: BorderSide(color: Colors.grey.shade300)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          box('المجموع', before, Colors.blueGrey),
+          if (lineDisc > 0) box('خصم الأصناف', lineDisc, Colors.green.shade700),
+          if (discount > 0) box('الخصم', discount, Colors.red.shade400),
+          if (loading > 0) box('أجور التحميل', loading, Colors.brown),
+          box('الصافي للدفع', net, const Color(0xFF0F3460), strong: true),
+          box(paymentType == 'نقد' ? 'نقداً' : 'المدفوع', paid, Colors.green.shade700),
+          if (paymentType != 'نقد') box('الباقي (دين)', rest, Colors.orange.shade800),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: _toggleSidePanel,
+            icon: const Icon(Icons.view_sidebar_outlined, size: 18),
+            label: const Text('الدفع والتفاصيل'),
+          ),
+          const SizedBox(width: 6),
+          if (!isViewOnly)
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF48BB78)),
+              onPressed: isSaving ? null : saveInvoice,
+              icon: const Icon(Icons.save_alt, size: 18),
+              label: const Text('حفظ الفاتورة'),
+            ),
+        ]),
+      ),
+    );
+  }
+
+  // ═══════════════════════════ 🧩 «المزيد» ═══════════════════════════
+  // ما لا تحتاجه أغلب الفواتير: الجوال والعنوان وأجور التحميل والنقل،
+  // وإعدادات عرض الجدول، والطباعة الإضافية والمشاركة والسجل.
+
+  int get _invoiceExtrasCount =>
+      (customerPhoneController.text.trim().isNotEmpty ? 1 : 0) +
+      (customerAddressController.text.trim().isNotEmpty ? 1 : 0) +
+      ((double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0) > 0 ? 1 : 0);
+
+  Widget _buildHeaderInfoChip(IconData icon, String text) => Padding(
+        padding: const EdgeInsetsDirectional.only(end: 6),
+        child: InkWell(
+          onTap: _openInvoiceMore,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            height: 42,
+            constraints: const BoxConstraints(maxWidth: 170),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 15, color: Colors.white60),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(text,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+            ]),
+          ),
+        ),
+      );
+
+  Widget _buildHeaderMoreButton() {
+    final n = _invoiceExtrasCount;
+    return Tooltip(
+      message: 'الجوال والعنوان وأجور النقل وعرض الجدول',
+      child: InkWell(
+        onTap: _openInvoiceMore,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          height: 42,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.tune, color: Colors.white, size: 18),
+            const SizedBox(width: 6),
+            const Text('المزيد', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+            if (n > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(color: const Color(0xFF00B4D8), borderRadius: BorderRadius.circular(10)),
+                child: Text('$n', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
+
+  void _openInvoiceHistory() {
+    final id = invoiceToManage?.id;
+    if (id == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => InvoiceHistoryScreen(invoiceId: id, customerName: customerNameController.text),
+      ),
+    );
+  }
+
+  Future<void> _openColumnsSettings() async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const InvoiceEntryLayoutScreen()));
+    await InvoiceEntryLayout.load();
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildMoreActionsMenu() {
+    final hasItems = invoiceItems.isNotEmpty && !isSaving;
+    PopupMenuItem<String> item(String value, IconData icon, String label, {bool enabled = true}) => PopupMenuItem<String>(
+          value: value,
+          enabled: enabled,
+          height: 42,
+          child: Row(children: [
+            Icon(icon, size: 19, color: enabled ? const Color(0xFF334155) : Colors.grey),
+            const SizedBox(width: 12),
+            Text(label, style: TextStyle(fontSize: 14, color: enabled ? const Color(0xFF1E293B) : Colors.grey)),
+          ]),
+        );
+    return PopupMenuButton<String>(
+      tooltip: 'خيارات أخرى',
+      icon: const Icon(Icons.more_vert),
+      position: PopupMenuPosition.under,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      itemBuilder: (_) => [
+        item('extras', Icons.tune, 'تفاصيل إضافية (الجوال، العنوان، أجور النقل)'),
+        item('columns', Icons.view_column_outlined, 'أعمدة الجدول وعرضها…'),
+        const PopupMenuDivider(),
+        item('picking', Icons.print_disabled, 'طباعة تجهيز (بدون أسعار)', enabled: hasItems),
+        item('share', Icons.share, 'مشاركة الفاتورة PDF', enabled: hasItems),
+        if (invoiceToManage?.id != null) item('history', Icons.history, 'سجل التعديلات'),
+      ],
+      onSelected: (v) {
+        switch (v) {
+          case 'extras':
+            _openInvoiceMore();
+            break;
+          case 'columns':
+            _openColumnsSettings();
+            break;
+          case 'picking':
+            _printPickingList();
+            break;
+          case 'share':
+            shareInvoice();
+            break;
+          case 'history':
+            _openInvoiceHistory();
+            break;
+        }
+      },
+    );
+  }
+
+  /// ⚙️ زر صغير في رأس الجدول: إظهار/إخفاء الأعمدة وارتفاع السطر فوراً.
+  Widget _buildColumnsQuickButton() {
+    final layout = InvoiceEntryLayout.current;
+    final canSeeCost = AuthService().hasPermission(AppPermissions.viewCostProfit);
+    final heights = <double, String>{30: 'سطر مضغوط', 38: 'سطر عادي', 46: 'سطر واسع'};
+    return PopupMenuButton<String>(
+      tooltip: 'أعمدة الجدول',
+      icon: const Icon(Icons.view_column_outlined, size: 18, color: Color(0xFF475569)),
+      padding: EdgeInsets.zero,
+      position: PopupMenuPosition.under,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      itemBuilder: (_) => [
+        const PopupMenuItem<String>(
+          enabled: false,
+          height: 30,
+          child: Text('الأعمدة الظاهرة', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+        ),
+        for (final k in InvoiceEntryLayout.keys)
+          if (!InvoiceEntryLayout.required.contains(k) && (canSeeCost || !InvoiceEntryLayout.costColumns.contains(k)))
+            CheckedPopupMenuItem<String>(
+              value: 'col:$k',
+              checked: layout.show(k),
+              height: 36,
+              child: Text(InvoiceEntryLayout.labels[k]!),
+            ),
+        const PopupMenuDivider(),
+        for (final e in heights.entries)
+          CheckedPopupMenuItem<String>(
+            value: 'h:${e.key}',
+            checked: layout.rowHeight == e.key,
+            height: 36,
+            child: Text(e.value),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'settings',
+          height: 38,
+          child: Row(children: [Icon(Icons.tune, size: 18), SizedBox(width: 8), Text('عرض الأعمدة بالبكسل…')]),
+        ),
+      ],
+      onSelected: (v) async {
+        final l = InvoiceEntryLayout.current;
+        if (v.startsWith('col:')) {
+          final k = v.substring(4);
+          final hidden = {...l.hidden};
+          if (!hidden.remove(k)) hidden.add(k);
+          await l.copyWith(hidden: hidden).save();
+        } else if (v.startsWith('h:')) {
+          await l.copyWith(rowHeight: double.parse(v.substring(2))).save();
+        } else if (v == 'settings') {
+          await _openColumnsSettings();
+        }
+        if (mounted) setState(() {});
+      },
+    );
+  }
+
+  Future<void> _openInvoiceMore() async {
+    final editable = !isViewOnly;
+    final feeEditable = !isViewOnly && !(invoiceToManage?.isLocked ?? false);
+    final canSeeCost = AuthService().hasPermission(AppPermissions.viewCostProfit);
+    const border = Color(0xFFE2E8F0);
+    InputDecoration dec(String label, IconData icon, {String? suffix}) => InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon, size: 19),
+          suffixText: suffix,
+          isDense: true,
+          filled: true,
+          fillColor: const Color(0xFFF6F8FB),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: border)),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: border)),
+          disabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: border)),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5)),
+        );
+    Widget section(String title, String hint, IconData icon, Color color, List<Widget> children) => Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(9)),
+                child: Icon(icon, size: 17, color: color),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5)),
+                  Text(hint, style: TextStyle(fontSize: 11.5, color: Colors.blueGrey.shade400)),
+                ]),
+              ),
+            ]),
+            const SizedBox(height: 12),
+            ...children,
+          ]),
+        );
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final layout = InvoiceEntryLayout.current;
+        Future<void> setLayout(InvoiceEntryLayout l) async {
+          await l.save();
+          if (mounted) setState(() {});
+          setD(() {});
+        }
+
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          insetPadding: const EdgeInsets.all(24),
+          backgroundColor: const Color(0xFFF7F9FC),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640, maxHeight: 680),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                padding: const EdgeInsets.fromLTRB(20, 14, 10, 14),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+                  border: Border(bottom: BorderSide(color: border)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.tune, color: Color(0xFF0F3460)),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('تفاصيل إضافية للفاتورة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      Text('أمور لا تحتاجها أغلب الفواتير', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    ]),
+                  ),
+                  IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
+                ]),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    section('بيانات العميل الإضافية', 'تظهر في الفاتورة المطبوعة وتُحفظ مع العميل',
+                        Icons.person_outline, const Color(0xFF2563EB), [
+                      TextField(
+                        controller: customerPhoneController,
+                        enabled: editable,
+                        keyboardType: TextInputType.phone,
+                        decoration: dec('رقم الجوال', Icons.phone_outlined),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: customerAddressController,
+                        enabled: editable,
+                        decoration: dec('العنوان', Icons.location_on_outlined),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ]),
+                    section('أجور التحميل والنقل', 'تُضاف إلى صافي الفاتورة', Icons.local_shipping_outlined,
+                        Colors.brown, [
+                      TextField(
+                        controller: loadingFeeController,
+                        enabled: feeEditable,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                        decoration: dec('المبلغ', Icons.payments_outlined, suffix: 'د.ع'),
+                        onChanged: (val) {
+                          setState(() {
+                            _guardDiscount();
+                            _updatePaidAmountIfCash();
+                            _calculateProfit();
+                          });
+                        },
+                      ),
+                    ]),
+                    section('عرض الجدول', 'يُحفظ لهذا الجهاز — لا يغيّر بيانات الفاتورة', Icons.view_column_outlined,
+                        const Color(0xFF4F46E5), [
+                      const Text('الأعمدة الظاهرة', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      Wrap(spacing: 6, runSpacing: 6, children: [
+                        for (final k in InvoiceEntryLayout.keys)
+                          if (!InvoiceEntryLayout.required.contains(k) &&
+                              (canSeeCost || !InvoiceEntryLayout.costColumns.contains(k)))
+                            FilterChip(
+                              label: Text(InvoiceEntryLayout.labels[k]!, style: const TextStyle(fontSize: 12.5)),
+                              selected: layout.show(k),
+                              onSelected: (v) {
+                                final hidden = {...layout.hidden};
+                                if (v) {
+                                  hidden.remove(k);
+                                } else {
+                                  hidden.add(k);
+                                }
+                                setLayout(layout.copyWith(hidden: hidden));
+                              },
+                            ),
+                      ]),
+                      const SizedBox(height: 12),
+                      Row(children: [
+                        const Text('ارتفاع السطر', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Wrap(spacing: 6, children: [
+                            for (final e in <double, String>{30: 'مضغوط', 38: 'عادي', 46: 'واسع'}.entries)
+                              ChoiceChip(
+                                label: Text(e.value),
+                                selected: layout.rowHeight == e.key,
+                                onSelected: (_) => setLayout(layout.copyWith(rowHeight: e.key)),
+                              ),
+                          ]),
+                        ),
+                      ]),
+                      const SizedBox(height: 6),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text('شريط الإدخال فوق الجدول'),
+                        subtitle: const Text('بدونه تُكتب المواد مباشرة في آخر سطر من الجدول'),
+                        value: layout.showEntryBar,
+                        onChanged: (v) => setLayout(layout.copyWith(showEntryBar: v)),
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text('اللوحة الجانبية (المجاميع والدفع)'),
+                        subtitle: const Text('عند إخفائها تنزل المجاميع وزر الحفظ إلى شريط سفلي'),
+                        value: _sidePanelOpen,
+                        onChanged: (_) async {
+                          await _toggleSidePanel();
+                          setD(() {});
+                        },
+                      ),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: TextButton.icon(
+                          onPressed: () async {
+                            Navigator.pop(ctx);
+                            await _openColumnsSettings();
+                          },
+                          icon: const Icon(Icons.straighten, size: 18),
+                          label: const Text('عرض كل عمود بالبكسل…'),
+                        ),
+                      ),
+                    ]),
+                  ]),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(18)),
+                  border: Border(top: BorderSide(color: border)),
+                ),
+                child: Row(children: [
+                  const Spacer(),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF0F3460),
+                      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text('تم'),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+        );
+      }),
+    );
+    if (mounted) setState(() {});
+  }
+
   bool _autoScrollEnabled = true; // سيتم تحميله من الإعدادات
   double _currentInvoiceProfit = 0.0;
 
@@ -577,6 +1082,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     InvoiceEntryLayout.load().then((_) {
       if (mounted) setState(() {});
     });
+    SharedPreferences.getInstance().then((prefs) {
+      final open = prefs.getBool('invoice_side_panel_open');
+      if (open != null && mounted) setState(() => _sidePanelOpen = open);
+    }).catchError((_) {});
     try {
       printingService = getPlatformPrintingService();
       invoiceToManage = widget.existingInvoice;
@@ -1045,6 +1554,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       _quantityFocusNode.dispose();
       _searchFocusNode.dispose();
       _scrollController.dispose();
+      _hScrollController.dispose();
 
       // 6. التخلص من عقد التركيز لصفوف الفاتورة
       for (final node in focusNodesList) {
@@ -3146,22 +3656,39 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             ),
     
                   
-                  // أجور التحميل (إذا كانت مفعّلة)
-                  if (!isViewOnly && !(invoiceToManage?.isLocked ?? false)) ...[
-                    _buildStyledInputField(
-                      controller: loadingFeeController,
-                      label: 'أجور التحميل والنقل',
-                      icon: Icons.local_shipping_outlined,
-                      onChanged: (val) {
-                        setState(() {
-                          _guardDiscount();
-                          _updatePaidAmountIfCash(); 
-                          _calculateProfit();
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                  ],
+                  // 🧩 أجور التحميل والنقل — تُدخل من «المزيد» (أغلب الفواتير لا تحتاجها)
+                  Builder(builder: (context) {
+                    final fee = double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0.0;
+                    final canEdit = !isViewOnly && !(invoiceToManage?.isLocked ?? false);
+                    if (fee <= 0 && !canEdit) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: InkWell(
+                        onTap: _openInvoiceMore,
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: Row(children: [
+                            Icon(Icons.local_shipping_outlined, size: 18, color: Colors.brown.shade400),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(fee > 0 ? 'أجور التحميل والنقل' : 'إضافة أجور تحميل أو نقل',
+                                  style: TextStyle(fontSize: 13, color: fee > 0 ? Colors.black87 : Colors.grey.shade600)),
+                            ),
+                            if (fee > 0)
+                              Text(formatNumber(fee), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                            const SizedBox(width: 6),
+                            Icon(fee > 0 ? Icons.edit_outlined : Icons.add, size: 16, color: Colors.grey.shade500),
+                          ]),
+                        ),
+                      ),
+                    );
+                  }),
                   
                   // الخصم المسموح
                   _buildStyledInputField(
@@ -3495,9 +4022,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-        decoration: BoxDecoration(
-            color: const Color(0xFFF0FDF4), // Very light green
-            border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+        decoration: const BoxDecoration(
+            color: Colors.white, // 🧩 شريط إدخال نظيف فوق بطاقة الجدول
+            border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
         ),
         child: Row(
             children: [
@@ -4335,7 +4862,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.0)),
         ),
         appBarTheme: AppBarTheme(
-          backgroundColor: const Color(0xFF212121),
+          backgroundColor: const Color(0xFF0F3460),
           foregroundColor: Colors.white,
           centerTitle: true,
           elevation: 4,
@@ -4354,8 +4881,18 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           AbsorbPointer(
             absorbing: isSaving,
             child: Scaffold(
+        backgroundColor: const Color(0xFFF3F6FB),
         appBar: AppBar(
           toolbarHeight: 60, // 🔺 Increased height for better visibility
+          flexibleSpace: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF0F3460), Color(0xFF1B5E8C)],
+                begin: Alignment.centerRight,
+                end: Alignment.centerLeft,
+              ),
+            ),
+          ),
           title: LayoutBuilder(
             builder: (context, constraints) {
               return SingleChildScrollView(
@@ -4501,56 +5038,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                     ),
                   const SizedBox(width: 8),
 
-                  // 2. Phone
-                  SizedBox(
-                    width: 180, // 🔺 Increased further per user request
-                    height: 42, // 🔺 Increased Height
-                    child: TextFormField(
-                      controller: customerPhoneController,
-                      style: const TextStyle(color: Colors.white, fontSize: 12.5),
-                      keyboardType: TextInputType.phone,
-                      enabled: !isViewOnly,
-                      decoration: InputDecoration(
-                        hintText: 'الجوال',
-                        hintStyle: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13),
-                        prefixIcon: Icon(Icons.phone_outlined, color: Colors.white54, size: 18),
-                        prefixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 0),
-                        filled: true,
-                        fillColor: Colors.white.withOpacity(0.12),
-                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                         isDense: true,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
-                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
-                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Colors.white30, width: 0.5)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-
-                  // 3. Address
-                   SizedBox(
-                      width: 200, // Fixed width for scrollable layout
-                      height: 42, // 🔺 Increased Height for better visibility
-                      child: TextFormField(
-                        controller: customerAddressController,
-                         style: const TextStyle(color: Colors.white, fontSize: 12.5),
-                        enabled: !isViewOnly,
-                        decoration: InputDecoration(
-                          hintText: 'العنوان',
-                          hintStyle: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13),
-                          prefixIcon: Icon(Icons.location_on_outlined, color: Colors.white54, size: 18),
-                          prefixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 0),
-                          filled: true,
-                          fillColor: Colors.white.withOpacity(0.12),
-                           contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                           isDense: true,
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
-                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
-                          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Colors.white30, width: 0.5)),
-                        ),
-                      ),
-                    ),
-                  const SizedBox(width: 12),
+                  // 🧩 الجوال والعنوان انتقلا إلى «المزيد» — يظهران هنا شارة صغيرة إن وُجدا
+                  if (customerPhoneController.text.trim().isNotEmpty)
+                    _buildHeaderInfoChip(Icons.phone_outlined, customerPhoneController.text.trim()),
+                  if (customerAddressController.text.trim().isNotEmpty)
+                    _buildHeaderInfoChip(Icons.location_on_outlined, customerAddressController.text.trim()),
+                  const SizedBox(width: 4),
 
                   // 3.5. اسم المستخدم الحالي (الكاشير/المحاسب)
                   Builder(
@@ -4643,6 +5136,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                   ),
                   ], // close Row children (نوع الفاتورة)
                 ), // close Row (نوع الفاتورة)
+                const SizedBox(width: 8),
+                // 🧩 «المزيد»: الجوال والعنوان وأجور النقل وعرض الجدول
+                _buildHeaderMoreButton(),
               ], // close Main Row children
             ), // close Main Row
           ); // close SingleChildScrollView
@@ -4650,6 +5146,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           ),
           centerTitle: true,
           actions: [
+            // 🧩 طي/إظهار اللوحة الجانبية لتوسيع جدول المواد
+            IconButton(
+              icon: Icon(_sidePanelOpen ? Icons.view_sidebar : Icons.view_sidebar_outlined),
+              tooltip: _sidePanelOpen ? 'إخفاء اللوحة الجانبية (توسيع الجدول)' : 'إظهار اللوحة الجانبية',
+              onPressed: _toggleSidePanel,
+            ),
             // زر جديد لإعادة التعيين - يظهر دائماً per user request
             IconButton(
               icon: const Icon(Icons.receipt),
@@ -4665,64 +5167,25 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
               tooltip: 'طباعة الفاتورة',
               onPressed: (invoiceItems.isEmpty || isSaving) ? null : printInvoice,
             ),
-            IconButton(
-              icon: const Icon(Icons.print_disabled),
-              tooltip: 'طباعة تجهيز (بدون أسعار)',
-              onPressed: (invoiceItems.isEmpty || isSaving) ? null : _printPickingList,
-            ),
-            // زر المشاركة الجديد
-            IconButton(
-              icon: const Icon(Icons.share),
-              tooltip: 'مشاركة الفاتورة PDF',
-              onPressed: (invoiceItems.isEmpty || isSaving) ? null : shareInvoice,
-            ),
-            // 📋 زر سجل التعديلات
-            if (invoiceToManage != null) 
+            // 📋 سجل التعديلات — يظهر هنا فقط إن عُدّلت الفاتورة (وموجود دائماً في القائمة)
+            if (invoiceToManage != null)
               FutureBuilder<bool>(
                 future: DatabaseService().hasInvoiceBeenModified(invoiceToManage!.id!),
                 builder: (context, snapshot) {
-                  final hasHistory = snapshot.data ?? false;
+                  if (snapshot.data != true) return const SizedBox.shrink();
                   return IconButton(
-                    icon: Icon(
-                      Icons.history,
-                      color: hasHistory ? Colors.orange : null,
-                    ),
-                    tooltip: hasHistory ? 'سجل التعديلات (تم التعديل)' : 'سجل التعديلات',
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => InvoiceHistoryScreen(
-                            invoiceId: invoiceToManage!.id!,
-                            customerName: customerNameController.text,
-                          ),
-                        ),
-                      );
-                    },
+                    icon: const Icon(Icons.history, color: Colors.orange),
+                    tooltip: 'سجل التعديلات (تم التعديل)',
+                    onPressed: _openInvoiceHistory,
                   );
                 },
               ),
-            if (invoiceToManage != null && isViewOnly) ...[
-              if (invoiceToManage!.isCreatedByMe)
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  tooltip: 'تعديل الفاتورة',
-                  onPressed: isSaving ? null : _enableEditMode,
-                ),
+            if (invoiceToManage != null && isViewOnly && invoiceToManage!.isCreatedByMe)
               IconButton(
-                icon: const Icon(Icons.playlist_add),
-                tooltip: 'تسوية الفاتورة - تحت التطوير',
-                onPressed: isSaving ? null : () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('هذه الميزة تحت التطوير حالياً'),
-                      backgroundColor: Colors.orange,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                },
+                icon: const Icon(Icons.edit),
+                tooltip: 'تعديل الفاتورة',
+                onPressed: isSaving ? null : _enableEditMode,
               ),
-            ],
             if (invoiceToManage != null && !isViewOnly) ...[
               IconButton(
                 icon: const Icon(Icons.save),
@@ -4735,6 +5198,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                 onPressed: isSaving ? null : _cancelEdit,
               ),
             ],
+            // 🧩 الخيارات الأقل استعمالاً في قائمة واحدة
+            _buildMoreActionsMenu(),
+            const SizedBox(width: 4),
           ],
         ),
         body: Row(
@@ -4756,36 +5222,73 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                   flex: 3,
                   child: Column(
                     children: [
-                  // شريط إدخال المواد (أفقي) - يظهر فقط إذا لم يكن للعرض
-                  _buildProductEntryBar(context),
+                  // شريط إدخال المواد (أفقي) - يظهر فقط إذا لم يكن للعرض، ويمكن إخفاؤه من الإعدادات
+                  if (InvoiceEntryLayout.current.showEntryBar) _buildProductEntryBar(context),
                   
-                  // رأس الجدول (Header Row) — الأعمدة وعرضها من الإعدادات (🧩 InvoiceEntryLayout)
+                  // 🧩 جدول المواد على طريقة الإداري: عرض كل عمود بالبكسل، يتّسع «اسم المادة»
+                  //    ليملأ الشاشة، وإن زادت الأعمدة عن العرض يظهر شريط تمرير أفقي.
                   if (invoiceItems.isNotEmpty || !isViewOnly)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 10.0, horizontal: 8.0),
-                      color: Colors.grey[200],
-                      child: Row(
-                        children: [
-                          for (final k in InvoiceEntryLayout.keys)
-                            if (InvoiceEntryLayout.current.show(k) && !(k == 'units' && isViewOnly))
-                              Expanded(
-                                  flex: InvoiceEntryLayout.current.f(k),
-                                  child: Text(InvoiceEntryLayout.headers[k]!,
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: k == 'units' ? 11 : null))),
-                          const SizedBox(width: 120),
-                        ],
-                      ),
-                    ),
-
-                  // قائمة المواد (Table)
-                  Expanded(
-                    child: Form(
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                          boxShadow: [
+                            BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 3)),
+                          ],
+                        ),
+                        child: LayoutBuilder(builder: (context, box) {
+                        final layout = InvoiceEntryLayout.current;
+                        _ensureTrailingEmptyRow();
+                        const trailing = 120.0; // أيقونات التنبيه + الحذف
+                        final colWidths = layout.resolve(
+                          box.maxWidth - trailing - 2,
+                          isViewOnly: isViewOnly,
+                          canSeeCost: AuthService().hasPermission(AppPermissions.viewCostProfit),
+                        );
+                        final tableWidth = colWidths.values.fold<double>(0, (a, b) => a + b) + trailing + 2;
+                        final header = Container(
+                          height: 34,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFF1F5F9),
+                            border: Border(
+                              bottom: BorderSide(color: Color(0xFFCBD5E1)),
+                              left: BorderSide(color: Color(0xFFE2E8F0)),
+                              right: BorderSide(color: Color(0xFFE2E8F0)),
+                            ),
+                          ),
+                          child: Row(children: [
+                            for (final e in colWidths.entries)
+                              Container(
+                                width: e.value,
+                                alignment: Alignment.center,
+                                padding: const EdgeInsets.symmetric(horizontal: 4),
+                                decoration: const BoxDecoration(
+                                  border: Border(right: BorderSide(color: Color(0xFFE2E8F0))),
+                                ),
+                                child: Text(InvoiceEntryLayout.headers[e.key]!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700, fontSize: 12.5, color: Color(0xFF334155))),
+                              ),
+                            // ⚙️ إظهار/إخفاء الأعمدة بسرعة من رأس الجدول
+                            SizedBox(width: trailing, child: Center(child: _buildColumnsQuickButton())),
+                          ]),
+                        );
+                        final grid = SizedBox(
+                          width: tableWidth,
+                          height: box.maxHeight,
+                          child: Column(children: [
+                            header,
+                            Expanded(
+                              child: Form(
                       key: formKey,
-                      child: ListView.builder(
+                      child: Stack(children: [
+                      ListView.builder(
                         controller: _scrollController,
                         itemCount: invoiceItems.length,
                         padding: const EdgeInsets.only(bottom: 100), // مساحة في الأسفل
@@ -4798,6 +5301,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                           }
 
                           return EditableInvoiceItemRow(
+                            columnWidths: colWidths,
+                            rowHeight: layout.rowHeight,
                             key: ValueKey(item.uniqueId),
                             item: item,
                             index: index,
@@ -4864,25 +5369,56 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                           );
                         },
                       ),
+                      // لا مواد بعد: تلميح هادئ في وسط الجدول
+                      if (invoiceItems.isEmpty && !isViewOnly)
+                        IgnorePointer(
+                          child: Center(
+                            child: Column(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.receipt_long_outlined, size: 54, color: Colors.blueGrey.shade100),
+                              const SizedBox(height: 10),
+                              Text('ابدأ بكتابة اسم المادة أو رقمها أو امسح الباركود',
+                                  style: TextStyle(color: Colors.blueGrey.shade300, fontSize: 14)),
+                            ]),
+                          ),
+                        ),
+                      ]),
                     ),
-                  ),
+                            ),
+                          ]),
+                        );
+                        if (tableWidth <= box.maxWidth + 1) return grid;
+                        return Scrollbar(
+                          controller: _hScrollController,
+                          thumbVisibility: true,
+                          child: SingleChildScrollView(
+                            controller: _hScrollController,
+                            scrollDirection: Axis.horizontal,
+                            child: grid,
+                          ),
+                        );
+                      }),
+                      ),
+                    ),
+                  // 🧩 اللوحة الجانبية مطوية ⇒ المجاميع والحفظ في شريط سفلي
+                  if (!_sidePanelOpen && isDesktop) _buildCompactTotalsBar(),
                 ],
               ),
             ),
             
             
             // الفاصل العمودي
+            if (_sidePanelOpen || !isDesktop)
             isDesktop
                 ? VerticalDivider(width: 1, color: Colors.grey.shade300)
                 : Divider(height: 1, color: Colors.grey.shade300),
 
             // ═══════════════════════════════════════════════════════════════════════════
-            // 2. الشريط الجانبي (Totals & Actions) - يأخذ المساحة الأقل
+            // 2. الشريط الجانبي (Totals & Actions) — عرض ثابت، ويُطوى لتوسيع الجدول
             // ═══════════════════════════════════════════════════════════════════════════
-            Expanded(
-              flex: isDesktop ? 1 : 2,
-              child: _buildSidebar(context),
-            ),
+            if (!isDesktop)
+              Expanded(flex: 2, child: _buildSidebar(context))
+            else if (_sidePanelOpen)
+              SizedBox(width: 330, child: _buildSidebar(context)),
           ],
         );
       },
@@ -5173,6 +5709,10 @@ class EditableInvoiceItemRow extends StatefulWidget {
   final VoidCallback? onPriceSubmitted; // جديد: للانتقال إلى الصف التالي عند الضغط على Enter في السعر
   final bool allowNegativeStock; // جديد: للسماح بالبيع بالسالب أو منعه
   final List<String> Function()? getCurrentInvoiceProductNames; // المنتجات الحالية لخفض أولويتها في البحث
+  /// 🧩 عرض كل عمود بالبكسل (من InvoiceEntryLayout.resolve) — الأعمدة غير الموجودة لا تُرسم
+  final Map<String, double>? columnWidths;
+  /// ارتفاع السطر (مضغوط كالإداري أو عادي)
+  final double rowHeight;
 
   const EditableInvoiceItemRow({
     Key? key,
@@ -5192,6 +5732,8 @@ class EditableInvoiceItemRow extends StatefulWidget {
     this.onPriceSubmitted, // جديد: للانتقال إلى الصف التالي
     this.allowNegativeStock = false, // القيمة الافتراضية
     this.getCurrentInvoiceProductNames,
+    this.columnWidths,
+    this.rowHeight = 44,
   }) : super(key: key);
 
   @override
@@ -5222,7 +5764,15 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   // دالة للتحقق مما إذا كان سعر البيع أقل من سعر التكلفة
   bool _isPriceBelowCost() {
     if (_currentItem.appliedPrice <= 0) return false;
-    if (_currentItem.productName.isEmpty) return false;
+    final effectiveCostPerUnit = _effectiveCostPerUnit();
+    if (effectiveCostPerUnit == null || effectiveCostPerUnit <= 0) return false;
+    const double eps = 1e-6;
+    return (_currentItem.appliedPrice + eps) < effectiveCostPerUnit;
+  }
+
+  /// كلفة الوحدة المباعة لهذا السطر (من كلفة السطر المخزنة أو من بطاقة المادة)
+  double? _effectiveCostPerUnit() {
+    if (_currentItem.productName.isEmpty) return null;
     
     double quantity = _currentItem.quantityIndividual ??
         _currentItem.quantityLargeUnit ?? 1;
@@ -5329,11 +5879,30 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
       }
     }
     
-    if (effectiveCostPerUnit == null || effectiveCostPerUnit <= 0) return false;
-    
-    const double eps = 1e-6;
-    return (_currentItem.appliedPrice + eps) < effectiveCostPerUnit;
+    return effectiveCostPerUnit;
   }
+
+  // 🧩 فهرس المواد بالاسم (يُبنى مرة لكل قائمة مواد) للأعمدة: الرقم، الرصيد، الكلفة
+  static List<Product>? _indexSource;
+  static Map<String, Product> _productIndex = {};
+  Product? get _rowProduct {
+    if (!identical(_indexSource, widget.allProducts)) {
+      _indexSource = widget.allProducts;
+      _productIndex = {for (final p in widget.allProducts) p.name: p};
+    }
+    return _productIndex[_currentItem.productName];
+  }
+
+  /// خلية بعرض العمود المحدد؛ العمود غير الظاهر لا يُرسم
+  Widget _cell(String key, Widget child) {
+    final widths = widget.columnWidths;
+    if (widths == null) return Expanded(flex: 2, child: child);
+    final w = widths[key];
+    if (w == null) return const SizedBox.shrink();
+    return SizedBox(width: w, child: child);
+  }
+
+  double get _vPad => widget.rowHeight < 40 ? 4 : 8;
 
   // 🔒 التحقق من المخزون عند الكتابة اليدوية لاسم المنتج
   void _validateStockByManualName(String name) {
@@ -6017,28 +6586,29 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   }
 
   String formatCurrency(num value) {
-    final formatter = NumberFormat('#,##0.00', 'en_US');
+    final formatter = NumberFormat('#,##0.##', 'en_US');
     return formatter.format(value);
   }
   @override
   Widget build(BuildContext context) {
-    // لون الخطوط الفاصلة بين الأعمدة - أغمق للوضوح
-    final Color gridBorderColor = Colors.grey.shade500;
+    // 🧩 شبكة هادئة: خطوط فاتحة وأسطر متناوبة اللون (مثل جداول البيانات الحديثة)
+    const Color gridBorderColor = Color(0xFFE2E8F0);
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: gridBorderColor, width: 1),
+        color: widget.index.isOdd ? const Color(0xFFF8FAFC) : Colors.white,
+        border: const Border(
+          bottom: BorderSide(color: gridBorderColor),
+          left: BorderSide(color: gridBorderColor),
+          right: BorderSide(color: gridBorderColor),
+        ),
       ),
       child: SizedBox(
-        height: 44,
+        height: widget.rowHeight,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             // رقم الصف
-            if (InvoiceEntryLayout.current.show('index'))
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('index'),
-              child: Container(
+            _cell('index', Container(
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
@@ -6046,13 +6616,22 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                 child: Text((widget.index + 1).toString(),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium),
-              ),
-            ),
+              )),
 
-            // التفاصيل (اسم المنتج) - Increased Flex (5 -> 7)
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('details'), 
-              child: Container(
+            // 🔢 رقم المادة
+            _cell('code', Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
+              ),
+              child: Text(
+                '${_currentItem.productId ?? _rowProduct?.id ?? ''}',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+              ),
+            )),
+
+            // التفاصيل (اسم المنتج)
+            _cell('details', Container(
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
                 ),
@@ -6091,20 +6670,19 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                             decoration: InputDecoration(
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(4),
-                                borderSide: BorderSide(color: Colors.grey.shade400, width: 1),
+                                borderSide: BorderSide(color: Colors.transparent, width: 1),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(4),
-                                borderSide: BorderSide(color: Colors.grey.shade400, width: 1),
+                                borderSide: BorderSide(color: Colors.transparent, width: 1),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(4),
-                                borderSide: BorderSide(color: Colors.blue.shade400, width: 1.5),
+                                borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
                               ),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: _vPad),
                               isDense: true,
-                              filled: true,
-                              fillColor: const Color(0xFFF5F5F5),
+                              filled: false,
                             ),
                             style: Theme.of(context).textTheme.bodyMedium,
                             onChanged: (val) {
@@ -6166,12 +6744,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                            FocusScope.of(context).requestFocus(_quantityFocusNode);
                         },
                       ),
-              ),
-            ),
+              )),
             // العدد
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('qty'),
-              child: Container(
+            _cell('qty', Container(
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
                 ),
@@ -6204,28 +6779,24 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                         decoration: InputDecoration(
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: Colors.grey.shade400, width: 1),
+                            borderSide: BorderSide(color: Colors.transparent, width: 1),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: Colors.grey.shade400, width: 1),
+                            borderSide: BorderSide(color: Colors.transparent, width: 1),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: Colors.blue.shade400, width: 1.5),
+                            borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
                           ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: _vPad),
                           isDense: true,
-                          filled: true,
-                          fillColor: const Color(0xFFF5F5F5),
+                          filled: false,
                         ),
                       ),
-              ),
-            ),
+              )),
             // نوع البيع
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('saleType'),
-              child: Container(
+            _cell('saleType', Container(
                 key: _saleTypeKey, // مفتاح لتحديد موقع القائمة المنبثقة
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
@@ -6234,11 +6805,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                 child: widget.isViewOnly
                     ? Container(
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade400, width: 1),
                           borderRadius: BorderRadius.circular(4),
-                          color: const Color(0xFFF5F5F5),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                        padding: EdgeInsets.symmetric(horizontal: 6, vertical: _vPad),
                         child: Text(
                           widget.item.saleType ?? '',
                           textAlign: TextAlign.center,
@@ -6247,9 +6816,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                       )
                     : Container(
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade400, width: 1),
                           borderRadius: BorderRadius.circular(4),
-                          color: const Color(0xFFF5F5F5),
                         ),
                         padding: const EdgeInsets.symmetric(horizontal: 2),
                         child: DropdownButtonHideUnderline(
@@ -6260,6 +6827,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                                 ? null
                                 : (value) => _updateSaleType(value!),
                             isExpanded: true,
+                            isDense: widget.rowHeight < 40, // 🧩 سطر مضغوط
                             alignment: AlignmentDirectional.center,
                             style: Theme.of(context).textTheme.bodyMedium,
                             itemHeight: 48,
@@ -6273,12 +6841,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                           ),
                         ),
                       ),
-              ),
-            ),
+              )),
             // السعر
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('price'),
-              child: Container(
+            _cell('price', Container(
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
                 ),
@@ -6315,29 +6880,37 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                           suffixIcon: null,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: Colors.grey.shade400, width: 1),
+                            borderSide: BorderSide(color: Colors.transparent, width: 1),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: Colors.grey.shade400, width: 1),
+                            borderSide: BorderSide(color: Colors.transparent, width: 1),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: Colors.blue.shade400, width: 1.5),
+                            borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
                           ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: _vPad),
                           isDense: true,
-                          filled: true,
-                          fillColor: const Color(0xFFF5F5F5),
+                          filled: false,
                         ),
                       ),
+              )),
+            // السعر قبل الخصم (للسطر المخصوم أو الهدية)
+            _cell('listPrice', Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
               ),
-            ),
+              child: Text(
+                _currentItem.hasLineDiscount
+                    ? formatCurrency(_currentItem.priceBeforeDiscount ?? _currentItem.appliedPrice)
+                    : '',
+                style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+              ),
+            )),
             // 🏷️ الخصم / الهدية — اضغط لتعديل خصم هذا السطر
-            if (InvoiceEntryLayout.current.show('discount'))
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('discount'),
-              child: InkWell(
+            _cell('discount', InkWell(
                 onTap: (widget.isViewOnly || widget.isPlaceholder || _isRowLocked) ? null : _editLineDiscount,
                 child: Container(
                   alignment: Alignment.center,
@@ -6362,12 +6935,8 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                             : Icon(Icons.local_offer_outlined, size: 16, color: Colors.grey.shade400)),
                   ),
                 ),
-              ),
-            ),
-            if (!widget.isViewOnly && InvoiceEntryLayout.current.show('units'))
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('units'),
-              child: Container(
+              )),
+            _cell('units', Container(
                 alignment: Alignment.center,
                 child: widget.isViewOnly
                   ? ((widget.item.saleType == 'قطعة' ||
@@ -6386,12 +6955,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                               '',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodyMedium),
-              ),
-            ),
+              )),
             // المبلغ (Total) - Moved to end
-            Expanded(
-              flex: InvoiceEntryLayout.current.f('total'),
-              child: Container(
+            _cell('total', Container(
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
@@ -6411,8 +6977,59 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                             fontWeight: FontWeight.bold,
                             color: Theme.of(context).colorScheme.primary),
                       ),
+              )),
+            // 📦 الرصيد في المخزن (بالوحدة الأساسية)
+            _cell('stock', Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
               ),
-            ),
+              child: Builder(builder: (context) {
+                final p = _rowProduct;
+                if (p == null) return const SizedBox.shrink();
+                final q = p.stockQuantity;
+                return Text(
+                  NumberFormat('#,##0.##', 'en_US').format(q),
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: q <= 0 ? Colors.red.shade700 : Colors.teal.shade700,
+                  ),
+                );
+              }),
+            )),
+            // 💰 كلفة الوحدة المباعة
+            _cell('cost', Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
+              ),
+              child: Builder(builder: (context) {
+                if (_currentItem.productName.isEmpty) return const SizedBox.shrink();
+                final c = _effectiveCostPerUnit();
+                return Text(c == null ? '—' : formatCurrency(c),
+                    style: TextStyle(fontSize: 12.5, color: Colors.grey.shade800));
+              }),
+            )),
+            // 📈 ربح السطر = الإجمالي − الكلفة × الكمية
+            _cell('profit', Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: gridBorderColor, width: 1)),
+              ),
+              child: Builder(builder: (context) {
+                if (_currentItem.productName.isEmpty) return const SizedBox.shrink();
+                final c = _effectiveCostPerUnit();
+                if (c == null) return const Text('—');
+                final profit = _currentItem.itemTotal - c * _currentItem.soldQuantity;
+                return Text(formatCurrency(profit),
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: profit < 0 ? Colors.red.shade700 : Colors.green.shade700,
+                    ));
+              }),
+            )),
             // أيقونات التنبيه في أقصى اليمين
             SizedBox(
               width: 80, // زيادة العرض لاستيعاب أيقونتين
@@ -6454,8 +7071,11 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
               SizedBox(
                 width: 40,
                 child: IconButton(
-                  icon: const Icon(Icons.delete_outline,
-                      color: Colors.red, size: 24),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(Icons.delete_outline,
+                      color: Colors.red, size: widget.rowHeight < 40 ? 19 : 24),
                   onPressed: () =>
                       widget.onItemRemovedByUid(widget.item.uniqueId),
                   tooltip: 'حذف الصنف',

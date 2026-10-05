@@ -8,7 +8,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../accounting/screens/acc_ui.dart' show fmtMoney, requirePermission;
-import '../inventory/item_card_screen.dart';
+import '../inventory/item_card_editor_screen.dart';
 import '../models/app_user.dart';
 import '../models/customer.dart';
 import '../screens/create_invoice_screen.dart';
@@ -124,7 +124,7 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
       case _Kind.product:
         if (!requirePermission(context, AppPermissions.itemCard)) return;
         nav.pop();
-        nav.push(MaterialPageRoute(builder: (_) => ItemCardScreen(productId: h.id)));
+        nav.push(MaterialPageRoute(builder: (_) => ItemCardEditorScreen(productId: h.id)));
         break;
       case _Kind.invoice:
         if (!requirePermission(context, AppPermissions.editInvoices)) return;
