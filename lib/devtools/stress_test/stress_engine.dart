@@ -46,6 +46,7 @@ import '../../services/firebase_sync/firebase_sync_config.dart';
 import '../../services/firebase_sync/firebase_sync_helper.dart';
 import '../../services/firebase_sync/invoice_sync_service.dart';
 import '../../widgets/line_discount_dialog.dart' show lineNetPrice;
+import 'keep_awake.dart';
 import 'stress_model.dart';
 
 const String kStressCustomerPrefix = 'عميل اختبار';
@@ -263,6 +264,7 @@ class StressEngine extends ChangeNotifier {
     }
     running = true;
     _stop = false;
+    setSystemAwake(true);
     startedAt = DateTime.now();
     final startSaves = saves;
     status = 'يعمل';
@@ -302,6 +304,7 @@ class StressEngine extends ChangeNotifier {
       status = 'توقف بخطأ';
     } finally {
       running = false;
+      setSystemAwake(false);
       notifyListeners();
     }
   }
@@ -425,7 +428,7 @@ class StressEngine extends ChangeNotifier {
 
   // ─────────────────────────── المعاملات اليدوية ───────────────────────────
 
-  Future<int?> _addManual(TCustomer cust, Random rnd, {required bool live, Map<String, double>? deltas}) async {
+  Future<int?> _addManual(TCustomer cust, Random rnd, {required bool live}) async {
     final bal = await _localBalance(cust.id);
     final payment = bal > 5000 && rnd.nextDouble() < 0.4;
     double amt;
@@ -1168,6 +1171,7 @@ class StressEngine extends ChangeNotifier {
     }
     running = true;
     _stop = false;
+    setSystemAwake(true);
     status = 'الجولة الحيّة تعمل';
     notifyListeners();
     try {
@@ -1268,6 +1272,7 @@ class StressEngine extends ChangeNotifier {
       status = 'توقف بخطأ';
     } finally {
       running = false;
+      setSystemAwake(false);
       notifyListeners();
     }
   }
