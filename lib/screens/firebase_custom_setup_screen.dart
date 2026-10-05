@@ -148,13 +148,29 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
         print('✅ [2/3] User UID: ${userCred.user?.uid}');
         print('✅ [2/3] isAnonymous: ${userCred.user?.isAnonymous}');
 
+        // 🔑 انتظار توكن صالح قبل أول قراءة (كبوابة المصادقة في المزامنة):
+        // على ويندوز قد تخرج أول قراءة بعد التسجيل المجهول مباشرة بلا توكن،
+        // فترفضها القواعد (permission-denied) رغم أنها صحيحة — إنذار كاذب.
+        try {
+          await userCred.user?.getIdToken(true).timeout(const Duration(seconds: 20));
+        } catch (_) {}
+
         print('🧪 [3/3] محاولة قراءة مجموعة customers من Firestore...');
         final testFirestore = FirebaseFirestore.instanceFor(app: app);
-        final snapshot = await testFirestore
+        Future<QuerySnapshot<Map<String, dynamic>>> readOnce() => testFirestore
             .collection('customers')
             .limit(1)
-            .get()
+            .get(const GetOptions(source: Source.server))
             .timeout(const Duration(seconds: 20));
+        QuerySnapshot<Map<String, dynamic>> snapshot;
+        try {
+          snapshot = await readOnce();
+        } on FirebaseException catch (e) {
+          if (!e.code.contains('permission-denied')) rethrow;
+          // محاولة ثانية بعد لحظة: التوكن قد يصل متأخراً، وقواعد نُشرت للتو تحتاج ثوانيَ لتسري
+          await Future.delayed(const Duration(seconds: 3));
+          snapshot = await readOnce();
+        }
         print('✅ [3/3] تمت القراءة من Firestore بنجاح!');
         print('✅ [3/3] عدد المستندات المقروءة: ${snapshot.docs.length}');
         
