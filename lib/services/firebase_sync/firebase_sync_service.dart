@@ -2098,9 +2098,17 @@ class FirebaseSyncService {
 
       final currentType = existingTx['transaction_type'] as String?;
       final currentNote = existingTx['transaction_note'] as String? ?? '';
+      // 🛡️ تعديل التاريخ وحده تعديل أيضاً (كان يُهمَل فتبقى الأجهزة الأخرى بالتاريخ القديم
+      // — يغيّر ترتيب الكشف والأرصدة التراكمية فيه وتصفية التقارير بالتاريخ)
+      final currentDate = existingTx['transaction_date'] as String?;
+      final dateChanged = transactionDate != null &&
+          transactionDate.isNotEmpty &&
+          (DateTime.tryParse(transactionDate)?.millisecondsSinceEpoch ?? 0) !=
+              (DateTime.tryParse(currentDate ?? '')?.millisecondsSinceEpoch ?? 0);
       final needsUpdate = (currentAmount - amountChanged).abs() > 0.01 ||
           currentType != transactionType ||
           currentNote != transactionNote ||
+          dateChanged ||
           isTxDeleted;
       if (!needsUpdate) return;
 

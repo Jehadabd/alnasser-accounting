@@ -38,6 +38,7 @@ import '../accounting/screens/acc_ui.dart' show requirePermission;
 import '../models/app_user.dart' show AppPermissions;
 import '../erp/erp_settings_screen.dart';
 import '../erp/activity/activity_log.dart' show ActivityLogScreen;
+import '../devtools/stress_test/stress_test_screen.dart'; // 🧪
 
 import '../models/account_statement_item.dart';
 import '../models/verification_result.dart'; // ✅ Added
@@ -2187,6 +2188,18 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   onTap: () {
                     if (requirePermission(context, AppPermissions.manageUsers)) {
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityLogScreen()));
+                    }
+                  },
+                ),
+                // 🧪 اختبار التحمّل الحقيقي (للمدير فقط)
+                _buildActionTile(
+                  icon: Icons.science_outlined,
+                  iconColor: Colors.deepOrange,
+                  title: 'اختبار التحمّل والحسابات',
+                  subtitle: 'آلاف الفواتير والمعاملات في القاعدة الحقيقية ثم مطابقة كل رقم، ومقارنة حاسوبين عبر فايربيس',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.manageUsers)) {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const StressTestScreen()));
                     }
                   },
                 ),

@@ -150,7 +150,20 @@ class InvoiceSyncService {
   /// 🔒 المزامنة الذرية: كل فاتورة تُرفع مع معاملاتها المالية المدمجة في
   ///    وثيقة واحدة (`payload['transactions']`)، بحيث يصل أثرها المالي على
   ///    العميل على الأجهزة الأخرى مع الفاتورة نفسها — لا حالة وسطية.
-  Future<int> syncPendingInvoices() async {
+  /// 🛡️ تشغيلة واحدة في كل مرة: كانت تنطلق من عدة مسارات معاً (بدء المزامنة،
+  /// دورة المعلّقات، المؤقتين) فتُرفع الفاتورة نفسها مرات — قراءة وكتابة في
+  /// فايربيس لكل مرة. الطلب أثناء تشغيلة جارية ينتظر نتيجتها.
+  static Future<int>? _pendingRun;
+
+  Future<int> syncPendingInvoices() {
+    final running = _pendingRun;
+    if (running != null) return running;
+    final run = _syncPendingInvoicesImpl().whenComplete(() => _pendingRun = null);
+    _pendingRun = run;
+    return run;
+  }
+
+  Future<int> _syncPendingInvoicesImpl() async {
     if (!await FirebaseSyncConfig.isEnabled()) return 0;
     // 🛡️ وضع الاستعادة: نسخة قديمة من فاتورة قد تكتب فوق نسخة أحدث في السحابة
     if (FirebaseSyncService().isRecovering) return 0;
@@ -162,11 +175,20 @@ class InvoiceSyncService {
     final collection = _firestore.collection('invoices');
     int uploaded = 0;
 
+    final localDb = await DatabaseService().database;
     for (final invMap in pending) {
       final uuid = invMap['invoice_uuid'] as String?;
       if (uuid == null || uuid.isEmpty) continue;
 
       try {
+        // رُفعت بمسار آخر (الرفع الفوري بعد الحفظ) منذ أُخذت القائمة؟ لا نكررها
+        final cur = await localDb.query('invoices',
+            columns: ['is_synced', 'version'], where: 'invoice_uuid = ?', whereArgs: [uuid], limit: 1);
+        if (cur.isNotEmpty &&
+            ((cur.first['is_synced'] as num?)?.toInt() ?? 0) == 1 &&
+            ((cur.first['version'] as num?)?.toInt() ?? 1) == ((invMap['version'] as num?)?.toInt() ?? 1)) {
+          continue;
+        }
         final payload = await _buildInvoiceBundlePayload(invMap, collection);
         if (payload == null) continue;
 

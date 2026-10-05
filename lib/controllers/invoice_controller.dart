@@ -412,6 +412,10 @@ class InvoiceController {
       // 🏁 Start Transaction
       await (await _db.database).transaction((txn) async {
         Customer? customer;
+        // اسم/هاتف الفاتورة المحفوظة قد يختلفان عمّا كُتب (عميل تغيّر اسمه أو هاتفه)
+        String? resolvedName;
+        String? resolvedPhone;
+        var phoneFromCustomer = false;
         if (data.customerName.trim().isNotEmpty) {
           String? normalizedPhone;
           if (data.customerPhone.trim().isNotEmpty) {
@@ -419,21 +423,56 @@ class InvoiceController {
           }
 
           final normalizedName = data.customerName.trim().replaceAll(' ', '');
-          List<Map<String, dynamic>> customerMaps;
-          if (normalizedPhone != null && normalizedPhone.trim().isNotEmpty) {
-            customerMaps = await txn.rawQuery(
-              "SELECT * FROM customers WHERE REPLACE(name, ' ', '') = ? AND phone = ? LIMIT 1",
-              [normalizedName, normalizedPhone.trim()],
-            );
-          } else {
-            customerMaps = await txn.rawQuery(
-              "SELECT * FROM customers WHERE REPLACE(name, ' ', '') = ? LIMIT 1",
-              [normalizedName],
-            );
+          String nameKey(String s) => s.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+
+          // 🛡️ تعديل فاتورة محفوظة:
+          //   • الاسم والهاتف كما في الفاتورة ⇒ هي لعميلها نفسه (بالمعرّف)، حتى لو
+          //     تغيّر اسمه أو هاتفه في بطاقته بعد إنشاء الفاتورة. كان البحث بالاسم
+          //     القديم لا يجده فيُنشئ عميلاً جديداً وينقل إليه الدين.
+          //   • تغيّر الاسم فقط والهاتف بقي هاتف العميل القديم ⇒ الهاتف متروك من
+          //     العميل السابق (نقل الفاتورة لعميل آخر)، فلا يُبحث به.
+          var usePhone = normalizedPhone != null && normalizedPhone.trim().isNotEmpty;
+          final old = data.invoiceToManage;
+          if (!data.isNewInvoice && old != null) {
+            final oldPhone = (old.customerPhone ?? '').trim().isEmpty
+                ? null
+                : _normalizePhoneNumber(old.customerPhone!.trim());
+            final sameName = nameKey(old.customerName) == nameKey(data.customerName);
+            final samePhone = oldPhone == normalizedPhone;
+            if (sameName && samePhone && old.customerId != null) {
+              final byId = await txn.query('customers',
+                  where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [old.customerId], limit: 1);
+              if (byId.isNotEmpty) {
+                customer = Customer.fromMap(byId.first);
+                resolvedName = customer.name;
+              }
+            } else if (!sameName && samePhone) {
+              usePhone = false;
+            }
           }
 
-          if (customerMaps.isNotEmpty) {
-            customer = Customer.fromMap(customerMaps.first);
+          if (customer == null) {
+            // الأسماء المطابقة (غير المحذوفة)؛ الهاتف يُقارن بعد توحيد صيغته في الطرفين
+            // (العميل المُدخل من شاشة العملاء قد يُحفظ هاتفه 07… والفاتورة توحّده 964…)
+            final candidates = await txn.rawQuery(
+              "SELECT * FROM customers WHERE REPLACE(name, ' ', '') = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY id",
+              [normalizedName],
+            );
+            if (usePhone) {
+              for (final m in candidates) {
+                final p = (m['phone'] as String?)?.trim() ?? '';
+                if (p.isNotEmpty && _normalizePhoneNumber(p) == normalizedPhone) {
+                  customer = Customer.fromMap(m);
+                  break;
+                }
+              }
+            } else if (candidates.isNotEmpty) {
+              customer = Customer.fromMap(candidates.first);
+              if (!data.isNewInvoice) {
+                resolvedPhone = customer.phone;
+                phoneFromCustomer = true;
+              }
+            }
           }
 
           if (customer == null) {
@@ -529,8 +568,10 @@ class InvoiceController {
 
         Invoice invoice = Invoice(
           id: data.invoiceToManage?.id,
-          customerName: data.customerName,
-          customerPhone: normalizedPhoneForInvoice,
+          customerName: resolvedName ?? data.customerName,
+          customerPhone: phoneFromCustomer
+              ? ((resolvedPhone ?? '').trim().isEmpty ? null : _normalizePhoneNumber(resolvedPhone!.trim()))
+              : normalizedPhoneForInvoice,
           customerAddress: data.customerAddress,
           installerName: (data.installerName == null || data.installerName!.isEmpty)
               ? null
