@@ -1401,7 +1401,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
           flex: 5,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             _label('الوحدة ${i + 2}'),
-            Autocomplete<String>(
+            LayoutBuilder(builder: (context, box) => Autocomplete<String>(
               initialValue: TextEditingValue(text: u.name.text),
               optionsBuilder: (t) {
                 final all = {'كرتون', 'باكيت', 'درزن', 'صندوق', 'شدة', 'لفة', 'كيس', 'كونية', ..._allUnits};
@@ -1412,6 +1412,32 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
                 u.name.text = s;
                 _touch();
               },
+              // قائمة الاقتراحات بعرض الحقل نفسه وتحته مباشرة (لا تغطي حقل المعامل)
+              optionsViewBuilder: (context, onSelected, options) => Align(
+                alignment: AlignmentDirectional.topStart,
+                child: Material(
+                  elevation: 6,
+                  borderRadius: BorderRadius.circular(10),
+                  clipBehavior: Clip.antiAlias,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: box.maxWidth, maxHeight: 220),
+                    child: ListView(
+                      padding: EdgeInsets.zero,
+                      shrinkWrap: true,
+                      children: [
+                        for (final o in options)
+                          InkWell(
+                            onTap: () => onSelected(o),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                              child: Text(o, style: const TextStyle(fontSize: 13.5)),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
               fieldViewBuilder: (context, ctrl, focus, onSubmit) {
                 return TextField(
                   controller: ctrl,
@@ -1425,7 +1451,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
                   },
                 );
               },
-            ),
+            )),
           ]),
         ),
         const Padding(
@@ -1861,6 +1887,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         );
         return Dialog(
           insetPadding: const EdgeInsets.all(24),
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           clipBehavior: Clip.antiAlias,
           child: SizedBox(
@@ -1909,12 +1937,12 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
                 child: Row(children: [
                   TextButton.icon(
                     onPressed: sel > 0 ? () => setD(() => sel--) : null,
-                    icon: const Icon(Icons.chevron_left),
+                    icon: const Icon(Icons.chevron_right),
                     label: const Text('السابق'),
                   ),
                   TextButton.icon(
                     onPressed: sel < _sections.length - 1 ? () => setD(() => sel++) : null,
-                    icon: const Icon(Icons.chevron_right),
+                    icon: const Icon(Icons.chevron_left),
                     label: const Text('التالي'),
                   ),
                   const Spacer(),
@@ -2244,6 +2272,8 @@ class _ItemSearchDialogState extends State<_ItemSearchDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(

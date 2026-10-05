@@ -90,7 +90,7 @@ class InvoiceEntryLayout {
   final Map<String, double> widths;
   final Set<String> hidden;
 
-  /// ارتفاع السطر بالبكسل (مضغوط 30، عادي 38، واسع 46)
+  /// ارتفاع السطر بالبكسل (مضغوط 30، عادي 34، واسع 42)
   final double rowHeight;
 
   /// شريط الإدخال الأخضر فوق الجدول (بدونه يُكتب مباشرة في آخر سطر من الجدول كما في الإداري)

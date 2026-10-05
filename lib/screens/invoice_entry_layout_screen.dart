@@ -23,7 +23,7 @@ class _InvoiceEntryLayoutScreenState extends State<InvoiceEntryLayoutScreen> {
   bool _loading = true;
 
   // (خريطة غير ثابتة: مفاتيح double لا تصلح في const map)
-  static final _rowHeights = <double, String>{30: 'مضغوط', 38: 'عادي', 46: 'واسع'};
+  static final _rowHeights = <double, String>{30: 'مضغوط', 34: 'عادي', 42: 'واسع'};
 
   @override
   void initState() {

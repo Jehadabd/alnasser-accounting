@@ -13,6 +13,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/app_settings.dart';
 import '../models/customer.dart';
@@ -656,7 +657,23 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
             });
         }
 
-        if (inputData.isNewInvoice) {
+        // 🖨️ طباعة تلقائية بعد الحفظ (من «المزيد» في شاشة الفاتورة) — مثل الإداري
+        var autoPrint = printAfterSave;
+        if (!autoPrint) {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            autoPrint = prefs.getBool('invoice_auto_print_after_save') ?? false;
+          } catch (_) {}
+        }
+        if (autoPrint && mounted && savedInvoice != null) {
+          try {
+            await printInvoice();
+          } catch (e) {
+            print('⚠️ الطباعة بعد الحفظ: $e');
+          }
+        }
+
+        if (inputData.isNewInvoice && mounted) {
           Navigator.of(context).popUntil((route) => route.isFirst);
         }
       }

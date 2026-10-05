@@ -246,6 +246,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           ]),
         );
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0xFFF1F5F9),
@@ -412,7 +413,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   Widget _buildColumnsQuickButton() {
     final layout = InvoiceEntryLayout.current;
     final canSeeCost = AuthService().hasPermission(AppPermissions.viewCostProfit);
-    final heights = <double, String>{30: 'سطر مضغوط', 38: 'سطر عادي', 46: 'سطر واسع'};
+    final heights = <double, String>{30: 'سطر مضغوط', 34: 'سطر عادي', 42: 'سطر واسع'};
     return PopupMenuButton<String>(
       tooltip: 'أعمدة الجدول',
       icon: const Icon(Icons.view_column_outlined, size: 18, color: Color(0xFF475569)),
@@ -526,6 +527,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           insetPadding: const EdgeInsets.all(24),
           backgroundColor: const Color(0xFFF7F9FC),
+          surfaceTintColor: Colors.transparent,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 640, maxHeight: 680),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -586,6 +588,28 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                         },
                       ),
                     ]),
+                    section('بعد الحفظ', 'يُحفظ لهذا الجهاز', Icons.print_outlined, const Color(0xFF0F766E), [
+                      FutureBuilder<SharedPreferences>(
+                        future: SharedPreferences.getInstance(),
+                        builder: (context, snap) {
+                          final prefs = snap.data;
+                          final on = prefs?.getBool('invoice_auto_print_after_save') ?? false;
+                          return SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            title: const Text('طباعة الفاتورة تلقائياً بعد الحفظ'),
+                            subtitle: const Text('بنوع الطباعة المختار في الإعدادات (A4 أو حرارية)'),
+                            value: on,
+                            onChanged: prefs == null
+                                ? null
+                                : (v) async {
+                                    await prefs.setBool('invoice_auto_print_after_save', v);
+                                    setD(() {});
+                                  },
+                          );
+                        },
+                      ),
+                    ]),
                     section('عرض الجدول', 'يُحفظ لهذا الجهاز — لا يغيّر بيانات الفاتورة', Icons.view_column_outlined,
                         const Color(0xFF4F46E5), [
                       const Text('الأعمدة الظاهرة', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
@@ -614,7 +638,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                         const SizedBox(width: 10),
                         Expanded(
                           child: Wrap(spacing: 6, children: [
-                            for (final e in <double, String>{30: 'مضغوط', 38: 'عادي', 46: 'واسع'}.entries)
+                            for (final e in <double, String>{30: 'مضغوط', 34: 'عادي', 42: 'واسع'}.entries)
                               ChoiceChip(
                                 label: Text(e.value),
                                 selected: layout.rowHeight == e.key,
@@ -684,6 +708,94 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       }),
     );
     if (mounted) setState(() {});
+  }
+
+
+  // ═══════════════ 🧩 تغيير مستوى السعر على الأصناف الموجودة ═══════════════
+
+  double? _levelPriceOf(Product p, String level) {
+    switch (level) {
+      case 'مفرد 2':
+        return p.price2;
+      case 'منزل':
+        return p.price3;
+      case 'جملة':
+        return p.price4;
+      case 'جملة 2':
+        return p.price5;
+      case 'أخرى':
+        return p.price6;
+      default:
+        return p.price1;
+    }
+  }
+
+  /// عند تغيير «نوع الفاتورة» (مستوى السعر): يُسأل المستخدم هل يطبّق المستوى
+  /// الجديد على الأصناف المدخلة. أصناف الخصم والهدايا لا تتغيّر.
+  Future<void> _maybeApplyListTypeToItems(String level) async {
+    if (isViewOnly) return;
+    final filled = invoiceItems.where((it) => it.productName.trim().isNotEmpty).toList();
+    final candidates = filled.where((it) => !it.isGift && !it.hasLineDiscount).toList();
+    if (candidates.isEmpty) return;
+    final skipped = filled.length - candidates.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تغيير مستوى السعر'),
+        content: Text(
+          'هل تريد تطبيق أسعار «$level» على ${candidates.length} صنف موجود في الفاتورة؟'
+          '${skipped > 0 ? '\n($skipped صنف عليه خصم أو هدية لن يتغيّر)' : ''}',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('للأصناف الجديدة فقط')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تطبيق على الموجودة')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final updated = <String, InvoiceItem>{};
+    var missing = 0;
+    for (final it in candidates) {
+      // المادة بالمعرّف، وإلا بالاسم (أسطر المسودات المستعادة قد تكون بلا معرّف)
+      Product? p;
+      final name = it.productName.trim();
+      for (final x in _allProductsForUnits ?? const <Product>[]) {
+        if ((it.productId != null && x.id == it.productId) || (it.productId == null && x.name.trim() == name)) {
+          p = x;
+          break;
+        }
+      }
+      if (p == null) {
+        try {
+          p = it.productId != null ? await db.getProductById(it.productId!) : await db.getProductByName(name);
+        } catch (_) {}
+      }
+      final base = p == null ? null : _levelPriceOf(p, level);
+      if (base == null || base <= 0) {
+        missing++;
+        continue;
+      }
+      final isLarge = (it.quantityLargeUnit ?? 0) > 0;
+      final newPrice = base * (isLarge ? (it.unitsInLargeUnit ?? 1.0) : 1.0);
+      if ((newPrice - it.appliedPrice).abs() < 0.005) continue;
+      updated[it.uniqueId] = it.copyWith(appliedPrice: newPrice, itemTotal: it.soldQuantity * newPrice);
+    }
+    if (!mounted) return;
+    setState(() {
+      for (var i = 0; i < invoiceItems.length; i++) {
+        final u = updated[invoiceItems[i].uniqueId];
+        if (u != null) invoiceItems[i] = u;
+      }
+      if (updated.isNotEmpty && invoiceToManage != null) hasUnsavedChanges = true;
+      _recalculateTotals();
+      _calculateProfit();
+    });
+    if (updated.isNotEmpty) _scheduleLiveDebtSync();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('تغيّر سعر ${updated.length} صنف إلى «$level»'
+          '${missing > 0 ? ' — $missing صنف بلا سعر في هذا المستوى بقي كما هو' : ''}'),
+      backgroundColor: missing > 0 ? Colors.orange : Colors.green,
+    ));
   }
 
   bool _autoScrollEnabled = true; // سيتم تحميله من الإعدادات
@@ -5123,12 +5235,15 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                           DropdownMenuItem(value: 'أخرى', child: Text('أخرى', style: TextStyle(color: Colors.white))),
                         ],
                         onChanged: isViewOnly ? null : (value) {
+                          final changedLevel = (value ?? 'مفرد') != _selectedListType;
                           setState(() {
                             _selectedListType = value ?? 'مفرد';
                             if (_selectedProduct != null) {
                               _updatePriceForSelectedProduct(_selectedProduct!);
                             }
                           });
+                          // 🧩 مثل الإداري: سؤال قبل تطبيق المستوى الجديد على الأصناف الموجودة
+                          if (changedLevel) _maybeApplyListTypeToItems(_selectedListType);
                         },
                         style: const TextStyle(fontSize: 13, color: Colors.white),
                       ),
