@@ -275,7 +275,11 @@ class InvoiceController {
     
     final expectedNewBalance = currentCustomerDebt + debtChange;
     
-    if (expectedNewBalance < -0.01) {
+    // 🛡️ يُمنع التعديل فقط إذا كان هو نفسه يُنقص رصيد العميل إلى ما دون الصفر.
+    // عميل رصيده سالب أصلاً (له رصيد دائن، مثلاً بعد تحويل معاملة إلى تسديد) كان
+    // يُمنع من أي تعديل على فواتيره — حتى تغيير التاريخ أو زيادة الكمية.
+    // (وُجد في اختبار التحمّل: تعديل التاريخ وحده رُفض 5 مرات لهذا السبب)
+    if (debtChange < -0.01 && expectedNewBalance < -0.01) {
       final debtToDeduct = formatNumber(-debtChange);
       String reason = '';
       String solution = '';
