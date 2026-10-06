@@ -133,6 +133,18 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
       // 🔍 اختبار فعلي لقاعدة البيانات: تهيئة Firebase وحدها لا تكفي،
       // فقد تنجح بينما ترفض قواعد الأمان (Firestore Rules) كل القراءة/الكتابة.
       // نختبر: (1) تسجيل دخول مجهول، (2) قراءة فعلية من Firestore.
+      // 💾 الحفظ أولاً (بعد نجاح التهيئة): إن انهار اختبار القراءة على ويندوز
+      // تبقى الإعدادات محفوظة، وتعمل المزامنة بعد إعادة التشغيل.
+      await FirebaseCustomConfig.saveCustomConfig(
+        apiKey: options.apiKey,
+        appId: options.appId,
+        projectId: options.projectId,
+        messagingSenderId: options.messagingSenderId,
+      );
+      if (encryptionSecret.isNotEmpty) {
+        await SyncSecurity.saveSecretKey(encryptionSecret);
+      }
+
       String diagMessage = '';
       print('🧪 [اختبار الاتصال] ═══════════════════════════════════');
       print('🧪 [1/3] تم تهيئة Firebase App بنجاح');
@@ -169,22 +181,37 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
             testFirestore.settings = const Settings(persistenceEnabled: false);
           } catch (_) {}
         }
-        Future<QuerySnapshot<Map<String, dynamic>>> readOnce() => testFirestore
-            .collection('customers')
-            .limit(1)
-            .get(const GetOptions(source: Source.server))
-            .timeout(const Duration(seconds: 20));
-        QuerySnapshot<Map<String, dynamic>> snapshot;
+        // 🪟 ويندوز: قراءة الوثائق في هذا الاختبار كانت تُسقط البرنامج (استثناء C++
+        // 0xE06D7363) في نسخة الحاسوب الثاني؛ العدّ (count) يختبر صلاحية القراءة
+        // نفسها، وأخطاؤه تصل سليمة إلى Dart (مجرَّب في المزامنة).
+        final isWindows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+        Future<int> readOnce() async {
+          if (isWindows) {
+            final agg = await testFirestore
+                .collection('customers')
+                .count()
+                .get(source: AggregateSource.server)
+                .timeout(const Duration(seconds: 20));
+            return agg.count ?? 0;
+          }
+          final q = await testFirestore
+              .collection('customers')
+              .limit(1)
+              .get(const GetOptions(source: Source.server))
+              .timeout(const Duration(seconds: 20));
+          return q.docs.length;
+        }
+        int readCount;
         try {
-          snapshot = await readOnce();
+          readCount = await readOnce();
         } on FirebaseException catch (e) {
           if (!e.code.contains('permission-denied')) rethrow;
           // محاولة ثانية بعد لحظة: التوكن قد يصل متأخراً، وقواعد نُشرت للتو تحتاج ثوانيَ لتسري
           await Future.delayed(const Duration(seconds: 3));
-          snapshot = await readOnce();
+          readCount = await readOnce();
         }
         print('✅ [3/3] تمت القراءة من Firestore بنجاح!');
-        print('✅ [3/3] عدد المستندات المقروءة: ${snapshot.docs.length}');
+        print('✅ [3/3] ${isWindows ? 'عدد العملاء في السحابة' : 'عدد المستندات المقروءة'}: $readCount');
         
         diagMessage = '\n✅ تم التحقق من الوصول لقاعدة البيانات (القراءة ناجحة).';
         print('🎉 [نهاية الاختبار] جميع الخطوات نجحت! ═══════════════');
@@ -226,16 +253,7 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
       }
 
       // إذا نجح الاتصال، نحفظ البيانات
-      await FirebaseCustomConfig.saveCustomConfig(
-        apiKey: options.apiKey,
-        appId: options.appId,
-        projectId: options.projectId,
-        messagingSenderId: options.messagingSenderId,
-      );
-
-      if (encryptionSecret.isNotEmpty) {
-        await SyncSecurity.saveSecretKey(encryptionSecret);
-      }
+      // (الحفظ صار قبل الاختبار — أعلاه)
 
       // تم إزالة app.delete() من هنا لأنها تدمر تطبيق Firebase الافتراضي
 
