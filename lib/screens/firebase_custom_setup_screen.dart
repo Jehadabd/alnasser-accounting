@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -157,6 +158,17 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
 
         print('🧪 [3/3] محاولة قراءة مجموعة customers من Firestore...');
         final testFirestore = FirebaseFirestore.instanceFor(app: app);
+        // 🪟 على سطح المكتب: بلا تخزين محلي (LevelDB) كما في المزامنة نفسها.
+        // الإعداد الافتراضي يفتح LevelDB، وعلى ويندوز ينهار البرنامج باستثناء
+        // C++ غير ملتقط إن تعذّر فتحها (حدث في نسخة الحاسوب الثاني عند أول ربط).
+        if (!kIsWeb &&
+            (defaultTargetPlatform == TargetPlatform.windows ||
+                defaultTargetPlatform == TargetPlatform.linux ||
+                defaultTargetPlatform == TargetPlatform.macOS)) {
+          try {
+            testFirestore.settings = const Settings(persistenceEnabled: false);
+          } catch (_) {}
+        }
         Future<QuerySnapshot<Map<String, dynamic>>> readOnce() => testFirestore
             .collection('customers')
             .limit(1)

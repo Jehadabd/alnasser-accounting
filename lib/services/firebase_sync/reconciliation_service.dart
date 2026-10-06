@@ -621,6 +621,12 @@ class ReconciliationService {
         }
       } catch (e) {
         print('⚠️ تعذّر تجميع بيانات العميل $name: $e');
+        // نفدت الحصة اليومية أو انقطع الاتصال: لا فائدة من بقية العملاء الآن
+        final es = e.toString();
+        if (es.contains('resource-exhausted') || es.contains('Quota') || es.contains('unavailable')) {
+          print('⏸️ إيقاف التدقيق: ${es.contains('unavailable') ? 'لا اتصال' : 'نفدت الحصة اليومية'}');
+          break;
+        }
         continue;
       }
 
