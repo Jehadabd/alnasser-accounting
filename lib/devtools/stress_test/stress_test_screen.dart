@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/app_provider.dart';
+import '../../services/firebase_sync/firebase_sync_config.dart';
 import 'stress_engine.dart';
 import 'stress_model.dart';
 
@@ -47,6 +48,8 @@ class _StressTestScreenState extends State<StressTestScreen> {
   List<String> _blockLive = const [];
   Timer? _timer;
   bool _busy = false;
+  bool _chaos = true;
+  String _deviceId = '';
 
   @override
   void initState() {
@@ -56,6 +59,16 @@ class _StressTestScreenState extends State<StressTestScreen> {
     if (created) _e.load();
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
+    FirebaseSyncConfig.getDeviceId().then((d) {
+      if (mounted) setState(() => _deviceId = d);
+    }).catchError((_) {});
+  }
+
+  /// اسم هذه النسخة: المحاكاة (الحاسوب الثاني) تعمل من مجلد alnaser_pc2_sim
+  String get _instanceName {
+    final exe = Platform.resolvedExecutable.toLowerCase();
+    if (exe.contains('pc2')) return 'الحاسوب الثاني (محاكاة)';
+    return 'الحاسوب الأول';
   }
 
   @override
@@ -215,7 +228,7 @@ class _StressTestScreenState extends State<StressTestScreen> {
       word: 'ابدأ',
     );
     if (!ok) return;
-    unawaited(_e.runLive(primary: primary, customers: _int(_liveCount, 50).clamp(2, 500)));
+    unawaited(_e.runLive(primary: primary, customers: _int(_liveCount, 50).clamp(2, 500), chaos: _chaos));
   }
 
   // ─────────────────────────── الواجهة ───────────────────────────
@@ -227,7 +240,8 @@ class _StressTestScreenState extends State<StressTestScreen> {
       child: Scaffold(
         backgroundColor: const Color(0xFFF4F6FA),
         appBar: AppBar(
-          title: const Text('اختبار التحمّل والحسابات'),
+          title: Text('اختبار التحمّل والحسابات — $_instanceName'
+              '${_deviceId.isEmpty ? '' : ' (${_deviceId.length > 6 ? _deviceId.substring(0, 6) : _deviceId})'}'),
           actions: [
             TextButton.icon(onPressed: _openReports, icon: const Icon(Icons.folder_open), label: const Text('التقارير')),
             const SizedBox(width: 8),
@@ -495,6 +509,50 @@ class _StressTestScreenState extends State<StressTestScreen> {
           ),
         ]),
         const Divider(height: 28),
+        Row(children: [
+          Icon(_e.offline ? Icons.wifi_off : Icons.wifi, color: _e.offline ? Colors.red : Colors.green, size: 20),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              _e.offline ? 'الإنترنت مقطوع عن المزامنة (محاكاة)' : 'الإنترنت متصل',
+              style: TextStyle(fontWeight: FontWeight.w600, color: _e.offline ? Colors.red : Colors.green.shade700),
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: _blockLive.isNotEmpty ? null : () => _e.setOffline(!_e.offline),
+            icon: Icon(_e.offline ? Icons.wifi : Icons.wifi_off, size: 18),
+            label: Text(_e.offline ? 'إعادة الإنترنت' : 'قطع الإنترنت (محاكاة)'),
+          ),
+        ]),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          value: _chaos,
+          onChanged: (v) => setState(() => _chaos = v ?? true),
+          title: const Text('تقطّع الإنترنت عشوائياً أثناء الجولات', style: TextStyle(fontSize: 13)),
+          subtitle: const Text('يقطع ويعيد الاتصال بين العمليات ليختبر كل الحالات: إنشاء وأنت مقطوع، والآخر مقطوع، ثم الاتصال بترتيب مختلف',
+              style: TextStyle(fontSize: 11)),
+        ),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: FilledButton.tonalIcon(
+            onPressed: (_e.running || _blockLive.isNotEmpty || !_e.bulkDone)
+                ? null
+                : () async {
+                    final ok = await _confirmTyped(
+                      title: 'تعديل كل فاتورة مرة واحدة',
+                      body: 'تعديل واحد عشوائي على كل فاتورة من فواتير المرحلة الكبيرة (${_e.truth.invoices.values.where((i) => !i.live).length} فاتورة)'
+                          '${_chaos ? '، مع قطع الإنترنت وإعادته عشوائياً' : ''}. الرفع يتولاه محرك المزامنة.\n'
+                          'بعد الانتهاء: انتظر «المعلّق» صفراً، ثم «نشر البصمة» هنا وعلى الحاسوب الآخر، ثم «مقارنة الحاسوبين».',
+                      word: 'ابدأ',
+                    );
+                    if (ok) unawaited(_e.runEditAll(chaos: _chaos));
+                  },
+            icon: const Icon(Icons.edit_note),
+            label: const Text('تعديل كل فاتورة مرة واحدة (الحاسوب الأول)'),
+          ),
+        ),
+        const SizedBox(height: 12),
         const Text('الجولة الحيّة (المزامنة مفعّلة، الحاسوبان معاً)', style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
         if (_blockLive.isNotEmpty)

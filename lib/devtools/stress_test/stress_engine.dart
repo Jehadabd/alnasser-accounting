@@ -44,6 +44,7 @@ import '../../services/database_service.dart';
 import '../../services/demo_mode.dart';
 import '../../services/firebase_sync/firebase_sync_config.dart';
 import '../../services/firebase_sync/firebase_sync_helper.dart';
+import '../../services/firebase_sync/firebase_sync_service.dart';
 import '../../services/firebase_sync/invoice_sync_service.dart';
 import '../../widgets/line_discount_dialog.dart' show lineNetPrice;
 import 'keep_awake.dart';
@@ -659,7 +660,7 @@ class StressEngine extends ChangeNotifier {
   }
 
   Future<void> _editInvoice(int invId, List<String> kinds, Random rnd,
-      {required List<int> pool, required bool live}) async {
+      {required List<int> pool, required bool live, bool uploadNow = true}) async {
     final inv = await _db.getInvoiceById(invId);
     final t = truth.invoices[invId];
     if (inv == null || t == null) return;
@@ -798,7 +799,7 @@ class StressEngine extends ChangeNotifier {
       _count('تعديل فاتورة: $k');
     }
     if (customerIdx != t.customerIdx) _count('نقل فاتورة لعميل آخر');
-    if (res.invoice != null) await _afterSaveLikeUi(res.invoice!);
+    if (uploadNow && res.invoice != null) await _afterSaveLikeUi(res.invoice!);
   }
 
   void _refuse(String what, Object reason) {
@@ -1085,7 +1086,8 @@ class StressEngine extends ChangeNotifier {
     final peers = docs.where((d) => d.id != 'stress_$dev').toList();
     rep.summary['عملاء الاختبار هنا'] = myCust.length;
     rep.summary['حواسيب أخرى نشرت بصمتها'] = peers.length;
-    if (peers.isEmpty) rep.notes.add('لا يوجد حاسوب آخر نشر بصمته بعد — انشرها من الحاسوب الآخر ثم أعد المقارنة');
+    // لا حاسوب آخر = لا مقارنة؛ لا نُظهر «متطابقان» وهماً
+    rep.check(peers.isNotEmpty, 'لم ينشر أي حاسوب آخر بصمته بعد — انشرها من الحاسوب الآخر ثم أعد المقارنة');
 
     // 1) تطابق حرفي مع كل حاسوب آخر
     for (final d in peers) {
@@ -1149,9 +1151,8 @@ class StressEngine extends ChangeNotifier {
     }
     final pend = await pendingCounts();
     rep.summary['معلّق للرفع هنا'] = pend.entries.map((e) => '${e.key} ${e.value}').join('، ');
-    if (pend.values.any((v) => v > 0)) {
-      rep.notes.add('ما زالت هنا بيانات لم تُرفع — انتظر حتى تصير صفراً ثم أعد المقارنة');
-    }
+    rep.check(!pend.values.any((v) => v > 0),
+        'ما زالت هنا بيانات لم تُرفع (${rep.summary['معلّق للرفع هنا']}) — انتظر حتى تصير صفراً ثم أعد المقارنة');
     await _writeReport(rep);
     _say(rep.ok ? '✅ الحاسوبان متطابقان' : '❌ ${rep.problems.length} اختلاف بين الحاسوبين');
     notifyListeners();
@@ -1160,7 +1161,92 @@ class StressEngine extends ChangeNotifier {
 
   // ─────────────────────────── الجولة الحيّة (المزامنة مفعّلة) ───────────────────────────
 
-  Future<void> runLive({required bool primary, int customers = 50}) async {
+  // ─────────────────────────── انقطاع الإنترنت (محاكاة) ───────────────────────────
+
+  bool get offline => FirebaseSyncService().isSimulatedOffline;
+
+  Future<void> setOffline(bool off) async {
+    await FirebaseSyncService().setSimulatedOffline(off);
+    _say(off ? '📴 قُطع الإنترنت عن المزامنة (محاكاة)' : '🌐 عاد الإنترنت للمزامنة (محاكاة)');
+    _count(off ? 'قطع الإنترنت' : 'عودة الإنترنت');
+    notifyListeners();
+  }
+
+  /// تقطّع عشوائي: يقلب الحالة باحتمال [p]، ويبقى المقطوع مقطوعاً بضع عمليات
+  Future<void> _chaos(Random rnd, {double p = 0.3}) async {
+    if (rnd.nextDouble() < p) await setOffline(!offline);
+  }
+
+  /// ينتظر حتى يصير المعلّق للرفع صفراً (أو تنتهي المهلة)
+  Future<bool> waitPendingZero({Duration timeout = const Duration(minutes: 30)}) async {
+    final end = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(end)) {
+      if (_stop) return false;
+      final pc = await pendingCounts();
+      final left = pc.values.where((v) => v > 0).fold<int>(0, (a, b) => a + b);
+      status = 'بانتظار الرفع: ${pc.entries.map((e) => '${e.key} ${e.value}').join('، ')}';
+      notifyListeners();
+      if (left == 0) return true;
+      await Future.delayed(const Duration(seconds: 10));
+    }
+    return false;
+  }
+
+  /// تعديل واحد على كل فاتورة من فواتير المرحلة الكبيرة (والمزامنة مفعّلة)،
+  /// مع تقطّع الإنترنت عشوائياً إن طُلب. الرفع يتولاه محرك المزامنة نفسه.
+  Future<void> runEditAll({bool chaos = false}) async {
+    if (running) return;
+    final b = await blockers(needSyncOff: false);
+    if (b.isNotEmpty) {
+      for (final x in b) {
+        _say('⛔ $x');
+      }
+      return;
+    }
+    if (!bulkDone) {
+      _say('⛔ تعديل كل الفواتير يعمل على الحاسوب الذي أنشأها (بعد المرحلة الكبيرة)');
+      return;
+    }
+    running = true;
+    _stop = false;
+    setSystemAwake(true);
+    final rnd = Random(DateTime.now().microsecondsSinceEpoch);
+    final ids = truth.invoices.values.where((i) => !i.live).map((i) => i.id).toList()..sort();
+    final pool = truth.customers.keys.where((k) => k < 900000).toList();
+    var n = 0;
+    _say('بدء تعديل كل فاتورة مرة واحدة (${ids.length} فاتورة)${chaos ? ' مع تقطّع الإنترنت' : ''}');
+    try {
+      for (final id in ids) {
+        if (_stop) break;
+        n++;
+        if (chaos && n % 25 == 0) await _chaos(rnd, p: 0.5);
+        final kind = _editKinds[rnd.nextInt(_editKinds.length)];
+        await _editInvoice(id, [kind], rnd, pool: pool, live: false, uploadNow: false);
+        if (n % 20 == 0) {
+          status = 'تعديل الفواتير: $n/${ids.length}${offline ? ' — الإنترنت مقطوع' : ''}';
+          notifyListeners();
+          await _saveState();
+        }
+      }
+      if (offline) await setOffline(false);
+      _say(_stop
+          ? '⏸️ توقف تعديل الفواتير عند $n'
+          : '✅ عُدّلت $n فاتورة — الرفع يجري في الخلفية؛ انتظر المعلّق صفراً ثم انشر البصمة');
+      status = 'عُدّلت $n/${ids.length} فاتورة';
+    } catch (e, st) {
+      _say('❌ تعديل الفواتير توقف: $e');
+      print(st);
+      status = 'توقف بخطأ';
+      if (offline) await setOffline(false);
+    } finally {
+      running = false;
+      setSystemAwake(false);
+      await _saveState();
+      notifyListeners();
+    }
+  }
+
+  Future<void> runLive({required bool primary, int customers = 50, bool chaos = false}) async {
     if (running) return;
     final b = await blockers(needSyncOff: false);
     if (b.isNotEmpty) {
@@ -1245,7 +1331,8 @@ class StressEngine extends ChangeNotifier {
         if (_stop) break;
         final cu = truth.customers[idx]!;
         n++;
-        status = 'الجولة الحيّة: العميل $n/${pool.length}';
+        if (chaos) await _chaos(rnd);
+        status = 'الجولة الحيّة: العميل $n/${pool.length}${offline ? ' — الإنترنت مقطوع' : ''}';
         notifyListeners();
         // معاملتان يدويتان وتعديل إحداهما
         final t1 = await _addManual(cu, rnd, live: true);
@@ -1264,12 +1351,21 @@ class StressEngine extends ChangeNotifier {
           await _changePhone(cu, rnd);
         }
       }
-      _say('✅ انتهت الجولة الحيّة — انتظر حتى يصير «المعلّق للرفع» صفراً على الحاسوبين، ثم «نشر البصمة» و«المقارنة»');
+      if (offline) await setOffline(false);
+      _say('✅ انتهت الجولة الحيّة — بانتظار رفع المعلّق…');
+      final zero = await waitPendingZero();
+      if (zero) {
+        await publish();
+        _say('✅ رُفع كل شيء ونُشرت البصمة — انتظر الحاسوب الآخر ثم «مقارنة الحاسوبين»');
+      } else {
+        _say('⏳ ما زال هناك معلّق — انشر البصمة يدوياً بعد أن يصير صفراً');
+      }
       status = 'انتهت الجولة الحيّة';
     } catch (e, st) {
       _say('❌ الجولة الحيّة توقفت: $e');
       print(st);
       status = 'توقف بخطأ';
+      if (offline) await setOffline(false);
     } finally {
       running = false;
       setSystemAwake(false);

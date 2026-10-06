@@ -16,6 +16,7 @@ import 'sync_event_bus.dart';
 import '../database_service.dart';
 import '../database/business/customer_visibility.dart';
 import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
+import 'windowed_listener.dart'; // 👂
 
 /// مزامنة الفواتير عبر Firestore.
 ///
@@ -37,7 +38,7 @@ class InvoiceSyncService {
   final DatabaseService _db = DatabaseService();
   final InvoiceSyncCoordinator _coordinator = InvoiceSyncCoordinator();
 
-  StreamSubscription? _invoicesListener;
+  WindowedListener? _invoicesListener; // 👂 نافذة زمنية بساعة السيرفر
   bool _isListening = false;
   Timer? _retryTimer;
   Timer? _orphanReprocessTimer; // 🔄 إعادة معالجة الفواتير المؤجّلة (بانتظار وصول العميل)
@@ -136,7 +137,7 @@ class InvoiceSyncService {
 
   /// 🛑 إيقاف المزامنة
   Future<void> stopSync() async {
-    await _invoicesListener?.cancel();
+    await _invoicesListener?.stop();
     _retryTimer?.cancel();
     _orphanReprocessTimer?.cancel();
     _isListening = false;
@@ -425,31 +426,38 @@ class InvoiceSyncService {
     // كلياً على الإدمبوتنت: كل وثيقة تُفلتر عبر (invoice_uuid + version) داخل
     // _processIncomingInvoice، فالوثائق المكررة/القديمة تُرفض محلياً بلا أثر.
     // هذا يضمن عدم ضياع أي فاتورة مهما كان فرق التوقيت بين الأجهزة.
-    Query<Map<String, dynamic>> query = _firestore.collection('invoices');
-
-    _invoicesListener = query
-        .snapshots()
-        .listen((snapshot) async {
-          final changes = snapshot.docChanges
-              .where((c) =>
-                  c.type == DocumentChangeType.added ||
-                  c.type == DocumentChangeType.modified)
-              .toList();
-          if (changes.isNotEmpty) {
-            print('🧾 استماع الفواتير: ${changes.length} تغيير وارد');
+    //
+    // 👂 تحديث (اختبار التحمّل): النافذة الآن بساعة السيرفر (uploadedAt) لا
+    // بساعة الجهاز، فلا يتأثر باختلاف الساعات؛ والمستمع الكامل كان يُرسل كل
+    // الفواتير مع كل تغيير فانهارت سرعة الرفع مع آلاف الفواتير.
+    await _invoicesListener?.stop();
+    _invoicesListener = WindowedListener(
+      firestore: _firestore,
+      collection: 'invoices',
+      onSnapshot: (snapshot) async {
+        final changes = snapshot.docChanges
+            .where((c) =>
+                c.type == DocumentChangeType.added ||
+                c.type == DocumentChangeType.modified)
+            .toList();
+        if (changes.isNotEmpty) {
+          print('🧾 استماع الفواتير: ${changes.length} تغيير وارد');
+        }
+        for (final change in changes) {
+          final data = change.doc.data();
+          if (data != null) {
+            await _processIncomingInvoice(change.doc.id, data);
           }
-          for (final change in changes) {
-            final data = change.doc.data();
-            if (data != null) {
-              await _processIncomingInvoice(change.doc.id, data);
-            }
-          }
-        }, onError: (e) {
-          print('❌ خطأ في استماع الفواتير: $e');
-        });
+        }
+      },
+      onError: (e) {
+        print('❌ خطأ في استماع الفواتير: $e');
+      },
+    );
+    await _invoicesListener!.start();
 
     _isListening = true;
-    print('👂 الاستماع الشامل لفواتير الأجهزة الأخرى فعّال (إدمبوتنت بلا فلتر زمني)');
+    print('👂 الاستماع لفواتير الأجهزة الأخرى فعّال (نافذة زمنية بساعة السيرفر)');
   }
 
   /// 🛡️ رفع حزمة لا يكتب فوق نسخة أحدث في السحابة (معاملة Firestore).

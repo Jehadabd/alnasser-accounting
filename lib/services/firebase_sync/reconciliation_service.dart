@@ -11,9 +11,11 @@
 // مكان واحد ولحظة واحدة، لترى بعينك أن الجميع متطابق.
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../database_service.dart';
 import 'firebase_sync_service.dart';
@@ -590,17 +592,33 @@ class ReconciliationService {
 
       int cloudCount;
       double cloudSum;
+      // 🪟 ويندوز: مكتبة Firestore (C++) لا تدعم sum ("Sum is not supported on
+      // C++") فكان المجموع يُقرأ صفراً ⇒ كل عميل «مختلف» ⇒ تُسحب معاملاته كلها
+      // من السيرفر في كل تدقيق (آلاف القراءات — وجدها اختبار التحمّل حين نفدت
+      // الحصة اليومية). على ويندوز نقارن العدد وحده (count مدعوم)، والمستمعات
+      // تنقل تعديلات المبالغ أصلاً.
+      final sumSupported = kIsWeb || !Platform.isWindows;
       try {
-        final all = await base
-            .aggregate(count(), sum('amountChanged'))
-            .get(source: AggregateSource.server);
-        final del = await base
-            .where('isDeleted', isEqualTo: true)
-            .aggregate(count(), sum('amountChanged'))
-            .get(source: AggregateSource.server);
-        cloudCount = (all.count ?? 0) - (del.count ?? 0);
-        cloudSum = (all.getSum('amountChanged')?.toDouble() ?? 0.0) -
-            (del.getSum('amountChanged')?.toDouble() ?? 0.0);
+        if (sumSupported) {
+          final all = await base
+              .aggregate(count(), sum('amountChanged'))
+              .get(source: AggregateSource.server);
+          final del = await base
+              .where('isDeleted', isEqualTo: true)
+              .aggregate(count(), sum('amountChanged'))
+              .get(source: AggregateSource.server);
+          cloudCount = (all.count ?? 0) - (del.count ?? 0);
+          cloudSum = (all.getSum('amountChanged')?.toDouble() ?? 0.0) -
+              (del.getSum('amountChanged')?.toDouble() ?? 0.0);
+        } else {
+          final all = await base.count().get(source: AggregateSource.server);
+          final del = await base
+              .where('isDeleted', isEqualTo: true)
+              .count()
+              .get(source: AggregateSource.server);
+          cloudCount = (all.count ?? 0) - (del.count ?? 0);
+          cloudSum = localSums[uuid] ?? 0.0; // غير متاح هنا — العدد وحده يحكم
+        }
       } catch (e) {
         print('⚠️ تعذّر تجميع بيانات العميل $name: $e');
         continue;

@@ -43,6 +43,7 @@ import '../../utils/uuid_helper.dart'; // للـ UUID الحتمي
 import '../license_service.dart'; // 🔐 نظام التراخيص
 import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 import 'sync_breadcrumbs.dart'; // 🧭
+import 'windowed_listener.dart'; // 👂
 
 /// حالة المزامنة
 enum FirebaseSyncStatus {
@@ -171,8 +172,9 @@ class FirebaseSyncService {
   bool get isRecovering => _recoveryMode;
   
   // Listeners
-  StreamSubscription<QuerySnapshot>? _customersListener;
-  StreamSubscription<QuerySnapshot>? _transactionsListener;
+  // 👂 مستمعا العملاء والمعاملات بنافذة زمنية (انظر windowed_listener.dart)
+  WindowedListener? _customersListener;
+  WindowedListener? _transactionsListener;
   StreamSubscription<List<ConnectivityResult>>? _connectivityListener;
   
   //  Live Stats Cache - إحصائيات لحظية من Streams
@@ -196,7 +198,7 @@ class FirebaseSyncService {
   
   /// 📊 هل المستمعات اللحظية للإحصائيات والأجهزة فعالة؟
   bool get statsListenersActive =>
-      _isListening && _customersListener != null && _transactionsListener != null;
+      _isListening && (_customersListener?.active ?? false) && (_transactionsListener?.active ?? false);
   
   /// 📊 قائمة الأجهزة اللحظية المتوفرة حالياً (آخر تحديث من الـ Stream)
   List<Map<String, dynamic>> get liveDevices => _liveDevices;
@@ -569,7 +571,7 @@ class FirebaseSyncService {
       // المستمعين اللحظيين.
       try {
         SyncCrumb.mark('init: performFullCatchUp');
-        await performFullCatchUp().timeout(
+        await performFullCatchUp(force: false).timeout(
           const Duration(seconds: 120),
           onTimeout: () => print('⏳ استمرار التهيئة - السحب الكامل ما زال جارياً في الخلفية'),
         );
@@ -629,7 +631,7 @@ class FirebaseSyncService {
           print('⚠️ رفع المعلّق بعد التهيئة: $e');
         }
         try {
-          await performFullCatchUp();
+          await performFullCatchUp(force: false);
         } catch (e) {
           print('⚠️ السحب الكامل بعد التهيئة: $e');
         }
@@ -733,6 +735,7 @@ class FirebaseSyncService {
     if (_connectivityListener != null) return;
     
     _connectivityListener = Connectivity().onConnectivityChanged.listen((results) {
+      if (_simulatedOffline) return; // 🧪 انقطاع محاكى: لا نعود متصلين حتى يُلغى
       final hasConnection = results.any((r) => r != ConnectivityResult.none);
       
       if (hasConnection && (_status == FirebaseSyncStatus.offline || _status == FirebaseSyncStatus.error || !_isInitialized)) {
@@ -1119,7 +1122,39 @@ class FirebaseSyncService {
     await performFullCatchUp();
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🧪 محاكاة انقطاع الإنترنت (اختبار التحمّل/السيناريوهات):
+  // Firestore بلا شبكة (disableNetwork) + حالة «غير متصل» كما عند انقطاع حقيقي.
+  // عند الإلغاء: enableNetwork ثم نفس مسار «عاد الاتصال» (رفع المعلّق + سحب كامل).
+  // ═══════════════════════════════════════════════════════════════
+  bool _simulatedOffline = false;
+  bool get isSimulatedOffline => _simulatedOffline;
+
+  Future<void> setSimulatedOffline(bool off) async {
+    if (_simulatedOffline == off) return;
+    _simulatedOffline = off;
+    final fs = _firestore;
+    if (off) {
+      print('📴 [محاكاة] قطع الإنترنت عن المزامنة');
+      try {
+        await fs?.disableNetwork().timeout(const Duration(seconds: 20));
+      } catch (e) {
+        print('⚠️ [محاكاة] disableNetwork: $e');
+      }
+      _updateStatus(FirebaseSyncStatus.offline);
+    } else {
+      print('🌐 [محاكاة] إعادة الإنترنت للمزامنة');
+      try {
+        await fs?.enableNetwork().timeout(const Duration(seconds: 20));
+      } catch (e) {
+        print('⚠️ [محاكاة] enableNetwork: $e');
+      }
+      unawaited(_onConnectionRestored());
+    }
+  }
+
   Future<void> _onConnectionRestored() async {
+    if (_simulatedOffline) return;
     _updateStatus(FirebaseSyncStatus.syncing);
     
     try {
@@ -1140,9 +1175,10 @@ class FirebaseSyncService {
       // مزامنة التغييرات المعلقة
       await _syncPendingChanges();
 
-      // 🔄 سحب كامل إدمبوتنت: كل ما فات أثناء الانقطاع
+      // 🔄 سحب كامل إدمبوتنت: كل ما فات أثناء الانقطاع (المستمعات بنافذتها
+      // تلتقطه أصلاً؛ الكامل يومياً فقط)
       try {
-        await performFullCatchUp();
+        await performFullCatchUp(force: false);
       } catch (e) {
         print('⚠️ خطأ في السحب الكامل بعد عودة الاتصال: $e');
       }
@@ -1190,32 +1226,32 @@ class FirebaseSyncService {
     final lastSyncAt = syncState.isNotEmpty ? syncState.first['last_sync_at'] as String? : null;
     print('🧠 استماع شامل إدمبوتنت (آخر مزامنة مرجعية: ${lastSyncAt ?? "لا يوجد"} — للاطلاع فقط)');
 
-    final Query<Map<String, dynamic>> customersQuery = _firestore!.collection('customers');
-    final Query<Map<String, dynamic>> transactionsQuery = _firestore!.collection('transactions');
-    
-    // الاستماع لتغييرات العملاء
-    _customersListener = customersQuery
-        .snapshots()
-        .listen(
-          _onCustomersChanged,
-          onError: (e) {
-            print('❌ خطأ في استماع العملاء: $e');
-            SyncDiagnostics.logListener(e);
-            unawaited(_recoverFromAuthFailure());
-          },
-        );
-
-    // الاستماع لتغييرات المعاملات
-    _transactionsListener = transactionsQuery
-        .snapshots()
-        .listen(
-          _onTransactionsChanged,
-          onError: (e) {
-            print('❌ خطأ في استماع المعاملات: $e');
-            SyncDiagnostics.logListener(e);
-            unawaited(_recoverFromAuthFailure());
-          },
-        );
+    // 👂 نافذة زمنية بساعة السيرفر (uploadedAt) بدل المجموعة كاملة: المستمع
+    // الكامل كان يُرسل كل الوثائق مع كل تغيير (انهيار السرعة مع آلاف السجلات).
+    await _customersListener?.stop();
+    await _transactionsListener?.stop();
+    _customersListener = WindowedListener(
+      firestore: _firestore!,
+      collection: 'customers',
+      onSnapshot: _onCustomersChanged,
+      onError: (e) {
+        print('❌ خطأ في استماع العملاء: $e');
+        SyncDiagnostics.logListener(e);
+        unawaited(_recoverFromAuthFailure());
+      },
+    );
+    _transactionsListener = WindowedListener(
+      firestore: _firestore!,
+      collection: 'transactions',
+      onSnapshot: _onTransactionsChanged,
+      onError: (e) {
+        print('❌ خطأ في استماع المعاملات: $e');
+        SyncDiagnostics.logListener(e);
+        unawaited(_recoverFromAuthFailure());
+      },
+    );
+    await _customersListener!.start();
+    await _transactionsListener!.start();
     
     _isListening = true;
     _startDevicesListener(); // 📊 بدء مستمع الأجهزة والإحصائيات
@@ -1223,8 +1259,8 @@ class FirebaseSyncService {
   }
   
   Future<void> _stopListening() async {
-    await _customersListener?.cancel();
-    await _transactionsListener?.cancel();
+    await _customersListener?.stop();
+    await _transactionsListener?.stop();
     await _devicesListener?.cancel(); // 📊
     _customersListener = null;
     _transactionsListener = null;
@@ -2746,6 +2782,7 @@ class FirebaseSyncService {
         'is_deleted': 1,
         'lastModifiedAt': now,
         'deviceId': _deviceId,
+        'uploadedAt': FieldValue.serverTimestamp(), // 👂 كي تلتقطه نوافذ المستمعين
       }, SetOptions(merge: true));
       print('🗑️ [FirebaseSyncService] تم تسجيل حذف العميل في Firebase بنجاح (Tombstone): $syncUuid');
     } catch (e) {
@@ -3209,8 +3246,29 @@ class FirebaseSyncService {
   /// هذه الدالة تسحب كل عملاء ومعاملات السحابة عند الإقلاع وتطبقها
   /// إدمبوتنت — فأي جهاز يعود للعمل يصل للحقيقة كاملة مهما غاب.
   /// التطبيق آمن: موجود بالـ UUID يُهمل، والرصيد يُشتق من المجموع.
-  Future<void> performFullCatchUp() async {
+  /// [force] = false: يُتخطّى السحب الكامل إن جرى خلال آخر 24 ساعة — المستمعات
+  /// بنافذتها المحفوظة تلتقط كل ما فات (عند الإقلاع وبعد عودة الإنترنت)، والسحب
+  /// الكامل شبكة أمان يومية فقط. كان يقرأ كل العملاء والمعاملات عند كل إقلاع
+  /// وكل عودة للإنترنت (آلاف القراءات في كل مرة).
+  Future<void> performFullCatchUp({bool force = true}) async {
     if (!_isInitialized || _groupId == null || _firestore == null) return;
+    // آخر سحب كامل يُحفظ في القاعدة (بجانب نوافذ المستمعين): حذف القاعدة يُنسيه
+    const lastKey = '__full_catchup__';
+    if (!force) {
+      try {
+        final last = await WindowedListener.loadHwm(lastKey);
+        final hasHwm = await WindowedListener.loadHwm('transactions') != null;
+        if (hasHwm &&
+            last != null &&
+            DateTime.now().millisecondsSinceEpoch - last < const Duration(hours: 24).inMilliseconds) {
+          print('⏭️ [Catch-Up] السحب الكامل جرى خلال 24 ساعة — المستمعات تكفي');
+          try {
+            await StockMovementSyncService().downloadMissing();
+          } catch (_) {}
+          return;
+        }
+      } catch (_) {}
+    }
 
     print('🔄 [Catch-Up] بدء السحب الكامل عند التشغيل...');
 
@@ -3273,6 +3331,7 @@ class FirebaseSyncService {
     }
 
     print('✅ [Catch-Up] اكتمل السحب الكامل');
+    await WindowedListener.saveHwm(lastKey, DateTime.now().millisecondsSinceEpoch);
     // ⚖️ قرارات الإبطال عن بُعد لم تعد تُطبَّق (انظر MatchVerdictService).
   }
 
@@ -4010,6 +4069,8 @@ class FirebaseSyncService {
         await prefs.setBool(DatabaseService.restoredRowsMarkedKey, true);
       }
       if (_recoveryMode) {
+        // القاعدة أقدم مما عالجته المستمعات: نوافذها تبدأ من جديد (مستمع كامل مرة)
+        await WindowedListener.resetAll(); // (يشمل وقت آخر سحب كامل)
         print('🛡️ وضع الاستعادة: القاعدة من نسخة احتياطية — الرفع موقوف حتى المقارنة');
         _syncEventController.add('استعادة نسخة احتياطية: جاري طلب ما فاتها من الأجهزة الأخرى...');
       }
