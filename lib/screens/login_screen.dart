@@ -111,7 +111,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final check = _licenseUser == null
         ? const LicensePasswordCheck(LicensePasswordStatus.noLicense)
-        : await _license.checkAccountPassword(password);
+        : await _license.checkAccountPassword(password, username: username);
     if (!mounted) return;
 
     switch (check.status) {
@@ -293,7 +293,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       if (!allowed) {
                         final admin = await _authService.adminUser();
                         if (admin != null && admin.username == user) {
-                          final c = await _license.checkAccountPassword(rec);
+                          final c = await _license.checkAccountPassword(rec, username: user);
                           allowed = c.status == LicensePasswordStatus.ok;
                           if (c.status == LicensePasswordStatus.offline) {
                             setD(() {
@@ -485,7 +485,9 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           TextFormField(
             controller: _usernameController,
-            readOnly: setup && _licenseUser != null && _licenseUser!.isNotEmpty,
+            // ✏️ قابل للتعديل دائماً: كان مقفلاً على اسم الترخيص المحفوظ فلا يمكن
+            // إنشاء المدير بحساب ترخيص آخر (يُتحقق من الاسم المكتوب عند السيرفر).
+            readOnly: false,
             autofocus: !setup && _usernameController.text.isEmpty,
             decoration: InputDecoration(
               labelText: setup ? 'اسم المستخدم (حساب الترخيص)' : 'اسم المستخدم',

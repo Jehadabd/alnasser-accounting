@@ -770,14 +770,16 @@ class LicenseService {
   
   /// 👤 التحقق من كلمة سر حساب الترخيص (لإنشاء حساب المدير أو استعادة كلمة سره).
   /// لا يغيّر شيئاً في الترخيص المحفوظ؛ يسأل السيرفر فقط هل الكلمة صحيحة.
-  Future<LicensePasswordCheck> checkAccountPassword(String password) async {
+  /// [username]: اسم الحساب الذي كتبه المستخدم (قد يختلف عن المحفوظ)؛ وإلا المحفوظ.
+  Future<LicensePasswordCheck> checkAccountPassword(String password, {String? username}) async {
     final license = getStoredLicense();
     if (license == null) return const LicensePasswordCheck(LicensePasswordStatus.noLicense);
     if (password.isEmpty) return const LicensePasswordCheck(LicensePasswordStatus.wrong);
     if (!await hasInternetConnection()) return const LicensePasswordCheck(LicensePasswordStatus.offline);
+    final account = (username != null && username.trim().isNotEmpty) ? username.trim() : license.username;
     final response = await _callApi({
       'action': 'validate',
-      'username': license.username,
+      'username': account,
       'password': password,
       'deviceId': await generateDeviceId(),
     });
