@@ -534,7 +534,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       final passwordVerified = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('أدخل كلمة السر للتأكيد', style: TextStyle(fontSize: 18)),
+          title: const Text('أدخل كلمة سر المدير للتأكيد', style: TextStyle(fontSize: 18)),
           content: TextField(
             controller: passwordController,
             obscureText: true,

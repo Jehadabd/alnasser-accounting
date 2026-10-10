@@ -645,7 +645,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           children: [
             Icon(Icons.lock, color: Colors.deepPurple, size: 28),
             SizedBox(width: 8),
-            Text('أدخل كلمة السر', style: TextStyle(fontSize: 18)),
+            Text('أدخل كلمة سر المدير', style: TextStyle(fontSize: 18)),
           ],
         ),
         content: TextField(
@@ -1077,9 +1077,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       return;
     }
 
-    final usernameController = TextEditingController(
-      text: storedLicense.subUsername ?? storedLicense.username,
-    );
     final passwordController = TextEditingController();
     bool isLoading = false;
     String? errorMessage;
@@ -1126,18 +1123,10 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                     ),
                     const SizedBox(height: 16),
                     TextField(
-                      controller: usernameController,
-                      decoration: const InputDecoration(
-                        labelText: 'اسم المستخدم (اليوزر)',
-                        prefixIcon: Icon(Icons.person),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
                       controller: passwordController,
                       obscureText: obscurePassword,
                       decoration: InputDecoration(
-                        labelText: 'كلمة المرور الرئيسية',
+                        labelText: 'كلمة سر حساب الترخيص',
                         prefixIcon: const Icon(Icons.lock),
                         suffixIcon: IconButton(
                           icon: Icon(
@@ -1393,6 +1382,14 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             title: 'إدارة الترخيص وترقية الحساب',
             child: Column(
               children: [
+                _buildActionTile(
+                  icon: Icons.devices_rounded,
+                  iconColor: const Color(0xFF0F3460),
+                  title: 'الترخيص والأجهزة',
+                  subtitle: 'معلومات الترخيص، الأجهزة المرتبطة، وإضافة جهاز برمز (من الجهاز الرئيسي)',
+                  onTap: () => Navigator.pushNamed(context, '/license_devices'),
+                ),
+                const Divider(height: 1),
                 if (!_isSyncAllowed) ...[
                   _buildActionTile(
                     icon: Icons.published_with_changes_rounded,
@@ -1422,7 +1419,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               icon: Icons.people,
               iconColor: Colors.deepPurple,
               title: 'إدارة الموظفين',
-              subtitle: 'المدير هو حساب الترخيص. أضف موظفاً، حدّد صلاحياته، غيّر كلمة سره',
+              subtitle: 'حسابات الدخول اليومية (منفصلة عن حساب الترخيص): أضف موظفاً، حدّد صلاحياته، غيّر كلمة سره',
               onTap: () {
                 Navigator.pushNamed(context, '/user_management');
               },

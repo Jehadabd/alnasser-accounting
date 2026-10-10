@@ -888,7 +888,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       final shouldShow = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('أدخل رمز المرور'),
+          title: const Text('أدخل كلمة سر المدير'),
           content: TextField(
             controller: controller,
             obscureText: true,

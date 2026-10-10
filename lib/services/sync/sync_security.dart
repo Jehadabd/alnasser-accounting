@@ -81,6 +81,12 @@ class SyncSecurity {
     return key;
   }
 
+  /// قراءة مفتاح المجموعة إن وُجد (بلا إنشاء) — يُرسل مع رمز إضافة جهاز.
+  static Future<String?> readSecretKey() async {
+    final key = await _storage.read(key: _secretKeyStorage);
+    return (key == null || key.isEmpty) ? null : key;
+  }
+
   /// حفظ مفتاح المجموعة السري بشكل دائم.
   static Future<void> saveSecretKey(String key) async {
     await _storage.write(key: _secretKeyStorage, value: key);

@@ -1,7 +1,8 @@
 // screens/user_management_screen.dart
 //
 // 👥 الموظفون والصلاحيات
-//   • المدير = حساب الترخيص (كل الصلاحيات، لا يُحذف).
+//   • المدير: صاحب البرنامج على هذا الجهاز (كل الصلاحيات، لا يُحذف).
+//     منفصل عن حساب الترخيص: يختار اسمه وكلمة سره، ويغيّرهما من هنا.
 //   • كل موظف: اسم دخول + كلمة سر + صلاحيات. قوالب جاهزة (كاشير، أمين مخزن،
 //     محاسب، مدير فرع) تملأ الصلاحيات بضغطة ثم تُعدَّل كما تريد.
 //   • المدير يغيّر كلمة سر أي موظف أو صلاحياته أو يحذفه.
@@ -12,6 +13,7 @@ import 'package:intl/intl.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
+import '../services/firebase_sync/users_sync_service.dart';
 import '../widgets/user_menu_button.dart' show showChangeOwnPasswordDialog;
 
 class UserManagementScreen extends StatefulWidget {
@@ -283,10 +285,69 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
   }
 
+  /// ✏️ المدير يغيّر اسم دخوله (مثلاً: أُنشئ قديماً باسم حساب الترخيص).
+  Future<void> _renameSelf(AppUser user) async {
+    final ctrl = TextEditingController(text: user.username);
+    String? err;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Text('تغيير اسم الدخول'),
+          content: SizedBox(
+            width: 380,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('الاسم الذي تكتبه في شاشة الدخول. العمليات السابقة تبقى مسجّلة بالاسم القديم.',
+                  style: TextStyle(color: Colors.black54, height: 1.5)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                decoration: InputDecoration(labelText: 'اسم الدخول الجديد', errorText: err, border: const OutlineInputBorder()),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            FilledButton(
+              onPressed: () async {
+                final name = ctrl.text.trim();
+                if (name.isEmpty) {
+                  setD(() => err = 'اكتب الاسم');
+                  return;
+                }
+                if (name == user.username) {
+                  Navigator.pop(ctx, false);
+                  return;
+                }
+                final done = await _auth.renameUser(user.id!, name);
+                if (!done) {
+                  setD(() => err = 'هذا الاسم مستعمل لمستخدم آخر');
+                  return;
+                }
+                if (ctx.mounted) Navigator.pop(ctx, true);
+              },
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+    ctrl.dispose();
+    if (ok == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('تم تغيير اسم الدخول — استعمله في المرة القادمة'),
+        backgroundColor: Colors.green,
+      ));
+      _load();
+    }
+  }
+
   Future<void> _setDisplayName(int userId, String name) async {
     try {
       final db = await DatabaseService().database;
       await db.update('users', {'display_name': name.isEmpty ? null : name}, where: 'id = ?', whereArgs: [userId]);
+      await UsersSyncService.instance.markChanged(userId);
     } catch (_) {}
   }
 
@@ -344,7 +405,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 const Padding(
                   padding: EdgeInsets.only(bottom: 12),
                   child: Text(
-                    'كل من يستخدم البرنامج يدخل باسمه. المدير هو حساب الترخيص ويملك كل الصلاحيات. '
+                    'كل من يستخدم البرنامج يدخل باسمه. المدير يملك كل الصلاحيات، وحسابه منفصل عن حساب الترخيص. '
                     'الموظف يرى الأزرار والشاشات التي تسمح بها صلاحياته فقط، وتُسجَّل عملياته باسمه.',
                     style: TextStyle(color: Colors.black54, height: 1.5),
                   ),
@@ -363,7 +424,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       title: Row(children: [
                         Text(u.shownName, style: const TextStyle(fontWeight: FontWeight.bold)),
                         const SizedBox(width: 8),
-                        _chip(u.isAdmin ? 'مدير — حساب الترخيص' : (_templateOf(u) ?? 'موظف'),
+                        _chip(u.isAdmin ? 'مدير' : (_templateOf(u) ?? 'موظف'),
                             u.isAdmin ? const Color(0xFF0F3460) : Colors.teal),
                         if (me?.id == u.id) ...[const SizedBox(width: 6), _chip('أنت', Colors.green)],
                       ]),
@@ -374,11 +435,18 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       ),
                       trailing: u.isAdmin
                           ? (me?.id == u.id
-                              ? TextButton.icon(
-                                  onPressed: () => showChangeOwnPasswordDialog(context),
-                                  icon: const Icon(Icons.password),
-                                  label: const Text('تغيير كلمة السر'),
-                                )
+                              ? Row(mainAxisSize: MainAxisSize.min, children: [
+                                  TextButton.icon(
+                                    onPressed: () => _renameSelf(u),
+                                    icon: const Icon(Icons.drive_file_rename_outline),
+                                    label: const Text('تغيير اسم الدخول'),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: () => showChangeOwnPasswordDialog(context),
+                                    icon: const Icon(Icons.password),
+                                    label: const Text('تغيير كلمة السر'),
+                                  ),
+                                ])
                               : null)
                           : Row(mainAxisSize: MainAxisSize.min, children: [
                               TextButton.icon(

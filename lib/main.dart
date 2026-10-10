@@ -40,6 +40,7 @@ import 'services/purchase_service.dart'; // 🆕
 import 'services/suppliers_service.dart'; // 🆕 (Fix Provider Error)
 import 'services/license_service.dart'; // 🔐
 import 'screens/license_screen.dart'; // 🔐
+import 'screens/license_devices_screen.dart'; // 🔐 الترخيص والأجهزة
 import 'services/alert_service.dart'; // 🔔 Restored
 import 'services/font_manager.dart'; // 🔡 Font management
 import 'services/ensemble_ai_service_factory.dart'; // 🧠 AI Service (مشروط ويب/أصلي)
@@ -316,6 +317,12 @@ void main() async {
     print('⚠️ خطأ أثناء تهيئة Firebase: $e');
   }
 
+  // 🔐 نظام الترخيص 4: الترخيص الموقَّع + بصمة الجهاز، قبل اختيار الشاشة الأولى
+  await LicenseService.init();
+  LicenseService.onLocked = () {
+    globalNavigatorKey.currentState?.pushNamedAndRemoveUntil('/license', (route) => false);
+  };
+
   // 🔐 License check first
   final licenseService = LicenseService();
   final isLicenseActivated = licenseService.isLicenseActivated();
@@ -450,6 +457,7 @@ class MyApp extends StatelessWidget {
           '/main': (context) => const _LicenseGuard(child: MainScreen()),
           '/license': (context) => const LicenseScreen(), // 🔐
           '/license_check': (context) => const LicenseCheckScreen(), // 🔐
+          '/license_devices': (context) => const _LicenseGuard(child: LicenseDevicesScreen()), // 🔐
           '/password_setup': (context) => const _LicenseGuard(requireLogin: false, child: PasswordSetupScreen()),
           '/login': (context) => const _LicenseGuard(requireLogin: false, child: LoginScreen()), // 👤
           '/user_management': (context) => const _LicenseGuard(child: UserManagementScreen()), // 👤
@@ -495,6 +503,12 @@ class _LicenseGuard extends StatelessWidget {
   const _LicenseGuard({required this.child, this.requireLogin = true});
   static bool _toLogin = false; // يمنع تكرار التحويل إن أُعيد الرسم قبل الانتقال
 
+  /// شاشات ترخيص «سجل الديون» (الديون، التقارير، الإعدادات ورفع القاعدة)
+  static const Set<String> _debtsOnlyRoutes = {
+    '/', '/main', '/login', '/password_setup', '/user_management', '/general_settings',
+    '/debt_register', '/reports', '/debts_hub', '/license_devices',
+  };
+
   @override
   Widget build(BuildContext context) {
     final licenseService = LicenseService();
@@ -520,6 +534,26 @@ class _LicenseGuard extends StatelessWidget {
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
               ),
             ],
+          ),
+        ),
+      );
+    }
+    // 🧩 النمط من الترخيص الموقَّع: «سجل الديون» لا يفتح إلا شاشاته، مهما كان
+    //    طريق الوصول إلى المسار (اختصار لوحة مفاتيح، زر داخلي...).
+    final lic = licenseService.getStoredLicense();
+    final routeName = ModalRoute.of(context)?.settings.name;
+    if (lic != null && lic.isDebtsOnly && routeName != null && !_debtsOnlyRoutes.contains(routeName)) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('غير مشمول في ترخيصك')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'هذه الشاشة غير مشمولة في ترخيص «سجل الديون».\n'
+              'للترقية تواصل مع صاحب البرنامج: ${LicenseConfig.supportPhone}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, height: 1.6),
+            ),
           ),
         ),
       );

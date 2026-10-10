@@ -1,12 +1,20 @@
 // screens/login_screen.dart
 //
 // 🔐 شاشة الدخول — تظهر في كل فتح للبرنامج.
-//   • أول تشغيل (لا مستخدمين): إنشاء حساب المدير. المدير هو حساب الترخيص نفسه:
-//     اسم المستخدم = اسم مستخدم الترخيص، وكلمة السر تُتحقق من سيرفر التراخيص
-//     (بلا إنترنت: تُقبل بعد كتابتها مرتين وتصير كلمة سر المدير على هذا الجهاز).
+//
+//   طبقتان منفصلتان:
+//   1) الترخيص (شاشة التفعيل): موافقتنا على تشغيل البرنامج في هذا الجهاز.
+//      حسابه من أداة الأدمن، يُكتب مرة واحدة عند التثبيت، ولا يصير مستخدماً.
+//   2) المستخدمون (هذه الشاشة + الإعدادات ← الموظفون): حسابات المحل نفسه.
+//
+//   • أول تشغيل (لا مستخدمين): «إنشاء حساب المدير» باسم وكلمة سر يختارهما
+//     صاحب المحل. بعد التفعيل مباشرةً لا يُسأل شيء آخر؛ وإن فرغ جدول
+//     المستخدمين لاحقاً يُطلب إثبات ملكية الترخيص (كلمة سره، يتحقق منها
+//     السيرفر) — كي لا يصير أي أحد مديراً بمجرد إفراغ الجدول. لا كلمة جوكر.
 //   • بعدها: دخول المدير أو الموظف، وكل موظف يرى ما تسمح به صلاحياته فقط.
 //   • الوضع التجريبي يُفتح ويُغلق من هنا (لا من الإعدادات).
 
+import 'dart:async';
 import 'dart:io' show exit;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -14,9 +22,11 @@ import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
 import '../services/demo_mode.dart';
+import '../services/firebase_sync/firebase_custom_config.dart';
+import '../services/firebase_sync/users_sync_service.dart';
 import '../services/license_service.dart';
 
-enum _Mode { loading, demo, setupAdmin, login }
+enum _Mode { loading, demo, setupAdmin, login, waitUsers }
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -34,6 +44,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
+  final _proofController = TextEditingController();
   final AuthService _authService = AuthService();
   final LicenseService _license = LicenseService();
 
@@ -41,7 +52,9 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
-  String? _licenseUser;
+  String? _info;
+  Timer? _waitTimer;
+  StreamSubscription<void>? _waitSub;
 
   @override
   void initState() {
@@ -50,7 +63,6 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _init() async {
-    _licenseUser = _license.getStoredLicense()?.username;
     if (DemoMode.isOn) {
       setState(() => _mode = _Mode.demo);
       return;
@@ -61,13 +73,49 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (_) {}
     if (!mounted) return;
     if (hasUsers) {
-      _usernameController.text = await _authService.lastUsername() ?? _licenseUser ?? '';
+      _usernameController.text = await _authService.lastUsername() ?? '';
       if (!mounted) return;
       setState(() => _mode = _Mode.login);
     } else {
-      _usernameController.text = _licenseUser ?? '';
-      setState(() => _mode = _Mode.setupAdmin);
+      _usernameController.text = '';
+      // 👥 جهاز إضافي في نسخة المزامنة: حسابات المستخدمين تأتي من الجهاز الرئيسي
+      final lic = _license.getStoredLicense();
+      final waitForMain = lic != null && !lic.isMainDevice && lic.isSyncAllowed &&
+          await FirebaseCustomConfig.isCustomConfigured();
+      if (!mounted) return;
+      if (waitForMain) {
+        setState(() => _mode = _Mode.waitUsers);
+        _startWaitingForUsers();
+      } else {
+        setState(() => _mode = _Mode.setupAdmin);
+      }
     }
+  }
+
+  void _startWaitingForUsers() {
+    Future<void> check() async {
+      if (_mode != _Mode.waitUsers) return;
+      var has = false;
+      try {
+        has = await _authService.hasAnyUsers();
+      } catch (_) {}
+      if (!mounted || !has || _mode != _Mode.waitUsers) return;
+      _stopWaiting();
+      setState(() {
+        _mode = _Mode.login;
+        _info = 'وصلت حسابات المستخدمين من الجهاز الرئيسي — ادخل باسمك وكلمة سرك.';
+      });
+    }
+
+    _waitTimer = Timer.periodic(const Duration(seconds: 3), (_) => check());
+    _waitSub = UsersSyncService.instance.changes.listen((_) => check());
+  }
+
+  void _stopWaiting() {
+    _waitTimer?.cancel();
+    _waitTimer = null;
+    _waitSub?.cancel();
+    _waitSub = null;
   }
 
   @override
@@ -75,6 +123,8 @@ class _LoginScreenState extends State<LoginScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
+    _proofController.dispose();
+    _stopWaiting();
     super.dispose();
   }
 
@@ -104,92 +154,112 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!_formKey.currentState!.validate()) return;
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
+
+    // بعد تفعيل الترخيص مباشرةً (في هذه الجلسة) أثبت صاحبه ملكيته للتو.
+    // غير ذلك (فرغ جدول المستخدمين لاحقاً لأي سبب): إثبات الملكية أولاً.
+    if (!LicenseService.activatedThisSession) {
+      final ok = await _proveLicenseOwnership();
+      if (ok != true || !mounted) return;
+    }
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
-
-    final check = _licenseUser == null
-        ? const LicensePasswordCheck(LicensePasswordStatus.noLicense)
-        : await _license.checkAccountPassword(password, username: username);
-    if (!mounted) return;
-
-    switch (check.status) {
-      case LicensePasswordStatus.ok:
-        await _finishAdmin(username, password);
-        return;
-      case LicensePasswordStatus.wrong:
-        setState(() {
-          _isLoading = false;
-          _errorMessage = 'كلمة سر الترخيص غير صحيحة. اكتب نفس كلمة السر التي فعّلت بها البرنامج.';
-        });
-        return;
-      case LicensePasswordStatus.rejected:
-        setState(() {
-          _isLoading = false;
-          _errorMessage = check.message ?? 'رفض سيرفر التراخيص الطلب';
-        });
-        return;
-      case LicensePasswordStatus.offline:
-      case LicensePasswordStatus.noLicense:
-        setState(() => _isLoading = false);
-        final ok = await _confirmOfflineAdmin(password, noLicense: check.status == LicensePasswordStatus.noLicense);
-        if (ok == true) {
-          setState(() => _isLoading = true);
-          await _finishAdmin(username, password);
-        }
-        return;
-    }
+    await _finishAdmin(username, password);
   }
 
-  /// بلا إنترنت: تُكتب كلمة السر مرة ثانية للتأكيد وتصير كلمة سر المدير على هذا الجهاز.
-  Future<bool?> _confirmOfflineAdmin(String password, {required bool noLicense}) {
-    _confirmController.clear();
+  /// 🔑 إثبات ملكية الترخيص: كلمة سر حساب الترخيص المفعَّل على هذا الجهاز
+  /// (يتحقق منها السيرفر — يحتاج إنترنت).
+  Future<bool?> _proveLicenseOwnership() {
+    _proofController.clear();
     String? err;
+    bool busy = false;
     return showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) => AlertDialog(
-          title: const Row(children: [
-            Icon(Icons.wifi_off, color: Colors.orange),
-            SizedBox(width: 8),
-            Text('لا يوجد اتصال للتحقق'),
-          ]),
-          content: SizedBox(
-            width: 380,
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(noLicense
-                  ? 'لا توجد بيانات ترخيص للتحقق منها على هذا الجهاز.'
-                  : 'تعذّر الاتصال بسيرفر التراخيص للتحقق من كلمة السر.'),
-              const SizedBox(height: 6),
-              const Text('يمكنك إنشاء حساب المدير الآن: اكتب كلمة السر مرة ثانية للتأكيد، وستكون كلمة سر المدير على هذا الجهاز.'),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _confirmController,
-                obscureText: true,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: 'تأكيد كلمة السر',
-                  errorText: err,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-            FilledButton(
-              onPressed: () {
-                if (_confirmController.text != password) {
-                  setD(() => err = 'كلمتا السر غير متطابقتين');
-                  return;
-                }
+        builder: (ctx, setD) {
+          Future<void> submit() async {
+            final secret = _proofController.text;
+            if (secret.isEmpty) {
+              setD(() => err = 'اكتب كلمة سر حساب الترخيص');
+              return;
+            }
+            setD(() {
+              busy = true;
+              err = null;
+            });
+            final c = await _license.checkAccountPassword(secret);
+            if (!ctx.mounted) return;
+            switch (c.status) {
+              case LicensePasswordStatus.ok:
                 Navigator.pop(ctx, true);
-              },
-              child: const Text('إنشاء حساب المدير'),
+                return;
+              case LicensePasswordStatus.offline:
+                setD(() {
+                  busy = false;
+                  err = 'لا يوجد إنترنت للتحقق من كلمة سر الترخيص. صِل الإنترنت ثم أعد المحاولة.';
+                });
+                return;
+              case LicensePasswordStatus.wrong:
+              case LicensePasswordStatus.noLicense:
+                setD(() {
+                  busy = false;
+                  err = 'كلمة السر غير صحيحة';
+                });
+                return;
+              case LicensePasswordStatus.rejected:
+                setD(() {
+                  busy = false;
+                  err = c.message ?? 'رفض سيرفر التراخيص الطلب';
+                });
+                return;
+            }
+          }
+
+          final lic = _license.getStoredLicense();
+          return AlertDialog(
+            title: const Row(children: [
+              Icon(Icons.verified_user_outlined, color: Color(0xFF0F3460)),
+              SizedBox(width: 8),
+              Text('إثبات ملكية الترخيص'),
+            ]),
+            content: SizedBox(
+              width: 400,
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  'لا يوجد أي مستخدم على هذا الجهاز. لإنشاء حساب مدير جديد اكتب كلمة سر '
+                  'حساب الترخيص${lic != null ? ' «${lic.username}»' : ''} (نتحقق منها عبر الإنترنت).',
+                  style: const TextStyle(height: 1.5),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _proofController,
+                  obscureText: true,
+                  autofocus: true,
+                  enabled: !busy,
+                  onSubmitted: (_) => busy ? null : submit(),
+                  decoration: InputDecoration(
+                    labelText: 'كلمة سر حساب الترخيص',
+                    prefixIcon: const Icon(Icons.key),
+                    errorText: err,
+                    errorMaxLines: 3,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ]),
             ),
-          ],
-        ),
+            actions: [
+              TextButton(onPressed: busy ? null : () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+              FilledButton(
+                onPressed: busy ? null : submit,
+                child: busy
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('تحقّق'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -236,7 +306,7 @@ class _LoginScreenState extends State<LoginScreen> {
             width: 400,
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text(
-                '• المدير: اكتب كلمة سر الترخيص (يحتاج إنترنت) أو كلمة الجوكر.\n'
+                '• المدير: اكتب كلمة سر حساب الترخيص (نتحقق منها عبر الإنترنت).\n'
                 '• الموظف: يطلب من المدير تغيير كلمة سره من شاشة الموظفين.',
                 style: TextStyle(fontSize: 13, color: Colors.black54),
               ),
@@ -254,7 +324,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: recoveryController,
                 obscureText: true,
                 decoration: InputDecoration(
-                  labelText: 'كلمة سر الترخيص أو كلمة الجوكر',
+                  labelText: 'كلمة سر حساب الترخيص',
                   prefixIcon: const Icon(Icons.key),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 ),
@@ -289,25 +359,23 @@ class _LoginScreenState extends State<LoginScreen> {
                         busy = true;
                         err = null;
                       });
-                      var allowed = await _authService.verifyRecoveryPassword(rec);
-                      if (!allowed) {
-                        final admin = await _authService.adminUser();
-                        if (admin != null && admin.username == user) {
-                          final c = await _license.checkAccountPassword(rec, username: user);
-                          allowed = c.status == LicensePasswordStatus.ok;
-                          if (c.status == LicensePasswordStatus.offline) {
-                            setD(() {
-                              busy = false;
-                              err = 'لا يوجد إنترنت للتحقق من كلمة سر الترخيص';
-                            });
-                            return;
-                          }
+                      var allowed = false;
+                      final admin = await _authService.adminUser();
+                      if (admin != null && admin.username == user) {
+                        final c = await _license.checkAccountPassword(rec);
+                        allowed = c.status == LicensePasswordStatus.ok;
+                        if (c.status == LicensePasswordStatus.offline) {
+                          setD(() {
+                            busy = false;
+                            err = 'لا يوجد إنترنت للتحقق من كلمة سر الترخيص';
+                          });
+                          return;
                         }
                       }
                       if (!allowed) {
                         setD(() {
                           busy = false;
-                          err = 'كلمة الاسترداد غير صحيحة لهذا المستخدم';
+                          err = 'كلمة سر الترخيص غير صحيحة، أو هذا المستخدم ليس المدير';
                         });
                         return;
                       }
@@ -419,7 +487,7 @@ class _LoginScreenState extends State<LoginScreen> {
           const Spacer(),
           if (lic != null) ...[
             const Divider(color: Colors.white24),
-            Text('الترخيص: ${lic.username}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            Text('الترخيص: ${lic.username}${lic.isMainDevice ? '' : ' (جهاز إضافي)'}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
             if (lic.expires.length >= 10)
               Text('صالح حتى: ${lic.expires.substring(0, 10)}',
                   style: const TextStyle(color: Colors.white54, fontSize: 12)),
@@ -444,10 +512,39 @@ class _LoginScreenState extends State<LoginScreen> {
         return const SizedBox(height: 320, child: Center(child: CircularProgressIndicator()));
       case _Mode.demo:
         return _demoPanel();
+      case _Mode.waitUsers:
+        return _waitUsersPanel();
       case _Mode.setupAdmin:
       case _Mode.login:
         return _credentialsForm();
     }
+  }
+
+  Widget _waitUsersPanel() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('جهاز إضافي', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _navy)),
+        const SizedBox(height: 8),
+        Text(
+          'جارٍ جلب بيانات المحل وحسابات الموظفين من الجهاز الرئيسي عبر المزامنة...\n'
+          'يستغرق عادة أقل من دقيقة (أطول إن كانت البيانات كثيرة). بعدها ادخل باسمك الذي أنشأه لك المدير.',
+          style: TextStyle(color: Colors.grey[700], height: 1.6),
+        ),
+        const SizedBox(height: 28),
+        const Center(child: CircularProgressIndicator()),
+        const SizedBox(height: 28),
+        OutlinedButton.icon(
+          onPressed: () {
+            _stopWaiting();
+            setState(() => _mode = _Mode.setupAdmin);
+          },
+          icon: const Icon(Icons.person_add_alt),
+          label: const Text('إنشاء مدير لهذا الجهاز بدلاً من الانتظار'),
+        ),
+      ],
+    );
   }
 
   Widget _credentialsForm() {
@@ -463,11 +560,28 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(height: 6),
           Text(
             setup
-                ? 'أول تشغيل: المدير هو حساب الترخيص نفسه. اكتب كلمة السر التي فعّلت بها البرنامج، وسنتحقق منها عبر الإنترنت.'
+                ? 'أنشئ حساب مدير البرنامج على هذا الجهاز: اختر أي اسم وكلمة سر. '
+                    'هذا حساب الدخول اليومي، ومنفصل تماماً عن حساب الترخيص. '
+                    'بعدها تضيف موظفيك من: الإعدادات ← الموظفون والصلاحيات.'
                 : 'أدخل اسم المستخدم وكلمة السر للمتابعة.',
             style: TextStyle(color: Colors.grey[700], height: 1.5),
           ),
           const SizedBox(height: 24),
+          if (_info != null && !setup)
+            Container(
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.green[200]!),
+              ),
+              child: Row(children: [
+                const Icon(Icons.check_circle_outline, color: Colors.green),
+                const SizedBox(width: 8),
+                Expanded(child: Text(_info!, style: TextStyle(color: Colors.green[900]))),
+              ]),
+            ),
           if (_errorMessage != null)
             Container(
               padding: const EdgeInsets.all(12),
@@ -485,12 +599,9 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           TextFormField(
             controller: _usernameController,
-            // ✏️ قابل للتعديل دائماً: كان مقفلاً على اسم الترخيص المحفوظ فلا يمكن
-            // إنشاء المدير بحساب ترخيص آخر (يُتحقق من الاسم المكتوب عند السيرفر).
-            readOnly: false,
-            autofocus: !setup && _usernameController.text.isEmpty,
+            autofocus: setup || _usernameController.text.isEmpty,
             decoration: InputDecoration(
-              labelText: setup ? 'اسم المستخدم (حساب الترخيص)' : 'اسم المستخدم',
+              labelText: setup ? 'اسم المدير (تختاره أنت)' : 'اسم المستخدم',
               prefixIcon: Icon(setup ? Icons.admin_panel_settings_outlined : Icons.person_outline),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
@@ -504,7 +615,7 @@ class _LoginScreenState extends State<LoginScreen> {
             obscureText: _obscurePassword,
             autofocus: !setup && _usernameController.text.isNotEmpty,
             decoration: InputDecoration(
-              labelText: setup ? 'كلمة سر الترخيص' : 'كلمة السر',
+              labelText: setup ? 'كلمة سر المدير' : 'كلمة السر',
               prefixIcon: const Icon(Icons.lock_outline),
               suffixIcon: IconButton(
                 icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
@@ -514,9 +625,29 @@ class _LoginScreenState extends State<LoginScreen> {
               filled: true,
               fillColor: Colors.grey[50],
             ),
-            validator: (val) => val == null || val.isEmpty ? 'أدخل كلمة السر' : null,
-            onFieldSubmitted: (_) => setup ? _createAdmin() : _login(),
+            validator: (val) {
+              if (val == null || val.isEmpty) return 'أدخل كلمة السر';
+              if (setup && val.length < 4) return 'كلمة السر 4 أحرف على الأقل';
+              return null;
+            },
+            onFieldSubmitted: (_) => setup ? null : _login(),
           ),
+          if (setup) ...[
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _confirmController,
+              obscureText: _obscurePassword,
+              decoration: InputDecoration(
+                labelText: 'تأكيد كلمة السر',
+                prefixIcon: const Icon(Icons.lock_reset),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: Colors.grey[50],
+              ),
+              validator: (val) => val != _passwordController.text ? 'كلمتا السر غير متطابقتين' : null,
+              onFieldSubmitted: (_) => _createAdmin(),
+            ),
+          ],
           if (!setup)
             Align(
               alignment: AlignmentDirectional.centerEnd,
@@ -538,7 +669,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               child: _isLoading
                   ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : Text(setup ? 'تحقق وأنشئ حساب المدير' : 'دخول',
+                  : Text(setup ? 'أنشئ حساب المدير' : 'دخول',
                       style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
             ),
           ),

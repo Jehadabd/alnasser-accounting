@@ -16,6 +16,8 @@ import '../database_service.dart';
 import '../database/core/database_helpers.dart';
 import '../database/business/customer_visibility.dart';
 import 'firebase_sync_config.dart';
+import 'firebase_custom_config.dart';
+import 'users_sync_service.dart';
 import 'firebase_sync_coordinator.dart';
 import 'firebase_auth_service.dart';
 import 'sync_operation_tracker.dart';
@@ -319,10 +321,21 @@ class FirebaseSyncService {
     
     // 🔐 فحص حماية الترخيص: المزامنة غير مسموحة للـ debts_only و full_offline
     final license = LicenseService().getStoredLicense();
-    if (license != null && !license.isSyncAllowed) {
-      print('🔒 [FirebaseSyncService] المزامنة غير مشمولة في هذا الترخيص (${license.appMode}) - تم حظر محرك المزامنة.');
+    // 🔐 بلا ترخيص صالح الآن (منتهٍ/موقوف/غير مفعّل) أو بنمط بلا مزامنة ⇒ لا مزامنة
+    if (license == null || !license.isSyncAllowed) {
+      print('🔒 [FirebaseSyncService] المزامنة غير مشمولة في هذا الترخيص (${license?.appMode ?? 'غير صالح الآن'}) - تم حظر محرك المزامنة.');
       _initFailureRetryable = false; // إعادة المحاولة بلا فائدة هنا
       _updateStatus(FirebaseSyncStatus.disabled);
+      return false;
+    }
+
+    // 🪟 الربط ضُبط للتو من المعالج: لا Firestore قبل إعادة التشغيل (انظر
+    //    FirebaseCustomConfig.restartRequired).
+    if (FirebaseCustomConfig.restartRequired) {
+      print('ℹ️ [FirebaseSyncService] أعد تشغيل البرنامج لتفعيل ربط Firebase الجديد.');
+      _initFailureRetryable = false;
+      _updateStatus(FirebaseSyncStatus.notConfigured);
+      _errorController.add('أعد تشغيل البرنامج لتفعيل ربط Firebase الجديد');
       return false;
     }
 
@@ -465,6 +478,13 @@ class FirebaseSyncService {
         await _verdictService.start();
       } catch (e) {
         print('⚠️ تعذّر تشغيل مستمع قرارات المطابقة: $e');
+      }
+
+      // 👥 مزامنة حسابات المستخدمين (المدير والموظفين) بين أجهزة الترخيص
+      try {
+        await UsersSyncService.instance.start(_firestore!);
+      } catch (e) {
+        print('⚠️ تعذّر تشغيل مزامنة المستخدمين: $e');
       }
       
       // 🛡️ تهيئة خدمة الحماية من الانقطاع (WAL)
@@ -706,6 +726,7 @@ class FirebaseSyncService {
     _stopBackgroundSync(); // 🔄 إيقاف المزامنة الخلفية
     _watchdog?.stop(); // 🛡️ إيقاف المراقبة
     await InvoiceSyncService().stopSync(); // 🧾 إيقاف مزامنة الفواتير
+    await UsersSyncService.instance.stop(); // 👥 إيقاف مزامنة المستخدمين
     ReconciliationService().dispose(); // 🧮 إيقاف خدمة المطابقة
     LiveMatchService().dispose(); // 📡 إيقاف المطابقة الحية
     await _stopListening();

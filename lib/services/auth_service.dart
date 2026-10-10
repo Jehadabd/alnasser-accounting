@@ -4,7 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_user.dart';
 import 'database_service.dart';
-import 'password_service.dart';
+import 'firebase_sync/users_sync_service.dart';
 import '../erp/activity/activity_log.dart';
 
 class AuthService {
@@ -13,7 +13,6 @@ class AuthService {
   AuthService._internal();
 
   final DatabaseService _db = DatabaseService();
-  final PasswordService _passwordService = PasswordService();
   
   AppUser? _currentUser;
   static const String _sessionKey = 'current_user_session';
@@ -64,7 +63,7 @@ class AuthService {
     );
   }
 
-  /// حساب المدير (حساب الترخيص) إن وُجد.
+  /// حساب المدير (أول مستخدم بدور admin) إن وُجد — منفصل عن حساب الترخيص.
   Future<AppUser?> adminUser() async {
     final db = await _db.database;
     final r = await db.query('users', where: "role = 'admin'", orderBy: 'id', limit: 1);
@@ -88,6 +87,7 @@ class AuthService {
     final db = await _db.database;
     final n = await db.update('users', {'password_hash': _hashPassword(newPassword)},
         where: 'id = ?', whereArgs: [userId]);
+    if (n > 0) await UsersSyncService.instance.markChanged(userId);
     return n > 0;
   }
 
@@ -186,20 +186,11 @@ class AuthService {
         });
       }
       
+      await UsersSyncService.instance.markChanged(userId); // 👥 يظهر في بقية الأجهزة
       return await _getUserById(userId);
     } catch (e) {
       return null; // Username already exists or other error
     }
-  }
-
-  /// التحقق من كلمة سر الاسترداد (كلمات السر الثلاثة أو الجوكر)
-  Future<bool> verifyRecoveryPassword(String password) async {
-    // التحقق من كلمة الجوكر أولاً
-    if (await _passwordService.verifyPassword(password)) {
-      return true;
-    }
-    // يمكن إضافة منطق إضافي للكلمات الثلاثة هنا
-    return false;
   }
 
   /// إعادة تعيين كلمة السر
@@ -213,7 +204,10 @@ class AuthService {
       where: 'username = ?',
       whereArgs: [username],
     );
-    
+    if (count > 0) {
+      final r = await db.query('users', columns: ['id'], where: 'username = ?', whereArgs: [username], limit: 1);
+      if (r.isNotEmpty) await UsersSyncService.instance.markChanged(r.first['id'] as int);
+    }
     return count > 0;
   }
 
@@ -258,10 +252,38 @@ class AuthService {
   /// حذف مستخدم
   Future<bool> deleteUser(int userId) async {
     final db = await _db.database;
-    // حساب المدير (حساب الترخيص) لا يُحذف
+    final target = await db.query('users', columns: ['role'], where: 'id = ?', whereArgs: [userId], limit: 1);
+    if (target.isNotEmpty && target.first['role'] != 'admin') {
+      await UsersSyncService.instance.markDeleted(userId); // 👥 يُحذف من بقية الأجهزة
+    }
+    // حساب المدير لا يُحذف
     final count = await db.delete('users', where: "id = ? AND role != 'admin'", whereArgs: [userId]);
     if (count > 0) await db.delete('user_permissions', where: 'user_id = ?', whereArgs: [userId]);
     return count > 0;
+  }
+
+  /// تغيير اسم الدخول. يفيد خاصةً مديراً أُنشئ قديماً باسم حساب الترخيص.
+  /// العمليات السابقة تبقى مسجّلة بالاسم القديم. يعيد false إن كان الاسم مستعملاً.
+  Future<bool> renameUser(int userId, String newUsername) async {
+    final name = newUsername.trim();
+    if (name.isEmpty) return false;
+    final db = await _db.database;
+    final taken = await db.query('users',
+        columns: ['id'], where: 'username = ? AND id != ?', whereArgs: [name, userId], limit: 1);
+    if (taken.isNotEmpty) return false;
+    try {
+      final n = await db.update('users', {'username': name}, where: 'id = ?', whereArgs: [userId]);
+      if (n == 0) return false;
+      await UsersSyncService.instance.markChanged(userId);
+      if (_currentUser?.id == userId) {
+        _currentUser = await _getUserById(userId);
+        if (_currentUser != null) await _saveSession(_currentUser!);
+      }
+      ActivityLog.log('تعديل', 'المستخدمون', 'تغيير اسم دخول المستخدم #$userId إلى $name');
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// تحديث صلاحيات المستخدم
@@ -278,6 +300,7 @@ class AuthService {
         'permission_key': perm,
       });
     }
+    await UsersSyncService.instance.markChanged(userId);
   }
 
   /// فحص صلاحية معينة للمستخدم الحالي.

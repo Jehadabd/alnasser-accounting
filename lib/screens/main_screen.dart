@@ -253,7 +253,7 @@ class _MainScreenState extends State<MainScreen> {
     bool? result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('الرجاء إدخال كلمة السر',
+        title: const Text('أدخل كلمة سر المدير',
             style: TextStyle(fontSize: 20)),
         content: TextField(
           controller: passwordController,

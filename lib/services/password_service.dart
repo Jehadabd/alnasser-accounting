@@ -1,13 +1,13 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert'; // For utf8.encode
+import 'database_service.dart';
 
 class PasswordService {
   static final PasswordService _instance = PasswordService._internal();
   final _storage = const FlutterSecureStorage();
   static const String _passwordsKey = 'app_passwords';
   static const String _isFirstLaunchKey = 'is_first_launch';
-  static const String _jokerPassword = '2001'; // Joker password
 
   factory PasswordService() => _instance;
 
@@ -41,20 +41,21 @@ class PasswordService {
     await _storage.write(key: _passwordsKey, value: jsonString);
   }
 
-  // Verify a given password
+  // 🔐 كلمة السر لهذه الأقفال = كلمة سر أحد المديرين داخل البرنامج.
+  //    أُلغيت كلمة «الجوكر» الثابتة: كانت تفتح كل الأقفال لكل من يعرفها.
   Future<bool> verifyPassword(String password) async {
-    // Check against joker password first
-    if (password == _jokerPassword) {
-      return true;
+    if (password.isEmpty) return false;
+    try {
+      final db = await DatabaseService().database;
+      final r = await db.query('users',
+          columns: ['id'],
+          where: "role = 'admin' AND password_hash = ?",
+          whereArgs: [_hashPassword(password)],
+          limit: 1);
+      return r.isNotEmpty;
+    } catch (_) {
+      return false;
     }
-
-    final storedJson = await _storage.read(key: _passwordsKey);
-    if (storedJson == null) {
-      return false; // No passwords set yet
-    }
-    final List<dynamic> hashedPasswords = jsonDecode(storedJson);
-    final hashedPassword = _hashPassword(password);
-    return hashedPasswords.contains(hashedPassword);
   }
 
   // Check if passwords are set (for app initialization logic)

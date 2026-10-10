@@ -1,7 +1,11 @@
+import 'dart:convert';
+import 'dart:io' show Platform, Process, ProcessStartMode, exit;
+
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fauth;
@@ -29,6 +33,8 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
   
   bool _isTesting = false;
   String _testResult = '';
+  bool _savedNeedsRestart = false;
+  static bool get _isWindows => !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
   Color _testResultColor = Colors.black;
 
   @override
@@ -169,32 +175,30 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
         } catch (_) {}
 
         print('🧪 [3/3] محاولة قراءة مجموعة customers من Firestore...');
-        final testFirestore = FirebaseFirestore.instanceFor(app: app);
-        // 🪟 على سطح المكتب: بلا تخزين محلي (LevelDB) كما في المزامنة نفسها.
-        // الإعداد الافتراضي يفتح LevelDB، وعلى ويندوز ينهار البرنامج باستثناء
-        // C++ غير ملتقط إن تعذّر فتحها (حدث في نسخة الحاسوب الثاني عند أول ربط).
-        if (!kIsWeb &&
-            (defaultTargetPlatform == TargetPlatform.windows ||
-                defaultTargetPlatform == TargetPlatform.linux ||
-                defaultTargetPlatform == TargetPlatform.macOS)) {
-          try {
-            testFirestore.settings = const Settings(persistenceEnabled: false);
-          } catch (_) {}
-        }
-        // 🪟 ويندوز: قراءة الوثائق في هذا الاختبار كانت تُسقط البرنامج (استثناء C++
-        // 0xE06D7363) في نسخة الحاسوب الثاني؛ العدّ (count) يختبر صلاحية القراءة
-        // نفسها، وأخطاؤه تصل سليمة إلى Dart (مجرَّب في المزامنة).
+        // 🪟 ويندوز: الاختبار عبر واجهة Firestore REST، لا عبر مكتبة C++.
+        // مكتبة Firestore على ويندوز أسقطت البرنامج كله (استثناء C++ 0xE06D7363)
+        // عند أول قراءة في هذا المعالج على جهاز جديد — بقراءة الوثائق ثم بالعدّ.
+        // REST يختبر الأشياء نفسها (المشروع، المصادقة، قواعد الأمان، الحصة)
+        // بلا أي خطر على البرنامج، والمزامنة تتصل فعلياً بعد إعادة التشغيل.
         final isWindows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+        FirebaseFirestore? testFirestore;
+        if (!isWindows) {
+          testFirestore = FirebaseFirestore.instanceFor(app: app);
+          // على سطح المكتب (لينكس/ماك): بلا تخزين محلي (LevelDB) كما في المزامنة.
+          if (!kIsWeb &&
+              (defaultTargetPlatform == TargetPlatform.linux ||
+                  defaultTargetPlatform == TargetPlatform.macOS)) {
+            try {
+              testFirestore.settings = const Settings(persistenceEnabled: false);
+            } catch (_) {}
+          }
+        }
         Future<int> readOnce() async {
           if (isWindows) {
-            final agg = await testFirestore
-                .collection('customers')
-                .count()
-                .get(source: AggregateSource.server)
-                .timeout(const Duration(seconds: 20));
-            return agg.count ?? 0;
+            final token = await userCred.user?.getIdToken();
+            return _restReadTest(projectId: options.projectId, idToken: token);
           }
-          final q = await testFirestore
+          final q = await testFirestore!
               .collection('customers')
               .limit(1)
               .get(const GetOptions(source: Source.server))
@@ -210,8 +214,8 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
           await Future.delayed(const Duration(seconds: 3));
           readCount = await readOnce();
         }
-        print('✅ [3/3] تمت القراءة من Firestore بنجاح!');
-        print('✅ [3/3] ${isWindows ? 'عدد العملاء في السحابة' : 'عدد المستندات المقروءة'}: $readCount');
+        print('✅ [3/3] تمت القراءة من Firestore بنجاح!${isWindows ? ' (REST)' : ''}');
+        print('✅ [3/3] عدد المستندات المقروءة: $readCount');
         
         diagMessage = '\n✅ تم التحقق من الوصول لقاعدة البيانات (القراءة ناجحة).';
         print('🎉 [نهاية الاختبار] جميع الخطوات نجحت! ═══════════════');
@@ -243,6 +247,14 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
               ' Firestore Rules الحالية ترفض القراءة. تأكد من نشر firestore.rules '
               'الذي يسمح بجميع المجموعات للمستخدمين المصادق عليهم.\n'
               'الخطأ: ${e.code}';
+        } else if (e.code.contains('resource-exhausted')) {
+          diagMessage = '\n⚠️ نفدت حصة Firebase المجانية لهذا اليوم (القراءة/الكتابة).\n'
+              'الربط صحيح ومحفوظ، والمزامنة تعمل تلقائياً بعد تجدّد الحصة '
+              '(منتصف الليل بتوقيت كاليفورنيا، نحو العاشرة صباحاً بتوقيت بغداد).';
+        } else if (e.code.contains('not-found')) {
+          diagMessage = '\n⚠️ تحذير: لم تُنشأ قاعدة Firestore في هذا المشروع بعد.\n'
+              'من Firebase Console ← Firestore Database ← Create database.\n'
+              'الخطأ: ${e.message}';
         } else {
           diagMessage = '\n⚠️ تحذير: تهيئة Firebase نجحت لكن تعذّرت القراءة من قاعدة البيانات.\n'
               'الخطأ: ${e.code} - ${e.message}';
@@ -257,7 +269,9 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
 
       // تم إزالة app.delete() من هنا لأنها تدمر تطبيق Firebase الافتراضي
 
+      if (_isWindows) FirebaseCustomConfig.restartRequired = true;
       setState(() {
+        _savedNeedsRestart = true;
         _testResult = '✅ تم الاتصال وحفظ الإعدادات بنجاح!\n⚠️ يرجى إعادة تشغيل التطبيق بالكامل لتفعيل القاعدة الجديدة.$diagMessage';
         _testResultColor = diagMessage.contains('⚠️') ? Colors.orange : Colors.green;
       });
@@ -272,6 +286,61 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
         _isTesting = false;
       });
     }
+  }
+
+  /// 🪟 يعيد تشغيل البرنامج: نسخة جديدة من الملف نفسه ثم إغلاق هذه.
+  Future<void> _restartApp() async {
+    try {
+      await Process.start(Platform.resolvedExecutable, const [],
+          mode: ProcessStartMode.detached);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('تعذّر إعادة التشغيل تلقائياً — أغلق البرنامج وافتحه يدوياً ($e)'),
+      ));
+      return;
+    }
+    exit(0);
+  }
+
+  /// 🪟 اختبار قراءة Firestore عبر REST (بلا مكتبة C++ — انظر الاختبار أعلاه).
+  /// يقرأ وثيقة واحدة من customers بتوكن المستخدم المجهول، ويحوّل رمز HTTP
+  /// إلى رمز Firebase المعتاد ليعالَج كما تعالَج أخطاء المكتبة.
+  Future<int> _restReadTest({required String projectId, String? idToken}) async {
+    final uri = Uri.parse('https://firestore.googleapis.com/v1/projects/'
+        '${Uri.encodeComponent(projectId)}/databases/(default)/documents/customers?pageSize=1');
+    final http.Response res;
+    try {
+      res = await http.get(uri, headers: {
+        if (idToken != null && idToken.isNotEmpty) 'Authorization': 'Bearer $idToken',
+      }).timeout(const Duration(seconds: 20));
+    } catch (e) {
+      throw FirebaseException(plugin: 'cloud_firestore', code: 'unavailable', message: '$e');
+    }
+    if (res.statusCode == 200) {
+      try {
+        final body = jsonDecode(res.body);
+        final docs = body is Map ? body['documents'] : null;
+        return docs is List ? docs.length : 0;
+      } catch (_) {
+        return 0;
+      }
+    }
+    String message = 'HTTP ${res.statusCode}';
+    try {
+      final body = jsonDecode(res.body);
+      final err = body is Map ? body['error'] : null;
+      if (err is Map && err['message'] != null) message = '${err['message']}';
+    } catch (_) {}
+    final code = switch (res.statusCode) {
+      401 => 'unauthenticated',
+      403 => 'permission-denied',
+      404 => 'not-found',
+      429 => 'resource-exhausted',
+      _ => 'unavailable',
+    };
+    print('❌ [3/3] REST ${res.statusCode}: $message');
+    throw FirebaseException(plugin: 'cloud_firestore', code: code, message: message);
   }
 
   void _copyRules() {
@@ -586,6 +655,17 @@ service cloud.firestore {
                     Text(
                       _testResult,
                       style: TextStyle(color: _testResultColor, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                  if (_savedNeedsRestart && _isWindows) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _restartApp,
+                        icon: const Icon(Icons.restart_alt),
+                        label: const Text('إعادة تشغيل البرنامج الآن لتفعيل الربط'),
+                      ),
                     ),
                   ],
                   if (_projectIdController.text.isNotEmpty) ...[

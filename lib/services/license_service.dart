@@ -1,846 +1,633 @@
 // license_service.dart
-// نظام الترخيص المركزي للتطبيق
+//
+// 🔐 نظام الترخيص — الإصدار 4 (توقيع رقمي + ربط بالجهاز + أجهزة إضافية برمز).
+//
+// • حساب الترخيص (من أداة الأدمن) يُكتب مرة واحدة في الجهاز الرئيسي. بقية
+//   الأجهزة تُضاف برمز يولّده الجهاز الرئيسي، حتى العدد المسموح.
+// • السيرفر يعطي كل جهاز «ترخيصاً موقَّعاً» (Ed25519). البرنامج لا يقبل إلا ما
+//   يتحقق توقيعه بالمفتاح العام المضمَّن، ولا يقبله إلا إن طابقت بصمة الجهاز
+//   البصمة المكتوبة داخله. لذلك لا يمكن: تزوير الترخيص، ولا تغيير نمطه
+//   (ديون ← شامل ← مزامنة)، ولا مدّه، ولا نسخه إلى حاسوب آخر.
+// • الاشتراك (المزامنة): تحقق يومي عند التشغيل؛ بعد الانتهاء يعمل 5 أيام مع
+//   رسالة يومية فيها رقم التواصل، ثم يتوقف حتى التجديد (البيانات تبقى).
+//   بلا أي تحقق أكثر من 7 أيام ⇒ يطلب الاتصال بالإنترنت.
+// • الدائم: يحاول التحقق شهرياً إن توفر الإنترنت، ولا يُغلق لعدم الاتصال؛
+//   يتوقف فقط إن أوقفناه نحن من السيرفر (فك ربط الجهاز / إيقاف الحساب).
+// • تراجع ساعة الجهاز قبل آخر تحقق موقَّع ⇒ يُرفض (منع إطالة المدة بتغيير التاريخ).
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' show Random; // 🌐 لبصمة جهاز الويب
-import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
-import 'package:get_storage/get_storage.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // 🌐 التخزين الدائم للويب
-import 'package:http/http.dart' as http;
+import 'dart:math' show Random, max;
+
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:get_storage/get_storage.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'firebase_sync/firebase_custom_config.dart';
 import 'firebase_sync/firebase_sync_config.dart';
+import 'sync/sync_security.dart';
+import 'license_v4/device_fingerprint.dart';
+import 'license_v4/license_api.dart';
+import 'license_v4/license_config.dart';
+import 'license_v4/license_token.dart';
+
+export 'license_v4/license_config.dart' show LicenseConfig;
+
+const int _day = 24 * 3600 * 1000;
+const String _appVersion = 'acc-1.0.0-lic4';
+
+enum LicenseState { none, active, warning, grace, expired, offlineTooLong, blocked, clockTampered }
+
+class LicenseStatus {
+  const LicenseStatus(this.state, {this.daysLeft, this.message});
+  final LicenseState state;
+  final int? daysLeft;
+  final String? message;
+  bool get usable =>
+      state == LicenseState.active || state == LicenseState.warning || state == LicenseState.grace;
+}
 
 class LicenseService {
-  static const String _apiUrl = 'https://script.google.com/macros/s/AKfycbzdk2Fhl_JM1dPotLZal_oAakPndDrRKVli75K_9MyVbMcMNqvXAIUquVA1N6Om3WSqsw/exec';
-  
-  // مفاتيح التخزين المحلي
-  static const String _keyLicense = 'license_data';
-  static const String _keyLastCheck = 'last_license_check';
-  static const String _keyLastKnownTime = 'last_known_time';
-  static const String _keyServerTimeOffset = 'server_time_offset';
-  
-  // فترة التحقق (6 أشهر بالميلي ثانية)
-  static const int _checkIntervalMs = 6 * 30 * 24 * 60 * 60 * 1000; // ~180 يوم
-  
-  // فترة السماح بعد انتهاء الاشتراك (يومين)
-  static const int _gracePeriodDays = 2;
-  
-  // حد الاشتراك الدائم (إذا كان أكثر من 25 سنة = دائم)
-  static const int _lifetimeThresholdYears = 25;
-  
-  // أقصى مدة للاشتراك المحلي (100 سنة)
-  static const int _maxSubscriptionYears = 100;
-  
-  // 🔐 المفتاح السري للتوقيع التشفيري لمنع التلاعب بالترخيص محلياً أو بالمتصفح
-  static const String _licenseSecretSalt = 'AL_NASSER_CRYPT_SIG_v2_987412356_SECRET';
-  
-  final GetStorage _storage = GetStorage();
+  static final LicenseService _instance = LicenseService._internal();
+  factory LicenseService() => _instance;
+  LicenseService._internal();
 
-  /// 🔒 حساب التوقيع الرقمي المشفر للترخيص
-  String _computeLicenseSignature(Map<String, dynamic> data) {
-    final payload = '${data['username']}_${data['deviceId']}_${data['appMode']}_${data['type']}_${data['expires']}_$_licenseSecretSalt';
-    final bytes = utf8.encode(payload);
-    return sha256.convert(bytes).toString();
-  }
-  
-  /// توليد بصمة الجهاز الفريدة وتثبيتها بشكل دائم
-  Future<String> generateDeviceId() async {
+  /// ✅ فُعّل الترخيص (أو أُضيف الجهاز) في هذه الجلسة: يسمح بإنشاء حساب المدير
+  /// مباشرةً دون طلب كلمة سر الترخيص مرة ثانية.
+  static bool activatedThisSession = false;
+
+  /// سبب إيقاف الترخيص — تعرضه شاشة التفعيل
+  static String? blockMessage;
+
+  /// أُضيف هذا الجهاز برمز وجاء معه ربط المزامنة (Firebase) من الجهاز الرئيسي:
+  /// يلزم إعادة تشغيل البرنامج ليبدأ المزامنة وجلب البيانات والموظفين.
+  static bool syncLinkApplied = false;
+
+  /// تُضبط من main.dart: الانتقال لشاشة التفعيل إن توقف الترخيص أثناء العمل
+  static void Function()? onLocked;
+
+  static const _kToken = 'alnaser_license_v4';
+  static const _kBlock = 'alnaser_license_v4_block';
+  static const _kSeen = 'alnaser_license_v4_seen';
+  static const _kDaily = 'alnaser_license_v4_daily';
+  static const _secure = FlutterSecureStorage();
+
+  static bool _initDone = false;
+  static Future<void>? _initFuture;
+  static String? _token;
+  static LicensePayload? _payload;
+  static Map<String, String> _fp = const {};
+  static Map<String, dynamic>? _block;
+  static Timer? _timer;
+
+  // مخزن حالة الترخيص داخل مجلد بيانات البرنامج نفسه (لا في «المستندات» المشترك)،
+  // فلكل برنامج/مستخدم ويندوز حالته الخاصة.
+  static GetStorage? _box;
+  GetStorage get _storage => _box ?? GetStorage();
+
+  // ═══════════════════════════════ التهيئة ═══════════════════════════════
+
+  /// يُستدعى مرة عند الإقلاع قبل اختيار الشاشة الأولى.
+  static Future<void> init() => _initFuture ??= _init();
+
+  static Future<void> _init() async {
+    final s = LicenseService();
     try {
-      // 🌐 الويب: تثبيت بصمة الجهاز في الذاكرة الدائمة المزدوجة (SharedPreferences + GetStorage)
-      // لمنع تغيير البصمة نهائياً عند إعادة التفعيل أو تحديث الصفحة
-      if (kIsWeb) {
-        String? stored = _storage.read<String>('web_device_id');
-        if (stored == null || stored.isEmpty) {
-          try {
-            final prefs = await SharedPreferences.getInstance();
-            stored = prefs.getString('web_device_id');
-          } catch (_) {}
-        }
-
-        if (stored != null && stored.isNotEmpty) {
-          _storage.write('web_device_id', stored);
-          try {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('web_device_id', stored);
-          } catch (_) {}
-          return stored;
-        }
-
-        final newId = sha256
-            .convert(utf8.encode(
-                'web_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1 << 32)}'))
-            .toString()
-            .substring(0, 32);
-
-        await _storage.write('web_device_id', newId);
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('web_device_id', newId);
-        } catch (_) {}
-        return newId;
-      }
-
-      final List<String> parts = [];
-
-      // اسم الكمبيوتر
-      parts.add(Platform.localHostname);
-      
-      // اسم المستخدم
-      parts.add(Platform.environment['USERNAME'] ?? Platform.environment['USER'] ?? 'unknown');
-      
-      // معرف النظام
-      if (Platform.isWindows) {
-        // الحصول على معرف القرص الصلب
-        final result = await Process.run('wmic', ['diskdrive', 'get', 'serialnumber'], runInShell: true);
-        if (result.exitCode == 0) {
-          final serial = result.stdout.toString().split('\n').where((s) => s.trim().isNotEmpty && !s.contains('SerialNumber')).join();
-          parts.add(serial.trim());
-        }
-        
-        // الحصول على معرف اللوحة الأم
-        final mbResult = await Process.run('wmic', ['baseboard', 'get', 'serialnumber'], runInShell: true);
-        if (mbResult.exitCode == 0) {
-          final mbSerial = mbResult.stdout.toString().split('\n').where((s) => s.trim().isNotEmpty && !s.contains('SerialNumber')).join();
-          parts.add(mbSerial.trim());
-        }
-      }
-      
-      // إنشاء hash من المعلومات
-      final combined = parts.join('|');
-      final bytes = utf8.encode(combined);
-      final hash = sha256.convert(bytes);
-      
-      return hash.toString().substring(0, 32); // أول 32 حرف
-    } catch (e) {
-      // في حالة الخطأ، استخدم معرف بديل
-      final fallback =
-          '${kIsWeb ? "web" : Platform.localHostname}_${DateTime.now().millisecondsSinceEpoch}';
-      final bytes = utf8.encode(fallback);
-      return sha256.convert(bytes).toString().substring(0, 32);
-    }
-  }
-  
-  /// التحقق من توفر الإنترنت
-  Future<bool> hasInternetConnection() async {
-    try {
-      final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity.contains(ConnectivityResult.none)) {
-        return false;
-      }
-      
-      if (kIsWeb) {
-        // 🌐 على الويب: InternetAddress.lookup غير مدعوم في المتصفح، ويكفي فحص الاتصال
-        return true;
-      }
-
-      // تحقق فعلي من الاتصال للأجهزة الأصلية
-      final result = await InternetAddress.lookup('google.com');
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-    } catch (e) {
-      return kIsWeb; // على الويب لا نمنع العملية
-    }
-  }
-  
-  /// استدعاء API (يدعم GET فائق السرعة للويب و POST للأجهزة الأصلية)
-  Future<Map<String, dynamic>> _callApi(Map<String, dynamic> data) async {
-    print('🔐 [LICENSE] Calling API...');
-    print('🔐 [LICENSE] URL: $_apiUrl');
-    final safeLog = Map<String, dynamic>.from(data);
-    if (safeLog.containsKey('password')) safeLog['password'] = '***'; // لا تُطبع كلمة السر
-    print('🔐 [LICENSE] Data: $safeLog');
-    
-    try {
-      if (kIsWeb) {
-        // 🌐 على الويب: نرسل كـ GET عبر Uri Query Parameters لمنع خطأ 405 وقيود CORS للـ 302 Redirect تماماً
-        final queryParams = data.map((key, value) => MapEntry(key, value.toString()));
-        final uri = Uri.parse(_apiUrl).replace(queryParameters: queryParams);
-        
-        print('🔐 [LICENSE] Sending Web GET request to: $uri');
-        final response = await http.get(uri).timeout(const Duration(seconds: 30));
-        
-        print('🔐 [LICENSE] Web response status: ${response.statusCode}');
-        print('🔐 [LICENSE] Web response body: ${response.body}');
-        
-        if (response.statusCode == 200) {
-          final decoded = jsonDecode(response.body);
-          if (decoded is Map<String, dynamic>) {
-            return decoded;
-          }
-          return {'success': false, 'error': 'INVALID_RESPONSE', 'message': 'استجابة غير صالحة من السيرفر'};
-        } else {
-          return {'success': false, 'error': 'HTTP_${response.statusCode}', 'message': 'خطأ في الاتصال: ${response.statusCode}'};
-        }
-      }
-
-      // 💻 المنصات الأصلية (ويندوز / أندرويد / آيفون):
-      final client = http.Client();
-      try {
-        var request = http.Request('POST', Uri.parse(_apiUrl));
-        request.headers['Content-Type'] = 'application/json';
-        request.body = jsonEncode(data);
-        
-        print('🔐 [LICENSE] Sending native POST request...');
-        var streamedResponse = await client.send(request).timeout(const Duration(seconds: 30));
-        
-        // معالجة redirects
-        var response = await http.Response.fromStream(streamedResponse);
-        
-        // إذا كان redirect، اتبع الرابط الجديد
-        if (response.statusCode == 302 || response.statusCode == 301) {
-          final redirectUrl = response.headers['location'];
-          if (redirectUrl != null) {
-            final getResponse = await http.get(Uri.parse(redirectUrl)).timeout(const Duration(seconds: 30));
-            response = getResponse;
-          }
-        }
-        
-        print('🔐 [LICENSE] Final status: ${response.statusCode}');
-        print('🔐 [LICENSE] Response body: ${response.body}');
-        
-        if (response.statusCode == 200) {
-          final decoded = jsonDecode(response.body);
-          if (decoded is Map<String, dynamic>) {
-            return decoded;
-          }
-          return {'success': false, 'error': 'INVALID_RESPONSE', 'message': 'استجابة غير صالحة من السيرفر'};
-        } else {
-          return {'success': false, 'error': 'HTTP_${response.statusCode}', 'message': 'خطأ في الاتصال: ${response.statusCode}'};
-        }
-      } finally {
-        client.close();
-      }
-    } catch (e, stackTrace) {
-      print('🔐 [LICENSE] EXCEPTION: $e');
-      print('🔐 [LICENSE] Stack: $stackTrace');
-      return {'success': false, 'error': 'NETWORK_ERROR', 'message': 'فشل الاتصال بالسيرفر: $e'};
-    }
-  }
-
-  /// معالج قوي لتواريخ السيرفر (يقبل ISO-8601 أو Timestamp)
-  /// يقوم بتقييد التواريخ الضخمة إلى 100 سنة كحد أقصى (اشتراك مدى الحياة)
-  DateTime? _parseDate(dynamic input) {
-    if (input == null) return null;
-    
-    // الحد الأقصى: 100 سنة من الآن (للاشتراك مدى الحياة)
-    final maxDate = DateTime.now().add(Duration(days: 365 * _maxSubscriptionYears));
-    DateTime? result;
-    
-    try {
-      if (input is int) {
-        // إذا كان الرقم ضخماً جداً (أكبر من سنة 3000)، استخدم الحد الأقصى
-        if (input > 32503680000000) {
-          print('🔐 [LICENSE] Huge timestamp detected: $input, treating as LIFETIME');
-          result = maxDate;
-        } else {
-          result = DateTime.fromMillisecondsSinceEpoch(input);
-        }
-      } else if (input is String) {
-        final inputStr = input.toString().trim();
-        
-        // إذا كان الرقم كبير جداً لا يمكن تحويله لـ int (أكثر من 15 خانة)
-        // أو يحتوي على أرقام فقط وطوله كبير
-        if (RegExp(r'^\d+$').hasMatch(inputStr)) {
-          if (inputStr.length > 15) {
-            // رقم ضخم جداً - اعتبره lifetime
-            print('🔐 [LICENSE] Huge timestamp string (${inputStr.length} digits): treating as LIFETIME');
-            result = maxDate;
-          } else {
-            final ms = int.tryParse(inputStr);
-            if (ms != null) {
-              if (ms > 32503680000000) {
-                result = maxDate;
-              } else {
-                result = DateTime.fromMillisecondsSinceEpoch(ms);
-              }
-            } else {
-              // فشل التحويل - استخدم الحد الأقصى
-              result = maxDate;
-            }
-          }
-        } else {
-          // محاولة قراءة ISO-8601
-          try {
-            result = DateTime.parse(inputStr);
-          } catch (_) {
-            // فشل - استخدم الحد الأقصى
-            print('🔐 [LICENSE] Could not parse date string: $inputStr, treating as LIFETIME');
-            result = maxDate;
-          }
-        }
+      if (!kIsWeb) {
+        final dir = await getApplicationSupportDirectory();
+        final box = GetStorage('alnaser_license_v4', dir.path);
+        await box.initStorage;
+        _box = box;
       }
     } catch (e) {
-      print('🔐 [LICENSE] Date parse error: $e, treating as LIFETIME');
-      result = maxDate;
+      debugPrint('🔐 [LICENSE] storage: $e');
     }
-    
-    // تقييد التاريخ إلى 100 سنة كحد أقصى
-    if (result != null && result.isAfter(maxDate)) {
-      result = maxDate;
+    try {
+      _fp = await DeviceFingerprint.collect();
+      _block = s._readJson(_kBlock);
+      final token = await s._readToken();
+      if (token == null && GetStorage().read('license_data') != null) {
+        blockMessage = 'تحديث نظام الترخيص: فعّل البرنامج مرة واحدة بحساب الترخيص.\nبياناتك محفوظة كما هي.';
+      }
+      s._applyToken(token);
+    } catch (e) {
+      debugPrint('🔐 [LICENSE] init: $e');
     }
-    
-    // إذا فشل كل شيء وكان هناك input، استخدم الحد الأقصى
-    if (result == null && input != null && input.toString().isNotEmpty) {
-      print('🔐 [LICENSE] Fallback: using LIFETIME for unparseable input');
-      result = maxDate;
-    }
-    
-    return result;
+    _initDone = true;
+    _timer ??= Timer.periodic(const Duration(hours: 6), (_) => s._backgroundRefresh());
   }
-  
-  /// تفعيل الترخيص (أول مرة)
-  Future<LicenseResult> activateLicense(String username, String password) async {
-    print('🔐 [LICENSE] Activating license for user: $username');
-    final deviceId = await generateDeviceId();
-    print('🔐 [LICENSE] Device ID: $deviceId');
-    
-    final response = await _callApi({
-      'action': 'validate',
-      'username': username,
-      'password': password,
-      'deviceId': deviceId,
-    });
-    
-    print('🔐 [LICENSE] Activation response: $response');
-    
-    if (response['success'] == true) {
-      // تصحيح صيغة التاريخ قبل الحفظ
-      final expiresDate = _parseDate(response['expires']);
-      
-      if (expiresDate == null) {
-        return LicenseResult(
-          success: false,
-          error: 'INVALID_DATE',
-          message: 'تاريخ الانتهاء غير صالح من السيرفر',
-        );
-      }
 
-      final newAppMode = (response['appMode'] ?? 'full_sync').toString().toLowerCase();
-      final bool newSyncAllowed = response['isSyncAllowed'] as bool? ?? 
-          (newAppMode == 'full_sync' || (newAppMode == 'full' && newAppMode != 'debts_only' && newAppMode != 'full_offline'));
-
-      // حفظ بيانات الترخيص محلياً
-      final licenseData = {
-        'username': response['subUsername'] ?? username,
-        'mainUsername': response['mainUsername'] ?? username,
-        'subUsername': response['subUsername'] ?? username,
-        'appMode': newAppMode,
-        'isSyncAllowed': newSyncAllowed,
-        'deviceId': deviceId,
-        'type': response['type'],
-        'expires': expiresDate.toIso8601String(),
-        'daysLeft': expiresDate.difference(DateTime.now()).inDays,
-        'activatedAt': DateTime.now().toIso8601String(),
-      };
-      
-      // 🔒 إضافة التوقيع الرقمي لمنع التلاعب
-      licenseData['signature'] = _computeLicenseSignature(licenseData);
-      
-      final licenseJson = jsonEncode(licenseData);
-      await _storage.write(_keyLicense, licenseJson);
-      await _storage.write(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
-      await _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
-
-      if (kIsWeb) {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(_keyLicense, licenseJson);
-          await prefs.setInt(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
-          await prefs.setInt(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
-        } catch (_) {}
-      }
-      
-      // 🚀 تفعيل/تعطيل مفتاح المزامنة أوتوماتيكياً حسب نوع الترخيص عند التفعيل
-      await FirebaseSyncConfig.setEnabled(newSyncAllowed);
-
-      // حفظ فرق الوقت مع السيرفر
-      if (response['serverTime'] != null) {
-        final serverTime = _parseDate(response['serverTime']);
-        if (serverTime != null) {
-          final offset = serverTime.difference(DateTime.now()).inSeconds;
-          await _storage.write(_keyServerTimeOffset, offset);
-          if (kIsWeb) {
-            try {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setInt(_keyServerTimeOffset, offset);
-            } catch (_) {}
-          }
-        }
-      }
-      
-      return LicenseResult(
-        success: true,
-        type: response['type'],
-        appMode: newAppMode,
-        mainUsername: response['mainUsername'],
-        subUsername: response['subUsername'],
-        expires: expiresDate.toIso8601String(),
-        daysLeft: expiresDate.difference(DateTime.now()).inDays,
-        warning: response['warning'],
-      );
-    } else {
-      return LicenseResult(
-        success: false,
-        error: response['error'] ?? 'UNKNOWN_ERROR',
-        message: response['message'] ?? 'خطأ غير معروف',
-      );
+  /// يقبل الترخيص فقط إن كان موقَّعاً من سيرفرنا ولهذا الجهاز.
+  bool _applyToken(String? token) {
+    if (token == null) {
+      _payload = null;
+      _token = null;
+      return false;
     }
+    final p = LicenseToken.verify(token);
+    if (p == null) {
+      blockMessage = 'ترخيص هذا الجهاز غير صالح — فعّل البرنامج من جديد';
+      _forget();
+      return false;
+    }
+    if (_fp.isEmpty) {
+      blockMessage = 'تعذّر قراءة بصمة هذا الجهاز، فلا يمكن التحقق من الترخيص.\nأعد تشغيل البرنامج، وإن تكرر تواصل معنا: ${LicenseConfig.supportPhone}';
+      _payload = null;
+      _token = null;
+      return false;
+    }
+    if (!fingerprintMatches(p.fingerprint, _fp)) {
+      blockMessage = 'هذا الترخيص يخص جهازاً آخر. فعّل البرنامج على هذا الجهاز بحساب الترخيص، أو برمز من الجهاز الرئيسي.';
+      _forget();
+      return false;
+    }
+    _payload = p;
+    _token = token;
+    return true;
   }
-  
-  /// جلب بيانات الترخيص المحفوظة مع التحقق التشفيري الصارم من عدم التلاعب
+
+  void _forget() {
+    _payload = null;
+    _token = null;
+    unawaited(_deleteStored());
+  }
+
+  // ═══════════════════════════════ الحالة ═══════════════════════════════
+
+  int get _maxSeen => _toInt(_storage.read(_kSeen));
+
+  /// أحدث وقت رآه البرنامج (لكشف إرجاع ساعة الجهاز). يُكتب كل دقيقة على الأكثر.
+  void _bumpSeen([int? now]) {
+    final n = now ?? DateTime.now().millisecondsSinceEpoch;
+    if (n > _maxSeen + 60000) _storage.write(_kSeen, n);
+  }
+
+  LicenseStatus evaluate() {
+    final p = _payload;
+    if (p == null) return LicenseStatus(LicenseState.none, message: blockMessage);
+    if (_block != null) {
+      return LicenseStatus(LicenseState.blocked, message: '${_block!['message'] ?? 'الترخيص موقوف'}');
+    }
+    final real = DateTime.now().millisecondsSinceEpoch;
+    final floor = max(p.issuedAtMs, _maxSeen);
+    if (real < floor - 3600 * 1000) {
+      return const LicenseStatus(LicenseState.clockTampered,
+          message: 'تاريخ ووقت الجهاز غير صحيحين (أقدم من آخر تحقق من الترخيص).\n'
+              'صحّح التاريخ والوقت من إعدادات ويندوز ثم أعد تشغيل البرنامج.');
+    }
+    final now = max(real, floor);
+    _bumpSeen(now);
+    final phone = p.supportPhone;
+    if (!p.isLifetime) {
+      final grc = p.graceUntilMs, exp = p.expiresMs, off = p.offlineUntilMs;
+      if (grc != null && now > grc) {
+        return LicenseStatus(LicenseState.expired,
+            message: '${p.type == 'trial' ? 'انتهت الفترة التجريبية.' : 'انتهى الاشتراك وانتهت مهلة الأيام الخمسة.'}\n'
+                'للتجديد تواصل مع صاحب البرنامج (واتساب / اتصال): $phone\n'
+                'بعد التجديد اضغط «تحقق من التجديد» — بياناتك محفوظة.');
+      }
+      if (off != null && now > off) {
+        return const LicenseStatus(LicenseState.offlineTooLong,
+            message: 'يلزم الاتصال بالإنترنت للتحقق من الاشتراك (مرّ أكثر من 7 أيام بلا تحقق).\n'
+                'صِل الإنترنت ثم اضغط «تحقق من التجديد».');
+      }
+      if (exp != null && now > exp && grc != null) {
+        final d = ((grc - now) / _day).ceil().clamp(1, 99);
+        return LicenseStatus(LicenseState.grace,
+            daysLeft: d,
+            message: '⚠️ انتهى اشتراكك.\n'
+                'يبقى البرنامج يعمل ${_days(d)} فقط، ثم يتوقف حتى التجديد.\n'
+                'للتجديد تواصل مع صاحب البرنامج (واتساب / اتصال): $phone\n'
+                'بياناتك محفوظة ولا تُحذف.');
+      }
+      if (exp != null && exp - now < 3 * _day) {
+        final d = ((exp - now) / _day).ceil().clamp(1, 3);
+        return LicenseStatus(LicenseState.warning,
+            daysLeft: d,
+            message: 'تنبيه: ينتهي اشتراكك بعد ${_days(d)}.\n'
+                'للتجديد تواصل مع صاحب البرنامج (واتساب / اتصال): $phone');
+      }
+    }
+    return const LicenseStatus(LicenseState.active);
+  }
+
+  static String _days(int d) => d == 1 ? 'يوماً واحداً' : (d == 2 ? 'يومين' : '$d أيام');
+
+  bool isLicenseActivated() => evaluate().usable;
+
+  /// الترخيص الحالي إن كان صالحاً للاستعمال الآن (وإلا null).
   LicenseData? getStoredLicense() {
-    dynamic data = _storage.read(_keyLicense);
-    if (data == null) return null;
-    
+    final p = _payload;
+    if (p == null || !evaluate().usable) return null;
+    return LicenseData.fromPayload(p);
+  }
+
+  /// محتوى الترخيص حتى لو كان موقوفاً (للعرض فقط: اسم الحساب في شاشة التفعيل)
+  LicensePayload? get payload => _payload;
+  bool get hasStoredToken => _token != null;
+  bool get isMainDevice => _payload?.isMain ?? false;
+
+  // ═══════════════════════════════ الفحص عند الإقلاع ═══════════════════════════════
+
+  Future<StartupCheckResult> performStartupCheck() async {
+    await init();
+    if (_payload == null) {
+      return StartupCheckResult(canProceed: false, reason: StartupBlockReason.notActivated, message: blockMessage);
+    }
+    var st = evaluate();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final due = now > _payload!.checkAfterMs || st.state != LicenseState.active;
+    if (due) {
+      await refreshNow();
+      if (_payload == null) {
+        return StartupCheckResult(canProceed: false, reason: StartupBlockReason.notActivated, message: blockMessage);
+      }
+      st = evaluate();
+    }
+    switch (st.state) {
+      case LicenseState.active:
+        return StartupCheckResult(canProceed: true);
+      case LicenseState.warning:
+      case LicenseState.grace:
+        final show = _dailyOnce();
+        return StartupCheckResult(
+          canProceed: true,
+          showWarning: show,
+          warningMessage: st.message,
+          daysLeft: st.daysLeft,
+          isGracePeriod: st.state == LicenseState.grace,
+        );
+      case LicenseState.clockTampered:
+        return StartupCheckResult(canProceed: false, reason: StartupBlockReason.clockTampering, message: st.message);
+      case LicenseState.expired:
+        blockMessage = st.message;
+        return StartupCheckResult(canProceed: false, reason: StartupBlockReason.expired, message: st.message);
+      case LicenseState.offlineTooLong:
+        blockMessage = st.message;
+        return StartupCheckResult(canProceed: false, reason: StartupBlockReason.noInternetInGrace, message: st.message);
+      case LicenseState.blocked:
+        blockMessage = st.message;
+        return StartupCheckResult(canProceed: false, reason: StartupBlockReason.serverRejected, message: st.message);
+      case LicenseState.none:
+        return StartupCheckResult(canProceed: false, reason: StartupBlockReason.notActivated, message: blockMessage);
+    }
+  }
+
+  /// رسالة الانتهاء/التنبيه مرة واحدة في اليوم
+  bool _dailyOnce() {
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    if (_storage.read(_kDaily) == today) return false;
+    _storage.write(_kDaily, today);
+    return true;
+  }
+
+  Future<void> _backgroundRefresh() async {
+    if (_payload == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now < _payload!.checkAfterMs && evaluate().state == LicenseState.active) return;
+    if (!await hasInternetConnection()) return;
+    await refreshNow();
+    if (!evaluate().usable) onLocked?.call();
+  }
+
+  // ═══════════════════════════════ العمليات مع السيرفر ═══════════════════════════════
+
+  /// تفعيل بحساب الترخيص (الجهاز الرئيسي). [move]: نقل الجهاز الرئيسي إلى هذا الجهاز.
+  Future<LicenseResult> activateLicense(String username, String password, {bool move = false}) async {
+    await init();
+    if (_fp.isEmpty) return _noFingerprint();
+    final r = await LicenseApi.call({
+      'action': 'activate',
+      'username': username.trim(),
+      'password': password,
+      'fp': _fp,
+      'name': DeviceFingerprint.deviceName(),
+      'appVersion': _appVersion,
+      if (move) 'move': true,
+    });
+    final res = await _handleIssue(r);
+    if (res.success) activatedThisSession = true;
+    return res;
+  }
+
+  /// إضافة هذا الجهاز برمز من الجهاز الرئيسي.
+  Future<LicenseResult> redeemPairCode(String code) async {
+    await init();
+    if (_fp.isEmpty) return _noFingerprint();
+    final r = await LicenseApi.call({
+      'action': 'pair_redeem',
+      'code': code.trim(),
+      'fp': _fp,
+      'name': DeviceFingerprint.deviceName(),
+      'appVersion': _appVersion,
+    });
+    final res = await _handleIssue(r);
+    if (res.success) {
+      activatedThisSession = true;
+      final cfg = r['cfg'];
+      if (cfg is Map && _payload?.syncAllowed == true) await _applySyncLink(Map<String, dynamic>.from(cfg));
+    }
+    return res;
+  }
+
+  /// يحفظ ربط Firebase (ومفتاح المجموعة) القادم من الجهاز الرئيسي مع رمز الإضافة.
+  Future<void> _applySyncLink(Map<String, dynamic> cfg) async {
     try {
-      final decoded = data is String ? jsonDecode(data) : data;
-      if (decoded is! Map) return null;
-      final Map<String, dynamic> map = Map<String, dynamic>.from(decoded);
-      if (map.isEmpty) return null;
-
-      final storedSignature = map['signature'] as String?;
-      final expectedSignature = _computeLicenseSignature(map);
-
-      // 🚨 إذا كان التوقيع غير مطابق (تم التلاعب ببيانات الترخيص في الذاكرة أو المتصفح)
-      if (storedSignature != null && storedSignature != expectedSignature) {
-        print('🚨 [SECURITY_ALERT] تم اكتشاف تلاعب غير مصرح به في بيانات الترخيص! تم إلغاء التفعيل وقفل النظام.');
-        clearLicense();
-        return null;
-      }
-
-      // إذا كان ترخيصاً قديماً بدون ختم، نختمه تشفيرياً
-      if (storedSignature == null) {
-        map['signature'] = expectedSignature;
-        _storage.write(_keyLicense, jsonEncode(map));
-      }
-
-      return LicenseData.fromJson(map);
+      final apiKey = '${cfg['apiKey'] ?? ''}', appId = '${cfg['appId'] ?? ''}';
+      final projectId = '${cfg['projectId'] ?? ''}';
+      if (apiKey.isEmpty || appId.isEmpty || projectId.isEmpty) return;
+      await FirebaseCustomConfig.saveCustomConfig(
+        apiKey: apiKey,
+        appId: appId,
+        projectId: projectId,
+        messagingSenderId: '${cfg['messagingSenderId'] ?? ''}',
+        authDomain: cfg['authDomain'] == null ? null : '${cfg['authDomain']}',
+      );
+      final secret = '${cfg['secret'] ?? ''}';
+      if (secret.isNotEmpty) await SyncSecurity.saveSecretKey(secret);
+      await FirebaseSyncConfig.setEnabled(true);
+      FirebaseCustomConfig.restartRequired = true;
+      syncLinkApplied = true;
     } catch (e) {
+      debugPrint('🔐 [LICENSE] ربط المزامنة: $e');
+    }
+  }
+
+  /// ربط Firebase الحالي (يُرسل مع رمز الإضافة ليتصل الجهاز الجديد تلقائياً)
+  Future<Map<String, dynamic>?> _currentSyncLink() async {
+    if (_payload?.syncAllowed != true) return null;
+    try {
+      final o = await FirebaseCustomConfig.getCustomOptions();
+      if (o == null) return null;
+      final secret = await SyncSecurity.readSecretKey();
+      return {
+        'apiKey': o.apiKey,
+        'appId': o.appId,
+        'projectId': o.projectId,
+        'messagingSenderId': o.messagingSenderId,
+        if (o.authDomain != null) 'authDomain': o.authDomain,
+        if (secret != null) 'secret': secret,
+      };
+    } catch (_) {
       return null;
     }
   }
-  
-  /// هل الترخيص مفعّل؟
-  bool isLicenseActivated() {
-    return getStoredLicense() != null;
-  }
-  
-  /// فحص حماية تغيير التاريخ
-  AntiTamperResult checkAntiTampering() {
-    final lastKnownTime = _storage.read(_keyLastKnownTime);
-    if (lastKnownTime == null) {
-      // أول مرة - لا مشكلة
-      _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
-      return AntiTamperResult(isValid: true);
-    }
-    
-    DateTime? lastTime;
-    try {
-      if (lastKnownTime is int) {
-        lastTime = DateTime.fromMillisecondsSinceEpoch(lastKnownTime);
-      } else if (lastKnownTime is String) {
-        lastTime = DateTime.tryParse(lastKnownTime) ?? DateTime.fromMillisecondsSinceEpoch(int.tryParse(lastKnownTime) ?? 0);
-      }
-    } catch (_) {}
-    
-    if (lastTime == null) {
-      // تجاوز الخطأ إذا كانت البيانات تالفة
-      _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
-      return AntiTamperResult(isValid: true);
-    }
-    
-    final now = DateTime.now();
-    
-    // إذا كان الوقت الحالي أقل من آخر وقت معروف بأكثر من ساعة
-    if (now.isBefore(lastTime.subtract(const Duration(hours: 1)))) {
-      return AntiTamperResult(
-        isValid: false,
-        message: '⚠️ تم اكتشاف تغيير في تاريخ النظام!\n\nيرجى إعادة ضبط التاريخ والوقت بشكل صحيح.',
-      );
-    }
-    
-    // تحديث آخر وقت معروف
-    _storage.write(_keyLastKnownTime, now.millisecondsSinceEpoch);
-    return AntiTamperResult(isValid: true);
-  }
-  
-  /// فحص انتهاء الصلاحية مع دعم فترة السماح
-  /// إذا كان الاشتراك أكثر من 25 سنة = دائم ولا يُفحص أبداً
-  ExpiryResult checkExpiry() {
-    final license = getStoredLicense();
-    if (license == null) {
-      return ExpiryResult(status: ExpiryStatus.notActivated);
-    }
-    
-    // ✅ اشتراك دائم (lifetime) - لا تتحقق أبداً
-    if (license.type == 'lifetime' || license.type == 'master') {
-      print('🔐 [LICENSE] LIFETIME subscription detected - skipping all checks');
-      return ExpiryResult(status: ExpiryStatus.lifetime, daysLeft: 9999999);
-    }
-    
-    final expires = _parseDate(license.expires);
-    if (expires == null) {
-      return ExpiryResult(
-        status: ExpiryStatus.expired,
-        message: 'خطأ في بيانات الترخيص (تاريخ غير صالح). يرجى إعادة التفعيل.',
-      );
-    }
-    
-    final now = DateTime.now();
-    final daysLeft = expires.difference(now).inDays;
-    
-    // ✅ إذا كان الاشتراك أكثر من 25 سنة = دائم
-    if (daysLeft > (_lifetimeThresholdYears * 365)) {
-      print('🔐 [LICENSE] Subscription >25 years ($daysLeft days) - treating as LIFETIME');
-      return ExpiryResult(status: ExpiryStatus.lifetime, daysLeft: daysLeft);
-    }
-    
-    // منتهي وتجاوز فترة السماح
-    if (daysLeft < -_gracePeriodDays) {
-      return ExpiryResult(
-        status: ExpiryStatus.expired,
-        daysLeft: daysLeft,
-        message: '⛔ انتهت صلاحية الترخيص\n\nيرجى التواصل مع المطور لتجديد الاشتراك (واتساب / اتصال: 07705252905).',
-      );
-    }
-    
-    // في فترة السماح (0 إلى -2 أيام)
-    if (daysLeft <= 0 && daysLeft >= -_gracePeriodDays) {
-      final graceDaysLeft = _gracePeriodDays + daysLeft;
-      return ExpiryResult(
-        status: ExpiryStatus.gracePeriod,
-        daysLeft: graceDaysLeft,
-        message: '⚠️ انتهى اشتراكك!\n\nأنت في آخر مهلة ($graceDaysLeft ${graceDaysLeft == 1 ? "يوم" : "أيام"} متبقية)\n\nيجب تجديد الاشتراك للاستمرار (تواصل معنا: 07705252905).',
-      );
-    }
-    
-    // تحديد فترة التحذير حسب نوع الحساب
-    final warningDays = 3;
-    
-    if (daysLeft <= warningDays) {
-      final dayWord = daysLeft == 1 ? 'يوم واحد' : '$daysLeft أيام';
-      return ExpiryResult(
-        status: ExpiryStatus.warning,
-        daysLeft: daysLeft,
-        message: '⚠️ تنبيه: سينتهي اشتراكك بعد $dayWord\n\nيرجى التواصل مع المطور لتجديد الاشتراك (واتساب / اتصال: 07705252905).',
-      );
-    }
-    
-    return ExpiryResult(status: ExpiryStatus.valid, daysLeft: daysLeft);
-  }
-  
-  /// هل يجب التحقق من السيرفر؟ (كل 6 أشهر)
-  bool shouldVerifyWithServer() {
-    final lastCheck = _storage.read(_keyLastCheck);
-    if (lastCheck == null) return true;
-    
-    // التأكد من أن lastCheck رقم صحيح
-    if (lastCheck is! int) return true;
-    
-    final elapsed = DateTime.now().millisecondsSinceEpoch - lastCheck;
-    return elapsed >= _checkIntervalMs;
-  }
-  
-  /// التحقق من السيرفر (تحديث صامت في الخلفية)
-  Future<LicenseResult> verifyWithServer({bool silent = false}) async {
-    final license = getStoredLicense();
-    if (license == null) {
-      return LicenseResult(success: false, error: 'NOT_ACTIVATED');
-    }
-    
-    // التحقق من الإنترنت
-    if (!await hasInternetConnection()) {
-      // لا إنترنت - نستمر بالترخيص المحلي
-      return LicenseResult(
-        success: true,
-        type: license.type,
-        expires: license.expires,
-        noInternet: true,
-      );
-    }
-    
-    final deviceId = await generateDeviceId();
-    
-    final response = await _callApi({
-      'action': 'validate',
-      'username': license.username,
-      'password': '', // لا نحتاج كلمة المرور للتحقق
-      'deviceId': deviceId,
+
+  /// تجديد الترخيص الموقَّع من السيرفر (يومياً للاشتراك، شهرياً للدائم، أو يدوياً).
+  Future<LicenseResult> refreshNow() async {
+    await init();
+    if (_token == null) return LicenseResult(success: false, error: 'NOT_ACTIVATED', message: 'الترخيص غير مفعّل');
+    final r = await LicenseApi.call({
+      'action': 'refresh',
+      'token': _token,
+      'fp': _fp,
+      'name': DeviceFingerprint.deviceName(),
+      'appVersion': _appVersion,
     });
-    
-    if (response['success'] == true) {
-      final expiresDate = _parseDate(response['expires']);
-      
-      if (expiresDate == null) {
-        return LicenseResult(
-          success: false,
-          error: 'INVALID_DATE',
-          message: 'تاريخ الانتهاء غير صالح من السيرفر',
-        );
+    return _handleIssue(r);
+  }
+
+  /// اسم قديم تستعمله شاشة الإعدادات
+  Future<LicenseResult> verifyWithServer({bool silent = false}) => refreshNow();
+
+  Future<LicenseResult> _handleIssue(Map<String, dynamic> r) async {
+    if (r['ok'] == true && r['token'] is String) {
+      final token = r['token'] as String;
+      if (!_applyToken(token)) {
+        return LicenseResult(success: false, error: 'BAD_TOKEN', message: blockMessage ?? 'استجابة غير موثوقة من السيرفر');
       }
-      
-      // تحديث البيانات المحلية شأملة نمط التطبيق وسماح المزامنة
-      final newAppMode = (response['appMode'] ?? license.appMode).toString().toLowerCase();
-      final bool newSyncAllowed = response['isSyncAllowed'] as bool? ?? (newAppMode == 'full_sync' || (newAppMode == 'full' && newAppMode != 'debts_only' && newAppMode != 'full_offline'));
-
-      final licenseData = {
-        'username': license.username,
-        'mainUsername': response['mainUsername'] ?? license.mainUsername,
-        'subUsername': response['subUsername'] ?? license.subUsername,
-        'appMode': newAppMode,
-        'isSyncAllowed': newSyncAllowed,
-        'deviceId': deviceId,
-        'type': response['type'] ?? license.type,
-        'expires': expiresDate.toIso8601String(),
-        'daysLeft': expiresDate.difference(DateTime.now()).inDays,
-        'lastVerified': DateTime.now().toIso8601String(),
-      };
-      
-      // 🔒 إضافة التوقيع الرقمي لمنع التلاعب
-      licenseData['signature'] = _computeLicenseSignature(licenseData);
-      
-      final licenseJson = jsonEncode(licenseData);
-      await _storage.write(_keyLicense, licenseJson);
-      await _storage.write(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
-      await _storage.write(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
-
-      if (kIsWeb) {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(_keyLicense, licenseJson);
-          await prefs.setInt(_keyLastCheck, DateTime.now().millisecondsSinceEpoch);
-          await prefs.setInt(_keyLastKnownTime, DateTime.now().millisecondsSinceEpoch);
-        } catch (_) {}
+      await _storeToken(token);
+      _block = null;
+      await _writeJson(_kBlock, null);
+      blockMessage = null;
+      // وقت السيرفر هو المرجع: يصحّح «أحدث وقت» إن كانت ساعة الجهاز قد قُدّمت خطأً ثم صُحّحت
+      await _storage.write(_kSeen, _payload!.issuedAtMs);
+      await FirebaseSyncConfig.setEnabled(_payload!.syncAllowed);
+      return LicenseResult.fromPayload(_payload!);
+    }
+    final code = '${r['error'] ?? 'UNKNOWN'}';
+    final message = '${r['message'] ?? 'خطأ غير معروف'}';
+    if (code == 'REVOKED' || code == 'DEVICE_MISMATCH' || code == 'BAD_TOKEN') {
+      if (_token != null) {
+        await clearLicense();
+        blockMessage = message;
       }
+    } else if (code == 'EXPIRED' || code == 'SUSPENDED') {
+      if (_token != null) {
+        _block = {'code': code, 'message': message, 'at': DateTime.now().millisecondsSinceEpoch};
+        await _writeJson(_kBlock, _block);
+        blockMessage = message;
+      }
+    }
+    return LicenseResult(
+      success: false,
+      error: code,
+      message: message,
+      movesLeft: r['moves_left'] is num ? (r['moves_left'] as num).toInt() : null,
+      noInternet: code == 'NETWORK_ERROR',
+    );
+  }
 
-      // 🚀 تفعيل/تعطيل مفتاح المزامنة أوتوماتيكياً حسب النمط المجلوب من السيرفر
-      await FirebaseSyncConfig.setEnabled(newSyncAllowed);
-      
-      print('🔐 [LICENSE] License updated silently. Mode: $newAppMode, Sync: $newSyncAllowed, Expiry: $expiresDate');
-      
-      return LicenseResult(
-        success: true,
-        type: response['type'] ?? license.type,
-        appMode: newAppMode,
-        mainUsername: response['mainUsername'] ?? license.mainUsername,
-        subUsername: response['subUsername'] ?? license.subUsername,
-        expires: expiresDate.toIso8601String(),
-        daysLeft: expiresDate.difference(DateTime.now()).inDays,
-        warning: response['warning'],
-        wasRenewed: true,
-      );
-    } else {
-      // فشل التحقق - ربما تم تعليق الحساب أو تغيير الجهاز
-      return LicenseResult(
-        success: false,
-        error: response['error'] ?? 'VERIFICATION_FAILED',
-        message: response['message'] ?? 'فشل التحقق من الترخيص',
+  LicenseResult _noFingerprint() => LicenseResult(
+      success: false,
+      error: 'BAD_FINGERPRINT',
+      message: 'تعذّر قراءة بصمة هذا الجهاز. أعد تشغيل البرنامج، وإن تكرر تواصل معنا: ${LicenseConfig.supportPhone}');
+
+  /// الجهاز الرئيسي: رمز لإضافة جهاز جديد (صالح دقائق، يُستعمل مرة واحدة).
+  Future<PairCodeResult> createPairCode() async {
+    if (_token == null) return PairCodeResult(error: 'NOT_ACTIVATED', message: 'الترخيص غير مفعّل');
+    final cfg = await _currentSyncLink();
+    final r = await LicenseApi.call({'action': 'pair_create', 'token': _token, 'fp': _fp, if (cfg != null) 'cfg': cfg});
+    if (r['ok'] == true) {
+      return PairCodeResult(
+        code: '${r['code']}',
+        expiresAt: DateTime.fromMillisecondsSinceEpoch(_toInt(r['expires'])),
+        used: _toInt(r['used']),
+        max: _toInt(r['max']),
       );
     }
+    await _handleIssue(r);
+    return PairCodeResult(error: '${r['error']}', message: '${r['message'] ?? ''}');
   }
-  
-  /// الفحص الكامل عند بدء التطبيق
-  Future<StartupCheckResult> performStartupCheck() async {
-    try {
-      // 1. فحص حماية التاريخ
-      final antiTamper = checkAntiTampering();
-      if (!antiTamper.isValid) {
-        return StartupCheckResult(
-          canProceed: false,
-          reason: StartupBlockReason.clockTampering,
-          message: antiTamper.message,
-        );
-      }
-      
-      // 2. فحص وجود ترخيص
-      if (!isLicenseActivated()) {
-        return StartupCheckResult(
-          canProceed: false,
-          reason: StartupBlockReason.notActivated,
-        );
-      }
-      
-      // 3. فحص انتهاء الصلاحية
-      final expiry = checkExpiry();
-      
-      switch (expiry.status) {
-        case ExpiryStatus.expired:
-          // منتهي تماماً - لا يدخل
-          return StartupCheckResult(
-            canProceed: false,
-            reason: StartupBlockReason.expired,
-            message: expiry.message,
-          );
-          
-        case ExpiryStatus.gracePeriod:
-          // في فترة السماح - يحتاج إنترنت
-          final hasInternet = await hasInternetConnection();
-          
-          if (!hasInternet) {
-            // لا إنترنت في فترة السماح - لا يدخل
-            return StartupCheckResult(
-              canProceed: false,
-              reason: StartupBlockReason.noInternetInGrace,
-              message: '⚠️ انتهى اشتراكك!\n\nيجب توفر اتصال بالإنترنت للتحقق من تجديد الاشتراك.',
-            );
-          }
-          
-          // تحقق من السيرفر - ربما تم التجديد
-          final serverResult = await verifyWithServer();
-          
-          if (serverResult.wasRenewed == true) {
-            // تم التجديد! تحقق مرة أخرى
-            final newExpiry = checkExpiry();
-            if (newExpiry.status == ExpiryStatus.valid || newExpiry.status == ExpiryStatus.warning) {
-              // الاشتراك صالح الآن
-              return StartupCheckResult(
-                canProceed: true,
-                showWarning: newExpiry.status == ExpiryStatus.warning,
-                warningMessage: newExpiry.message,
-                daysLeft: newExpiry.daysLeft,
-              );
-            }
-          }
-          
-          // لم يتم التجديد - يدخل مع تحذير
-          return StartupCheckResult(
-            canProceed: true,
-            showWarning: true,
-            warningMessage: expiry.message,
-            daysLeft: expiry.daysLeft,
-            isGracePeriod: true,
-          );
-          
-        case ExpiryStatus.warning:
-          // قريب من الانتهاء - يدخل مع تحذير
-          // محاولة تحديث صامت في الخلفية
-          _silentBackgroundUpdate();
-          
-          return StartupCheckResult(
-            canProceed: true,
-            showWarning: true,
-            warningMessage: expiry.message,
-            daysLeft: expiry.daysLeft,
-          );
-          
-        case ExpiryStatus.valid:
-          // صالح - يدخل
-          // محاولة تحديث صامت في الخلفية
-          _silentBackgroundUpdate();
-          
-          return StartupCheckResult(canProceed: true);
-          
-        case ExpiryStatus.lifetime:
-          // ✅ اشتراك دائم - يدخل مباشرة بدون أي تحقق
-          print('🔐 [LICENSE] LIFETIME user - direct access granted');
-          return StartupCheckResult(canProceed: true);
-          
-        case ExpiryStatus.notActivated:
-          return StartupCheckResult(
-            canProceed: false,
-            reason: StartupBlockReason.notActivated,
-          );
-      }
-    } catch (e, stack) {
-      print('🔐 [LICENSE] Critical error in startup check: $e\n$stack');
-      // في حالة وجود خطأ غير متوقع، نمنع الدخول للأمان ونعرض الرسالة
-      return StartupCheckResult(
-        canProceed: false,
-        reason: StartupBlockReason.serverRejected,
-        message: 'حدث خطأ في النظام: $e',
-      );
+
+  /// الجهاز الرئيسي: الأجهزة المرتبطة بالترخيص.
+  Future<DevicesResult> listDevices() async {
+    if (_token == null) return DevicesResult(error: 'NOT_ACTIVATED', message: 'الترخيص غير مفعّل');
+    final r = await LicenseApi.call({'action': 'devices', 'token': _token, 'fp': _fp});
+    if (r['ok'] == true) {
+      final list = (r['devices'] as List? ?? const [])
+          .whereType<Map>()
+          .map((m) => LicenseDeviceInfo.fromJson(Map<String, dynamic>.from(m)))
+          .toList();
+      return DevicesResult(devices: list, max: _toInt(r['max']));
     }
+    await _handleIssue(r);
+    return DevicesResult(error: '${r['error']}', message: '${r['message'] ?? ''}');
   }
-  
-  /// تحديث صامت في الخلفية (بدون انتظار)
-  void _silentBackgroundUpdate() {
-    // لا ننتظر النتيجة - يعمل في الخلفية
-    Future.microtask(() async {
-      try {
-        if (await hasInternetConnection()) {
-          await verifyWithServer(silent: true);
-          print('🔐 [LICENSE] Silent background update completed');
-        }
-      } catch (e) {
-        print('🔐 [LICENSE] Silent background update failed: $e');
-      }
-    });
+
+  /// الجهاز الرئيسي: فك ربط جهاز إضافي (يتحرر مكانه).
+  Future<LicenseResult> unbindDevice(String deviceId) async {
+    if (_token == null) return LicenseResult(success: false, error: 'NOT_ACTIVATED');
+    final r = await LicenseApi.call({'action': 'unbind', 'token': _token, 'fp': _fp, 'device_id': deviceId});
+    if (r['ok'] == true) return LicenseResult(success: true);
+    return LicenseResult(success: false, error: '${r['error']}', message: '${r['message'] ?? ''}');
   }
-  
-  /// 👤 التحقق من كلمة سر حساب الترخيص (لإنشاء حساب المدير أو استعادة كلمة سره).
-  /// لا يغيّر شيئاً في الترخيص المحفوظ؛ يسأل السيرفر فقط هل الكلمة صحيحة.
-  /// [username]: اسم الحساب الذي كتبه المستخدم (قد يختلف عن المحفوظ)؛ وإلا المحفوظ.
-  Future<LicensePasswordCheck> checkAccountPassword(String password, {String? username}) async {
-    final license = getStoredLicense();
-    if (license == null) return const LicensePasswordCheck(LicensePasswordStatus.noLicense);
+
+  /// 🔑 التحقق من كلمة سر حساب الترخيص (عبر السيرفر) — لاستعادة كلمة سر المدير
+  /// أو إنشاء مدير جديد إن فرغ جدول المستخدمين.
+  Future<LicensePasswordCheck> checkAccountPassword(String password) async {
+    if (_token == null) return const LicensePasswordCheck(LicensePasswordStatus.noLicense);
     if (password.isEmpty) return const LicensePasswordCheck(LicensePasswordStatus.wrong);
-    if (!await hasInternetConnection()) return const LicensePasswordCheck(LicensePasswordStatus.offline);
-    final account = (username != null && username.trim().isNotEmpty) ? username.trim() : license.username;
-    final response = await _callApi({
-      'action': 'validate',
-      'username': account,
-      'password': password,
-      'deviceId': await generateDeviceId(),
-    });
-    if (response['success'] == true) return const LicensePasswordCheck(LicensePasswordStatus.ok);
-    final err = '${response['error'] ?? ''}';
-    if (err == 'WRONG_PASSWORD' || err == 'USER_NOT_FOUND') {
-      return const LicensePasswordCheck(LicensePasswordStatus.wrong);
-    }
-    if (err == 'NETWORK_ERROR' || err.startsWith('HTTP_') || err == 'INVALID_RESPONSE') {
+    final r = await LicenseApi.call({'action': 'verify_owner', 'token': _token, 'fp': _fp, 'password': password});
+    if (r['ok'] == true) return const LicensePasswordCheck(LicensePasswordStatus.ok);
+    final err = '${r['error'] ?? ''}';
+    if (err == 'WRONG_CREDENTIALS') return const LicensePasswordCheck(LicensePasswordStatus.wrong);
+    if (err == 'NETWORK_ERROR' || err == 'NOT_CONFIGURED') {
       return const LicensePasswordCheck(LicensePasswordStatus.offline);
     }
-    return LicensePasswordCheck(LicensePasswordStatus.rejected, '${response['message'] ?? err}');
+    return LicensePasswordCheck(LicensePasswordStatus.rejected, '${r['message'] ?? err}');
   }
 
-  /// التصفير الذاتي للجهاز وتسجيل الخروج
+  /// فك ربط هذا الجهاز بكلمة سر الترخيص (لنقل البرنامج إلى جهاز آخر).
   Future<LicenseResult> selfUnbindDevice(String password) async {
-    final license = getStoredLicense();
-    if (license == null) {
-      return LicenseResult(success: false, error: 'NOT_ACTIVATED', message: 'الترخيص غير مفعّل');
-    }
-
-    if (!await hasInternetConnection()) {
-      return LicenseResult(success: false, error: 'NETWORK_ERROR', message: 'يلزم توفر اتصال بالإنترنت لتصفير الجهاز');
-    }
-
-    final deviceId = await generateDeviceId();
-    final response = await _callApi({
-      'action': 'self_unbind_device',
-      'username': license.subUsername ?? license.username,
-      'password': password,
-      'deviceId': deviceId,
-    });
-
-    if (response['success'] == true) {
+    if (_token == null) return LicenseResult(success: false, error: 'NOT_ACTIVATED', message: 'الترخيص غير مفعّل');
+    final r = await LicenseApi.call({'action': 'release', 'token': _token, 'fp': _fp, 'password': password});
+    if (r['ok'] == true) {
       await clearLicense();
-      return LicenseResult(success: true, message: response['message'] ?? 'تم تصفير الجهاز بنجاح');
-    } else {
-      return LicenseResult(
-        success: false,
-        error: response['error'] ?? 'UNBIND_FAILED',
-        message: response['message'] ?? 'فشل تصفير الجهاز',
-      );
+      return LicenseResult(success: true, message: 'تم فك ربط هذا الجهاز. يمكنك الآن تفعيل البرنامج على جهاز آخر.');
     }
+    return LicenseResult(success: false, error: '${r['error']}', message: '${r['message'] ?? 'فشل فك الربط'}');
   }
 
-  /// مسح بيانات الترخيص (للاختبار أو إعادة التفعيل)
   Future<void> clearLicense() async {
-    await _storage.remove(_keyLicense);
-    await _storage.remove(_keyLastCheck);
-    await _storage.remove(_keyLastKnownTime);
-    await _storage.remove(_keyServerTimeOffset);
-    if (kIsWeb) {
+    _payload = null;
+    _token = null;
+    _block = null;
+    await _deleteStored();
+    await _writeJson(_kBlock, null);
+  }
+
+  // ═══════════════════════════════ التخزين ═══════════════════════════════
+
+  Future<String?> _readToken() async {
+    String? t;
+    try {
+      t = await _secure.read(key: _kToken);
+    } catch (_) {}
+    t ??= _storage.read<String>(_kToken);
+    if (t == null && kIsWeb) {
       try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove(_keyLicense);
-        await prefs.remove(_keyLastCheck);
-        await prefs.remove(_keyLastKnownTime);
-        await prefs.remove(_keyServerTimeOffset);
+        t = (await SharedPreferences.getInstance()).getString(_kToken);
       } catch (_) {}
     }
-    print('🔐 [LICENSE] License data cleared');
+    return t;
+  }
+
+  Future<void> _storeToken(String token) async {
+    try {
+      await _secure.write(key: _kToken, value: token);
+    } catch (_) {}
+    await _storage.write(_kToken, token);
+    if (kIsWeb) {
+      try {
+        await (await SharedPreferences.getInstance()).setString(_kToken, token);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _deleteStored() async {
+    try {
+      await _secure.delete(key: _kToken);
+    } catch (_) {}
+    await _storage.remove(_kToken);
+    if (kIsWeb) {
+      try {
+        await (await SharedPreferences.getInstance()).remove(_kToken);
+      } catch (_) {}
+    }
+  }
+
+  Map<String, dynamic>? _readJson(String key) {
+    final v = _storage.read(key);
+    if (v is Map) return Map<String, dynamic>.from(v);
+    if (v is String && v.isNotEmpty) {
+      try {
+        return Map<String, dynamic>.from(jsonDecode(v) as Map);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Future<void> _writeJson(String key, Map<String, dynamic>? v) async {
+    if (v == null) {
+      await _storage.remove(key);
+    } else {
+      await _storage.write(key, jsonEncode(v));
+    }
+  }
+
+  static int _toInt(dynamic v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
+
+  // ═══════════════════════════════ أدوات عامة ═══════════════════════════════
+
+  Future<bool> hasInternetConnection() async {
+    try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) return false;
+      if (kIsWeb) return true;
+      final result = await InternetAddress.lookup('google.com').timeout(const Duration(seconds: 6));
+      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+    } catch (_) {
+      return kIsWeb;
+    }
+  }
+
+  /// معرّف قديم ثابت للجهاز (يستعمله قفل العملاء بين الأجهزة) — غير مرتبط بالترخيص.
+  Future<String> generateDeviceId() async {
+    try {
+      if (kIsWeb) {
+        final legacy = GetStorage();
+        String? stored = legacy.read<String>('web_device_id');
+        if (stored == null || stored.isEmpty) {
+          try {
+            stored = (await SharedPreferences.getInstance()).getString('web_device_id');
+          } catch (_) {}
+        }
+        if (stored != null && stored.isNotEmpty) return stored;
+        final newId = sha256
+            .convert(utf8.encode('web_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1 << 32)}'))
+            .toString()
+            .substring(0, 32);
+        await legacy.write('web_device_id', newId);
+        try {
+          await (await SharedPreferences.getInstance()).setString('web_device_id', newId);
+        } catch (_) {}
+        return newId;
+      }
+      final parts = <String>[
+        Platform.localHostname,
+        Platform.environment['USERNAME'] ?? Platform.environment['USER'] ?? 'unknown',
+      ];
+      if (Platform.isWindows) {
+        for (final what in const ['diskdrive', 'baseboard']) {
+          try {
+            final r = await Process.run('wmic', [what, 'get', 'serialnumber'], runInShell: true);
+            if (r.exitCode == 0) {
+              parts.add(r.stdout.toString().split('\n').where((s) => s.trim().isNotEmpty && !s.contains('SerialNumber')).join().trim());
+            }
+          } catch (_) {}
+        }
+      }
+      return sha256.convert(utf8.encode(parts.join('|'))).toString().substring(0, 32);
+    } catch (e) {
+      final fallback = '${kIsWeb ? "web" : Platform.localHostname}_${DateTime.now().millisecondsSinceEpoch}';
+      return sha256.convert(utf8.encode(fallback)).toString().substring(0, 32);
+    }
   }
 }
 
@@ -858,58 +645,70 @@ class LicenseData {
   final String username;
   final String? mainUsername;
   final String? subUsername;
-  final String appMode; // 'full', 'debts_only', 'full_offline', 'full_sync'
+  final String appMode; // 'debts_only', 'full_offline', 'full_sync'
   final String deviceId;
-  final String type;
+  final String type; // 'lifetime', 'subscription', 'trial'
   final String expires;
   final int? daysLeft;
   final bool isSyncAllowed;
+  final String role; // 'main' | 'secondary'
+  final String customer;
+  final int maxDevices;
 
   LicenseData({
     required this.username,
     this.mainUsername,
     this.subUsername,
-    this.appMode = 'full',
+    this.appMode = 'full_offline',
     required this.deviceId,
     required this.type,
     required this.expires,
     this.daysLeft,
     bool? isSyncAllowed,
-  }) : isSyncAllowed = isSyncAllowed ?? (appMode == 'full_sync' || (appMode == 'full' && appMode != 'debts_only' && appMode != 'full_offline' && appMode != 'full_no_sync'));
+    this.role = 'main',
+    this.customer = '',
+    this.maxDevices = 1,
+  }) : isSyncAllowed = isSyncAllowed ?? appMode == 'full_sync';
 
-  bool get isDebtsOnly => appMode == 'debts_only';
-  bool get isFullOffline => appMode == 'full_offline' || appMode == 'full_no_sync';
-  bool get isFullSync => isSyncAllowed;
-
-  factory LicenseData.fromJson(Map<String, dynamic> json) {
-    final mode = (json['appMode'] ?? json['mode'] ?? 'full').toString().toLowerCase();
-    final bool syncAllowed = json['isSyncAllowed'] as bool? ?? (mode == 'full_sync' || (mode == 'full' && mode != 'debts_only' && mode != 'full_offline' && mode != 'full_no_sync'));
+  factory LicenseData.fromPayload(LicensePayload p) {
+    final exp = p.expiresMs;
     return LicenseData(
-      username: json['username'] ?? json['subUsername'] ?? '',
-      mainUsername: json['mainUsername'],
-      subUsername: json['subUsername'],
-      appMode: mode,
-      deviceId: json['deviceId'] ?? '',
-      type: json['type'] ?? 'trial',
-      expires: (json['expires'] ?? '').toString(),
-      daysLeft: json['daysLeft'],
-      isSyncAllowed: syncAllowed,
+      username: p.account,
+      mainUsername: p.account,
+      subUsername: p.account,
+      appMode: p.mode,
+      deviceId: p.deviceId,
+      type: p.type,
+      expires: exp == null
+          ? '2099-12-31T23:59:59.000'
+          : DateTime.fromMillisecondsSinceEpoch(exp).toIso8601String(),
+      daysLeft: exp == null ? null : ((exp - DateTime.now().millisecondsSinceEpoch) / _day).floor(),
+      isSyncAllowed: p.syncAllowed,
+      role: p.role,
+      customer: p.customer,
+      maxDevices: p.maxDevices,
     );
   }
 
-  Map<String, dynamic> toJson() {
-    return {
-      'username': username,
-      'mainUsername': mainUsername,
-      'subUsername': subUsername,
-      'appMode': appMode,
-      'isSyncAllowed': isSyncAllowed,
-      'deviceId': deviceId,
-      'type': type,
-      'expires': expires,
-      'daysLeft': daysLeft,
-    };
-  }
+  bool get isDebtsOnly => appMode == 'debts_only';
+  bool get isFullOffline => appMode == 'full_offline';
+  bool get isFullSync => isSyncAllowed;
+  bool get isMainDevice => role == 'main';
+  bool get isLifetime => type == 'lifetime';
+
+  String get modeLabel => switch (appMode) {
+        'debts_only' => 'سجل الديون',
+        'full_offline' => 'التطبيق الشامل (بلا مزامنة)',
+        'full_sync' => 'التطبيق الشامل + المزامنة',
+        _ => appMode,
+      };
+
+  String get typeLabel => switch (type) {
+        'lifetime' => 'دائم مدى الحياة',
+        'subscription' => 'اشتراك حتى ${expires.substring(0, 10)}',
+        'trial' => 'تجريبي حتى ${expires.substring(0, 10)}',
+        _ => type,
+      };
 }
 
 class LicenseResult {
@@ -925,11 +724,12 @@ class LicenseResult {
   final String? message;
   final bool noInternet;
   final bool? wasRenewed;
-  
+  final int? movesLeft;
+
   LicenseResult({
     required this.success,
     this.type,
-    this.appMode = 'full',
+    this.appMode = 'full_offline',
     this.mainUsername,
     this.subUsername,
     this.expires,
@@ -939,24 +739,73 @@ class LicenseResult {
     this.message,
     this.noInternet = false,
     this.wasRenewed,
+    this.movesLeft,
   });
+
+  factory LicenseResult.fromPayload(LicensePayload p) {
+    final d = LicenseData.fromPayload(p);
+    return LicenseResult(
+      success: true,
+      type: p.type,
+      appMode: p.mode,
+      mainUsername: p.account,
+      subUsername: p.account,
+      expires: d.expires,
+      daysLeft: d.daysLeft,
+      wasRenewed: true,
+    );
+  }
 }
 
-class AntiTamperResult {
-  final bool isValid;
+class PairCodeResult {
+  PairCodeResult({this.code, this.expiresAt, this.used = 0, this.max = 0, this.error, this.message});
+  final String? code;
+  final DateTime? expiresAt;
+  final int used;
+  final int max;
+  final String? error;
   final String? message;
-  
-  AntiTamperResult({required this.isValid, this.message});
+  bool get success => code != null;
 }
 
-enum ExpiryStatus { valid, warning, expired, notActivated, gracePeriod, lifetime }
+class LicenseDeviceInfo {
+  LicenseDeviceInfo({
+    required this.id,
+    required this.name,
+    required this.role,
+    required this.isThis,
+    this.firstSeen,
+    this.lastSeen,
+  });
+  final String id;
+  final String name;
+  final String role;
+  final bool isThis;
+  final DateTime? firstSeen;
+  final DateTime? lastSeen;
 
-class ExpiryResult {
-  final ExpiryStatus status;
-  final int? daysLeft;
+  bool get isMain => role == 'main';
+
+  factory LicenseDeviceInfo.fromJson(Map<String, dynamic> j) {
+    DateTime? t(dynamic v) => v is num && v > 0 ? DateTime.fromMillisecondsSinceEpoch(v.toInt()) : null;
+    return LicenseDeviceInfo(
+      id: '${j['device_id'] ?? ''}',
+      name: '${j['name'] ?? ''}',
+      role: '${j['role'] ?? ''}',
+      isThis: j['is_this'] == true,
+      firstSeen: t(j['first_seen']),
+      lastSeen: t(j['last_seen']),
+    );
+  }
+}
+
+class DevicesResult {
+  DevicesResult({this.devices = const [], this.max = 0, this.error, this.message});
+  final List<LicenseDeviceInfo> devices;
+  final int max;
+  final String? error;
   final String? message;
-  
-  ExpiryResult({required this.status, this.daysLeft, this.message});
+  bool get success => error == null;
 }
 
 enum StartupBlockReason {
@@ -975,7 +824,7 @@ class StartupCheckResult {
   final String? warningMessage;
   final int? daysLeft;
   final bool isGracePeriod;
-  
+
   StartupCheckResult({
     required this.canProceed,
     this.reason,

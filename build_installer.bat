@@ -48,7 +48,7 @@ echo.
 
 REM --- المرحلة 3: بناء تطبيق ويندوز المكتبي ---
 echo 💻 [المرحلة 3/4] جاري بناء تطبيق ويندوز (Flutter Windows Release)...
-call flutter build windows --release
+call flutter build windows --release --obfuscate --split-debug-info=build\symbols
 if %ERRORLEVEL% neq 0 (
     echo ❌ فشل بناء تطبيق ويندوز!
     pause

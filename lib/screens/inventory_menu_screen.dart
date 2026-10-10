@@ -33,7 +33,7 @@ class InventoryMenuScreen extends StatelessWidget {
     bool? result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('الرجاء إدخال كلمة السر', style: TextStyle(fontSize: 20)),
+        title: const Text('أدخل كلمة سر المدير', style: TextStyle(fontSize: 20)),
         content: TextField(
           controller: passwordController,
           obscureText: true,

@@ -7,6 +7,12 @@ import 'firebase_options_helper.dart'; // 🌐 خيارات الويب (authDoma
 class FirebaseCustomConfig {
   static const _storage = FlutterSecureStorage();
 
+  /// 🪟 ضُبط الربط للتو من المعالج في هذه الجلسة، وتطبيق Firebase أُنشئ أثناء
+  /// التشغيل. على ويندوز لا نستعمل Firestore قبل إعادة تشغيل البرنامج: مكتبة
+  /// C++ أسقطت البرنامج عند أول استعمال لتطبيق Firebase أُنشئ بهذه الطريقة
+  /// (معالج الربط في الحاسوب الثاني). بعد إعادة التشغيل يُهيَّأ من main.dart.
+  static bool restartRequired = false;
+
   static const String _keyApiKey = 'firebase_api_key';
   static const String _keyAppId = 'firebase_app_id';
   static const String _keyProjectId = 'firebase_project_id';
