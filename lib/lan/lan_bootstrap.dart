@@ -22,6 +22,7 @@ import 'lan_codec.dart' show LanConnectionException;
 import 'lan_settings.dart';
 import 'lan_server.dart';
 import 'network_settings_screen.dart';
+import 'windows_autostart.dart';
 
 class LanRuntime {
   LanRuntime._();
@@ -39,26 +40,60 @@ class LanRuntime {
     if (settings.host.isEmpty || settings.secret.isEmpty) {
       return 'لم يُحدَّد عنوان السيرفر أو رمز الربط';
     }
-    final conn = LanClientConnection(
+    final name = settings.clientName.isEmpty ? Platform.localHostname : settings.clientName;
+    LanClientConnection conn = LanClientConnection(
       host: settings.host,
       port: settings.port,
       secret: settings.secret,
-      clientName: settings.clientName.isEmpty ? Platform.localHostname : settings.clientName,
+      clientName: name,
     );
     try {
       await conn.connect();
-    } on LanConnectionException catch (e) {
-      return e.message;
     } catch (e) {
-      return 'تعذّر الاتصال بالسيرفر: $e';
+      // 🔎 ربما تغيّر عنوان حاسبة السيرفر (الراوتر يوزّع العناوين من جديد بعد إطفائه):
+      // نبحث عنها في الشبكة ونجرّب برمز الربط نفسه، ونحفظ العنوان الجديد إن نجح.
+      final moved = await _findMovedServer(settings, name);
+      if (moved == null) {
+        return e is LanConnectionException ? e.message : 'تعذّر الاتصال بالسيرفر: $e';
+      }
+      conn = moved;
     }
     client = conn;
     databaseFactory = createLanDatabaseFactory(conn);
     return null;
   }
 
+  static Future<LanClientConnection?> _findMovedServer(LanSettings s, String clientName) async {
+    try {
+      final found = await discoverLanServers(wait: const Duration(seconds: 3));
+      // السيرفر الذي اخترناه سابقاً (بالاسم) أولاً، ثم البقية
+      found.sort((a, b) => (b['name'] == s.serverName ? 1 : 0) - (a['name'] == s.serverName ? 1 : 0));
+      for (final f in found) {
+        final host = '${f['host']}';
+        final port = (f['port'] as num?)?.toInt() ?? s.port;
+        if (host == s.host && port == s.port) continue;
+        final c = LanClientConnection(host: host, port: port, secret: s.secret, clientName: clientName);
+        try {
+          await c.connect();
+          await s.copyWith(host: host, port: port).save();
+          AppNetworkMode.current = s.copyWith(host: host, port: port);
+          // ignore: avoid_print
+          print('🖧 السيرفر انتقل إلى $host:$port — حُفظ العنوان الجديد');
+          return c;
+        } catch (_) {
+          try {
+            await c.close();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   static Future<void> afterDatabase() async {
     final s = AppNetworkMode.current;
+    // ▶️ حاسبة السيرفر تفتح البرنامج وحدها عند تشغيل ويندوز (ما لم يُطفأ الخيار)
+    WindowsAutostart.sync(s.isServer && s.autoStart);
     if (s.isServer) {
       try {
         final path = await DatabaseConfig.getDatabasePath();

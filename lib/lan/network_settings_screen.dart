@@ -13,6 +13,7 @@ import 'lan_client.dart';
 import 'lan_codec.dart';
 import 'lan_server.dart';
 import 'lan_settings.dart';
+import 'windows_autostart.dart';
 
 const _navy = Color(0xFF0F3460);
 
@@ -35,6 +36,8 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   List<Map<String, Object?>> _found = const [];
   bool _searching = false;
   String? _testResult;
+  bool _autoStart = true;
+  String? _pickedServerName;
   StreamSubscription<List<LanClientInfo>>? _sub;
   List<LanClientInfo> _clients = const [];
 
@@ -76,6 +79,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       _secret.text = s.secret.isEmpty ? LanSettings.generateSecret() : s.secret;
       _serverName.text = s.serverName.isEmpty ? Platform.localHostname : s.serverName;
       _clientName.text = s.clientName;
+      _autoStart = s.autoStart;
       _ips = ips;
     });
   }
@@ -94,6 +98,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     if (f.length == 1) {
       _host.text = '${f.first['host']}';
       _port.text = '${f.first['port']}';
+      _pickedServerName = '${f.first['name'] ?? ''}';
     }
   }
 
@@ -120,8 +125,10 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       host: _host.text.trim(),
       port: int.tryParse(_port.text) ?? lanDefaultPort,
       secret: _secret.text.trim(),
-      serverName: _serverName.text.trim(),
+      // الطرفية تحفظ اسم السيرفر الذي اختارته لتجده إن تغيّر عنوانه
+      serverName: _mode == LanMode.client ? (_pickedServerName ?? _s.serverName) : _serverName.text.trim(),
       clientName: _clientName.text.trim(),
+      autoStart: _autoStart,
     );
     if (next.isClient && (next.host.isEmpty || next.secret.isEmpty)) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -129,6 +136,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       return;
     }
     await next.save();
+    WindowsAutostart.sync(next.isServer && next.autoStart);
     if (!mounted) return;
     await showDialog<void>(
       context: context,
@@ -136,7 +144,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
         title: const Text('حُفظ إعداد الشبكة'),
         content: Text(switch (_mode) {
           LanMode.server =>
-            'أعد تشغيل البرنامج على هذه الحاسبة ليعمل كسيرفر. ثم على كل طرفية اختر «طرفية» وأدخل رمز الربط:\n\n${next.secret}',
+            'أعد تشغيل البرنامج على هذه الحاسبة ليعمل كسيرفر'
+                '${next.autoStart ? ' (ومن الآن يفتح وحده عند تشغيل الحاسبة)' : ''}. '
+                'ثم على كل طرفية اختر «طرفية» وأدخل رمز الربط:\n\n${next.secret}',
           LanMode.client =>
             'أعد تشغيل البرنامج ليتصل بالسيرفر. من الآن كل البيانات تُقرأ وتُكتب في قاعدة السيرفر.',
           LanMode.standalone => 'أعد تشغيل البرنامج ليعمل على قاعدة هذه الحاسبة وحدها.',
@@ -178,6 +188,80 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     );
   }
 
+  Widget _guide() {
+    Widget step(String n, String title, String body) => Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            CircleAvatar(radius: 13, backgroundColor: _navy, child: Text(n, style: const TextStyle(color: Colors.white, fontSize: 13))),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                Text(body, style: const TextStyle(color: Colors.black87, height: 1.5)),
+              ]),
+            ),
+          ]),
+        );
+    Widget head(IconData i, String t) => Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 8),
+          child: Row(children: [
+            Icon(i, color: _navy),
+            const SizedBox(width: 8),
+            Text(t, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: _navy)),
+          ]),
+        );
+    return Card(
+      child: ExpansionTile(
+        initiallyExpanded: _mode != LanMode.standalone && _s.mode == LanMode.standalone,
+        leading: const Icon(Icons.help_outline, color: _navy),
+        title: const Text('كيف أربط الأجهزة؟ شرح خطوة بخطوة', style: TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: const Text('حاسبة سيرفر واحدة + طرفيات (حاسبات أخرى أو تابلت أندرويد)'),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'السيرفر هو الحاسبة التي تحفظ قاعدة البيانات (عادةً حاسبة الكاشير الرئيسية). '
+            'كل الأجهزة الأخرى «طرفيات» تقرأ وتكتب في قاعدة السيرفر مباشرةً عبر شبكة المحل، '
+            'فيرى الجميع نفس الأرصدة والمخزون لحظياً. لا تحتاج الشبكة المحلية إلى إنترنت.',
+            style: TextStyle(height: 1.6),
+          ),
+          const SizedBox(height: 10),
+          head(Icons.dns, 'أولاً: على حاسبة السيرفر (مرة واحدة)'),
+          step('1', 'اختر «حاسبة السيرفر» واضغط «حفظ»',
+              'ثم أعد تشغيل البرنامج. يظهر في الأعلى «السيرفر يعمل»، ويظهر رمز الربط وعنوان الحاسبة (مثل 192.168.1.10).'),
+          step('2', 'جدار الحماية',
+              'برنامج التثبيت يفتح منافذ الشبكة (47800 و47801) تلقائياً. إن ظهرت رسالة من ويندوز تسأل عن البرنامج فاختر «السماح».'),
+          step('3', 'يبقى سيرفراً دائماً',
+              'مع خيار «تشغيل البرنامج تلقائياً» يفتح البرنامج وحده كلما شُغّلت الحاسبة ويبدأ خدمة الطرفيات فوراً، '
+                  'ولا يتوقف إلا إذا غيّرت الوضع من هنا. اترك البرنامج مفتوحاً (يمكن تصغيره)؛ إغلاقه يوقف الطرفيات.'),
+          head(Icons.tablet_android, 'ثانياً: على كل طرفية (حاسبة أخرى أو تابلت أندرويد)'),
+          step('1', 'اربط الجهاز بنفس شبكة المحل',
+              'نفس الراوتر: الحاسبة بالكابل أو الواي فاي، والتابلت بالواي فاي. لا تستعمل «شبكة الضيوف» في الراوتر لأنها تعزل الأجهزة.'),
+          step('2', 'فعّل الترخيص على الجهاز',
+              'كل طرفية جهاز ضمن ترخيصك: من حاسبة السيرفر (الجهاز الرئيسي) ← الإعدادات ← الترخيص والأجهزة ← «إضافة جهاز»، '
+                  'ثم في الطرفية اختر «جهاز إضافي» واكتب الرمز.'),
+          step('3', 'افتح هذه الشاشة في الطرفية واختر «طرفية»',
+              'اضغط «ابحث عن السيرفر» ثم «اختر». إن لم يظهر شيء فاكتب عنوان السيرفر بيدك (الرقم الظاهر في شاشة السيرفر) والمنفذ ${_port.text}.'),
+          step('4', 'اكتب رمز الربط واضغط «اختبار الاتصال»',
+              'الرمز يظهر في شاشة السيرفر (مثل ABCD-EFGH-JKLM). عند ظهور «✓ الاتصال ناجح» اضغط «حفظ» وأعد تشغيل البرنامج في الطرفية.'),
+          step('5', 'ادخل باسم الموظف',
+              'الطرفية تستعمل حسابات المستخدمين الموجودة في السيرفر: كل موظف يدخل باسمه وصلاحياته.'),
+          head(Icons.build_circle_outlined, 'إن لم تتصل الطرفية'),
+          const Text(
+            '• تأكد أن البرنامج مفتوح على حاسبة السيرفر وأن الجهازين على نفس الراوتر.\n'
+            '• جرّب كتابة العنوان يدوياً بدل البحث (بعض الراوترات تمنع البحث).\n'
+            '• جدار الحماية: إن كان عندك برنامج حماية آخر (مثل ESET أو Kaspersky) فاسمح فيه للبرنامج أو للمنفذين 47800 و47801.\n'
+            '• إن تغيّر عنوان السيرفر بعد إطفاء الراوتر تبحث الطرفية عنه وحدها عند التشغيل. '
+            'وللثبات التام اطلب من فني الشبكة «عنواناً ثابتاً» لحاسبة السيرفر في الراوتر.\n'
+            '• المزامنة مع Firebase والنسخ الاحتياطي تعمل على حاسبة السيرفر وحدها لكل المحل.',
+            style: TextStyle(height: 1.7),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final running = LanRuntime.server?.isRunning == true;
@@ -214,6 +298,18 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                     ]),
                     const SizedBox(height: 12),
                     TextField(controller: _serverName, decoration: const InputDecoration(labelText: 'اسم السيرفر (يظهر للطرفيات)')),
+                    if (!Platform.isAndroid && !Platform.isIOS)
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: _autoStart,
+                        onChanged: (v) => setState(() => _autoStart = v),
+                        title: const Text('تشغيل البرنامج تلقائياً عند تشغيل الحاسبة'),
+                        subtitle: Text(WindowsAutostart.supported
+                            ? (WindowsAutostart.isEnabled()
+                                ? 'مفعّل: بعد إطفاء الحاسبة وتشغيلها يفتح البرنامج ويعمل كسيرفر وحده'
+                                : 'يبقى هذا الجهاز سيرفراً بعد إطفاء الحاسبة وتشغيلها، حتى تغيّر الوضع من هنا')
+                            : 'يعمل في النسخة المثبّتة من البرنامج'),
+                      ),
                     const SizedBox(height: 12),
                     Row(children: [
                       Expanded(
@@ -283,6 +379,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                           onPressed: () => setState(() {
                             _host.text = '${f['host']}';
                             _port.text = '${f['port']}';
+                            _pickedServerName = '${f['name'] ?? ''}';
                           }),
                           child: const Text('اختر'),
                         ),
@@ -316,6 +413,8 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                 ),
               ),
             ],
+            const SizedBox(height: 4),
+            _guide(),
             const SizedBox(height: 12),
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: _navy, padding: const EdgeInsets.all(16)),

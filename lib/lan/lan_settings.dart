@@ -24,6 +24,7 @@ class LanSettings {
     this.secret = '',
     this.serverName = '',
     this.clientName = '',
+    this.autoStart = true,
   });
 
   final LanMode mode;
@@ -41,6 +42,9 @@ class LanSettings {
   /// اسم هذه الطرفية كما يظهر في شاشة السيرفر (مثلاً: «كاشير 2»).
   final String clientName;
 
+  /// حاسبة السيرفر: يفتح البرنامج تلقائياً عند تشغيل ويندوز (فيبقى سيرفراً بعد إعادة التشغيل).
+  final bool autoStart;
+
   bool get isServer => mode == LanMode.server;
   bool get isClient => mode == LanMode.client;
 
@@ -50,6 +54,7 @@ class LanSettings {
   static const _kSecret = 'lan_secret';
   static const _kServerName = 'lan_server_name';
   static const _kClientName = 'lan_client_name';
+  static const _kAutoStart = 'lan_autostart';
 
   static Future<LanSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -62,6 +67,7 @@ class LanSettings {
       secret: prefs.getString(_kSecret) ?? '',
       serverName: prefs.getString(_kServerName) ?? '',
       clientName: prefs.getString(_kClientName) ?? Platform.localHostname,
+      autoStart: prefs.getBool(_kAutoStart) ?? true,
     );
   }
 
@@ -73,6 +79,7 @@ class LanSettings {
     await prefs.setString(_kSecret, secret);
     await prefs.setString(_kServerName, serverName);
     await prefs.setString(_kClientName, clientName);
+    await prefs.setBool(_kAutoStart, autoStart);
   }
 
   LanSettings copyWith({
@@ -82,6 +89,7 @@ class LanSettings {
     String? secret,
     String? serverName,
     String? clientName,
+    bool? autoStart,
   }) =>
       LanSettings(
         mode: mode ?? this.mode,
@@ -90,6 +98,7 @@ class LanSettings {
         secret: secret ?? this.secret,
         serverName: serverName ?? this.serverName,
         clientName: clientName ?? this.clientName,
+        autoStart: autoStart ?? this.autoStart,
       );
 
   /// رمز ربط جديد: 12 حرفاً سهلة القراءة (بدون 0/O و1/I).

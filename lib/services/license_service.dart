@@ -110,11 +110,24 @@ class LicenseService {
     try {
       _fp = await DeviceFingerprint.collect();
       _block = s._readJson(_kBlock);
-      final token = await s._readToken();
-      if (token == null && GetStorage().read('license_data') != null) {
-        blockMessage = 'تحديث نظام الترخيص: فعّل البرنامج مرة واحدة بحساب الترخيص.\nبياناتك محفوظة كما هي.';
+      // كل نسخ الترخيص المحفوظة (مخزن البرنامج ثم المخزن الآمن): يُعتمد أول ترخيص
+      // صالح لهذا الجهاز. ترخيص لا يطابق لا يُحذف — قد يكون من نسخة أخرى للبرنامج.
+      final tokens = await s._readTokens();
+      var applied = false;
+      for (final t in tokens) {
+        if (s._applyToken(t)) {
+          applied = true;
+          if (s._storage.read<String>(_kToken) != t) await s._storage.write(_kToken, t);
+          break;
+        }
       }
-      s._applyToken(token);
+      if (!applied) {
+        s._applyToken(null);
+        if (tokens.isEmpty && GetStorage().read('license_data') != null) {
+          blockMessage = 'تحديث نظام الترخيص: فعّل البرنامج مرة واحدة بحساب الترخيص.\nبياناتك محفوظة كما هي.';
+        }
+      }
+      debugPrint('🔐 [LICENSE] init: ${tokens.length} ترخيص محفوظ، ${applied ? 'مفعّل ✓' : 'غير مفعّل'}');
     } catch (e) {
       debugPrint('🔐 [LICENSE] init: $e');
     }
@@ -132,7 +145,8 @@ class LicenseService {
     final p = LicenseToken.verify(token);
     if (p == null) {
       blockMessage = 'ترخيص هذا الجهاز غير صالح — فعّل البرنامج من جديد';
-      _forget();
+      _payload = null;
+      _token = null;
       return false;
     }
     if (_fp.isEmpty) {
@@ -141,20 +155,21 @@ class LicenseService {
       _token = null;
       return false;
     }
+    final parts = ['mg', 'uuid', 'bb', 'cpu', 'bios', 'disk']
+        .where((k) => p.fingerprint[k] != null && _fp[k] != null)
+        .map((k) => '$k${p.fingerprint[k] == _fp[k] ? '✓' : '✗'}')
+        .join(' ');
+    debugPrint('🔐 [LICENSE] بصمة الجهاز مقابل الترخيص: $parts');
     if (!fingerprintMatches(p.fingerprint, _fp)) {
+      debugPrint('🔐 [LICENSE] البصمة لا تطابق هذا الترخيص');
       blockMessage = 'هذا الترخيص يخص جهازاً آخر. فعّل البرنامج على هذا الجهاز بحساب الترخيص، أو برمز من الجهاز الرئيسي.';
-      _forget();
+      _payload = null;
+      _token = null;
       return false;
     }
     _payload = p;
     _token = token;
     return true;
-  }
-
-  void _forget() {
-    _payload = null;
-    _token = null;
-    unawaited(_deleteStored());
   }
 
   // ═══════════════════════════════ الحالة ═══════════════════════════════
@@ -335,6 +350,25 @@ class LicenseService {
     return res;
   }
 
+  /// 🔎 التعرّف على هذا الجهاز من بصمته وحدها: إن كان مفعّلاً على السيرفر
+  /// (إعادة تثبيت، أو نسخة أخرى من البرنامج على الحاسوب نفسه) يفتح مباشرة
+  /// بلا اسم ولا كلمة سر. لا يعمل على حاسوب غير مفعّل.
+  Future<LicenseResult> recoverByFingerprint() async {
+    await init();
+    if (_fp.isEmpty) return _noFingerprint();
+    final r = await LicenseApi.call({
+      'action': 'recover',
+      'fp': _fp,
+      'name': DeviceFingerprint.deviceName(),
+      'appVersion': _appVersion,
+    });
+    final code = '${r['error'] ?? ''}';
+    if (code == 'EXPIRED' || code == 'SUSPENDED') blockMessage = '${r['message'] ?? ''}';
+    final res = await _handleIssue(r);
+    debugPrint('🔐 [LICENSE] recover → ${res.success ? 'OK' : res.error}');
+    return res;
+  }
+
   /// يحفظ ربط Firebase (ومفتاح المجموعة) القادم من الجهاز الرئيسي مع رمز الإضافة.
   Future<void> _applySyncLink(Map<String, dynamic> cfg) async {
     try {
@@ -429,6 +463,7 @@ class LicenseService {
       error: code,
       message: message,
       movesLeft: r['moves_left'] is num ? (r['moves_left'] as num).toInt() : null,
+      mainDeviceName: (r['main_name'] is String && (r['main_name'] as String).isNotEmpty) ? r['main_name'] as String : null,
       noInternet: code == 'NETWORK_ERROR',
     );
   }
@@ -514,18 +549,23 @@ class LicenseService {
 
   // ═══════════════════════════════ التخزين ═══════════════════════════════
 
-  Future<String?> _readToken() async {
-    String? t;
+  /// كل نسخ الترخيص المحفوظة بلا تكرار: مخزن البرنامج أولاً (خاص بهذه النسخة)، ثم المخزن الآمن.
+  Future<List<String>> _readTokens() async {
+    final out = <String>[];
+    void add(String? t) {
+      if (t != null && t.isNotEmpty && !out.contains(t)) out.add(t);
+    }
+
+    add(_storage.read<String>(_kToken));
     try {
-      t = await _secure.read(key: _kToken);
+      add(await _secure.read(key: _kToken));
     } catch (_) {}
-    t ??= _storage.read<String>(_kToken);
-    if (t == null && kIsWeb) {
+    if (kIsWeb) {
       try {
-        t = (await SharedPreferences.getInstance()).getString(_kToken);
+        add((await SharedPreferences.getInstance()).getString(_kToken));
       } catch (_) {}
     }
-    return t;
+    return out;
   }
 
   Future<void> _storeToken(String token) async {
@@ -726,6 +766,9 @@ class LicenseResult {
   final bool? wasRenewed;
   final int? movesLeft;
 
+  /// اسم الحاسبة الرئيسية الحالية (عند MAIN_BOUND_ELSEWHERE)
+  final String? mainDeviceName;
+
   LicenseResult({
     required this.success,
     this.type,
@@ -740,6 +783,7 @@ class LicenseResult {
     this.noInternet = false,
     this.wasRenewed,
     this.movesLeft,
+    this.mainDeviceName,
   });
 
   factory LicenseResult.fromPayload(LicensePayload p) {

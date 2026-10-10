@@ -2,6 +2,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:alnaser/services/license_v4/ed25519.dart';
 import 'package:alnaser/services/license_v4/license_token.dart';
+import 'package:alnaser/services/license_v4/device_fingerprint.dart';
+import 'dart:typed_data';
 
 const _vectors = [
   ['2a837e9d7d09be325bc20b178e3764e77f68a1c81a81638f726032d2b62530c5', '', 'cf9de64be005057168c3ff3820f9e09e0059dbd4ca6405078aa094fddaad086e504d2e6bb20126b04b0013086ca26a5264cd4734b78fa8866146f92966e71202'],
@@ -60,5 +62,31 @@ void main() {
     expect(fingerprintMatches({'mg': 'A'}, {'mg': 'A'}), isTrue);
     expect(fingerprintMatches({'mg': 'A'}, {'mg': 'B'}), isFalse);
     expect(fingerprintMatches(a, const {}), isFalse);
+  });
+
+  test('SMBIOS parsing matches WMI formatting', () {
+    List<int> strings(List<String> xs) {
+      if (xs.isEmpty) return [0, 0];
+      final out = <int>[];
+      for (final x in xs) {
+        out..addAll(x.codeUnits)..add(0);
+      }
+      return out..add(0);
+    }
+    final t1 = [1, 0x1B, 1, 0, 1, 2, 0, 3,
+      0x44, 0x45, 0x4C, 0x4C, 0x30, 0x00, 0x10, 0x4E, 0x80, 0x37, 0xB4, 0xC0, 0x4F, 0x37, 0x52, 0x33,
+      6, 0, 0, ...strings(['Dell Inc.', 'OptiPlex', 'ABC1234'])];
+    final t32 = [32, 0x0B, 3, 0, 0, 0, 0, 0, 0, 0, 0, ...strings([])];
+    final t2 = [2, 8, 2, 0, 1, 2, 0, 3, ...strings(['Dell', '0X', '/ABC1234/CN0'])];
+    final t4 = [4, 0x1A, 4, 0, 1, 3, 0xB3, 2, 0xEA, 0x06, 0x09, 0x00, 0xFF, 0xFB, 0xEB, 0xBF,
+      0, 0, 0, 0, 0, 0, 0, 0, 0x41, 1, ...strings(['CPU 1', 'Intel'])];
+    final t127 = [127, 4, 0xFF, 0xFE, 0, 0];
+    final table = [...t1, ...t32, ...t2, ...t4, ...t127];
+    final raw = Uint8List.fromList([0, 3, 2, 0, table.length & 0xff, (table.length >> 8) & 0xff, 0, 0, ...table]);
+    final m = DeviceFingerprint.parseSmbios(raw);
+    expect(m['uuid'], '4C4C4544-0030-4E10-8037-B4C04F375233');
+    expect(m['bios'], 'ABC1234');
+    expect(m['bb'], '/ABC1234/CN0');
+    expect(m['cpu'], 'BFEBFBFF000906EA');
   });
 }

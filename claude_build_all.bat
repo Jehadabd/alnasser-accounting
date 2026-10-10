@@ -13,6 +13,8 @@ call flutter build windows --release >> %LOG% 2>&1
 echo PC2_EXIT %errorlevel% %time% >> %LOG%
 copy /y ".env" "build\windows\x64\runner\Release\" >> %LOG% 2>&1
 robocopy "build\windows\x64\runner\Release" "%USERPROFILE%\Desktop\alnaser_pc2_sim" /MIR /NFL /NDL /NJH /NP >> %LOG% 2>&1
+rem PC2 = "a different computer" for pairing tests only (fingerprint salt)
+>"%USERPROFILE%\Desktop\alnaser_pc2_sim\alnaser_test_device.txt" echo PC2
 copy /y "build\Runner.rc.orig" "windows\runner\Runner.rc" >> %LOG% 2>&1
 call flutter build windows --debug >> %LOG% 2>&1
 echo DEBUG_EXIT %errorlevel% %time% >> %LOG%

@@ -40,6 +40,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
   int _mode = 0; // 0: حساب الترخيص (رئيسي)، 1: رمز جهاز إضافي
   bool _isLoading = false;
   bool _obscurePassword = true;
+  bool _recovering = false;
   String? _errorMessage;
 
   @override
@@ -49,7 +50,52 @@ class _LicenseScreenState extends State<LicenseScreen> {
     if (p != null) {
       _usernameController.text = p.account;
       if (!p.isMain) _mode = 1;
+    } else {
+      // 🔎 هذا الحاسوب مفعّل مسبقاً؟ (إعادة تثبيت/نسخة أخرى) — يفتح بلا اسم ولا كلمة سر
+      _recovering = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _tryRecover());
     }
+  }
+
+  Future<void> _tryRecover() async {
+    final r = await _licenseService.recoverByFingerprint();
+    if (!mounted) return;
+    if (r.success && _licenseService.isLicenseActivated()) {
+      _goIn();
+      return;
+    }
+    setState(() {
+      _recovering = false;
+      if (r.error == 'EXPIRED' || r.error == 'SUSPENDED') _errorMessage = r.message;
+    });
+  }
+
+  Widget _recoveringView() {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+            colors: [Color(0xFF020F2B), _navy, Color(0xFF16508A)],
+          ),
+        ),
+        child: const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 36, vertical: 28),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 18),
+                Text('جارٍ التعرّف على هذا الجهاز...', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                SizedBox(height: 6),
+                Text('إن كان مفعّلاً من قبل يفتح البرنامج مباشرة', style: TextStyle(color: Colors.black54)),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -123,9 +169,10 @@ class _LicenseScreenState extends State<LicenseScreen> {
     final choice = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('الحساب مفعّل على جهاز رئيسي آخر'),
+        title: const Text('الحساب مفعّل على حاسبة رئيسية أخرى'),
         content: Text(
-          'حساب الترخيص هذا مربوط بجهاز رئيسي آخر.\n\n'
+          'حساب الترخيص هذا مربوط بحاسبة رئيسية أخرى${r.mainDeviceName != null ? ' (اسمها: ${r.mainDeviceName})' : ''}، '
+          'وهذه الحاسبة ليست هي (القطع الداخلية مختلفة).\n\n'
           '• لإضافة هذا الجهاز كجهاز إضافي: اطلب «رمز إضافة جهاز» من الجهاز الرئيسي.\n'
           '${moves > 0 ? '• أو انقل الجهاز الرئيسي إلى هذا الجهاز (متبقٍ $moves مرات). الجهاز القديم يتوقف.' : '• لنقل الجهاز الرئيسي تواصل معنا: ${LicenseConfig.supportPhone}'}',
           style: const TextStyle(height: 1.6),
@@ -172,6 +219,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_recovering) return _recoveringView();
     final block = LicenseService.blockMessage;
     return Scaffold(
       body: Container(
