@@ -128,6 +128,11 @@ class _LicenseDevicesScreenState extends State<LicenseDevicesScreen> {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
+            tooltip: 'تفعيل هذا الجهاز بحساب ترخيص آخر أو برمز من جهاز رئيسي',
+            onPressed: _loading ? null : () => Navigator.of(context).pushNamed('/license'),
+            icon: const Icon(Icons.swap_horiz),
+          ),
+          IconButton(
             tooltip: 'تحديث الترخيص الآن',
             onPressed: _loading ? null : _refreshLicense,
             icon: const Icon(Icons.sync),

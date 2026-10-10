@@ -10,8 +10,13 @@
 class LicenseConfig {
   LicenseConfig._();
 
-  static const String serverUrl =
-      'https://script.google.com/macros/s/AKfycbzluC_BLnVyqUyFO0NjJzUQDImcX0qgrmLQcOaycBT_jexqvs-RvwbDg3HNndQvYiNJJg/exec';
+  /// روابط السيرفر بالترتيب: الأول هو المعتمد، والبقية احتياط إن تعطّل
+  /// (نشر محذوف أو مؤرشف). كلها لنفس السكربت ونفس الجدول ونفس مفتاح التوقيع.
+  static const List<String> serverUrls = [
+    'https://script.google.com/macros/s/AKfycbwjQyu6uySoh48hnhnpaR_7TNhCmkXdGR4SuAfVsVlLBrT7foeiDOKf68KYS84ELVEMQQ/exec',
+    'https://script.google.com/macros/s/AKfycbzluC_BLnVyqUyFO0NjJzUQDImcX0qgrmLQcOaycBT_jexqvs-RvwbDg3HNndQvYiNJJg/exec',
+  ];
+  static String get serverUrl => serverUrls.first;
   static const String publicKeyHex = '31dc0ccf8b49bb730d25a48a807c29ce54e01a1dbb3bc88614f693a6d37eddb6';
 
   /// يظهر للعميل في رسائل التجديد والتفعيل

@@ -20,6 +20,8 @@ import 'dart:io' show exit;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../lan/lan_settings.dart';
+import '../lan/network_settings_screen.dart';
 import '../services/auth_service.dart';
 import '../services/demo_mode.dart';
 import '../services/firebase_sync/firebase_custom_config.dart';
@@ -53,6 +55,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   String? _errorMessage;
   String? _info;
+  List<String> _names = const [];
   Timer? _waitTimer;
   StreamSubscription<void>? _waitSub;
 
@@ -74,6 +77,9 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     if (hasUsers) {
       _usernameController.text = await _authService.lastUsername() ?? '';
+      try {
+        _names = (await _authService.getAllUsers()).map((u) => u.username).toList();
+      } catch (_) {}
       if (!mounted) return;
       setState(() => _mode = _Mode.login);
     } else {
@@ -141,9 +147,19 @@ class _LoginScreenState extends State<LoginScreen> {
     if (user != null) {
       Navigator.pushReplacementNamed(context, '/main');
     } else {
+      final typed = _usernameController.text.trim();
+      final exists = _names.any((n) => n.toLowerCase() == typed.toLowerCase());
+      final licAccount = _license.payload?.account ?? '';
       setState(() {
         _isLoading = false;
-        _errorMessage = 'اسم المستخدم أو كلمة السر غير صحيحة';
+        if (exists) {
+          _errorMessage = 'كلمة السر غير صحيحة.\n'
+              'إن كنت المدير ونسيتها: اضغط «نسيت كلمة السر؟» واكتب كلمة سر حساب الترخيص.';
+        } else {
+          _errorMessage = 'لا يوجد مستخدم باسم «$typed» في هذا البرنامج.\n'
+              '${licAccount.isNotEmpty && typed.toLowerCase() == licAccount.toLowerCase() || _names.isNotEmpty ? 'تذكّر: حساب الترخيص (من أداة الأدمن) يفعّل الجهاز فقط، وليس حساب دخول. ' : ''}'
+              '${_names.isNotEmpty ? 'اختر اسمك من الأسماء تحت الخانة.' : ''}';
+        }
       });
     }
   }
@@ -286,8 +302,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // ─────────────────────────── نسيت كلمة السر ───────────────────────────
 
-  void _showForgotPasswordDialog() {
-    final usernameController = TextEditingController(text: _usernameController.text);
+  Future<void> _showForgotPasswordDialog() async {
+    final admin0 = await _authService.adminUser();
+    if (!mounted) return;
+    final typed = _usernameController.text.trim();
+    final usernameController = TextEditingController(
+        text: _names.any((n) => n == typed) ? typed : (admin0?.username ?? typed));
     final recoveryController = TextEditingController();
     final newPasswordController = TextEditingController();
     String? err;
@@ -371,11 +391,20 @@ class _LoginScreenState extends State<LoginScreen> {
                           });
                           return;
                         }
+                        if (c.status == LicensePasswordStatus.rejected || c.status == LicensePasswordStatus.noLicense) {
+                          setD(() {
+                            busy = false;
+                            err = c.message ?? 'الترخيص على هذا الجهاز غير صالح الآن — فعّله من «الترخيص» ثم أعد المحاولة';
+                          });
+                          return;
+                        }
                       }
                       if (!allowed) {
                         setD(() {
                           busy = false;
-                          err = 'كلمة سر الترخيص غير صحيحة، أو هذا المستخدم ليس المدير';
+                          err = admin != null && admin.username != user
+                              ? 'الاستعادة للمدير فقط (${admin.username}). الموظف يطلب من المدير تغيير كلمة سره.'
+                              : 'كلمة سر حساب الترخيص غير صحيحة';
                         });
                         return;
                       }
@@ -609,6 +638,22 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             validator: (val) => val == null || val.trim().isEmpty ? 'أدخل اسم المستخدم' : null,
           ),
+          if (!setup && _names.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              Text('المستخدمون:', style: TextStyle(color: Colors.grey[700], fontSize: 13)),
+              for (final n in _names.take(12))
+                ActionChip(
+                  avatar: const Icon(Icons.person, size: 16),
+                  label: Text(n),
+                  onPressed: () => setState(() {
+                    _usernameController.text = n;
+                    _passwordController.clear();
+                    _errorMessage = null;
+                  }),
+                ),
+            ]),
+          ],
           const SizedBox(height: 16),
           TextFormField(
             controller: _passwordController,
@@ -673,8 +718,22 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
             ),
           ),
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: () => Navigator.of(context).pushNamed('/license'),
+            icon: const Icon(Icons.verified_user_outlined, color: _navy),
+            label: const Text('الترخيص: تفعيل بحساب آخر، أو إضافة هذا الجهاز برمز', style: TextStyle(color: _navy)),
+          ),
+          if (setup || AppNetworkMode.isClient)
+            TextButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NetworkSettingsScreen()),
+              ),
+              icon: const Icon(Icons.lan_outlined, color: _navy),
+              label: const Text('هذا الجهاز طرفية؟ اربطه بحاسبة السيرفر', style: TextStyle(color: _navy)),
+            ),
           if (!kIsWeb) ...[
-            const SizedBox(height: 20),
+            const SizedBox(height: 8),
             const Divider(),
             TextButton.icon(
               onPressed: () => _switchDemo(

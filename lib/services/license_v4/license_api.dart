@@ -27,19 +27,31 @@ class LicenseApi {
     if (!LicenseConfig.isConfigured) {
       return {'ok': false, 'error': 'NOT_CONFIGURED', 'message': 'سيرفر التراخيص غير مضبوط في هذه النسخة'};
     }
+    // الرابط المعتمد أولاً؛ إن لم يُجب (نشر معطّل) أو لم يعرف العملية، فالرابط الاحتياطي
+    Map<String, dynamic>? first;
+    for (final url in LicenseConfig.serverUrls) {
+      final r = await _callUrl(url, body);
+      first ??= r;
+      final err = r['error'];
+      if (err != 'NETWORK_ERROR' && err != 'UNKNOWN_ACTION') return r;
+    }
+    return first ?? networkError();
+  }
+
+  static Future<Map<String, dynamic>> _callUrl(String url, Map<String, dynamic> body) async {
     final action = body['action'];
     try {
       final payload = jsonEncode(body);
       http.Response res;
       if (kIsWeb) {
         res = await http
-            .post(Uri.parse(LicenseConfig.serverUrl),
+            .post(Uri.parse(url),
                 headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: payload)
             .timeout(_timeout);
       } else {
         final client = http.Client();
         try {
-          final req = http.Request('POST', Uri.parse(LicenseConfig.serverUrl))
+          final req = http.Request('POST', Uri.parse(url))
             ..followRedirects = false
             ..headers['Content-Type'] = 'text/plain;charset=utf-8'
             ..body = payload;

@@ -38,6 +38,8 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   String? _testResult;
   bool _autoStart = true;
   String? _pickedServerName;
+  String? _autoSecret; // رمز وُلّد تلقائياً للسيرفر — لا يُعرض في وضع الطرفية
+  final _secretFocus = FocusNode();
   StreamSubscription<List<LanClientInfo>>? _sub;
   List<LanClientInfo> _clients = const [];
 
@@ -57,6 +59,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   @override
   void dispose() {
     _sub?.cancel();
+    _secretFocus.dispose();
     super.dispose();
   }
 
@@ -76,7 +79,13 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       _mode = s.mode;
       _host.text = s.host;
       _port.text = '${s.port}';
-      _secret.text = s.secret.isEmpty ? LanSettings.generateSecret() : s.secret;
+      if (s.secret.isEmpty) {
+        // الطرفية تكتب رمز السيرفر بنفسها؛ الرمز المولَّد للسيرفر فقط
+        _autoSecret = LanSettings.generateSecret();
+        _secret.text = s.mode == LanMode.client ? '' : _autoSecret!;
+      } else {
+        _secret.text = s.secret;
+      }
       _serverName.text = s.serverName.isEmpty ? Platform.localHostname : s.serverName;
       _clientName.text = s.clientName;
       _autoStart = s.autoStart;
@@ -95,10 +104,30 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       _searching = false;
       _found = f;
     });
-    if (f.length == 1) {
-      _host.text = '${f.first['host']}';
-      _port.text = '${f.first['port']}';
-      _pickedServerName = '${f.first['name'] ?? ''}';
+    if (f.length == 1) _pick(f.first);
+  }
+
+  /// اختيار سيرفر من نتائج البحث: يملأ العنوان والمنفذ ويوضح الخطوة التالية.
+  void _pick(Map<String, Object?> f) {
+    setState(() {
+      _host.text = '${f['host']}';
+      _port.text = '${f['port'] ?? lanDefaultPort}';
+      _pickedServerName = '${f['name'] ?? ''}';
+      _testResult = null;
+    });
+    final hasCode = _secret.text.trim().isNotEmpty && _secret.text != _autoSecret;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      backgroundColor: Colors.green.shade700,
+      duration: const Duration(seconds: 6),
+      content: Text(hasCode
+          ? '✓ اخترت «${f['name']}» (${f['host']}). جارٍ اختبار الاتصال...'
+          : '✓ اخترت «${f['name']}» (${f['host']}).\nالآن اكتب «رمز الربط» الظاهر في شاشة السيرفر، ثم اضغط «اختبار الاتصال» ثم «حفظ».'),
+    ));
+    if (hasCode) {
+      _test();
+    } else {
+      _secretFocus.requestFocus();
     }
   }
 
@@ -107,7 +136,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     final conn = LanClientConnection(
       host: _host.text.trim(),
       port: int.tryParse(_port.text) ?? lanDefaultPort,
-      secret: _secret.text.trim(),
+      secret: _secret.text.trim().toUpperCase(),
       clientName: '${_clientName.text.trim()} (اختبار)',
     );
     try {
@@ -124,7 +153,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       mode: _mode,
       host: _host.text.trim(),
       port: int.tryParse(_port.text) ?? lanDefaultPort,
-      secret: _secret.text.trim(),
+      secret: _secret.text.trim().toUpperCase(),
       // الطرفية تحفظ اسم السيرفر الذي اختارته لتجده إن تغيّر عنوانه
       serverName: _mode == LanMode.client ? (_pickedServerName ?? _s.serverName) : _serverName.text.trim(),
       clientName: _clientName.text.trim(),
@@ -163,7 +192,14 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     final sel = _mode == m;
     return Expanded(
       child: InkWell(
-        onTap: () => setState(() => _mode = m),
+        onTap: () => setState(() {
+          _mode = m;
+          if (m == LanMode.client && _secret.text == _autoSecret) _secret.text = '';
+          if (m == LanMode.server && _secret.text.trim().isEmpty) {
+            _autoSecret ??= LanSettings.generateSecret();
+            _secret.text = _autoSecret!;
+          }
+        }),
         borderRadius: BorderRadius.circular(16),
         child: Container(
           margin: const EdgeInsets.all(6),
@@ -371,19 +407,21 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                         const Flexible(child: Text('أو أدخل العنوان يدوياً', style: TextStyle(color: Colors.black54))),
                     ]),
                     for (final f in _found)
-                      ListTile(
-                        leading: const Icon(Icons.dns, color: _navy),
-                        title: Text('${f['name']}'),
-                        subtitle: Text('${f['host']}:${f['port']}'),
-                        trailing: TextButton(
-                          onPressed: () => setState(() {
-                            _host.text = '${f['host']}';
-                            _port.text = '${f['port']}';
-                            _pickedServerName = '${f['name'] ?? ''}';
-                          }),
-                          child: const Text('اختر'),
-                        ),
-                      ),
+                      Builder(builder: (context) {
+                        final picked = _host.text.trim() == '${f['host']}';
+                        return ListTile(
+                          onTap: () => _pick(f),
+                          selected: picked,
+                          selectedTileColor: Colors.green.shade50,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          leading: Icon(picked ? Icons.check_circle : Icons.dns, color: picked ? Colors.green : _navy),
+                          title: Text('${f['name']}'),
+                          subtitle: Text('${f['host']}:${f['port']}${picked ? '  — مُختار' : ''}'),
+                          trailing: picked
+                              ? const Icon(Icons.check, color: Colors.green)
+                              : FilledButton(onPressed: () => _pick(f), child: const Text('اختر')),
+                        );
+                      }),
                     const SizedBox(height: 8),
                     Row(children: [
                       Expanded(
@@ -395,8 +433,13 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                     const SizedBox(height: 8),
                     TextField(
                       controller: _secret,
+                      focusNode: _secretFocus,
+                      textCapitalization: TextCapitalization.characters,
                       style: const TextStyle(letterSpacing: 2, fontWeight: FontWeight.bold),
-                      decoration: const InputDecoration(labelText: 'رمز الربط (من شاشة السيرفر)'),
+                      decoration: const InputDecoration(
+                        labelText: 'رمز الربط (من شاشة السيرفر)',
+                        hintText: 'مثل ABCD-EFGH-JKLM',
+                      ),
                     ),
                     const SizedBox(height: 8),
                     TextField(

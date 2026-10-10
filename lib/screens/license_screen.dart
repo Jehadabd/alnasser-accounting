@@ -161,7 +161,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
   }
 
   void _goIn() {
-    Navigator.of(context).pushReplacementNamed('/license_check');
+    Navigator.of(context).pushNamedAndRemoveUntil('/license_check', (r) => false);
   }
 
   Future<void> _mainBoundElsewhere(LicenseResult r) async {
@@ -254,6 +254,22 @@ class _LicenseScreenState extends State<LicenseScreen> {
                               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _navy)),
                           const SizedBox(height: 18),
                           if (block != null) _blockBanner(block),
+                          if (_licenseService.isLicenseActivated())
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 14),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade50,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.blue.shade200),
+                              ),
+                              child: Text(
+                                'هذا الجهاز مفعّل الآن بحساب «${_licenseService.payload?.account ?? ''}». '
+                                'التفعيل هنا بحساب آخر، أو بإضافته برمز من جهاز رئيسي، يستبدل ترخيصه الحالي. '
+                                'بيانات البرنامج والموظفين لا تتغير.',
+                                style: TextStyle(color: Colors.blue.shade900, height: 1.5),
+                              ),
+                            ),
                           SegmentedButton<int>(
                             segments: const [
                               ButtonSegment(value: 0, icon: Icon(Icons.vpn_key), label: Text('الجهاز الرئيسي')),
@@ -298,6 +314,12 @@ class _LicenseScreenState extends State<LicenseScreen> {
                                       style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
                             ),
                           ),
+                          if (Navigator.of(context).canPop())
+                            TextButton.icon(
+                              onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.arrow_back),
+                              label: const Text('رجوع'),
+                            ),
                           const SizedBox(height: 18),
                           const Divider(),
                           Row(
@@ -404,7 +426,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
 
   List<Widget> _codeFields() => [
         Text(
-          'في الجهاز الرئيسي: الإعدادات ← الحساب والموظفون ← أجهزة الترخيص ← «إضافة جهاز»، '
+          'في الجهاز الرئيسي: الإعدادات ← الحساب والموظفون ← الترخيص والأجهزة ← «إضافة جهاز»، '
           'ثم اكتب الرمز الذي يظهر هناك (صالح 10 دقائق).',
           style: TextStyle(color: Colors.grey.shade700, height: 1.6),
         ),
