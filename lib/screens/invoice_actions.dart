@@ -42,6 +42,9 @@ import '../services/firebase_sync/firebase_sync_helper.dart';
 
 /// واجهة تحدد المتغيرات المطلوبة للتعامل مع الفواتير
 abstract class InvoiceActionsInterface {
+  /// 🔒 اسم العميل محجوز لهذا الجهاز؟ null = نعم، وإلا رسالة المنع
+  Future<String?> verifyCustomerClaimBeforeSave();
+
   bool get isSaving;
   set isSaving(bool value);
   
@@ -579,6 +582,23 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     setState(() {
       isSaving = true;
     });
+
+    // 🔒 اسم العميل قيد الاستعمال في فاتورة مفتوحة على جهاز آخر؟ لا حفظ
+    final claimMsg = await verifyCustomerClaimBeforeSave();
+    if (claimMsg != null) {
+      if (mounted) {
+        setState(() => isSaving = false);
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('⛔ العميل مستخدم على جهاز آخر'),
+            content: Text(claimMsg, style: const TextStyle(height: 1.6)),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+          ),
+        );
+      }
+      return null;
+    }
 
     // 🔒 إلغاء أي تزامن حي معلّق لمنع race condition مع الحفظ
     (this as dynamic).liveDebtTimer?.cancel();

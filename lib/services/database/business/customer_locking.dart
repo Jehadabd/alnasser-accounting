@@ -2,6 +2,8 @@
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import '../../license_service.dart';
+import '../../auth_service.dart';
+import '../../license_v4/device_fingerprint.dart';
 import 'dart:io';
 
 /// نتيجة محاولة القفل
@@ -61,13 +63,38 @@ class LockService {
   // هل تأكّدنا من وجود جدول الأقفال في هذه الجلسة؟
   bool _tableReady = false;
 
+  /// من يحجز: المستخدم الداخل الآن + اسم الجهاز (يظهر للجهاز الآخر في رسالة المنع)
+  String get _who {
+    String user = _userName ?? 'مستخدم';
+    try {
+      final u = AuthService().currentUser;
+      if (u != null) {
+        final d = u.displayName;
+        user = (d != null && d.trim().isNotEmpty) ? d.trim() : u.username;
+      }
+    } catch (_) {}
+    String device = '';
+    try {
+      device = DeviceFingerprint.deviceName();
+    } catch (_) {}
+    return device.isEmpty ? user : '$user — $device';
+  }
+
   /// تهيئة معرف الجهاز
   Future<void> _initMsg() async {
     if (_deviceId == null) {
+      // معرّف الجهاز في الترخيص: فريد لكل حاسبة وتابلت وهاتف (المعرّف القديم كان
+      // يتكرر بين أجهزة أندرويد فيظن كل جهاز أن قفل الآخر قفله هو)
       try {
-        _deviceId = await _licenseService.generateDeviceId();
-      } catch (e) {
-        print('⚠️ [LockService] تعذّر توليد معرّف الجهاز: $e');
+        final dev = _licenseService.payload?.deviceId;
+        if (dev != null && dev.isNotEmpty) _deviceId = 'lic:$dev';
+      } catch (_) {}
+      if (_deviceId == null) {
+        try {
+          _deviceId = await _licenseService.generateDeviceId();
+        } catch (e) {
+          print('⚠️ [LockService] تعذّر توليد معرّف الجهاز: $e');
+        }
       }
       // locked_by_device_id عمود NOT NULL — لا نتركه فارغاً أبداً
       if (_deviceId == null || _deviceId!.isEmpty) {
@@ -164,7 +191,7 @@ class LockService {
         'resource_type': resourceType,
         'resource_id': resourceId,
         'locked_by_device_id': _deviceId,
-        'locked_by_user_name': _userName,
+        'locked_by_user_name': _who,
         'locked_at': now.toIso8601String(),
         'expires_at': expires.toIso8601String(),
       });

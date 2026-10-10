@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الو�
 import 'package:flutter/material.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
+import '../services/database/business/invoice_customer_claim.dart';
 import '../models/invoice_item.dart';
 import '../models/invoice.dart';
 
@@ -170,6 +171,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   Timer? debounceTimer;
   Timer? liveDebtTimer;
   Timer? _invoiceLockHeartbeat;
+  // 🔒 حجز اسم العميل بين الأجهزة (فاتورة قيد الإنشاء/التعديل)
+  late final InvoiceCustomerClaim _custClaim = InvoiceCustomerClaim(db.lockingService);
+  Timer? _custClaimDebounce;
+  bool _custClaimDialogOpen = false;
   
   // متغير لتتبع التغييرات غير المحفوظة
   bool hasUnsavedChanges = false;
@@ -1538,6 +1543,36 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       customerName: customerNameController.text.trim(),
       customerId: null, // سيتم تحديثه عند الحفظ
     );
+    // 🔒 بعد توقف الكتابة قليلاً: احجز الاسم، أو امنع إن كان مستعملاً في جهاز آخر
+    if (!isViewOnly) {
+      _custClaimDebounce?.cancel();
+      _custClaimDebounce = Timer(const Duration(milliseconds: 900), _claimCustomerName);
+    }
+  }
+
+  Future<void> _claimCustomerName() async {
+    if (!mounted || isViewOnly || _custClaimDialogOpen) return;
+    final name = customerNameController.text;
+    final msg = await _custClaim.claim(name);
+    if (!mounted || msg == null || customerNameController.text != name) return;
+    _custClaimDialogOpen = true;
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('⛔ العميل مستخدم على جهاز آخر'),
+        content: Text(msg, style: const TextStyle(height: 1.6)),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+      ),
+    );
+    _custClaimDialogOpen = false;
+    if (mounted && customerNameController.text == name) customerNameController.clear();
+  }
+
+  @override
+  Future<String?> verifyCustomerClaimBeforeSave() async {
+    if (isViewOnly) return null;
+    _custClaimDebounce?.cancel();
+    return _custClaim.verify(customerNameController.text);
   }
 
   // 🧠 معالج تغيير اسم المُركّب (للبحث الذكي)
@@ -1613,6 +1648,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     try {
       // 1. إلغاء المؤقت أولاً لمنع أي عمليات حفظ متأخرة
       debounceTimer?.cancel();
+      _custClaimDebounce?.cancel();
+      _custClaim.release(); // 🔒 تحرير اسم العميل للأجهزة الأخرى
 
       // 2. إزالة جميع المستمعين لمنع استدعاء logic بعد التخلص من الكائنات
       customerNameController.removeListener(_onFieldChanged);
