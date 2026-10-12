@@ -31,6 +31,7 @@ class LanClientConnection {
     required this.secret,
     this.port = lanDefaultPort,
     this.clientName = 'طرفية',
+    this.licenseToken = '',
     this.connectTimeout = const Duration(seconds: 5),
     this.requestTimeout = const Duration(seconds: 90),
   });
@@ -38,11 +39,19 @@ class LanClientConnection {
   final String host;
   final int port;
   final String secret;
+
+  /// ترخيص هذا الجهاز (موقَّع): يكفي بدل رمز الربط إن كان من حساب ترخيص السيرفر نفسه
+  final String licenseToken;
   final String clientName;
   final Duration connectTimeout;
 
   /// أطول من مهلة المعاملة المعلّقة في السيرفر (60 ث) عمداً.
   final Duration requestTimeout;
+
+  /// 🔐 حاسبة السيرفر رفضت ترخيص هذا الجهاز (فُكّ ربطه، أو لم يتحقق منذ مدة طويلة)
+  static void Function(int code)? onLicenseRejected;
+
+  static bool _isLicenseCode(int? c) => c == lanCloseRevoked || c == lanCloseLicenseStale;
 
   WebSocket? _socket;
   int _nextId = 1;
@@ -85,6 +94,7 @@ class LanClientConnection {
           'x-alnaser-key': secret,
           'x-alnaser-proto': '$lanProtocolVersion',
           'x-alnaser-client': Uri.encodeComponent(clientName),
+          if (licenseToken.isNotEmpty) 'x-alnaser-license': licenseToken,
         },
       ).timeout(connectTimeout);
       socket.pingInterval = const Duration(seconds: 10);
@@ -107,6 +117,11 @@ class LanClientConnection {
         onDone: () {
           if (!hello.isCompleted) {
             hello.completeError(_closeCodeError(socket.closeCode));
+          }
+          if (_isLicenseCode(socket.closeCode)) {
+            try {
+              onLicenseRejected?.call(socket.closeCode!);
+            } catch (_) {}
           }
           if (identical(_socket, socket)) _onDisconnected();
         },
@@ -159,9 +174,17 @@ class LanClientConnection {
   LanConnectionException _closeCodeError(int? code) {
     switch (code) {
       case lanCloseBadKey:
-        return LanConnectionException('رمز الربط غير صحيح');
+        return LanConnectionException(secret.isEmpty
+            ? 'هذا الجهاز ليس من ترخيص حاسبة السيرفر نفسه — اكتب رمز الربط الظاهر في شاشة السيرفر'
+            : 'رمز الربط غير صحيح');
       case lanCloseBadProto:
         return LanConnectionException('إصدار البرنامج لا يطابق السيرفر — حدّث البرنامج على هذا الجهاز');
+      case lanCloseRevoked:
+        return LanConnectionException('فُكّ ربط هذا الجهاز من ترخيص البرنامج، فرفضته حاسبة السيرفر.\n'
+            'لإعادته: من الجهاز الرئيسي ← الترخيص والأجهزة ← «إضافة جهاز»، ثم اكتب الرمز في هذا الجهاز.');
+      case lanCloseLicenseStale:
+        return LanConnectionException('لم يتحقق ترخيص هذا الجهاز من السيرفر منذ مدة طويلة.\n'
+            'صِل هذا الجهاز (أو حاسبة السيرفر) بالإنترنت دقيقة، ثم أعد المحاولة.');
       default:
         return LanConnectionException('رفض السيرفر الاتصال (رمز $code)');
     }

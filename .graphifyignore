@@ -1,0 +1,43 @@
+# Generated / build output
+build/
+.dart_tool/
+android/.gradle/
+android/app/build/
+windows/flutter/ephemeral/
+linux/flutter/ephemeral/
+macos/Flutter/ephemeral/
+ios/Pods/
+test_results/
+graphify-out/
+
+# Old backups and experiments (not used by the app)
+_backup_*/
+*.bak_size
+*.backup
+*.backup.dart
+
+# Assets and binaries
+assets/fonts/
+assets/tessdata/
+*.png
+*.jpg
+*.jpeg
+*.ico
+*.ttf
+*.otf
+*.pdf
+*.apk
+*.zip
+*.tgz
+*.exe
+*.dll
+
+# Secrets
+.env
+.env.*
+**/google-services.json
+**/firebase_options*.dart
+
+# Old root notes (historical; keep the edition guide)
+/*.md
+!/ACCOUNTING_EDITION.md

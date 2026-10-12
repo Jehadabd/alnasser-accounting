@@ -5,6 +5,7 @@
 // (الإعدادات ← الفاتورة والطباعة ← أعمدة شاشة إنشاء الفاتورة)
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/invoice_entry_layout.dart';
 
@@ -22,12 +23,20 @@ class _InvoiceEntryLayoutScreenState extends State<InvoiceEntryLayoutScreen> {
   bool _showEntryBar = true;
   bool _loading = true;
 
+  /// مكان المجاميع والدفع والحفظ: لوحة جانبية (true) أو شريط سفلي (false)
+  bool _sidePanel = true;
+  static const _kSidePanel = 'invoice_side_panel_open';
+
   // (خريطة غير ثابتة: مفاتيح double لا تصلح في const map)
   static final _rowHeights = <double, String>{30: 'مضغوط', 34: 'عادي', 42: 'واسع'};
 
   @override
   void initState() {
     super.initState();
+    SharedPreferences.getInstance().then((p) {
+      final v = p.getBool(_kSidePanel);
+      if (v != null && mounted) setState(() => _sidePanel = v);
+    }).catchError((_) {});
     InvoiceEntryLayout.load().then((l) {
       if (!mounted) return;
       setState(() {
@@ -49,6 +58,9 @@ class _InvoiceEntryLayoutScreenState extends State<InvoiceEntryLayoutScreen> {
 
   Future<void> _save() async {
     await _draft.save();
+    try {
+      await (await SharedPreferences.getInstance()).setBool(_kSidePanel, _sidePanel);
+    } catch (_) {}
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
       content: Text('حُفظ تخطيط الجدول — يظهر في شاشة «إنشاء فاتورة» عند فتحها'),
@@ -62,6 +74,7 @@ class _InvoiceEntryLayoutScreenState extends State<InvoiceEntryLayoutScreen> {
         _hidden = {...InvoiceEntryLayout.defaultHidden};
         _rowHeight = 34;
         _showEntryBar = true;
+        _sidePanel = true;
       });
 
   /// إظهار كل الأعمدة دفعة واحدة (مثل شاشة الإداري الممتلئة)
@@ -79,7 +92,7 @@ class _InvoiceEntryLayoutScreenState extends State<InvoiceEntryLayoutScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6FA),
       appBar: AppBar(
-        title: const Text('أعمدة شاشة إنشاء الفاتورة'),
+        title: const Text('تخطيط شاشة إنشاء الفاتورة'),
         actions: [
           TextButton.icon(
               onPressed: _loading ? null : _showAll,
@@ -148,6 +161,30 @@ class _InvoiceEntryLayoutScreenState extends State<InvoiceEntryLayoutScreen> {
               'عند إيقافه تُكتب المواد مباشرة في آخر سطر فارغ من الجدول كما في الإداري، ويبقى للجدول ارتفاع أكبر.',
               style: TextStyle(fontSize: 12),
             ),
+          ),
+          const Divider(height: 18),
+          const Text('مكان المجاميع والدفع وزر الحفظ', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            ChoiceChip(
+              avatar: const Icon(Icons.view_sidebar_outlined, size: 18),
+              label: const Text('لوحة جانبية'),
+              selected: _sidePanel,
+              onSelected: (_) => setState(() => _sidePanel = true),
+            ),
+            ChoiceChip(
+              avatar: const Icon(Icons.call_to_action_outlined, size: 18),
+              label: const Text('شريط سفلي — الجدول بعرض الشاشة كاملاً'),
+              selected: !_sidePanel,
+              onSelected: (_) => setState(() => _sidePanel = false),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          const Text(
+            'الشريط السفلي يعرض كل ما في اللوحة الجانبية: الإجمالي قبل الخصم وبعده، المبلغ المسدد والمتبقي، '
+            'الخصم المسموح به وأجور التحميل أو النقل، نقد أو دين، والصافي للدفع مع زر حفظ الفاتورة. '
+            'ويمكن التبديل أيضاً من زر اللوحة أعلى شاشة الفاتورة، ويُحفظ اختيارك.',
+            style: TextStyle(fontSize: 12, color: Colors.black54, height: 1.5),
           ),
         ]),
       ),

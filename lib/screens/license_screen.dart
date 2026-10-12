@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../lan/lan_bootstrap.dart';
+import '../lan/lan_settings.dart';
 import '../services/license_service.dart';
 
 Future<void> openSupportWhatsApp() async {
@@ -123,6 +125,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
         await _restartForSync();
         return;
       }
+      if (_mode == 1 && await _autoJoinLan()) return;
       _goIn();
       return;
     }
@@ -131,6 +134,61 @@ class _LicenseScreenState extends State<LicenseScreen> {
       return;
     }
     setState(() => _errorMessage = result.message ?? 'حدث خطأ غير معروف');
+  }
+
+  /// 🖧 جهاز إضافي: يرتبط وحده بحاسبة السيرفر في شبكة المحل (بترخيصه، بلا رمز ربط)،
+  /// فيعمل على بياناتها وموظفيها مباشرة.
+  Future<bool> _autoJoinLan() async {
+    if (kIsWeb) return false;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    LanSettings? joined;
+    try {
+      joined = await LanRuntime.autoJoin();
+    } catch (_) {}
+    if (!mounted) return false;
+    setState(() => _isLoading = false);
+    if (joined == null) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('✅ أُضيف هذا الجهاز'),
+          content: const Text(
+            'لم أجد حاسبة السيرفر على هذه الشبكة.\n\n'
+            '• إن كان هذا الجهاز سيعمل على بيانات حاسبة المحل: افتح البرنامج على الحاسبة '
+            '(وضع «حاسبة السيرفر»)، وتأكد أنكما على نفس الواي فاي، ثم من شاشة الدخول اضغط '
+            '«هذا الجهاز طرفية؟ اربطه بحاسبة السيرفر».\n'
+            '• وإن كان سيعمل وحده: أنشئ له حساب مدير.',
+            style: TextStyle(height: 1.6),
+          ),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('متابعة'))],
+        ),
+      );
+      return false;
+    }
+    final j = joined;
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('✅ أُضيف هذا الجهاز وارتبط بحاسبة المحل'),
+        content: Text(
+          'ارتبط بحاسبة السيرفر «${j.serverName}» (${j.host}).\n'
+          'سيُغلق البرنامج الآن. افتحه من جديد، ثم ادخل باسم الموظف وكلمة سره '
+          'كما أنشأها المدير على الحاسبة.',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+      ),
+    );
+    if (!kIsWeb && Platform.isWindows) {
+      try {
+        await Process.start(Platform.resolvedExecutable, const [], mode: ProcessStartMode.detached);
+      } catch (_) {}
+    }
+    exit(0);
   }
 
   /// جهاز إضافي وصل معه ربط المزامنة: إعادة تشغيل ليتصل ويجلب البيانات والموظفين
@@ -156,6 +214,21 @@ class _LicenseScreenState extends State<LicenseScreen> {
         await Process.start(Platform.resolvedExecutable, const [], mode: ProcessStartMode.detached);
         exit(0);
       } catch (_) {}
+    }
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      // الهاتف لا يعيد تشغيل نفسه: نغلقه، ويفتحه المستخدم فيتصل بالمزامنة
+      if (mounted) {
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            content: const Text('سيُغلق البرنامج الآن. افتحه من جديد ليتصل ويجلب البيانات والموظفين.',
+                style: TextStyle(height: 1.6)),
+            actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+          ),
+        );
+      }
+      exit(0);
     }
     if (mounted) _goIn();
   }

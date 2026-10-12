@@ -30,6 +30,10 @@ import '../services/pdf_header.dart';
 import '../services/pdf_service.dart';
 import '../services/invoice_pdf_service.dart'; // لدوال PDF الفاتورة
 import '../erp/sales/roll_invoice_pdf.dart'; // 🧾 طباعة 80mm
+import '../invoice_designer/designed_rows.dart'; // 🎨 مصمم الفاتورة
+import '../invoice_designer/invoice_layout_store.dart';
+import '../invoice_designer/invoice_print_data.dart';
+import '../invoice_designer/layout_pdf_renderer.dart';
 import '../services/printing_service.dart';
 import '../services/settings_manager.dart';
 import '../services/smart_search/smart_search.dart'; // 🧠 البحث الذكي
@@ -718,7 +722,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
 
 // ============================================
 // 2. دالة إنشاء PDF (generateInvoicePdf)// ============================================
-  Future<pw.Document> generateInvoicePdf() async {
+  Future<pw.Document> generateInvoicePdf({String target = 'invoice_a4'}) async {
     try {
       final pdf = pw.Document();
 
@@ -961,6 +965,70 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
           ...sameDayAddedItemAdjs.map((a) => {'type': 'adj', 'adj': a}),
       ];
 
+      // 🎨 تصميم من «مصمم الفاتورة» مختار لهذا النوع من الطباعة؟ (وإلا التصميم الأصلي أدناه)
+      final designed = await InvoiceLayoutStore.activeFor(target);
+      if (designed != null) {
+        Product? byName(String n) {
+          for (final p in allProducts) {
+            if (p.name == n) return p;
+          }
+          return null;
+        }
+
+        Product? byId(int? id) {
+          if (id == null) return null;
+          for (final p in allProducts) {
+            if (p.id == id) return p;
+          }
+          return null;
+        }
+
+        final rows = <Map<String, String>>[];
+        for (var i = 0; i < combinedRows.length; i++) {
+          final r = combinedRows[i];
+          if (r['type'] == 'item') {
+            final it = r['item'] as InvoiceItem;
+            rows.add(DesignedRows.item(i, it, byName(it.productName)));
+          } else {
+            final a = r['adj'] as InvoiceAdjustment;
+            rows.add(DesignedRows.adjustment(i, a, byId(a.productId)));
+          }
+        }
+        final created = invoiceToManage?.createdAt ?? DateTime.now();
+        final dateStr = InvoicePrintData.dateText(selectedDate);
+        return LayoutPdfRenderer.render(
+          designed,
+          InvoicePrintData(
+            company: await PrintCompany.load(appSettings),
+            fields: {
+              'invoiceNo': invoiceDisplayNumber,
+              'date': dateStr,
+              'time': InvoicePrintData.timeText(created),
+              'dateTime': '$dateStr ${InvoicePrintData.timeText(created)}',
+              'customer': customerNameController.text.trim(),
+              'phone': customerPhoneController.text.trim(),
+              'address': customerAddressController.text.trim(),
+              'paymentType': paymentType,
+              'user': AuthService().currentUser?.username ?? '',
+              'copy': '',
+            },
+            rows: rows,
+            totals: {
+              'beforeDiscount': preDiscountTotal,
+              'discount': discount,
+              'afterDiscount': afterDiscount,
+              'loadingFee': loadingFee,
+              'net': afterDiscount,
+              'paid': displayedPaidForSettlementsCase,
+              'remaining': remainingForPdf,
+              'previousDebt': previousDebt,
+              'currentDebt': currentDebtForPdf,
+            },
+            paymentType: paymentType,
+          ),
+        );
+      }
+
       const itemsPerPage = 19;
       final totalPages =
           (combinedRows.length / itemsPerPage).ceil().clamp(1, double.infinity).toInt();
@@ -1182,7 +1250,12 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
   Future<void> printInvoice() async {
     try {
       // 🧾 نوع الطباعة الافتراضي (A4 أو حرارية 80mm) من إعدادات الطباعة
-      final pdf = await InvoicePrintFormat.get() == '80mm'
+      // 🎨 طابعة حرارية مع تصميم إيصال مختار في «مصمم الفاتورة»
+      final rollFormat = await InvoicePrintFormat.get() == '80mm';
+      final rollDesigned = rollFormat ? await InvoiceLayoutStore.activeFor(PrintTarget.invoiceRoll.key) : null;
+      final pdf = rollDesigned != null
+          ? await generateInvoicePdf(target: PrintTarget.invoiceRoll.key)
+          : rollFormat
           ? await RollInvoicePdf.build(
               items: invoiceItems,
               customerName: customerNameController.text,

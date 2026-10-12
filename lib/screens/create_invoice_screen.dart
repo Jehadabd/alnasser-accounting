@@ -188,7 +188,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   // التمرير التلقائي
   final ScrollController _scrollController = ScrollController();
   final ScrollController _hScrollController = ScrollController(); // 🧩 تمرير أفقي لجدول المواد
-  bool _sidePanelOpen = true; // 🧩 اللوحة الجانبية (المجاميع والدفع) — تُطوى لتوسيع الجدول
+  bool _sidePanelOpen = true; // 🧩 اللوحة الجانبية أو الشريط السفلي — يُختار من الإعدادات فقط
   bool _ensuringEmptyRow = false;
 
   /// بدون شريط الإدخال العلوي يُكتب في آخر سطر فارغ من الجدول (كما في الإداري)
@@ -214,75 +214,257 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     });
   }
 
-  Future<void> _toggleSidePanel() async {
-    setState(() => _sidePanelOpen = !_sidePanelOpen);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('invoice_side_panel_open', _sidePanelOpen);
-    } catch (_) {}
-  }
-
-  /// شريط المجاميع السفلي حين تُطوى اللوحة الجانبية (مثل أسفل فاتورة الإداري)
+  /// 🧩 الشريط السفلي (حين تُختار «شريط سفلي» من الإعدادات): مضغوط ليبقى للجدول
+  /// أكبر مساحة. المجاميع الأربعة فوق بعض، الخصم وأجور النقل يُكتبان هنا مباشرة،
+  /// نقد/دين والمبلغ الواصل، والصافي مع زر الحفظ. (الحساب نفسه في اللوحة الجانبية)
   Widget _buildCompactTotalsBar() {
-    final before = invoiceItems.fold(0.0, (s, it) => s + it.itemTotal);
-    final lineDisc = invoiceItems.fold(0.0, (s, it) => s + it.lineDiscountTotal);
+    final totalBeforeDiscount = invoiceItems.fold(0.0, (s, it) => s + it.itemTotal);
+    final total = totalBeforeDiscount - discount;
     final loading = double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0.0;
-    final net = before - discount + loading + (_invoiceAdjustments.isNotEmpty ? _totalSettlementAmount : 0.0);
-    // نفس حساب اللوحة الجانبية: الدين = المدفوع + تسويات نقدية
+    final adj = _invoiceAdjustments.isNotEmpty ? _totalSettlementAmount : 0.0;
+    final net = total + loading + adj;
     final cashSettlements = _invoiceAdjustments
         .where((a) => (a.settlementPaymentType ?? 'نقد') == 'نقد')
         .fold(0.0, (s, a) => s + a.amountDelta);
-    final paid = paymentType == 'نقد'
-        ? net
-        : (double.tryParse(paidAmountController.text.replaceAll(',', '')) ?? 0.0) + cashSettlements;
-    final rest = net - paid;
-    Widget box(String label, double v, Color c, {bool strong = false}) => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          margin: const EdgeInsets.symmetric(horizontal: 3),
+    final entered = double.tryParse(paidAmountController.text.replaceAll(',', '')) ?? 0.0;
+    final isCash = paymentType == 'نقد';
+    final paid = isCash ? net : entered + cashSettlements;
+    final rest = isCash ? 0.0 : net - paid;
+    final canEdit = !isViewOnly;
+    final feeEditable = !isViewOnly && !(invoiceToManage?.isLocked ?? false);
+    const navy = Color(0xFF0F3460);
+    const line = Color(0xFFE2E8F0);
+
+    Widget card(Widget child) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            color: strong ? c : Colors.white,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: c.withOpacity(0.5)),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: line),
           ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(label, style: TextStyle(fontSize: 10.5, color: strong ? Colors.white70 : Colors.black54)),
-            Text(formatNumber(v),
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: strong ? Colors.white : c)),
+          child: child,
+        );
+
+    Widget amount(String label, double v, Color c) => Expanded(
+          child: Row(children: [
+            Expanded(
+              child: Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, height: 1.1, color: Colors.grey.shade700)),
+            ),
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerEnd,
+                child: Text(formatNumber(v),
+                    style: TextStyle(fontSize: 13.5, height: 1.1, fontWeight: FontWeight.bold, color: c)),
+              ),
+            ),
           ]),
         );
+
+    Widget input(String label, IconData icon, TextEditingController c,
+            {required bool enabled, required ValueChanged<String> onChanged, Widget? suffix}) =>
+        SizedBox(
+          height: 32,
+          child: Row(children: [
+            Icon(icon, size: 16, color: Colors.blueGrey.shade400),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 68,
+              child: Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+            ),
+            Expanded(
+              child: TextFormField(
+                controller: c,
+                enabled: enabled,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                textAlign: TextAlign.left,
+                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: '0',
+                  filled: true,
+                  fillColor: const Color(0xFFF8FAFC),
+                  suffixIcon: suffix,
+                  suffixIconConstraints: const BoxConstraints(minHeight: 30, minWidth: 0),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: line),
+                  ),
+                ),
+                onChanged: onChanged,
+              ),
+            ),
+          ]),
+        );
+
+    Widget payBtn(String type, IconData icon, Color c) {
+      final sel = paymentType == type;
+      return Expanded(
+        child: InkWell(
+          onTap: !canEdit || sel
+              ? null
+              : () => setState(() {
+                    paymentType = type;
+                    if (type == 'نقد') {
+                      _updatePaidAmountIfCash();
+                    } else {
+                      paidAmountController.text = formatNumber(0);
+                    }
+                    _autoSave();
+                  }),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: sel ? c.withValues(alpha: 0.12) : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: sel ? c : line, width: sel ? 1.6 : 1),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 17, color: sel ? c : Colors.grey),
+              const SizedBox(width: 5),
+              Text(type,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: sel ? FontWeight.bold : FontWeight.normal,
+                      color: sel ? c : Colors.grey.shade700)),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    // 1) المجاميع الأربعة فوق بعض
+    final totalsCard = card(Column(children: [
+      amount('الإجمالي قبل الخصم', totalBeforeDiscount, Colors.grey.shade800),
+      amount('الإجمالي بعد الخصم', total, Colors.blue.shade700),
+      amount('المبلغ المسدد', paid, Colors.green.shade700),
+      amount('المبلغ المتبقي', rest, rest > 0 ? Colors.red.shade700 : Colors.green.shade700),
+    ]));
+
+    // 2) الخصم وأجور التحميل والنقل — تُكتب هنا مباشرة
+    final inputsCard = card(Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      input('الخصم', Icons.local_offer_outlined, discountController, enabled: canEdit, onChanged: (val) {
+        setState(() {
+          discount = double.tryParse(val.replaceAll(',', '')) ?? 0.0;
+          _guardDiscount();
+          _updatePaidAmountIfCash();
+          _calculateProfit();
+        });
+      }),
+      const SizedBox(height: 4),
+      input('أجور النقل', Icons.local_shipping_outlined, loadingFeeController, enabled: feeEditable, onChanged: (_) {
+        setState(() {
+          _guardDiscount();
+          _updatePaidAmountIfCash();
+          _calculateProfit();
+        });
+      }),
+    ]));
+
+    // 3) نقد / دين والمبلغ الواصل
+    final payCard = card(Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Row(children: [
+        payBtn('نقد', Icons.attach_money, const Color(0xFF48BB78)),
+        const SizedBox(width: 6),
+        payBtn('دين', Icons.account_balance_wallet_outlined, const Color(0xFF4299E1)),
+      ]),
+      const SizedBox(height: 4),
+      if (!isCash && canEdit)
+        input('الواصل', Icons.payments_outlined, paidAmountController,
+            enabled: true,
+            onChanged: (_) => setState(() {}),
+            suffix: TextButton(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                minimumSize: const Size(0, 30),
+              ),
+              onPressed: () => setState(() => paidAmountController.text = formatNumber(net)),
+              child: const Text('%100', style: TextStyle(fontSize: 12)),
+            ))
+      else
+        SizedBox(
+          height: 32,
+          child: Center(
+            child: Text(isCash ? 'نقداً — يُسدَّد كامل المبلغ' : 'دين',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+          ),
+        ),
+    ]));
+
+    // 4) الصافي للدفع وزر الحفظ
+    final saveCard = Container(
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+      decoration: BoxDecoration(color: navy, borderRadius: BorderRadius.circular(10)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          const Text('الصافي للدفع', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: AlignmentDirectional.centerEnd,
+              child: Text('${formatNumber(net)} د.ع',
+                  style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ]),
+        const Spacer(),
+        if (!isViewOnly)
+          SizedBox(
+            height: 38,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF48BB78),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: isSaving ? null : saveInvoice,
+              icon: const Icon(Icons.save_alt, size: 19),
+              label: const Text('حفظ الفاتورة', style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold)),
+            ),
+          ),
+      ]),
+    );
+
+    final cards = <Widget>[totalsCard, inputsCard, payCard, saveCard];
+    const flexes = [4, 4, 4, 3];
+    const widths = [250.0, 250.0, 240.0, 210.0];
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      height: 100,
+      padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: const Color(0xFFF1F5F9),
         border: Border(top: BorderSide(color: Colors.grey.shade300)),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(children: [
-          box('المجموع', before, Colors.blueGrey),
-          if (lineDisc > 0) box('خصم الأصناف', lineDisc, Colors.green.shade700),
-          if (discount > 0) box('الخصم', discount, Colors.red.shade400),
-          if (loading > 0) box('أجور التحميل', loading, Colors.brown),
-          box('الصافي للدفع', net, const Color(0xFF0F3460), strong: true),
-          box(paymentType == 'نقد' ? 'نقداً' : 'المدفوع', paid, Colors.green.shade700),
-          if (paymentType != 'نقد') box('الباقي (دين)', rest, Colors.orange.shade800),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: _toggleSidePanel,
-            icon: const Icon(Icons.view_sidebar_outlined, size: 18),
-            label: const Text('الدفع والتفاصيل'),
-          ),
-          const SizedBox(width: 6),
-          if (!isViewOnly)
-            FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF48BB78)),
-              onPressed: isSaving ? null : saveInvoice,
-              icon: const Icon(Icons.save_alt, size: 18),
-              label: const Text('حفظ الفاتورة'),
-            ),
-        ]),
-      ),
+      child: LayoutBuilder(builder: (context, box) {
+        if (box.maxWidth >= 880) {
+          return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            for (var i = 0; i < cards.length; i++) ...[
+              if (i > 0) const SizedBox(width: 6),
+              Expanded(flex: flexes[i], child: cards[i]),
+            ],
+          ]);
+        }
+        // شاشة أضيق: البطاقات بعرض ثابت مع تمرير أفقي
+        return ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: cards.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 6),
+          itemBuilder: (_, i) => SizedBox(width: widths[i], child: cards[i]),
+        );
+      }),
     );
   }
 
@@ -490,14 +672,16 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5)),
         );
-    Widget section(String title, String hint, IconData icon, Color color, List<Widget> children) => Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.white,
+    Widget section(String title, String hint, IconData icon, Color color, List<Widget> children) => Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Material(
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: border),
+            side: const BorderSide(color: border),
           ),
+          child: Padding(
+          padding: const EdgeInsets.all(14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(children: [
               Container(
@@ -517,6 +701,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             const SizedBox(height: 12),
             ...children,
           ]),
+          ),
+          ),
         );
     await showDialog<void>(
       context: context,
@@ -660,17 +846,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                         subtitle: const Text('بدونه تُكتب المواد مباشرة في آخر سطر من الجدول'),
                         value: layout.showEntryBar,
                         onChanged: (v) => setLayout(layout.copyWith(showEntryBar: v)),
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        title: const Text('اللوحة الجانبية (المجاميع والدفع)'),
-                        subtitle: const Text('عند إخفائها تنزل المجاميع وزر الحفظ إلى شريط سفلي'),
-                        value: _sidePanelOpen,
-                        onChanged: (_) async {
-                          await _toggleSidePanel();
-                          setD(() {});
-                        },
                       ),
                       Align(
                         alignment: AlignmentDirectional.centerStart,
@@ -3805,40 +3980,25 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             ),
     
                   
-                  // 🧩 أجور التحميل والنقل — تُدخل من «المزيد» (أغلب الفواتير لا تحتاجها)
-                  Builder(builder: (context) {
-                    final fee = double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0.0;
-                    final canEdit = !isViewOnly && !(invoiceToManage?.isLocked ?? false);
-                    if (fee <= 0 && !canEdit) return const SizedBox.shrink();
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: InkWell(
-                        onTap: _openInvoiceMore,
-                        borderRadius: BorderRadius.circular(10),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
-                          ),
-                          child: Row(children: [
-                            Icon(Icons.local_shipping_outlined, size: 18, color: Colors.brown.shade400),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(fee > 0 ? 'أجور التحميل والنقل' : 'إضافة أجور تحميل أو نقل',
-                                  style: TextStyle(fontSize: 13, color: fee > 0 ? Colors.black87 : Colors.grey.shade600)),
-                            ),
-                            if (fee > 0)
-                              Text(formatNumber(fee), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                            const SizedBox(width: 6),
-                            Icon(fee > 0 ? Icons.edit_outlined : Icons.add, size: 16, color: Colors.grey.shade500),
-                          ]),
-                        ),
-                      ),
-                    );
-                  }),
-                  
+                  // 🧩 أجور التحميل والنقل — تُكتب هنا مباشرة
+                  if (!isViewOnly ||
+                      (double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0) > 0) ...[
+                    _buildStyledInputField(
+                      controller: loadingFeeController,
+                      label: 'أجور التحميل والنقل',
+                      icon: Icons.local_shipping_outlined,
+                      enabled: !isViewOnly && !(invoiceToManage?.isLocked ?? false),
+                      onChanged: (_) {
+                        setState(() {
+                          _guardDiscount();
+                          _updatePaidAmountIfCash();
+                          _calculateProfit();
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+
                   // الخصم المسموح
                   _buildStyledInputField(
                     controller: discountController,
@@ -5298,12 +5458,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           ),
           centerTitle: true,
           actions: [
-            // 🧩 طي/إظهار اللوحة الجانبية لتوسيع جدول المواد
-            IconButton(
-              icon: Icon(_sidePanelOpen ? Icons.view_sidebar : Icons.view_sidebar_outlined),
-              tooltip: _sidePanelOpen ? 'إخفاء اللوحة الجانبية (توسيع الجدول)' : 'إظهار اللوحة الجانبية',
-              onPressed: _toggleSidePanel,
-            ),
             // زر جديد لإعادة التعيين - يظهر دائماً per user request
             IconButton(
               icon: const Icon(Icons.receipt),

@@ -1,6 +1,10 @@
 // services/thermal_receipt_service.dart
 // خدمة إنشاء وطباعة الإيصالات الحرارية باستخدام PDF للنص العربي
 
+import '../invoice_designer/designed_rows.dart';
+import '../invoice_designer/invoice_layout_store.dart';
+import '../invoice_designer/invoice_print_data.dart';
+import '../invoice_designer/layout_pdf_renderer.dart';
 import 'dart:typed_data';
 import 'dart:io';
 import 'package:pdf/pdf.dart';
@@ -10,6 +14,36 @@ import 'package:flutter/services.dart';
 import 'package:alnaser/models/printer_device.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:intl/intl.dart';
+
+/// 🎨 بيانات الإيصال لتصميم من «مصمم الفاتورة»
+InvoicePrintData designedReceiptData(ReceiptData r, PrintCompany company) {
+  final d = InvoicePrintData.dateText(r.dateTime);
+  return InvoicePrintData(
+    company: company,
+    fields: {
+      'invoiceNo': r.invoiceId,
+      'date': d,
+      'time': InvoicePrintData.timeText(r.dateTime),
+      'dateTime': '$d ${InvoicePrintData.timeText(r.dateTime)}',
+      'customer': r.customerName ?? '',
+      'paymentType': r.paymentType,
+      'copy': r.isCopy ? 'نسخة' : '',
+    },
+    rows: [
+      for (var i = 0; i < r.items.length; i++)
+        DesignedRows.simple(i, r.items[i].name, r.items[i].quantity, r.items[i].unit, r.items[i].price),
+    ],
+    totals: {
+      'beforeDiscount': r.subtotal,
+      'discount': r.discount,
+      'afterDiscount': r.total,
+      'net': r.total,
+      'paid': r.paidAmount,
+      'remaining': r.remainingAmount,
+    },
+    paymentType: r.paymentType,
+  );
+}
 
 /// بيانات صنف في الإيصال
 class ReceiptItem {
@@ -135,7 +169,13 @@ class ThermalReceiptService {
       await _loadAssets(logoPath);
 
       // إنشاء PDF
-      final pdf = await _buildReceiptPdf(receipt, companyName, phoneNumber);
+      // 🎨 تصميم إيصال من «مصمم الفاتورة»؟ (وإلا الإيصال الأصلي)
+      final designed = await InvoiceLayoutStore.activeFor(PrintTarget.posReceipt.key);
+      final pdf = designed != null
+          ? await (await LayoutPdfRenderer.render(
+                  designed, designedReceiptData(receipt, await PrintCompany.load(settings))))
+              .save()
+          : await _buildReceiptPdf(receipt, companyName, phoneNumber);
 
       // طباعة على الطابعة المحددة
       await Printing.directPrintPdf(

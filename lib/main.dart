@@ -52,7 +52,7 @@ import 'lan/network_settings_screen.dart';
 import 'accounting/screens/accounting_home_screen.dart'; // 🏛️ المحاسبة
 import 'org/screens/branches_warehouses_screen.dart'; // 🏢 الفروع والمخازن
 import 'inventory/item_card_screen.dart'; // 🗂️ بطاقات المواد
-import 'inventory/item_card_editor_screen.dart'; // 🗂️ بطاقة مادة (إدخال بضاعة)
+import 'inventory/product_entry_mode.dart'; // ⚙️ الواجهة المختارة لإدخال البضاعة
 import 'erp/purchases/purchase_return_screen.dart'; // ↩️ مرتجع المشتريات
 import 'widgets/global_shortcuts.dart'; // ⌨️ F1..F8
 
@@ -464,7 +464,7 @@ class MyApp extends StatelessWidget {
           '/general_settings': (context) => const _LicenseGuard(child: GeneralSettingsScreen()),
           '/debt_register': (context) => const _LicenseGuard(child: HomeScreen()),
           // 🗂️ «إدخال بضاعة» = بطاقة مادة الحديثة؛ الواجهة السابقة تبقى متاحة
-          '/product_entry': (context) => const _LicenseGuard(child: ItemCardEditorScreen()),
+          '/product_entry': (context) => const _LicenseGuard(child: ProductEntryRouter()),
           '/product_entry_classic': (context) => const _LicenseGuard(child: ProductEntryScreen()),
           '/create_invoice': (context) => const _LicenseGuard(child: CreateInvoiceScreen()),
           '/edit_invoices': (context) => const _LicenseGuard(child: EditInvoicesScreen()),

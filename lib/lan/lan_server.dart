@@ -53,6 +53,7 @@ class LanDatabaseServer {
     this.port = lanDefaultPort,
     this.transactionIdleTimeout = const Duration(seconds: 60),
     this.enableDiscovery = true,
+    this.checkLicense,
     SqfliteInvokeHandler? handler,
     this.log = _defaultLog,
   }) : _handler = handler ?? (databaseFactoryFfi as SqfliteInvokeHandler);
@@ -62,6 +63,13 @@ class LanDatabaseServer {
 
   /// رمز الربط: يجب أن ترسله الطرفية في ترويسة الاتصال.
   final String secret;
+
+  /// فحص ترخيص الطرفية: null = مقبولة (تكفي بدل رمز الربط)، وإلا السبب:
+  /// 'revoked' / 'stale' / 'expired' ⇒ تُرفض حتى برمز ربط صحيح،
+  /// 'foreign' / 'invalid' ⇒ لا تكفي وحدها (يلزم رمز الربط).
+  final Future<String?> Function(String token)? checkLicense;
+
+  static const _hardReject = {'revoked', 'stale', 'expired'};
 
   final String serverName;
   final int port;
@@ -136,6 +144,7 @@ class LanDatabaseServer {
 
       if (req.uri.path == '/db' && WebSocketTransformer.isUpgradeRequest(req)) {
         final key = req.headers.value('x-alnaser-key') ?? '';
+        final lic = req.headers.value('x-alnaser-license') ?? '';
         final proto = int.tryParse(req.headers.value('x-alnaser-proto') ?? '');
         final remote = req.connectionInfo?.remoteAddress.address ?? '?';
         final clientName = Uri.decodeComponent(
@@ -143,7 +152,23 @@ class LanDatabaseServer {
         // نرقّي الاتصال أولاً ثم نرفض داخل WebSocket برمز إغلاق واضح،
         // لأن dart:io في الطرفية لا يكشف رمز HTTP عند فشل الترقية.
         final socket = await WebSocketTransformer.upgrade(req);
-        if (!_constantTimeEquals(key, secret)) {
+        final keyOk = key.isNotEmpty && _constantTimeEquals(key, secret);
+        String? verdict = 'none';
+        if (lic.isNotEmpty && checkLicense != null) {
+          try {
+            verdict = await checkLicense!(lic);
+          } catch (_) {
+            verdict = 'error';
+          }
+        }
+        if (_hardReject.contains(verdict)) {
+          // جهاز فُكّ ربطه من الترخيص: لا يدخل حتى لو عرف رمز الربط
+          log('⛔ رُفض جهاز ($verdict) من الترخيص: $clientName ($remote)');
+          await socket.close(verdict == 'revoked' ? lanCloseRevoked : lanCloseLicenseStale, verdict);
+          return;
+        }
+        final licOk = lic.isNotEmpty && verdict == null;
+        if (!keyOk && !licOk) {
           log('⛔ محاولة اتصال برمز ربط خاطئ من $remote');
           await socket.close(lanCloseBadKey, 'bad key');
           return;
@@ -157,6 +182,7 @@ class LanDatabaseServer {
         final session = _LanSession(
           server: this,
           socket: socket,
+          licenseToken: lic,
           info: LanClientInfo(
             sessionId: id,
             address: remote,
@@ -188,6 +214,26 @@ class LanDatabaseServer {
     if (_sessions.remove(s.info.sessionId) != null) {
       _emitClients();
       log('🔌 انقطعت طرفية: ${s.info.clientName} (${s.info.address})');
+    }
+  }
+
+  /// 🖧 تغيّرت قائمة أجهزة الترخيص: أي طرفية متصلة فُكّ ربطها تُقطع فوراً.
+  Future<void> recheckLicenses() async {
+    final check = checkLicense;
+    if (check == null) return;
+    for (final s in _sessions.values.toList()) {
+      if (s.licenseToken.isEmpty) continue;
+      String? v;
+      try {
+        v = await check(s.licenseToken);
+      } catch (_) {
+        continue;
+      }
+      if (_hardReject.contains(v)) {
+        log('⛔ قطع طرفية فُكّ ربطها من الترخيص: ${s.info.clientName} (${s.info.address})');
+        unawaited(s.close(
+            reason: v ?? 'revoked', code: v == 'revoked' ? lanCloseRevoked : lanCloseLicenseStale));
+      }
     }
   }
 
@@ -244,11 +290,19 @@ class LanDatabaseServer {
 
 /// جلسة طرفية واحدة.
 class _LanSession {
-  _LanSession({required this.server, required this.socket, required this.info});
+  _LanSession({
+    required this.server,
+    required this.socket,
+    required this.info,
+    this.licenseToken = '',
+  });
 
   final LanDatabaseServer server;
   final WebSocket socket;
   final LanClientInfo info;
+
+  /// الترخيص الذي قدّمته الطرفية عند الاتصال (يُعاد فحصه إن تغيّرت قائمة الأجهزة)
+  final String licenseToken;
 
   /// معرّفات قواعد البيانات التي فتحتها هذه الطرفية (للتحقق من كل طلب).
   final Set<int> _dbIds = {};
@@ -405,14 +459,14 @@ class _LanSession {
     } catch (_) {}
   }
 
-  Future<void> close({required String reason}) async {
+  Future<void> close({required String reason, int? code}) async {
     if (_closed) return;
     _closed = true;
     for (final dbId in _openTransactions.keys.toList()) {
       await _rollbackIfOpen(dbId);
     }
     try {
-      await socket.close(WebSocketStatus.normalClosure, reason);
+      await socket.close(code ?? WebSocketStatus.normalClosure, reason);
     } catch (_) {}
     server._onSessionClosed(this);
   }

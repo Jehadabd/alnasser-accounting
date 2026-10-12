@@ -34,6 +34,9 @@ import 'firebase_custom_setup_screen.dart';
 import 'web_hosting_guide_screen.dart'; // 🌐 استضافة الويب
 import 'package:file_picker/file_picker.dart';
 import '../services/license_service.dart';
+import '../widgets/stay_logged_in_tile.dart';
+import '../inventory/product_entry_mode.dart';
+import '../invoice_designer/invoice_designer_screen.dart';
 import '../accounting/screens/acc_ui.dart' show requirePermission;
 import '../models/app_user.dart' show AppPermissions;
 import '../erp/erp_settings_screen.dart';
@@ -1425,6 +1428,13 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               },
             ),
           ),
+          // 🔓 الدخول على هذا الجهاز
+          _buildSettingsCard(
+            icon: Icons.login_rounded,
+            iconColor: const Color(0xFF0F3460),
+            title: 'الدخول على هذا الجهاز',
+            child: const StayLoggedInTile(),
+          ),
           ],
         ),
         _SettingsSection(
@@ -1439,10 +1449,22 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             title: 'تصميم الفاتورة',
             child: Column(children: [
               _buildActionTile(
+                icon: Icons.dashboard_customize_outlined,
+                iconColor: Colors.deepOrange,
+                title: 'مصمم الفاتورة — نماذج جاهزة وورقة بيضاء',
+                subtitle: 'صمّم فاتورة A4 وإيصال 80 و58 ملم بالسحب: الأعمدة وترتيبها وعرضها، المجاميع مربعات أو قائمة، '
+                    'واختر التصميم لكل نوع طباعة (الفاتورة، الطابعة الحرارية، إيصال الكاشير)',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const InvoiceDesignerScreen()),
+                ),
+              ),
+              const Divider(height: 1),
+              _buildActionTile(
                 icon: Icons.design_services,
                 iconColor: Colors.indigo,
-                title: 'تخصيص الفاتورة المطبوعة',
-                subtitle: 'أعمدة الجدول (ومنها السعر قبل الخصم والخصم)، اللوجو، اسم الشركة، العنوان، وأرقام الهاتف',
+                title: 'معلومات الشركة والشعار (والتصميم الأصلي)',
+                subtitle: 'اسم الشركة، الشعار، العنوان، الهواتف، الرقم الضريبي — تُستعمل في كل التصاميم. وأعمدة وألوان التصميم الأصلي',
                 onTap: () {
                   Navigator.push(
                     context,
@@ -1454,8 +1476,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               _buildActionTile(
                 icon: Icons.view_week_outlined,
                 iconColor: Colors.teal,
-                title: 'أعمدة شاشة إنشاء الفاتورة',
-                subtitle: 'اختر الأعمدة الظاهرة أثناء إدخال الفاتورة وعرض كل عمود (مع معاينة)',
+                title: 'تخطيط شاشة إنشاء الفاتورة',
+                subtitle: 'الأعمدة الظاهرة وعرض كل عمود، ومكان المجاميع وزر الحفظ: لوحة جانبية أو شريط سفلي (جدول أعرض)',
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const InvoiceEntryLayoutScreen()),
@@ -2097,7 +2119,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _SettingsSection(
           'الواجهة',
           Icons.dashboard_customize_outlined,
-          'الشريط الجانبي واتجاه الشاشة',
+          'الشريط الجانبي، واجهة إدخال البضاعة، واتجاه الشاشة',
           [
           // 🧭 قسم إعدادات الواجهة والشريط الجانبي
           _buildSettingsCard(
@@ -2118,6 +2140,13 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 ),
               ],
             ),
+          ),
+          // 📦 واجهة إدخال البضاعة
+          _buildSettingsCard(
+            icon: Icons.inventory_2_outlined,
+            iconColor: Colors.teal,
+            title: 'إدخال البضاعة',
+            child: const ProductEntryModeTile(),
           ),
           // 📱 إعدادات اتجاه الشاشة (الأندرويد والجوال)
           if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))

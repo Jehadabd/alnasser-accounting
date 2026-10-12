@@ -1,6 +1,8 @@
 // services/auth_service.dart
 import 'dart:convert';
+import 'dart:math' show Random;
 import 'package:crypto/crypto.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_user.dart';
 import 'database_service.dart';
@@ -33,9 +35,99 @@ class AuthService {
     return digest.toString();
   }
 
-  /// 🔐 لا استرجاع تلقائي للجلسة: تسجيل الدخول مطلوب في كل فتح للبرنامج.
-  /// (تبقى الدالة للتوافق؛ لا تفعل شيئاً.)
+  /// (تبقى الدالة للتوافق؛ الدخول التلقائي في restoreSavedLogin)
   Future<void> initSession() async {}
+
+  // ───────────── البقاء مسجلاً للدخول (حتى يخرج المستخدم بنفسه) ─────────────
+  // إعداد لكل جهاز (مفعّل افتراضياً). يُحفظ «دخول» المستخدم في المخزن الآمن
+  // لهذا الجهاز (مشفّر بحساب ويندوز / Keystore في أندرويد)، موقَّعاً بسرّ
+  // عشوائي خاص بالجهاز وببصمة كلمة سر المستخدم: إن غُيّرت كلمة سره، أو حُذف،
+  // أو ضُغط «تبديل المستخدم» ⇒ تُطلب كلمة السر من جديد.
+  static const String _kStay = 'stay_logged_in';
+  static const String _kSaved = 'alnaser_saved_login';
+  static const String _kDevSecret = 'alnaser_login_device_secret';
+  static const _secure = FlutterSecureStorage();
+
+  /// هل يبقى هذا الجهاز مسجلاً للدخول؟ (افتراضياً نعم)
+  Future<bool> stayLoggedIn() async {
+    try {
+      return (await SharedPreferences.getInstance()).getBool(_kStay) ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> setStayLoggedIn(bool v) async {
+    await (await SharedPreferences.getInstance()).setBool(_kStay, v);
+    if (!v) {
+      await _forgetSavedLogin();
+    } else if (_currentUser != null) {
+      await _rememberLogin(_currentUser!);
+    }
+  }
+
+  Future<String> _deviceSecret() async {
+    var s = await _secure.read(key: _kDevSecret);
+    if (s == null || s.length < 32) {
+      final r = Random.secure();
+      s = List.generate(32, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+      await _secure.write(key: _kDevSecret, value: s);
+    }
+    return s;
+  }
+
+  static String _loginSig(int id, String username, String passwordHash, String secret) =>
+      sha256.convert(utf8.encode('$id|$username|$passwordHash|$secret')).toString();
+
+  Future<void> _rememberLogin(AppUser u) async {
+    if (u.id == null) return;
+    try {
+      final secret = await _deviceSecret();
+      await _secure.write(
+          key: _kSaved,
+          value: jsonEncode({'id': u.id, 'u': u.username, 's': _loginSig(u.id!, u.username, u.passwordHash, secret)}));
+    } catch (_) {}
+  }
+
+  Future<void> _forgetSavedLogin() async {
+    try {
+      await _secure.delete(key: _kSaved);
+    } catch (_) {}
+  }
+
+  /// 🔓 يُدخل آخر مستخدم تلقائياً (إن كان الإعداد مفعّلاً ولم يخرج بنفسه).
+  Future<AppUser?> restoreSavedLogin() async {
+    if (_currentUser != null) return _currentUser;
+    if (!await stayLoggedIn()) return null;
+    try {
+      final raw = await _secure.read(key: _kSaved);
+      if (raw == null || raw.isEmpty) return null;
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final id = (m['id'] as num?)?.toInt();
+      if (id == null) return null;
+      final db = await _db.database;
+      final r = await db.query('users', where: 'id = ?', whereArgs: [id], limit: 1);
+      if (r.isEmpty) {
+        await _forgetSavedLogin();
+        return null;
+      }
+      final row = r.first;
+      final username = '${row['username']}';
+      final hash = '${row['password_hash']}';
+      final secret = await _deviceSecret();
+      if (m['u'] != username || m['s'] != _loginSig(id, username, hash, secret)) {
+        await _forgetSavedLogin(); // غُيّرت كلمة السر أو الاسم ⇒ دخول من جديد
+        return null;
+      }
+      _currentUser = AppUser.fromMap(row, permissions: await _getUserPermissions(id));
+      await _touchLastLogin(id);
+      ActivityLog.log('دخول', 'تسجيل الدخول', 'دخول تلقائي (البقاء مسجلاً): ${_currentUser!.username}');
+      return _currentUser;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// آخر اسم مستخدم دخل من هذا الجهاز (لملء حقل الدخول فقط — ليس جلسة).
   Future<String?> lastUsername() async {
@@ -133,6 +225,7 @@ class AuthService {
     _currentUser = AppUser.fromMap(result.first, permissions: permissions);
     await _touchLastLogin(_currentUser!.id);
     await _saveSession(_currentUser!);
+    if (await stayLoggedIn()) await _rememberLogin(_currentUser!);
     ActivityLog.log('دخول', 'تسجيل الدخول', 'دخول المستخدم ${_currentUser!.username}');
     
     return _currentUser;
@@ -153,6 +246,7 @@ class AuthService {
       await ActivityLog.log('خروج', 'تسجيل الدخول', 'خروج المستخدم ${_currentUser!.username}');
     }
     _currentUser = null;
+    await _forgetSavedLogin(); // خرج بنفسه ⇒ كلمة السر في الفتح القادم
   }
 
   /// إنشاء مستخدم Admin

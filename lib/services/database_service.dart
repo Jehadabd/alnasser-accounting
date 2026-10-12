@@ -75,6 +75,7 @@ import '../models/monthly_overview.dart'; // ✅ Added
 // 🔥 المزامنة: أمان + إعدادات الفاتورة + UUID
 import 'sync/sync_security.dart';
 import 'invoice_settings_service.dart';
+import 'database/business/invoice_numbering.dart';
 import '../utils/uuid_helper.dart';
 import 'firebase_sync/firebase_sync_config.dart';
 
@@ -1738,36 +1739,9 @@ class DatabaseService {
   Future<String> getNextInvoiceNumber(DateTime date) async {
     final db = await database;
     final deviceIdNum = await InvoiceSettingsService.getInvoiceDeviceId();
-    final deviceIdStr = deviceIdNum.toString();
-    final invoiceYear = date.year;
-    final invoiceMonth = date.month;
-
-    final seqResult = await db.rawQuery('''
-      SELECT MAX(monthly_sequence_number) as max_seq
-      FROM invoices
-      WHERE creator_device_id = ?
-        AND invoice_year = ?
-        AND invoice_month = ?
-    ''', [deviceIdStr, invoiceYear, invoiceMonth]);
-
-    int nextSeq = 1;
-    if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {
-      nextSeq = (seqResult.first['max_seq'] as int) + 1;
-    }
-
-    while (true) {
-      final checkSeq = await db.query(
-        'invoices',
-        columns: ['id'],
-        where: 'creator_device_id = ? AND invoice_year = ? AND invoice_month = ? AND monthly_sequence_number = ?',
-        whereArgs: [deviceIdStr, invoiceYear, invoiceMonth, nextSeq],
-        limit: 1,
-      );
-      if (checkSeq.isEmpty) break;
-      nextSeq++;
-    }
-
-    return '$deviceIdNum$invoiceYear$invoiceMonth$nextSeq';
+    final n = await InvoiceNumbering.next(db,
+        deviceNum: deviceIdNum, year: date.year, month: date.month);
+    return n.number;
   }
 
   Future<List<Invoice>> getAllInvoices({String orderBy = 'invoice_date DESC, id DESC'}) async {
@@ -2689,6 +2663,14 @@ class DatabaseService {
   }
 
   Future<void> _installSyncIdentityGuards(Database db) async {
+    // 🔢 رقم الفاتورة ليس فريداً بين الأجهزة (كلها افتراضياً «رقم الجهاز 1»).
+    // قيد UNIQUE عليه جاء من إصدار قديم (هذا الكود لا يُنشئه): كان يرفض حفظ
+    // فاتورة جديدة، ويُسقط فاتورة واردة بالمزامنة تحمل رقماً مستعملاً هنا — فلا
+    // يصل دينها أبداً. الهوية الحقيقية invoice_uuid، والترقيم المحلي يتجنب
+    // التكرار بنفسه (InvoiceNumbering). يبقى فهرس عادي للبحث بالرقم.
+    await _tryExec(db, 'DROP INDEX IF EXISTS idx_invoices_invoice_number');
+    await _tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices(invoice_number)');
+
     await _resolveDuplicateIds(db, 'transactions', 'sync_uuid');
     await _resolveDuplicateIds(db, 'invoices', 'invoice_uuid');
 

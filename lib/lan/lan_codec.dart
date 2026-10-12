@@ -111,3 +111,9 @@ class LanConnectionException implements Exception {
 /// رموز إغلاق WebSocket الخاصة بالبرنامج (4000–4999 مسموحة للتطبيقات).
 const int lanCloseBadKey = 4401;
 const int lanCloseBadProto = 4426;
+
+/// الطرفية فُكّ ربطها من ترخيص البرنامج
+const int lanCloseRevoked = 4403;
+
+/// تعذّر التحقق من ترخيص الطرفية منذ مدة طويلة (لا إنترنت هنا ولا هناك)
+const int lanCloseLicenseStale = 4410;

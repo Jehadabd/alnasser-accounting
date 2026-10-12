@@ -15,7 +15,7 @@
 //   • الوضع التجريبي يُفتح ويُغلق من هنا (لا من الإعدادات).
 
 import 'dart:async';
-import 'dart:io' show exit;
+import 'dart:io' show Platform, exit;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -56,6 +56,7 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _errorMessage;
   String? _info;
   List<String> _names = const [];
+  bool _stay = true;
   Timer? _waitTimer;
   StreamSubscription<void>? _waitSub;
 
@@ -76,6 +77,14 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (_) {}
     if (!mounted) return;
     if (hasUsers) {
+      // 🔓 البقاء مسجلاً للدخول: آخر مستخدم يدخل مباشرة حتى يخرج بنفسه
+      final auto = await _authService.restoreSavedLogin();
+      if (!mounted) return;
+      if (auto != null) {
+        Navigator.pushReplacementNamed(context, '/main');
+        return;
+      }
+      _stay = await _authService.stayLoggedIn();
       _usernameController.text = await _authService.lastUsername() ?? '';
       try {
         _names = (await _authService.getAllUsers()).map((u) => u.username).toList();
@@ -572,8 +581,27 @@ class _LoginScreenState extends State<LoginScreen> {
           icon: const Icon(Icons.person_add_alt),
           label: const Text('إنشاء مدير لهذا الجهاز بدلاً من الانتظار'),
         ),
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: () {
+            _stopWaiting();
+            Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NetworkSettingsScreen()));
+          },
+          icon: const Icon(Icons.lan_outlined),
+          label: const Text('بل هذا الجهاز طرفية على شبكة المحل — اربطه بحاسبة السيرفر'),
+        ),
       ],
     );
+  }
+
+  /// جهاز إضافي في الترخيص، أو هاتف/تابلت: غالباً طرفية تعمل على قاعدة حاسبة السيرفر
+  bool get _likelyTerminal {
+    try {
+      final lic = _license.getStoredLicense();
+      if (lic != null && !lic.isMainDevice) return true;
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) return true;
+    } catch (_) {}
+    return false;
   }
 
   Widget _credentialsForm() {
@@ -694,13 +722,25 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ],
           if (!setup)
-            Align(
-              alignment: AlignmentDirectional.centerEnd,
-              child: TextButton(
+            Row(children: [
+              Expanded(
+                child: CheckboxListTile(
+                  value: _stay,
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('ابقَ مسجلاً للدخول على هذا الجهاز'),
+                  onChanged: (v) {
+                    setState(() => _stay = v ?? true);
+                    _authService.setStayLoggedIn(_stay);
+                  },
+                ),
+              ),
+              TextButton(
                 onPressed: _showForgotPasswordDialog,
                 child: const Text('نسيت كلمة السر؟'),
               ),
-            )
+            ])
           else
             const SizedBox(height: 16),
           const SizedBox(height: 8),
@@ -724,7 +764,7 @@ class _LoginScreenState extends State<LoginScreen> {
             icon: const Icon(Icons.verified_user_outlined, color: _navy),
             label: const Text('الترخيص: تفعيل بحساب آخر، أو إضافة هذا الجهاز برمز', style: TextStyle(color: _navy)),
           ),
-          if (setup || AppNetworkMode.isClient)
+          if (setup || AppNetworkMode.isClient || _likelyTerminal)
             TextButton.icon(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const NetworkSettingsScreen()),

@@ -14,6 +14,7 @@ import 'lan_codec.dart';
 import 'lan_server.dart';
 import 'lan_settings.dart';
 import 'windows_autostart.dart';
+import '../services/license_service.dart';
 
 const _navy = Color(0xFF0F3460);
 
@@ -98,7 +99,11 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       _searching = true;
       _found = const [];
     });
-    final f = await discoverLanServers();
+    // هذه الحاسبة نفسها ليست سيرفراً لنفسها: لا تظهر في القائمة
+    final me = Platform.localHostname.trim().toLowerCase();
+    final f = (await discoverLanServers())
+        .where((x) => !_ips.contains('${x['host']}') && '${x['name'] ?? ''}'.trim().toLowerCase() != me)
+        .toList();
     if (!mounted) return;
     setState(() {
       _searching = false;
@@ -115,7 +120,8 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       _pickedServerName = '${f['name'] ?? ''}';
       _testResult = null;
     });
-    final hasCode = _secret.text.trim().isNotEmpty && _secret.text != _autoSecret;
+    final hasCode = (_secret.text.trim().isNotEmpty && _secret.text != _autoSecret) ||
+        (LicenseService().currentToken ?? '').isNotEmpty; // أجهزة الترخيص نفسه لا تحتاج الرمز
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       backgroundColor: Colors.green.shade700,
@@ -138,6 +144,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       port: int.tryParse(_port.text) ?? lanDefaultPort,
       secret: _secret.text.trim().toUpperCase(),
       clientName: '${_clientName.text.trim()} (اختبار)',
+      licenseToken: LicenseService().currentToken ?? '',
     );
     try {
       await conn.connect();
@@ -159,7 +166,16 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       clientName: _clientName.text.trim(),
       autoStart: _autoStart,
     );
-    if (next.isClient && (next.host.isEmpty || next.secret.isEmpty)) {
+    final hasLic = (LicenseService().currentToken ?? '').isNotEmpty;
+    if (next.isClient && Platform.isWindows && await LanRuntime.pointsToThisPc(next)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('هذا العنوان هو هذه الحاسبة نفسها. إن كانت قاعدة البيانات هنا فاختر «سيرفر»، '
+              'و«طرفية» فقط على الأجهزة الأخرى.'),
+          backgroundColor: Colors.red));
+      return;
+    }
+    if (next.isClient && (next.host.isEmpty || (next.secret.isEmpty && !hasLic))) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('أدخل عنوان السيرفر ورمز الربط'), backgroundColor: Colors.red));
       return;
@@ -182,7 +198,10 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
         }),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('لاحقاً')),
-          FilledButton(onPressed: () => exit(0), child: const Text('إغلاق البرنامج الآن')),
+          FilledButton(
+            onPressed: LanRuntime.relaunch,
+            child: Text(Platform.isWindows ? 'إعادة تشغيل البرنامج الآن' : 'إغلاق البرنامج الآن'),
+          ),
         ],
       ),
     );
@@ -438,7 +457,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                       style: const TextStyle(letterSpacing: 2, fontWeight: FontWeight.bold),
                       decoration: const InputDecoration(
                         labelText: 'رمز الربط (من شاشة السيرفر)',
-                        hintText: 'مثل ABCD-EFGH-JKLM',
+                        hintText: 'غير مطلوب إن كان هذا الجهاز مضافاً لنفس الترخيص',
                       ),
                     ),
                     const SizedBox(height: 8),

@@ -18,11 +18,12 @@ import '../accounting/posting_engine.dart';
 import '../services/database/core/database_config.dart';
 import '../services/database_service.dart';
 import 'lan_client.dart';
-import 'lan_codec.dart' show LanConnectionException;
+import 'lan_codec.dart' show LanConnectionException, lanDefaultPort, lanCloseRevoked;
 import 'lan_settings.dart';
 import 'lan_server.dart';
 import 'network_settings_screen.dart';
 import 'windows_autostart.dart';
+import '../services/license_service.dart';
 
 class LanRuntime {
   LanRuntime._();
@@ -33,11 +34,26 @@ class LanRuntime {
 
   /// نتيجة الإقلاع: null = نجح، وإلا رسالة خطأ الاتصال (للطرفية).
   static Future<String?> beforeDatabase() async {
-    final settings = await LanSettings.load();
+    var settings = await LanSettings.load();
     AppNetworkMode.current = settings;
     if (!settings.isClient) return null;
 
-    if (settings.host.isEmpty || settings.secret.isEmpty) {
+    // 🖧 «طرفية» تشير إلى هذه الحاسبة نفسها (اسمها أو أحد عناوينها) خطأ مؤكد:
+    // هذه الحاسبة هي السيرفر. تصير سيرفراً وتفتح مباشرة بلا رسالة «تعذّر الاتصال».
+    if (Platform.isWindows && await pointsToThisPc(settings)) {
+      settings = settings.copyWith(mode: LanMode.server);
+      await settings.save();
+      AppNetworkMode.current = settings;
+      // ignore: avoid_print
+      print('🖧 إعداد «طرفية» كان يشير إلى هذه الحاسبة نفسها — صارت سيرفراً');
+      return null;
+    }
+    LanClientConnection.onLicenseRejected = (code) => unawaited(_onLicenseRejected(code));
+
+    // ترخيص هذا الجهاز يكفي بدل رمز الربط (أجهزة الترخيص نفسه)
+    await LicenseService.init();
+    final token = LicenseService().currentToken ?? '';
+    if (settings.host.isEmpty || (settings.secret.isEmpty && token.isEmpty)) {
       return 'لم يُحدَّد عنوان السيرفر أو رمز الربط';
     }
     final name = settings.clientName.isEmpty ? Platform.localHostname : settings.clientName;
@@ -46,6 +62,7 @@ class LanRuntime {
       port: settings.port,
       secret: settings.secret,
       clientName: name,
+      licenseToken: token,
     );
     try {
       await conn.connect();
@@ -60,7 +77,52 @@ class LanRuntime {
     }
     client = conn;
     databaseFactory = createLanDatabaseFactory(conn);
+    // حاسبة السيرفر تتحقق من ترخيص هذه الطرفية (قائمة الأجهزة النشطة)
+    LicenseService.gatedByLanServer = true;
     return null;
+  }
+
+  /// السيرفر رفض ترخيص هذه الطرفية: نسأل سيرفر الترخيص بأنفسنا. إن أكّد فك
+  /// الربط يُمسح الترخيص وتظهر شاشة التفعيل. لا نمسحه بكلمة حاسبة السيرفر وحدها.
+  static bool _checkingRevoked = false;
+  static Future<void> _onLicenseRejected(int code) async {
+    if (code != lanCloseRevoked || _checkingRevoked) return;
+    _checkingRevoked = true;
+    try {
+      final lic = LicenseService();
+      await lic.refreshNow();
+      if (!lic.isLicenseActivated()) LicenseService.onLocked?.call();
+    } catch (_) {
+    } finally {
+      _checkingRevoked = false;
+    }
+  }
+
+  /// هل يشير إعداد الطرفية إلى هذه الحاسبة نفسها؟
+  static Future<bool> pointsToThisPc(LanSettings s) async {
+    try {
+      final me = Platform.localHostname.trim().toLowerCase();
+      if (me.isNotEmpty && me != 'localhost' && s.serverName.trim().toLowerCase() == me) return true;
+      final h = s.host.trim();
+      if (h.isEmpty) return false;
+      if (h == 'localhost' || h.startsWith('127.')) return true;
+      for (final ni in await NetworkInterface.list(includeLoopback: true)) {
+        for (final a in ni.addresses) {
+          if (a.address == h) return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// إعادة تشغيل البرنامج (ويندوز: يفتح نسخة جديدة ثم يغلق هذه؛ أندرويد: يغلق فقط)
+  static Future<void> relaunch() async {
+    try {
+      if (Platform.isWindows) {
+        await Process.start(Platform.resolvedExecutable, const [], mode: ProcessStartMode.detached);
+      }
+    } catch (_) {}
+    exit(0);
   }
 
   static Future<LanClientConnection?> _findMovedServer(LanSettings s, String clientName) async {
@@ -72,7 +134,9 @@ class LanRuntime {
         final host = '${f['host']}';
         final port = (f['port'] as num?)?.toInt() ?? s.port;
         if (host == s.host && port == s.port) continue;
-        final c = LanClientConnection(host: host, port: port, secret: s.secret, clientName: clientName);
+        final c = LanClientConnection(
+            host: host, port: port, secret: s.secret, clientName: clientName,
+            licenseToken: LicenseService().currentToken ?? '');
         try {
           await c.connect();
           await s.copyWith(host: host, port: port).save();
@@ -90,6 +154,45 @@ class LanRuntime {
     return null;
   }
 
+  /// 🖧 بعد إضافة جهاز برمز: يبحث عن حاسبة السيرفر في الشبكة ويرتبط بها بترخيص
+  /// هذا الجهاز (بلا رمز ربط). يُرجع الإعداد المحفوظ، أو null إن لم يجد سيرفراً.
+  static Future<LanSettings?> autoJoin() async {
+    final token = LicenseService().currentToken ?? '';
+    if (token.isEmpty) return null;
+    final name = Platform.localHostname;
+    List<Map<String, Object?>> found = const [];
+    for (var i = 0; i < 2 && found.isEmpty; i++) {
+      found = await discoverLanServers(wait: const Duration(seconds: 3));
+    }
+    for (final f in found) {
+      final host = '${f['host']}';
+      final port = (f['port'] as num?)?.toInt() ?? lanDefaultPort;
+      final c = LanClientConnection(host: host, port: port, secret: '', clientName: name, licenseToken: token);
+      try {
+        await c.connect();
+        try {
+          await c.close();
+        } catch (_) {}
+        final cur = await LanSettings.load();
+        final next = cur.copyWith(
+          mode: LanMode.client,
+          host: host,
+          port: port,
+          secret: '',
+          serverName: '${f['name'] ?? ''}',
+          clientName: cur.clientName.isEmpty ? name : cur.clientName,
+        );
+        await next.save();
+        return next;
+      } catch (_) {
+        try {
+          await c.close();
+        } catch (_) {}
+      }
+    }
+    return null;
+  }
+
   static Future<void> afterDatabase() async {
     final s = AppNetworkMode.current;
     // ▶️ حاسبة السيرفر تفتح البرنامج وحدها عند تشغيل ويندوز (ما لم يُطفأ الخيار)
@@ -104,8 +207,13 @@ class LanRuntime {
           secret: s.secret,
           serverName: s.serverName.isEmpty ? Platform.localHostname : s.serverName,
           port: s.port,
+          checkLicense: LicenseService.checkPeerToken,
         );
         await server!.start();
+        // 🔐 قائمة أجهزة الترخيص النشطة: كل 30 دقيقة وفوراً بعد فك ربط جهاز —
+        // أي طرفية فُكّ ربطها تُقطع وتُرفض حتى لو عرفت رمز الربط
+        LicenseService.onPeersChanged = () => unawaited(server?.recheckLicenses());
+        LicenseService.startPeerWatch();
       } catch (e) {
         // ignore: avoid_print
         print('⚠️ تعذّر تشغيل خادم الشبكة: $e');
@@ -170,6 +278,38 @@ class LanConnectionErrorApp extends StatelessWidget {
                       onPressed: () => Navigator.push(
                           context, MaterialPageRoute(builder: (_) => const NetworkSettingsScreen())),
                     ),
+                    if (Platform.isWindows) ...[
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('إعادة المحاولة'),
+                        onPressed: LanRuntime.relaunch,
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.dns_outlined),
+                        label: const Text('هذه الحاسبة هي السيرفر — شغّلها سيرفراً'),
+                        onPressed: () async {
+                          final ok = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('تشغيل هذه الحاسبة سيرفراً؟'),
+                              content: const Text(
+                                  'اختر هذا فقط إن كانت قاعدة البيانات على هذه الحاسبة، وكانت الأجهزة الأخرى تتصل بها.\n'
+                                  'سيُعاد تشغيل البرنامج، ومن الآن يعمل سيرفراً تلقائياً عند كل تشغيل.'),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+                                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('نعم، سيرفر')),
+                              ],
+                            ),
+                          );
+                          if (ok != true) return;
+                          final cur = await LanSettings.load();
+                          await cur.copyWith(mode: LanMode.server).save();
+                          await LanRuntime.relaunch();
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     TextButton(
                       onPressed: () => exit(0),

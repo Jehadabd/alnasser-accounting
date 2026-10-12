@@ -11,8 +11,12 @@
 // • الاشتراك (المزامنة): تحقق يومي عند التشغيل؛ بعد الانتهاء يعمل 5 أيام مع
 //   رسالة يومية فيها رقم التواصل، ثم يتوقف حتى التجديد (البيانات تبقى).
 //   بلا أي تحقق أكثر من 7 أيام ⇒ يطلب الاتصال بالإنترنت.
-// • الدائم: يحاول التحقق شهرياً إن توفر الإنترنت، ولا يُغلق لعدم الاتصال؛
-//   يتوقف فقط إن أوقفناه نحن من السيرفر (فك ربط الجهاز / إيقاف الحساب).
+// • كل جهاز يسأل السيرفر عند التشغيل ثم كل 4 ساعات إن توفر الإنترنت (بالخلفية،
+//   بلا انتظار): فك ربط جهاز أو إيقاف الحساب يسري خلال ساعات، لا أسابيع.
+// • الدائم: الجهاز الرئيسي لا يُغلق لعدم الاتصال أبداً. الجهاز الإضافي يلزمه
+//   الإنترنت مرة كل 60 يوماً (تنبيه قبلها بأسبوع) — وإلا لبقي جهاز مفكوك يعمل
+//   للأبد ما دام لا يتصل. الطرفية المرتبطة بحاسبة السيرفر يحكمها السيرفر:
+//   يرفض الأجهزة المفكوكة ويقطعها فوراً (قائمة الأجهزة النشطة من سيرفر الترخيص).
 // • تراجع ساعة الجهاز قبل آخر تحقق موقَّع ⇒ يُرفض (منع إطالة المدة بتغيير التاريخ).
 
 import 'dart:async';
@@ -85,6 +89,32 @@ class LicenseService {
   static Map<String, dynamic>? _block;
   static Timer? _timer;
 
+  /// كل كم يسأل الجهاز سيرفر الترخيص بالخلفية (إن توفر الإنترنت)
+  static const Duration recheckEvery = Duration(hours: 4);
+
+  /// الجهاز الإضافي بترخيص دائم: أقصى مدة يعمل فيها بلا أي تحقق من السيرفر
+  static const int lifetimeSecondaryOfflineDays = 60;
+
+  /// آخر رد فعلي من سيرفر الترخيص (لا نكرر السؤال قبل ساعة)
+  static int _lastContactMs = 0;
+
+  /// 🖧 طرفية مرتبطة الآن بحاسبة السيرفر: السيرفر هو من يتحقق منها (قائمة
+  /// الأجهزة النشطة)، فلا تُقفل لطول انقطاعها هي عن الإنترنت.
+  static bool gatedByLanServer = false;
+
+  // ── حاسبة السيرفر: الأجهزة النشطة في الترخيص (لرفض الطرفيات المفكوكة) ──
+  static const _kPeers = 'alnaser_license_v4_peers';
+  static const _kRevokedPeers = 'alnaser_license_v4_revoked_peers';
+  static Set<String>? _activePeers;
+  static int _peersAt = 0;
+  static int _peersTriedAt = 0;
+  static Set<String> _revokedPeers = {};
+  static Future<bool>? _peersInFlight;
+  static Timer? _peerTimer;
+
+  /// تُستدعى حين تتغير قائمة الأجهزة النشطة (لتقطع حاسبة السيرفر أي طرفية فُكّت)
+  static void Function()? onPeersChanged;
+
   // مخزن حالة الترخيص داخل مجلد بيانات البرنامج نفسه (لا في «المستندات» المشترك)،
   // فلكل برنامج/مستخدم ويندوز حالته الخاصة.
   static GetStorage? _box;
@@ -132,7 +162,11 @@ class LicenseService {
       debugPrint('🔐 [LICENSE] init: $e');
     }
     _initDone = true;
-    _timer ??= Timer.periodic(const Duration(hours: 6), (_) => s._backgroundRefresh());
+    s._loadPeers();
+    // 🔄 سؤال السيرفر بالخلفية بعد الإقلاع بقليل ثم كل 4 ساعات — لا ينتظره المستخدم،
+    // وفك ربط الجهاز أو إيقاف الحساب يسري خلال ساعات حتى للترخيص الدائم.
+    _timer ??= Timer.periodic(recheckEvery, (_) => s._backgroundRefresh(force: true));
+    Future<void>.delayed(const Duration(seconds: 40), () => s._backgroundRefresh(force: true));
   }
 
   /// يقبل الترخيص فقط إن كان موقَّعاً من سيرفرنا ولهذا الجهاز.
@@ -198,6 +232,23 @@ class LicenseService {
     final now = max(real, floor);
     _bumpSeen(now);
     final phone = p.supportPhone;
+    if (p.isLifetime && !p.isMain && !gatedByLanServer) {
+      final off = offlineLimitOf(p)!;
+      if (now > off) {
+        return const LicenseStatus(LicenseState.offlineTooLong,
+            message: 'هذا جهاز إضافي في الترخيص، ولم يتحقق من السيرفر منذ أكثر من '
+                '$lifetimeSecondaryOfflineDays يوماً.\n'
+                'صِل الإنترنت ثم اضغط «تحقق من التجديد» — يكفي اتصال واحد، وبياناتك محفوظة.');
+      }
+      if (off - now < 7 * _day) {
+        final d = ((off - now) / _day).ceil().clamp(1, 7);
+        return LicenseStatus(LicenseState.warning,
+            daysLeft: d,
+            message: 'صِل هذا الجهاز بالإنترنت خلال ${_days(d)} ليتحقق من ترخيصه '
+                '(الأجهزة الإضافية تتحقق مرة كل $lifetimeSecondaryOfflineDays يوماً على الأقل)، '
+                'وإلا يتوقف حتى يتصل. يكفي فتح البرنامج والإنترنت متصل.');
+      }
+    }
     if (!p.isLifetime) {
       final grc = p.graceUntilMs, exp = p.expiresMs, off = p.offlineUntilMs;
       if (grc != null && now > grc) {
@@ -231,6 +282,11 @@ class LicenseService {
     return const LicenseStatus(LicenseState.active);
   }
 
+  /// آخر موعد يعمل فيه الترخيص بلا تحقق من السيرفر (null = بلا حد: الجهاز الرئيسي الدائم)
+  static int? offlineLimitOf(LicensePayload p) =>
+      p.offlineUntilMs ??
+      (p.isLifetime && !p.isMain ? p.issuedAtMs + lifetimeSecondaryOfflineDays * _day : null);
+
   static String _days(int d) => d == 1 ? 'يوماً واحداً' : (d == 2 ? 'يومين' : '$d أيام');
 
   bool isLicenseActivated() => evaluate().usable;
@@ -245,6 +301,127 @@ class LicenseService {
   /// محتوى الترخيص حتى لو كان موقوفاً (للعرض فقط: اسم الحساب في شاشة التفعيل)
   LicensePayload? get payload => _payload;
   bool get hasStoredToken => _token != null;
+
+  /// الترخيص الموقَّع لهذا الجهاز (تقدّمه الطرفية لحاسبة السيرفر بدل رمز الربط)
+  String? get currentToken => _token;
+
+  /// 🖧 حاسبة السيرفر: هل تقبل طرفية تقدّم هذا الترخيص؟
+  /// null = نعم. وإلا السبب: 'revoked' (فُكّ ربطها من الترخيص)، 'stale' (لم
+  /// تتحقق من السيرفر منذ مدة طويلة ولا نستطيع التحقق الآن)، 'expired'،
+  /// 'foreign' (حساب ترخيص آخر)، 'invalid' (توقيع غير صالح أو هذا الجهاز بلا ترخيص).
+  static Future<String?> checkPeerToken(String token) async {
+    final mine = _payload;
+    if (mine == null) return 'invalid';
+    final p = LicenseToken.verify(token);
+    if (p == null) return 'invalid';
+    if (p.account != mine.account) return 'foreign';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final g = p.graceUntilMs;
+    if (!p.isLifetime && g != null && now > g) return 'expired';
+    if (p.deviceId == mine.deviceId) return null;
+    if (_revokedPeers.contains(p.deviceId)) return 'revoked';
+    if (_activePeers?.contains(p.deviceId) == true) return null;
+    // ليس في القائمة المعروفة (جهاز أُضيف للتو، أو فُكّ ربطه): نسأل السيرفر الآن
+    var fresh = await _refreshPeers(minGap: const Duration(seconds: 30))
+        .timeout(const Duration(seconds: 4), onTimeout: () => false);
+    if (fresh && !_activePeers!.contains(p.deviceId) && p.issuedAtMs > _peersAt) {
+      // ترخيصه أحدث من قائمتنا (أُضيف بعد آخر جلب): نجلبها مرة أخرى الآن
+      fresh = await _refreshPeers().timeout(const Duration(seconds: 4), onTimeout: () => false);
+    }
+    if (fresh) return _activePeers!.contains(p.deviceId) ? null : 'revoked';
+    // تعذّر السؤال (بلا إنترنت، أو سيرفر قديم):
+    // • كان موجوداً قبل آخر قائمة عرفناها ولم يكن فيها ⇒ مفكوك
+    //   (هامش 10 دقائق لفرق الساعة بين هذا الجهاز وسيرفر الترخيص)
+    if (_activePeers != null && p.issuedAtMs <= _peersAt + 10 * 60 * 1000) return 'revoked';
+    // • وإلا نطبّق عليه حدّ الانقطاع نفسه الذي يطبّقه على نفسه
+    final off = offlineLimitOf(p);
+    if (off != null && now > off) return 'stale';
+    return null;
+  }
+
+  /// 🖧 حاسبة السيرفر: تحديث قائمة الأجهزة النشطة كل 30 دقيقة (وأول مرة بعد الإقلاع بقليل).
+  static void startPeerWatch() {
+    _peerTimer ??= Timer.periodic(
+        const Duration(minutes: 30), (_) => _refreshPeers(minGap: const Duration(minutes: 5)));
+    Future<void>.delayed(const Duration(seconds: 20), () => _refreshPeers());
+  }
+
+  /// يجلب الأجهزة النشطة من سيرفر الترخيص. true = القائمة الآن حديثة.
+  static Future<bool> _refreshPeers({Duration minGap = Duration.zero}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final running = _peersInFlight;
+    if (running != null) return running;
+    if (_activePeers != null && now - _peersAt < minGap.inMilliseconds) return Future.value(true);
+    if (now - _peersTriedAt < minGap.inMilliseconds) return Future.value(false);
+    _peersTriedAt = now;
+    final f = _fetchPeers();
+    _peersInFlight = f;
+    f.whenComplete(() {
+      if (identical(_peersInFlight, f)) _peersInFlight = null;
+    });
+    return f;
+  }
+
+  static Future<bool> _fetchPeers() async {
+    final s = LicenseService();
+    try {
+      if (_token == null || _payload == null) return false;
+      Set<String>? ids;
+      if (_payload!.isMain) {
+        // الجهاز الرئيسي: قائمة أجهزة الترخيص (تعمل مع كل إصدارات سيرفر الترخيص)
+        final r = await s.listDevices();
+        if (r.success) ids = r.devices.map((d) => d.id).where((d) => d.isNotEmpty).toSet();
+      } else {
+        // جهاز إضافي يعمل سيرفراً: عملية peers (سيرفر الترخيص الإصدار الأحدث)
+        final r = await LicenseApi.call({'action': 'peers', 'token': _token, 'fp': _fp});
+        if (r['ok'] == true && r['ids'] is List) {
+          ids = (r['ids'] as List).map((e) => '$e').where((d) => d.isNotEmpty).toSet();
+        } else {
+          final code = '${r['error'] ?? ''}';
+          if (code == 'REVOKED' || code == 'EXPIRED' || code == 'SUSPENDED' ||
+              code == 'DEVICE_MISMATCH' || code == 'BAD_TOKEN') {
+            await s._handleIssue(r);
+          }
+        }
+      }
+      if (ids == null) return false;
+      _activePeers = ids;
+      _peersAt = DateTime.now().millisecondsSinceEpoch;
+      _revokedPeers.removeAll(ids); // أُعيد إضافته
+      await s._savePeers();
+      onPeersChanged?.call();
+      return true;
+    } catch (e) {
+      debugPrint('🔐 [LICENSE] قائمة الأجهزة: $e');
+      return false;
+    }
+  }
+
+  void _loadPeers() {
+    try {
+      final acc = _payload?.account ?? '';
+      final m = _readJson(_kPeers);
+      if (m != null && '${m['acc'] ?? ''}' == acc && m['ids'] is List) {
+        _activePeers = (m['ids'] as List).map((e) => '$e').toSet();
+        _peersAt = _toInt(m['at']);
+      }
+      final r = _readJson(_kRevokedPeers);
+      if (r != null && '${r['acc'] ?? ''}' == acc && r['ids'] is List) {
+        _revokedPeers = (r['ids'] as List).map((e) => '$e').toSet();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _savePeers() async {
+    final acc = _payload?.account ?? '';
+    try {
+      if (_activePeers != null) {
+        await _writeJson(_kPeers, {'acc': acc, 'at': _peersAt, 'ids': _activePeers!.toList()});
+      }
+      await _writeJson(_kRevokedPeers, {'acc': acc, 'ids': _revokedPeers.toList()});
+    } catch (_) {}
+  }
+
   bool get isMainDevice => _payload?.isMain ?? false;
 
   // ═══════════════════════════════ الفحص عند الإقلاع ═══════════════════════════════
@@ -301,10 +478,12 @@ class LicenseService {
     return true;
   }
 
-  Future<void> _backgroundRefresh() async {
+  Future<void> _backgroundRefresh({bool force = false}) async {
     if (_payload == null) return;
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now < _payload!.checkAfterMs && evaluate().state == LicenseState.active) return;
+    if (!force && now < _payload!.checkAfterMs && evaluate().state == LicenseState.active) return;
+    // سُئل السيرفر قبل أقل من ساعة (عند الإقلاع مثلاً): لا داعي
+    if (force && now - _lastContactMs < 3600 * 1000) return;
     if (!await hasInternetConnection()) return;
     await refreshNow();
     if (!evaluate().usable) onLocked?.call();
@@ -430,6 +609,10 @@ class LicenseService {
   Future<LicenseResult> verifyWithServer({bool silent = false}) => refreshNow();
 
   Future<LicenseResult> _handleIssue(Map<String, dynamic> r) async {
+    final err0 = '${r['error'] ?? ''}';
+    if (r['ok'] == true || (err0.isNotEmpty && err0 != 'NETWORK_ERROR' && err0 != 'UNKNOWN_ACTION')) {
+      _lastContactMs = DateTime.now().millisecondsSinceEpoch;
+    }
     if (r['ok'] == true && r['token'] is String) {
       final token = r['token'] as String;
       if (!_applyToken(token)) {
@@ -509,7 +692,15 @@ class LicenseService {
   Future<LicenseResult> unbindDevice(String deviceId) async {
     if (_token == null) return LicenseResult(success: false, error: 'NOT_ACTIVATED');
     final r = await LicenseApi.call({'action': 'unbind', 'token': _token, 'fp': _fp, 'device_id': deviceId});
-    if (r['ok'] == true) return LicenseResult(success: true);
+    if (r['ok'] == true) {
+      // 🖧 حاسبة السيرفر ترفضه وتقطعه فوراً، حتى لو لم يعرف الجهاز نفسه بعد
+      _revokedPeers.add(deviceId);
+      _activePeers?.remove(deviceId);
+      await _savePeers();
+      onPeersChanged?.call();
+      unawaited(_refreshPeers());
+      return LicenseResult(success: true);
+    }
     return LicenseResult(success: false, error: '${r['error']}', message: '${r['message'] ?? ''}');
   }
 

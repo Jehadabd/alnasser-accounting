@@ -17,6 +17,7 @@ import '../services/database/business/invoice_debt_reconciler.dart';
 import '../services/smart_search/smart_search.dart';
 import '../services/auth_service.dart';
 import '../services/invoice_settings_service.dart';
+import '../services/database/business/invoice_numbering.dart';
 import 'package:sqflite/sqflite.dart';
 
 class InvoiceValidationResult {
@@ -540,34 +541,12 @@ class InvoiceController {
           invoiceYear = data.selectedDate.year;
           invoiceMonth = data.selectedDate.month;
           
-          final seqResult = await txn.rawQuery('''
-            SELECT MAX(monthly_sequence_number) as max_seq
-            FROM invoices
-            WHERE creator_device_id = ?
-              AND invoice_year = ?
-              AND invoice_month = ?
-          ''', [creatorDeviceIdStr, invoiceYear, invoiceMonth]);
-          
-          int currentSeq = 1;
-          if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {
-            currentSeq = (seqResult.first['max_seq'] as int) + 1;
-          }
-          
-          // 🛡️ حلقة حماية تمنع التعارض المطلق لـ UNIQUE constraint
-          while (true) {
-            final checkSeq = await txn.query(
-              'invoices',
-              columns: ['id'],
-              where: 'creator_device_id = ? AND invoice_year = ? AND invoice_month = ? AND monthly_sequence_number = ?',
-              whereArgs: [creatorDeviceIdStr, invoiceYear, invoiceMonth, currentSeq],
-              limit: 1,
-            );
-            if (checkSeq.isEmpty) break;
-            currentSeq++;
-          }
-          
-          nextSeq = currentSeq;
-          invoiceNumberStr = '$deviceIdNum$invoiceYear$invoiceMonth$nextSeq';
+          // 🔢 أول رقم غير مستعمل في القاعدة كلها — لا في فواتير هذا الجهاز وحدها
+          // (فواتير جهاز آخر على «رقم الجهاز» نفسه كانت تصطدم: UNIQUE invoice_number)
+          final n = await InvoiceNumbering.next(txn,
+              deviceNum: deviceIdNum, year: invoiceYear, month: invoiceMonth);
+          nextSeq = n.seq;
+          invoiceNumberStr = n.number;
         }
 
         Invoice invoice = Invoice(
@@ -630,7 +609,8 @@ class InvoiceController {
         // InvoiceDebtReconciler الذي يقرأه من صف الفاتورة مباشرة.
 
         if (data.isNewInvoice) {
-          invoiceId = await txn.insert('invoices', invoiceMap);
+          // سبقنا جهاز آخر بالرقم نفسه في اللحظة نفسها؟ يُعاد الترقيم تلقائياً
+          invoiceId = await InvoiceNumbering.insertNew(txn, invoiceMap);
           invoice = Invoice.fromMap(invoiceMap).copyWith(id: invoiceId);
         } else {
           invoiceId = data.invoiceToManage!.id!;

@@ -63,3 +63,6 @@ installer_output/
 Output/
 checkpoints_arabic/
 *.traineddata
+
+# Graphify code graph (rebuilt locally by the git hook; ~9 MB)
+graphify-out/

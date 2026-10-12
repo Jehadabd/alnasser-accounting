@@ -10,6 +10,7 @@ import '../../../models/invoice_item.dart';
 import '../../../models/transaction.dart';
 import '../../../utils/uuid_helper.dart';
 import '../../invoice_settings_service.dart';
+import 'invoice_numbering.dart';
 import 'financial_integrity_guard.dart';
 
 class InvoiceManager {
@@ -99,37 +100,11 @@ class InvoiceManager {
         final invoiceYear = invoice.invoiceDate.year;
         final invoiceMonth = invoice.invoiceDate.month;
 
-        // التسلسل الشهري: نأخذ MAX ضمن نفس (الجهاز + السنة + الشهر) للفواتير المحلية فقط.
-        // نستخدم invoice_year/invoice_month (أعمدة مفهرسة) + creator_device_id لتسريع البحث،
-        // ونتحقق من is_created_by_me = 1 حتى لا تؤثر الفواتير المستوردة من أجهزة أخرى على تسلسلي.
-        final seqResult = await txn.rawQuery('''
-          SELECT MAX(monthly_sequence_number) as max_seq
-          FROM invoices
-          WHERE creator_device_id = ?
-            AND invoice_year = ?
-            AND invoice_month = ?
-        ''', [deviceIdStr, invoiceYear, invoiceMonth]);
-
-        int nextSeq = 1;
-        if (seqResult.isNotEmpty && seqResult.first['max_seq'] != null) {
-          nextSeq = (seqResult.first['max_seq'] as int) + 1;
-        }
-
-        // 🛡️ حلقة أمان تفحص وجود نفس الرقم التسلسلي وتمنع UNIQUE constraint
-        while (true) {
-          final checkSeq = await txn.query(
-            'invoices',
-            columns: ['id'],
-            where: 'creator_device_id = ? AND invoice_year = ? AND invoice_month = ? AND monthly_sequence_number = ?',
-            whereArgs: [deviceIdStr, invoiceYear, invoiceMonth, nextSeq],
-            limit: 1,
-          );
-          if (checkSeq.isEmpty) break;
-          nextSeq++;
-        }
-
-        // رقم الفاتورة التجاري كنص: [جهاز][سنة][شهر][تسلسل]
-        final invoiceNumberStr = '$deviceIdNum$invoiceYear$invoiceMonth$nextSeq';
+        // 🔢 أول رقم غير مستعمل في القاعدة كلها (القيدان: رقم الفاتورة، والجهاز+السنة+الشهر+التسلسل)
+        final n = await InvoiceNumbering.next(txn,
+            deviceNum: deviceIdNum, year: invoiceYear, month: invoiceMonth);
+        final nextSeq = n.seq;
+        final invoiceNumberStr = n.number;
 
         invoiceMap['monthly_sequence_number'] = nextSeq;
         invoiceMap['invoice_number'] = invoiceNumberStr; // ✅ الرقم المرئي للمستخدم
@@ -140,7 +115,7 @@ class InvoiceManager {
         
         if (createdBy != null) invoiceMap['created_by'] = createdBy;
         
-        final invoiceId = await txn.insert('invoices', invoiceMap);
+        final invoiceId = await InvoiceNumbering.insertNew(txn, invoiceMap);
         
         // ج. حفظ الأصناف مع معالجة التكلفة
         for (final item in items) {
