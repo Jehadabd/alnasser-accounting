@@ -384,7 +384,7 @@ class ErpPosting {
           sourceId: s.id,
           sourceHash: s.hash,
           date: parseDate(r['invoice_date']),
-          description: 'عمولة البائع ${r['seller_name'] ?? ''} على فاتورة #${s.id} — ${r['customer_name'] ?? ''}',
+          description: 'عمولة المندوب ${r['seller_name'] ?? ''} على فاتورة #${s.id} — ${r['customer_name'] ?? ''}',
           lines: [
             JournalLineInput(accountId: expense, debit: amt),
             JournalLineInput(accountId: payable, credit: amt),

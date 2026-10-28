@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'dart:ui' as ui;
 import 'dart:convert';
-import 'dart:math' as math;
 import 'vision_service.dart';
 
 class OcrService {
@@ -34,8 +33,11 @@ class OcrService {
       if (!isBundled) {
         try {
            final check = await Process.run('tesseract', ['--version']);
-           if (check.exitCode == 0) tesseractPath = 'tesseract';
-           else return "Error: Tesseract not found.";
+           if (check.exitCode == 0) {
+             tesseractPath = 'tesseract';
+           } else {
+             return "Error: Tesseract not found.";
+           }
         } catch (e) {
            return "Error: Tesseract not found at $tesseractPath and not in PATH.";
         }
@@ -143,7 +145,9 @@ class OcrService {
 
     double pageWidth = 0;
     // Estimate page width from max X
-    for (var o in objects) if ((o.x + o.width) > pageWidth) pageWidth = o.x + o.width;
+    for (var o in objects) {
+      if ((o.x + o.width) > pageWidth) pageWidth = o.x + o.width;
+    }
     
     debugPrint("Pipeline: Vision OK. Objects: ${objects.length}, PageWidth: $pageWidth");
 
@@ -272,7 +276,7 @@ class OcrService {
      List<_ClassifiedBox> classified = [];
      for (var box in row) {
         if (box.text == "[[IMAGE]]") {
-           classified.add(_ClassifiedBox(box, _Role.IMAGE));
+           classified.add(_ClassifiedBox(box, _Role.image));
            continue;
         }
 
@@ -289,22 +293,22 @@ class OcrService {
            // Heuristic: Qty is usually integer-like and small. Price/Total are money.
            // Position Heuristic:
            // If we have multiple numbers, we need to distinguish.
-           classified.add(_ClassifiedBox(box, _Role.NUMBER, value: val));
+           classified.add(_ClassifiedBox(box, _Role.number, value: val));
         } else {
            // Skip short noise
            if (box.text.trim().length > 1) {
-             classified.add(_ClassifiedBox(box, _Role.TEXT));
+             classified.add(_ClassifiedBox(box, _Role.text));
            }
         }
      }
      
      // 2. Role Assignment (Constraint Satisfaction)
      // We look for patterns: [NUMBER, NUMBER, NUMBER] or [NUMBER, NUMBER] in the row
-     List<_ClassifiedBox> numbers = classified.where((c) => c.role == _Role.NUMBER).toList();
-     List<_ClassifiedBox> texts = classified.where((c) => c.role == _Role.TEXT || c.role == _Role.IMAGE).toList();
+     List<_ClassifiedBox> numbers = classified.where((c) => c.role == _Role.number).toList();
+     List<_ClassifiedBox> texts = classified.where((c) => c.role == _Role.text || c.role == _Role.image).toList();
      
      if (texts.isEmpty && numbers.isEmpty) return null;
-     if (numbers.length < 2 && numbers.length > 0) {
+     if (numbers.length < 2 && numbers.isNotEmpty) {
         // Only 1 number? Probably Price or Total.
         // If we assumed Qty=1, we can match.
         price = numbers.first.value;
@@ -357,7 +361,7 @@ class OcrService {
      // 3. Name Assembly
      if (texts.isNotEmpty) {
         name = texts.map((e) {
-             if (e.role == _Role.IMAGE) return "منتج (صورة)";
+             if (e.role == _Role.image) return "منتج (صورة)";
              return e.box.text;
         }).join(" ");
      } else {
@@ -386,7 +390,7 @@ class OcrService {
   }
 }
 
-enum _Role { TEXT, NUMBER, IMAGE }
+enum _Role { text, number, image }
 
 class _ClassifiedBox {
   final OCRWord box;

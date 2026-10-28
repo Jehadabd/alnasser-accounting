@@ -54,8 +54,6 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   late FocusNode _priceFocusNode;
   late FocusNode _detailsFocusNode;
   late FocusNode _saleTypeFocusNode;
-  bool _openSaleTypeDropdown = false;
-  bool _openPriceDropdown = false;
   bool _isSaleTypeDropdownOpen = false;
   int _selectedSaleTypeIndex = 0;
   final GlobalKey _saleTypeDropdownKey = GlobalKey();
@@ -237,14 +235,16 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
             json.decode(product.unitHierarchy!.replaceAll("'", '"'));
         options.addAll(hierarchy
             .map((e) => (e['unit_name'] ?? e['name'] ?? '').toString()));
-      } catch (e) {}
+      } catch (_) {
+        // هرمية وحدات تالفة: نكتفي بالوحدة الأساسية
+      }
     } else if (product.unit == 'meter' && product.lengthPerUnit != null) {
       options = ['متر'];
       options.add('لفة');
     } else if (product.unit != 'piece' && product.unit != 'meter') {
       options = [product.unit];
     }
-    options = options.where((e) => e != null && e.isNotEmpty).toSet().toList();
+    options = options.where((e) => e.isNotEmpty).toSet().toList();
     if (_currentItem.saleType != null &&
         _currentItem.saleType!.isNotEmpty &&
         !options.contains(_currentItem.saleType)) {
@@ -253,14 +253,6 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     return options;
   }
 
-  List<DropdownMenuItem<String>> _getUnitOptions() {
-    return _getUnitValues()
-        .map((unit) => DropdownMenuItem(
-              value: unit,
-              child: Text(unit, textAlign: TextAlign.center),
-            ))
-        .toList();
-  }
 
   void _updateQuantity(String value) {
     double? newQuantity = double.tryParse(value.replaceAll(',', ''));
@@ -300,47 +292,45 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
       ),
     );
     double conversionFactor = 1.0;
-    print('🔍 [تشخيص-صف-ودجت] "${_currentItem.productName}" → "$newType" | السعر الحالي: ${_currentItem.appliedPrice}');
-    if (product != null) {
-      print('    unit="${product.unit}" | isWeighable=${product.isWeighable} | unitHierarchy=${product.unitHierarchy}');
-      if (product.unit == 'piece' && newType != 'قطعة') {
-        if (product.unitHierarchy != null &&
-            product.unitHierarchy!.isNotEmpty) {
-          try {
-            List<dynamic> hierarchy =
-                json.decode(product.unitHierarchy!.replaceAll("'", '"'));
-            for (var unit in hierarchy) {
-              if ((unit['unit_name'] ?? unit['name']) == newType) {
-                conversionFactor = (unit['quantity'] as num).toDouble();
-                break;
-              }
+    debugPrint('🔍 [تشخيص-صف-ودجت] "${_currentItem.productName}" → "$newType" | السعر الحالي: ${_currentItem.appliedPrice}');
+    debugPrint('    unit="${product.unit}" | isWeighable=${product.isWeighable} | unitHierarchy=${product.unitHierarchy}');
+    if (product.unit == 'piece' && newType != 'قطعة') {
+      if (product.unitHierarchy != null &&
+          product.unitHierarchy!.isNotEmpty) {
+        try {
+          List<dynamic> hierarchy =
+              json.decode(product.unitHierarchy!.replaceAll("'", '"'));
+          for (var unit in hierarchy) {
+            if ((unit['unit_name'] ?? unit['name']) == newType) {
+              conversionFactor = (unit['quantity'] as num).toDouble();
+              break;
             }
-          } catch (e) {
-            print('    ❌ [تشخيص-صف-ودجت] فشل parse الهرمية: $e');
           }
+        } catch (e) {
+          debugPrint('    ❌ [تشخيص-صف-ودجت] فشل parse الهرمية: $e');
         }
-      } else if (product.unit == 'meter' && newType == 'لفة') {
-        conversionFactor = product.lengthPerUnit ?? 1.0;
-      } else if (newType != 'قطعة') {
-        print('    ⚠️ [تشخيص-صف-ودجت] لا فرع تحويل (unit="${product.unit}" ليست piece/meter) → معامل=1 — سبب خطأ الموزونات');
       }
+    } else if (product.unit == 'meter' && newType == 'لفة') {
+      conversionFactor = product.lengthPerUnit ?? 1.0;
+    } else if (newType != 'قطعة') {
+      debugPrint('    ⚠️ [تشخيص-صف-ودجت] لا فرع تحويل (unit="${product.unit}" ليست piece/meter) → معامل=1 — سبب خطأ الموزونات');
     }
-    print('    معامل التحويل: $conversionFactor');
+    debugPrint('    معامل التحويل: $conversionFactor');
     setState(() {
       double newAppliedPrice;
-      if ((product?.unit == 'piece' && newType != 'قطعة') ||
-          (product?.unit == 'meter' && newType == 'لفة')) {
+      if ((product.unit == 'piece' && newType != 'قطعة') ||
+          (product.unit == 'meter' && newType == 'لفة')) {
         newAppliedPrice = _currentItem.appliedPrice * conversionFactor;
-      } else if ((product?.unit == 'piece' &&
+      } else if ((product.unit == 'piece' &&
               _currentItem.saleType != 'قطعة' &&
               newType == 'قطعة') ||
-          (product?.unit == 'meter' &&
+          (product.unit == 'meter' &&
               _currentItem.saleType == 'لفة' &&
               newType == 'متر')) {
         newAppliedPrice = _currentItem.appliedPrice / conversionFactor;
       } else {
         newAppliedPrice = _currentItem.appliedPrice;
-        print('    ✅ [تشخيص-صف-ودجت] السعر بقي بلا تغيير: $newAppliedPrice');
+        debugPrint('    ✅ [تشخيص-صف-ودجت] السعر بقي بلا تغيير: $newAppliedPrice');
       }
       double quantity = _currentItem.quantityIndividual ??
           _currentItem.quantityLargeUnit ??
@@ -360,9 +350,6 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
           (newAppliedPrice > 0) ? NumberFormat('#,##0.##', 'en_US').format(newAppliedPrice) : '';
       widget.onItemUpdated(_currentItem);
       // FocusScope.of(context).requestFocus(_priceFocusNode); // <-- Removed auto focus to price here to allow user to confirm with Enter
-      setState(() {
-        _openPriceDropdown = true;
-      });
     });
   }
 
@@ -440,20 +427,6 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
       );
       
       currentStock = product.stockQuantity;
-      
-      // حساب الكمية المباعة بالوحدة الأساسية
-      double quantitySoldInBaseUnit;
-      double enteredQuantity = _getCorrectQuantity(displayItem);
-      
-      if (displayItem.saleType == 'قطعة' || displayItem.saleType == 'متر' || displayItem.saleType == product.unit) {
-         quantitySoldInBaseUnit = enteredQuantity;
-      } else {
-         // تحويل الوحدات الكبيرة إلى الوحدة الأساسية
-         // سنفترض هنا عملية تقريبية إذا لم تتوفر التسلسل الهرمي الدقيق في هذه اللحظة،
-         // لكن الأفضل استخدام unitsInLargeUnit إذا كان محسوباً
-         double factor = displayItem.unitsInLargeUnit ?? 1.0;
-         quantitySoldInBaseUnit = enteredQuantity * factor;
-      }
       
       // إذا كان المخزون 0 أو أقل، نعتبره نافذاً (حسب طلب المستخدم: إذا المخزون 0، يظهر تحذير أحمر)
       // المستخدم قال: "الذي اصبح المخزون له صفر... تظهر عليه لون احمر"
@@ -602,7 +575,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                                   _currentItem = _currentItem.copyWith(
                                     productName: selection,
                                     saleType: defaultSaleType,
-                                    appliedPrice: selectedProduct.price1 ?? selectedProduct.unitPrice,
+                                    appliedPrice: selectedProduct.price1,
                                     costPrice: selectedProduct.costPrice,
                                   );
                                   widget.onItemUpdated(_currentItem);
@@ -835,10 +808,6 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     );
   }
 
-  // دالة لاختيار نوع البيع الافتراضي (أصغر وحدة) والانتقال للسعر (لم تعد مستخدمة في onFieldSubmitted للكمية)
-  void _selectDefaultSaleTypeAndMoveToPrice() {
-     // ... logic kept or removed as needed, currently not called by Quantity Enter anymore ...
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

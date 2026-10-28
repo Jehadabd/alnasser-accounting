@@ -7,6 +7,7 @@ import '../models/category.dart';
 import '../services/database_service.dart';
 import '../widgets/formatters.dart';
 import '../widgets/camera_barcode_scanner_dialog.dart';
+import '../inventory/item_card_editor_screen.dart'; // 🧾 بطاقة المادة الحالية (مختصرة)
 
 // --- VISUAL CONSTANTS (From ProductEntryScreen) ---
 const Color kPrimaryColor = Color(0xFF5D5FEF);
@@ -38,7 +39,7 @@ class ModernSectionCard extends StatelessWidget {
         color: kCardColor,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(color: const Color(0xff121212).withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(color: const Color(0xff121212).withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4)),
         ],
       ),
       child: Column(
@@ -222,7 +223,6 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
   // Base Unit & Stock
   final _baseUnitNameController = TextEditingController(text: 'قطعة');
   final _stockController = TextEditingController();
-  final _baseWeightController = TextEditingController();
   final _alertQtyController = TextEditingController(); // 🔔 Added
   
   // Pricing (Cost + 6 Sell Prices)
@@ -243,13 +243,10 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
   
   // Lists
   List<String> _availableUnits = ['قطعة', 'كرتون', 'باكيت', 'طرد', 'كغم', 'متر', 'رول'];
-  List<Map<String, dynamic>> _hierarchyItems = [];
-  List<Map<String, dynamic>> _barcodeItems = [];
+  final List<Map<String, dynamic>> _hierarchyItems = [];
+  final List<Map<String, dynamic>> _barcodeItems = [];
   
   // UI Expandables
-  bool _showAdditionalPrices = false;
-  bool _showAdditionalBarcodes = false;
-  bool _showUnitHierarchy = false;
 
   // Invoice Entry (Context) 
   String _currentBuyUnit = 'قطعة'; 
@@ -268,7 +265,10 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
     
     // --- Smart Import Auto-Switch ---
     if (widget.initialName != null) {
-      _mode = 'create';
+      // 🧾 مادة جديدة من سطر فاتورة: تُفتح بطاقة المادة الحالية مختصرة فوراً
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openItemCard(name: widget.initialName);
+      });
       _nameController.text = widget.initialName!;
       
       if (widget.initialCost != null) {
@@ -319,7 +319,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
       children: [
         Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
         const SizedBox(width: 8),
-        Switch(value: value, onChanged: onChanged, activeColor: kPrimaryColor),
+        Switch(value: value, onChanged: onChanged, activeThumbColor: kPrimaryColor),
       ],
     );
   }
@@ -382,21 +382,45 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         );
       }
     } else {
-      // ❌ غير موجود: الانتقال إلى وضع إنشاء منتج جديد مع ملء الباركود تلقائياً
-      setState(() {
-        _mode = 'create';
-        _barcodeController.text = clean;
-      });
+      // ❌ غير موجود: بطاقة مادة جديدة بالباركود نفسه
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('لم يتم العثور على منتج بهذا الباركود ($clean). يمكنك تعريفه الآن.'),
+            content: Text('لا مادة بالباركود ($clean) — عرّفها الآن.'),
             backgroundColor: Colors.orange.shade800,
             duration: const Duration(seconds: 3),
           ),
         );
+        await _openItemCard(barcode: clean);
       }
     }
+  }
+
+  /// 🧾 «منتج جديد»: بطاقة المادة الحالية (نفس شاشة إدخال البضاعة) مختصرة. بعد
+  /// حفظها تعود هنا مختارة، فتُحدَّد الوحدة والكمية وسعر الشراء ثم «إضافة».
+  Future<void> _openItemCard({String? name, String? barcode}) async {
+    final res = await Navigator.of(context).push<Object?>(MaterialPageRoute(
+      builder: (_) => ItemCardEditorScreen(
+        quickForPurchase: true,
+        initialName: (name ?? '').trim().isEmpty ? null : name,
+        initialBarcode: barcode,
+      ),
+    ));
+    if (res is! int || !mounted) return;
+    final p = await DatabaseService().getProductById(res);
+    if (p == null || !mounted) return;
+    final fmt = NumberFormat('#,##0.##', 'en_US');
+    setState(() {
+      _mode = 'search';
+      _selectedExistingProduct = p;
+      _invoiceUnitController.text = (widget.initialUnit ?? '').trim().isNotEmpty ? widget.initialUnit!.trim() : p.unit;
+      _invoiceQtyController.text = widget.initialQty != null ? fmt.format(widget.initialQty!) : '1';
+      _invoicePriceController.text = widget.initialCost != null ? fmt.format(widget.initialCost!) : fmt.format(p.costPrice ?? 0);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('عُرّفت «${p.name}» — حدّد الوحدة والكمية وسعر الشراء ثم «إضافة»'),
+      backgroundColor: Colors.green.shade700,
+    ));
   }
 
   /// Called when the base unit changes. If different from invoice unit, auto-creates hierarchy.
@@ -409,9 +433,6 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
           _invoiceOriginalUnit!.isNotEmpty && 
           newUnit.isNotEmpty &&
           newUnit != _invoiceOriginalUnit) {
-        
-        // 1. Auto-open hierarchy section
-        _showUnitHierarchy = true;
         
         // 2. Auto-add the invoice unit as a larger unit (if not already there)
         final alreadyExists = _hierarchyItems.any((h) => h['unit_name'] == _invoiceOriginalUnit);
@@ -474,7 +495,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
           color: kBackgroundColor,
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
-             BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, 10)),
+             BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 20, offset: const Offset(0, 10)),
           ],
         ),
         child: Column(
@@ -491,7 +512,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                 children: [
                    Container(
                      padding: const EdgeInsets.all(10),
-                     decoration: BoxDecoration(color: kPrimaryColor.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                     decoration: BoxDecoration(color: kPrimaryColor.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)),
                      child: Icon(_mode == 'search' ? Icons.search : Icons.inventory_2, color: kPrimaryColor),
                    ),
                    const SizedBox(width: 16),
@@ -499,11 +520,11 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                      crossAxisAlignment: CrossAxisAlignment.start,
                      children: [
                        Text(
-                         _mode == 'search' ? 'بحث عن منتج' : 'إضافة منتج جديد (كامل)',
+                         _mode == 'search' ? 'بحث عن منتج' : 'منتج جديد',
                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: kTextColor),
                        ),
                        Text(
-                         _mode == 'search' ? 'اختر منتجاً لإضافته' : 'نفس شاشة المنتجات بتصميم مصغر',
+                         _mode == 'search' ? 'اختر منتجاً لإضافته' : 'الأساسيات فقط — والباقي في «خيارات أخرى»',
                          style: TextStyle(color: Colors.grey[500], fontSize: 12),
                        ),
                      ],
@@ -558,16 +579,12 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                       child: Container(
                         width: 400,
                         color: Colors.white,
-                        child: ListTile(
+                        child: Material(type: MaterialType.transparency, child: ListTile(
                           leading: const Icon(Icons.add_circle, color: Colors.green),
                           title: const Text('إضافة منتج جديد غير موجود'),
                           subtitle: const Text('اضغط هنا لتعريف المنتج فوراً'),
-                          onTap: () {
-                            setState(() {
-                              _mode = 'create';
-                            });
-                          },
-                        ),
+                          onTap: () => _openItemCard(name: _nameController.text),
+                        )),
                       ),
                     ),
                   );
@@ -581,7 +598,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                     width: 400,
                     color: Colors.white,
                     constraints: const BoxConstraints(maxHeight: 220),
-                    child: ListView.builder(
+                    child: Material(type: MaterialType.transparency, child: ListView.builder(
                       padding: EdgeInsets.zero,
                       itemCount: options.length,
                       itemBuilder: (BuildContext context, int index) {
@@ -596,7 +613,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                           onTap: () => onSelected(option),
                         );
                       },
-                    ),
+                    )),
                   ),
                 ),
               );
@@ -628,7 +645,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                        Container(
                          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
                          decoration: BoxDecoration(
-                           color: kPrimaryColor.withOpacity(0.1),
+                           color: kPrimaryColor.withValues(alpha: 0.1),
                            borderRadius: BorderRadius.circular(12),
                          ),
                          child: IconButton(
@@ -646,16 +663,13 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                        Container(
                          margin: const EdgeInsets.only(left: 6, right: 2, top: 4, bottom: 4),
                          decoration: BoxDecoration(
-                           color: Colors.green.withOpacity(0.1),
+                           color: Colors.green.withValues(alpha: 0.1),
                            borderRadius: BorderRadius.circular(12),
                          ),
                          child: IconButton(
                             icon: const Icon(Icons.add, color: Colors.green),
                             tooltip: 'منتج جديد',
-                            onPressed: () => setState(() {
-                              _mode = 'create';
-                              _nameController.text = controller.text;
-                            }),
+                            onPressed: () => _openItemCard(name: controller.text),
                          ),
                        ),
                      ],
@@ -750,7 +764,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                                                Container(
                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                                  decoration: BoxDecoration(
-                                                   color: Colors.blue.withOpacity(0.1),
+                                                   color: Colors.blue.withValues(alpha: 0.1),
                                                    borderRadius: BorderRadius.circular(4),
                                                  ),
                                                  child: Text(
@@ -793,9 +807,9 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                        Container(
                          padding: const EdgeInsets.all(12),
                          decoration: BoxDecoration(
-                           color: Colors.green.withOpacity(0.1),
+                           color: Colors.green.withValues(alpha: 0.1),
                            borderRadius: BorderRadius.circular(8),
-                           border: Border.all(color: Colors.green.withOpacity(0.3)),
+                           border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
                          ),
                          child: Row(
                            children: [
@@ -843,424 +857,331 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
   }
 
   // ================= CREATE MODE (Exact Clone from ProductEntryScreen) =================
+  // ================= CREATE MODE (مختصر) =================
+  // نفس حقول شاشة المنتجات ونفس الحفظ (_submitProductAndAddToInvoice) — الشكل فقط:
+  // الأساسيات ظاهرة (الاسم، الوحدة والتعبئة، الكلفة والبيع، ما يُشترى الآن)،
+  // والباقي في «خيارات أخرى» مطوية.
+  bool _showMoreOptions = false;
+
+  Widget _card({required IconData icon, required String title, String? hint, required Widget child, Color? tint}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+      decoration: BoxDecoration(
+        color: tint ?? Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE6E8F0)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Icon(icon, size: 19, color: kPrimaryColor),
+          const SizedBox(width: 8),
+          Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: kTextColor)),
+          if (hint != null) ...[
+            const SizedBox(width: 8),
+            Flexible(child: Text(hint, style: TextStyle(fontSize: 12, color: Colors.grey[600]), overflow: TextOverflow.ellipsis)),
+          ],
+        ]),
+        const SizedBox(height: 14),
+        child,
+      ]),
+    );
+  }
+
   Widget _buildCreateMode() {
+    final units = {_baseUnitNameController.text, ..._hierarchyItems.map((e) => e['unit_name'].toString())};
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
       child: Form(
         key: _formKey,
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-             Row(children: [TextButton.icon(onPressed: () => setState(() => _mode = 'search'), icon: const Icon(Icons.arrow_back), label: const Text('رجوع'))]),
-             const SizedBox(height: 12),
+             Align(
+               alignment: AlignmentDirectional.centerStart,
+               child: TextButton.icon(onPressed: () => setState(() => _mode = 'search'), icon: const Icon(Icons.arrow_back), label: const Text('رجوع للبحث')),
+             ),
+             const SizedBox(height: 6),
 
-             // Section 01: Info
-             ModernSectionCard(
-               number: '01',
-               title: 'تعريف المنتج الأساسي',
-               subtitle: 'الاسم، النوع، وطبيعة المنتج',
-               child: Column(
-                 children: [
-                   Row(
-                     children: [
-                       Expanded(
-                         flex: 2,
-                         child: ModernTextField(controller: _nameController, label: 'اسم المنتج', hint: 'مثال: دجاج تركي...', isRequired: true),
-                       ),
-                       const SizedBox(width: 16),
-                       Expanded(
-                         flex: 1,
-                         child: ModernDropdownField<int>(
-                           label: 'القسم',
-                           value: _selectedCategoryId,
-                           items: _categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
-                           onChanged: (val) => setState(() => _selectedCategoryId = val),
-                           hint: 'اختر...',
-                         ),
-                       ),
-                     ],
+             // ① المادة
+             _card(
+               icon: Icons.inventory_2_outlined,
+               title: 'المادة',
+               child: Column(children: [
+                 Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                   Expanded(
+                     flex: 2,
+                     child: ModernTextField(controller: _nameController, label: 'اسم المنتج', hint: 'كما يُكتب في الفاتورة', isRequired: true),
                    ),
-                   const SizedBox(height: 20),
-                   Container(
-                     padding: const EdgeInsets.all(16),
-                     decoration: BoxDecoration(color: kInputFillColor, borderRadius: BorderRadius.circular(12)),
-                     child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                           _buildToggle('يباع بالوزن؟', _isWeighable, (v) => setState(() => _isWeighable = v)),
-                           Container(width: 1, height: 40, color: Colors.grey[300]),
-                           _buildToggle('له تاريخ صلاحية؟', _hasExpiry, (v) => setState(() => _hasExpiry = v)),
-                        ],
+                   const SizedBox(width: 12),
+                   Expanded(
+                     child: ModernDropdownField<int>(
+                       label: 'القسم',
+                       value: _selectedCategoryId,
+                       items: _categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
+                       onChanged: (val) => setState(() => _selectedCategoryId = val),
+                       hint: 'اختياري',
                      ),
                    ),
-                   if (_hasExpiry) ...[
-                     const SizedBox(height: 12),
-                     InkWell(
-                       onTap: () async {
-                         final picked = await showDatePicker(
-                           context: context,
-                           initialDate: _expiryDate ?? DateTime.now(),
-                           firstDate: DateTime.now(),
-                           lastDate: DateTime(2050),
+                 ]),
+                 ModernTextField(
+                   controller: _barcodeController,
+                   label: 'الباركود',
+                   hint: 'اختياري',
+                   suffixIcon: IconButton(
+                     icon: const Icon(Icons.qr_code_scanner, color: kPrimaryColor),
+                     tooltip: 'مسح الباركود',
+                     onPressed: () async {
+                       final scanned = await CameraBarcodeScannerDialog.scan(context);
+                       if (scanned != null && scanned.trim().isNotEmpty) {
+                         setState(() {
+                           _barcodeController.text = scanned.trim();
+                         });
+                       }
+                     },
+                   ),
+                 ),
+               ]),
+             ),
+
+             // ② الوحدة والتعبئة
+             _card(
+               icon: Icons.account_tree_outlined,
+               title: 'الوحدة والتعبئة',
+               hint: 'كل مستوى يحتوي على ما قبله (كرتون فيه 12 قطعة)',
+               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                 const Text('الوحدة الأساسية *', style: TextStyle(color: kPrimaryColor, fontWeight: FontWeight.bold, fontSize: 12)),
+                 const SizedBox(height: 8),
+                 Container(
+                   decoration: BoxDecoration(color: kInputFillColor, borderRadius: BorderRadius.circular(12)),
+                   child: Autocomplete<String>(
+                      initialValue: TextEditingValue(text: _baseUnitNameController.text),
+                      optionsBuilder: (v) => _availableUnits.where((u) => u.contains(v.text)),
+                      onSelected: (s) => _onBaseUnitChanged(s),
+                      fieldViewBuilder: (ctx, ctrl, focus, submit) {
+                         return TextField(
+                           controller: ctrl,
+                           focusNode: focus,
+                           onChanged: (v) => _onBaseUnitChanged(v),
+                           decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.all(12), hintText: 'قطعة')
                          );
-                         if (picked != null) setState(() => _expiryDate = picked);
-                       },
-                       child: Container(
-                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                         decoration: BoxDecoration(
-                           color: kInputFillColor,
-                           borderRadius: BorderRadius.circular(12),
-                           border: Border.all(color: _expiryDate == null ? Colors.red.withOpacity(0.3) : Colors.transparent),
-                         ),
-                         child: Row(
-                           children: [
-                             const Icon(Icons.event_note, color: kPrimaryColor),
-                             const SizedBox(width: 12),
-                             Text(
-                               _expiryDate == null ? 'اختر تاريخ الصلاحية' : DateFormat('yyyy-MM-dd').format(_expiryDate!),
-                               style: TextStyle(color: _expiryDate == null ? Colors.grey : kTextColor),
-                             ),
-                           ],
-                         ),
-                       ),
-                     ),
-                   ],
-                 ],
-               ),
-             ),
-
-             // Section 02: Stock & Prices
-             ModernSectionCard(
-                number: '02',
-                title: 'الأسعار والمخزون',
-                subtitle: 'الوحدة والأسعار الأساسية',
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 2,
-                          child: Column(
-                             crossAxisAlignment: CrossAxisAlignment.start,
-                             children: [
-                               const Text('الوحدة الأساسية *', style: TextStyle(color: kPrimaryColor, fontWeight: FontWeight.bold, fontSize: 12)),
-                               const SizedBox(height: 8),
-                               Container(
-                                 decoration: BoxDecoration(color: kInputFillColor, borderRadius: BorderRadius.circular(12)),
-                                 child: Autocomplete<String>(
-                                    initialValue: TextEditingValue(text: _baseUnitNameController.text),
-                                    optionsBuilder: (v) => _availableUnits.where((u) => u.contains(v.text)),
-                                    onSelected: (s) => _onBaseUnitChanged(s),
-                                    fieldViewBuilder: (ctx, ctrl, focus, submit) {
-                                       // Remove listener, use onChanged with setState directly
-                                       return TextField(
-                                         controller: ctrl, 
-                                         focusNode: focus, 
-                                         onChanged: (v) => _onBaseUnitChanged(v),
-                                         decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.all(12), hintText: 'قطعة')
-                                       );
-                                    },
-                                 ),
-                               ),
-                             ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(child: ModernTextField(controller: _stockController, label: 'الرصيد الافتتاحي', hint: '0', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(child: ModernTextField(controller: _baseCostController, label: 'سعر التكلفة', hint: '0.0', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                        const SizedBox(width: 12),
-                        Expanded(child: ModernTextField(controller: _basePriceController, label: 'سعر البيع (مفرد) *', hint: '0.0', isRequired: true, inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // 🔔 حقول التنبيه (Low Stock)
+                      },
+                   ),
+                 ),
+                 const SizedBox(height: 12),
+                 for (int i=0; i<_hierarchyItems.length; i++)
                     Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.red.withOpacity(0.1)),
-                      ),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
                       child: Row(
-                        children: [
-                          Expanded(
-                            child: ModernTextField(
-                              controller: _alertQtyController,
-                              label: 'تنبيه النفاد عند',
-                              hint: 'أدخل الكمية',
-                              keyboardType: TextInputType.number,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    ModernTextField(
-                      controller: _barcodeController,
-                      label: 'الباركود الأساسي',
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.qr_code_scanner, color: kPrimaryColor),
-                        tooltip: 'مسح الباركود بالكاميرا',
-                        onPressed: () async {
-                          final scanned = await CameraBarcodeScannerDialog.scan(context);
-                          if (scanned != null && scanned.trim().isNotEmpty) {
-                            setState(() {
-                              _barcodeController.text = scanned.trim();
-                            });
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-             ),
-
-             // Expandable 1: Additional Prices
-             _buildExpandableSection(
-               title: 'أسعار إضافية',
-               subtitle: 'جملة، نصف جملة...',
-               isExpanded: _showAdditionalPrices,
-               onToggle: () => setState(() => _showAdditionalPrices = !_showAdditionalPrices),
-               icon: Icons.price_change_outlined,
-               child: Column(
-                 children: [
-                   Row(
-                     children: [
-                       Expanded(child: ModernTextField(controller: _price2Controller, label: 'سعر مفرد 2', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                       const SizedBox(width: 12),
-                       Expanded(child: ModernTextField(controller: _price3Controller, label: 'سعر منزل', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                     ],
-                   ),
-                   const SizedBox(height: 12),
-                   Row(
-                     children: [
-                       Expanded(child: ModernTextField(controller: _price4Controller, label: 'سعر جملة', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                       const SizedBox(width: 12),
-                       Expanded(child: ModernTextField(controller: _price5Controller, label: 'سعر جملة 2', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                     ],
-                   ),
-                   const SizedBox(height: 12),
-                   ModernTextField(controller: _price6Controller, label: 'سعر أخرى', inputFormatters: [ThousandSeparatorDecimalInputFormatter()]),
-                 ],
-               ),
-             ),
-             
-             // Expandable 2: Multiple Barcodes
-             _buildExpandableSection(
-               title: 'باركودات إضافية',
-               subtitle: 'للنكهات والألوان المختلفة',
-               isExpanded: _showAdditionalBarcodes,
-               onToggle: () => setState(() => _showAdditionalBarcodes = !_showAdditionalBarcodes),
-               icon: Icons.qr_code_2_outlined,
-               child: Column(
-                 children: [
-                   for (int i = 0; i < _barcodeItems.length; i++)
-                     Container(
-                       margin: const EdgeInsets.only(bottom: 12),
-                       padding: const EdgeInsets.all(12),
-                       decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
-                       child: Row(
                          children: [
-                           Expanded(flex: 2, child: TextField(
-                             decoration: InputDecoration(labelText: 'باركود', border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)), contentPadding: const EdgeInsets.all(12)),
-                             onChanged: (v) => _barcodeItems[i]['barcode'] = v,
+                           Expanded(flex: 2, child: Autocomplete<String>(
+                             initialValue: TextEditingValue(text: _hierarchyItems[i]['unit_name'] ?? ''),
+                             optionsBuilder: (v) => _availableUnits.where((u) => u.contains(v.text)),
+                             onSelected: (s) => setState(() => _hierarchyItems[i]['unit_name'] = s),
+                             fieldViewBuilder: (ctx, ctrl, f, s) => TextField(
+                               controller: ctrl,
+                               focusNode: f,
+                               onChanged: (v) => setState(() => _hierarchyItems[i]['unit_name'] = v),
+                               decoration: const InputDecoration(labelText: 'الوحدة الأكبر', border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12))
+                             ),
                            )),
                            const SizedBox(width: 8),
-                           Expanded(flex: 2, child: TextField(
-                             decoration: InputDecoration(labelText: 'وصف', border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)), contentPadding: const EdgeInsets.all(12)),
-                             onChanged: (v) => _barcodeItems[i]['variant_label'] = v,
+                           Expanded(child: TextField(
+                             keyboardType: TextInputType.number,
+                             decoration: InputDecoration(
+                               labelText: 'تحتوي',
+                               suffixText: i == 0 ? _baseUnitNameController.text : (_hierarchyItems[i - 1]['unit_name'] ?? '').toString(),
+                               border: const OutlineInputBorder(),
+                               contentPadding: const EdgeInsets.all(12),
+                             ),
+                             onChanged: (v) { setState(() { _hierarchyItems[i]['contains_qty'] = double.tryParse(v) ?? 1; _recalcPricesFromHierarchy(); }); },
                            )),
-                           IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => setState(() => _barcodeItems.removeAt(i))),
+                           IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), tooltip: 'حذف المستوى', onPressed: () => setState(() => _hierarchyItems.removeAt(i))),
                          ],
-                       ),
-                     ),
-                   TextButton.icon(
-                     onPressed: () => setState(() => _barcodeItems.add({'barcode': '', 'variant_label': '', 'cost_price': null, 'sell_price': null})),
-                     icon: const Icon(Icons.add),
-                     label: const Text('إضافة باركود جديد'),
-                   ),
-                 ],
-               ),
-             ),
-
-             // Expandable 3: Hierarchy
-             _buildExpandableSection(
-               title: 'وحدات كبرى (تعبئة)',
-               subtitle: 'كرتون، صندوق، درزن...',
-               isExpanded: _showUnitHierarchy,
-               onToggle: () => setState(() => _showUnitHierarchy = !_showUnitHierarchy),
-               icon: Icons.account_tree_outlined,
-               child: Column(
-                 children: [
-                   for (int i=0; i<_hierarchyItems.length; i++)
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
-                        child: Row(
-                           children: [
-                             Expanded(flex: 2, child: Autocomplete<String>(
-                               initialValue: TextEditingValue(text: _hierarchyItems[i]['unit_name'] ?? ''),
-                               optionsBuilder: (v) => _availableUnits.where((u) => u.contains(v.text)),
-                               onSelected: (s) => setState(() => _hierarchyItems[i]['unit_name'] = s),
-                               fieldViewBuilder: (ctx, ctrl, f, s) => TextField(
-                                 controller: ctrl, 
-                                 focusNode: f, 
-                                 onChanged: (v) => setState(() => _hierarchyItems[i]['unit_name'] = v), 
-                                 decoration: const InputDecoration(labelText: 'الوحدة', border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12))
-                               ),
-                             )),
-                             const SizedBox(width: 8),
-                             Expanded(child: TextField(
-                               keyboardType: TextInputType.number,
-                               decoration: const InputDecoration(labelText: 'تحتوي', border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12)),
-                               onChanged: (v) { setState(() { _hierarchyItems[i]['contains_qty'] = double.tryParse(v) ?? 1; _recalcPricesFromHierarchy(); }); },
-                             )),
-                             IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => setState(() => _hierarchyItems.removeAt(i))),
-                           ],
-                        ),
                       ),
-                   TextButton.icon(
+                    ),
+                 Align(
+                   alignment: AlignmentDirectional.centerStart,
+                   child: TextButton.icon(
                      onPressed: () => setState(() => _hierarchyItems.add({'unit_name': '', 'contains_qty': 12.0})),
                      icon: const Icon(Icons.add_link),
-                     label: const Text('إضافة مستوى جديد'),
+                     label: const Text('إضافة وحدة أكبر (كرتون، صندوق...)'),
                    ),
-                    // Visual feedback for auto-calculation
-
-                    if (_invoiceOriginalUnit != null && _invoiceOriginalCost > 0 && _hierarchyItems.isNotEmpty) ...[
-
-                      const SizedBox(height: 12),
-
-                      Builder(builder: (_) {
-
-                        final factor = (_hierarchyItems.first['contains_qty'] as num?)?.toDouble() ?? 0;
-
-                        if (factor <= 0) return const SizedBox.shrink();
-
-                        final costPerBase = _invoiceOriginalCost / factor;
-
-                        final sellPerBase = costPerBase * 1.10;
-
-                        return Container(
-
-                          padding: const EdgeInsets.all(12),
-
-                          decoration: BoxDecoration(
-
-                            color: Colors.blue.withOpacity(0.08),
-
-                            borderRadius: BorderRadius.circular(10),
-
-                            border: Border.all(color: Colors.blue.withOpacity(0.3)),
-
-                          ),
-
-                          child: Column(
-
-                            crossAxisAlignment: CrossAxisAlignment.start,
-
-                            children: [
-
-                              Row(
-
-                                children: [
-
-                                  const Icon(Icons.calculate, color: Colors.blue, size: 20),
-
-                                  const SizedBox(width: 8),
-
-                                  Expanded(
-
-                                    child: Text(
-
-                                      'سعر الـ${_baseUnitNameController.text} = سعر الـ${_hierarchyItems.first['unit_name']} (${NumberFormat('#,##0').format(_invoiceOriginalCost)}) ÷ $factor',
-                                      style: const TextStyle(fontSize: 12, color: Colors.blue),
-                                    ),
-
-                                  ),
-
-                                ],
-
-                              ),
-
-                              const SizedBox(height: 6),
-
-                              Row(
-
-                                children: [
-
-                                  const SizedBox(width: 28),
-
-                                  Expanded(
-
-                                    child: Text(
-
-                                      '= سعر التكلفة: ${NumberFormat('#,##0').format(_invoiceOriginalCost / factor)}  |  سعر البيع: ${NumberFormat('#,##0').format((_invoiceOriginalCost / factor) * 1.10)} (+10%)',
-
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.green),
-
-                                    ),
-
-                                  ),
-
-                                ],
-
-                              ),
-
-                            ],
-
-                          ),
-
-                        );
-
-                      }),
-
-                    ],
-
-                 ],
-               ),
+                 ),
+                 if (_invoiceOriginalUnit != null && _invoiceOriginalCost > 0 && _hierarchyItems.isNotEmpty)
+                   Builder(builder: (_) {
+                     final factor = (_hierarchyItems.first['contains_qty'] as num?)?.toDouble() ?? 0;
+                     if (factor <= 0) return const SizedBox.shrink();
+                     return Container(
+                       margin: const EdgeInsets.only(top: 6),
+                       padding: const EdgeInsets.all(12),
+                       decoration: BoxDecoration(
+                         color: Colors.blue.withValues(alpha: 0.06),
+                         borderRadius: BorderRadius.circular(10),
+                         border: Border.all(color: Colors.blue.withValues(alpha: 0.25)),
+                       ),
+                       child: Text(
+                         'سعر الـ${_baseUnitNameController.text} = ${NumberFormat('#,##0').format(_invoiceOriginalCost)} ÷ $factor'
+                         ' = ${NumberFormat('#,##0').format(_invoiceOriginalCost / factor)} كلفة  •  '
+                         '${NumberFormat('#,##0').format((_invoiceOriginalCost / factor) * 1.10)} بيعاً (+10%)',
+                         style: const TextStyle(fontSize: 12.5, color: Color(0xFF1D4ED8), fontWeight: FontWeight.w600),
+                       ),
+                     );
+                   }),
+               ]),
              ),
-             
-             const SizedBox(height: 24),
-             
-             // --- INVOICE INTEGRATION SECTION ---
-             Container(
-               padding: const EdgeInsets.all(16),
-               decoration: BoxDecoration(color: Colors.green.withOpacity(0.05), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.green.withOpacity(0.3))),
-               child: Column(
-                 children: [
-                    const Text('شراء هذا المنتج الآن (إضافة للفاتورة)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(child: DropdownButtonFormField<String>(
-                           value: ([_baseUnitNameController.text, ..._hierarchyItems.map((e) => e['unit_name'].toString())].contains(_currentBuyUnit)) ? _currentBuyUnit : _baseUnitNameController.text,
-                           items: [_baseUnitNameController.text, ..._hierarchyItems.map((e) => e['unit_name'].toString())].toSet()
-                               .map((u) => DropdownMenuItem(value: u, child: Text(u.isEmpty ? '?' : u))).toList(),
-                           onChanged: (v) => setState(() => _currentBuyUnit = v!),
-                           decoration: const InputDecoration(labelText: 'الوحدة المشتراة', border: OutlineInputBorder()),
-                        )),
-                        const SizedBox(width: 12),
-                        Expanded(child: ModernTextField(controller: _currentBuyQtyController, label: 'الكمية', keyboardType: TextInputType.number, inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                        const SizedBox(width: 12),
-                        Expanded(child: ModernTextField(controller: _currentBuyCostController, label: 'سعر الشراء', hint: 'سعر الوحدة المختارة', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
-                      ],
+
+             // ③ السعر
+             _card(
+               icon: Icons.sell_outlined,
+               title: 'السعر',
+               hint: 'للوحدة الأساسية',
+               child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                 Expanded(child: ModernTextField(controller: _baseCostController, label: 'سعر التكلفة', hint: '0', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                 const SizedBox(width: 12),
+                 Expanded(child: ModernTextField(controller: _basePriceController, label: 'سعر البيع (مفرد) *', hint: '0', isRequired: true, inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+               ]),
+             ),
+
+             // ④ في هذه الفاتورة
+             _card(
+               icon: Icons.add_shopping_cart_rounded,
+               title: 'في هذه الفاتورة',
+               hint: 'ما تشتريه الآن من المورد',
+               tint: const Color(0xFFF4F4FF),
+               child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                 Expanded(child: DropdownButtonFormField<String>(
+                    initialValue: units.contains(_currentBuyUnit) ? _currentBuyUnit : _baseUnitNameController.text,
+                    items: units.map((u) => DropdownMenuItem(value: u, child: Text(u.isEmpty ? '?' : u))).toList(),
+                    onChanged: (v) => setState(() => _currentBuyUnit = v!),
+                    decoration: InputDecoration(
+                      labelText: 'الوحدة المشتراة',
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                 ],
-               ),
+                 )),
+                 const SizedBox(width: 12),
+                 Expanded(child: ModernTextField(controller: _currentBuyQtyController, label: 'الكمية', keyboardType: TextInputType.number, inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                 const SizedBox(width: 12),
+                 Expanded(child: ModernTextField(controller: _currentBuyCostController, label: 'سعر الشراء', hint: 'للوحدة المختارة', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+               ]),
              ),
 
-             const SizedBox(height: 24),
+             // ⑤ خيارات أخرى (مطوية)
+             _buildExpandableSection(
+               title: 'خيارات أخرى',
+               subtitle: 'رصيد افتتاحي، تنبيه النفاد، وزن وصلاحية، أسعار وباركودات إضافية',
+               isExpanded: _showMoreOptions,
+               onToggle: () => setState(() => _showMoreOptions = !_showMoreOptions),
+               icon: Icons.tune_rounded,
+               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                 Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                   Expanded(child: ModernTextField(controller: _stockController, label: 'الرصيد الافتتاحي', hint: '0', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                   const SizedBox(width: 12),
+                   Expanded(child: ModernTextField(controller: _alertQtyController, label: 'تنبيه النفاد عند', hint: 'الكمية', keyboardType: TextInputType.number)),
+                 ]),
+                 Container(
+                   padding: const EdgeInsets.all(12),
+                   decoration: BoxDecoration(color: kInputFillColor, borderRadius: BorderRadius.circular(12)),
+                   child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                         _buildToggle('يباع بالوزن؟', _isWeighable, (v) => setState(() => _isWeighable = v)),
+                         Container(width: 1, height: 40, color: Colors.grey[300]),
+                         _buildToggle('له تاريخ صلاحية؟', _hasExpiry, (v) => setState(() => _hasExpiry = v)),
+                      ],
+                   ),
+                 ),
+                 if (_hasExpiry) ...[
+                   const SizedBox(height: 12),
+                   InkWell(
+                     onTap: () async {
+                       final picked = await showDatePicker(
+                         context: context,
+                         initialDate: _expiryDate ?? DateTime.now(),
+                         firstDate: DateTime.now(),
+                         lastDate: DateTime(2050),
+                       );
+                       if (picked != null) setState(() => _expiryDate = picked);
+                     },
+                     child: Container(
+                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                       decoration: BoxDecoration(
+                         color: kInputFillColor,
+                         borderRadius: BorderRadius.circular(12),
+                         border: Border.all(color: _expiryDate == null ? Colors.red.withValues(alpha: 0.3) : Colors.transparent),
+                       ),
+                       child: Row(children: [
+                         const Icon(Icons.event_note, color: kPrimaryColor),
+                         const SizedBox(width: 12),
+                         Text(
+                           _expiryDate == null ? 'اختر تاريخ الصلاحية' : DateFormat('yyyy-MM-dd').format(_expiryDate!),
+                           style: TextStyle(color: _expiryDate == null ? Colors.grey : kTextColor),
+                         ),
+                       ]),
+                     ),
+                   ),
+                 ],
+                 const SizedBox(height: 16),
+                 const Text('أسعار إضافية', style: TextStyle(fontWeight: FontWeight.w800, color: kTextColor)),
+                 const SizedBox(height: 8),
+                 Row(children: [
+                   Expanded(child: ModernTextField(controller: _price2Controller, label: 'سعر مفرد 2', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                   const SizedBox(width: 12),
+                   Expanded(child: ModernTextField(controller: _price3Controller, label: 'سعر منزل', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                   const SizedBox(width: 12),
+                   Expanded(child: ModernTextField(controller: _price4Controller, label: 'سعر جملة', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                 ]),
+                 Row(children: [
+                   Expanded(child: ModernTextField(controller: _price5Controller, label: 'سعر جملة 2', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                   const SizedBox(width: 12),
+                   Expanded(child: ModernTextField(controller: _price6Controller, label: 'سعر أخرى', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                   const SizedBox(width: 12),
+                   const Expanded(child: SizedBox()),
+                 ]),
+                 const SizedBox(height: 8),
+                 const Text('باركودات إضافية', style: TextStyle(fontWeight: FontWeight.w800, color: kTextColor)),
+                 const SizedBox(height: 8),
+                 for (int i = 0; i < _barcodeItems.length; i++)
+                   Container(
+                     margin: const EdgeInsets.only(bottom: 10),
+                     padding: const EdgeInsets.all(10),
+                     decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
+                     child: Row(children: [
+                       Expanded(flex: 2, child: TextField(
+                         decoration: InputDecoration(labelText: 'باركود', border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)), contentPadding: const EdgeInsets.all(12)),
+                         onChanged: (v) => _barcodeItems[i]['barcode'] = v,
+                       )),
+                       const SizedBox(width: 8),
+                       Expanded(flex: 2, child: TextField(
+                         decoration: InputDecoration(labelText: 'وصف', border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)), contentPadding: const EdgeInsets.all(12)),
+                         onChanged: (v) => _barcodeItems[i]['variant_label'] = v,
+                       )),
+                       IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () => setState(() => _barcodeItems.removeAt(i))),
+                     ]),
+                   ),
+                 Align(
+                   alignment: AlignmentDirectional.centerStart,
+                   child: TextButton.icon(
+                     onPressed: () => setState(() => _barcodeItems.add({'barcode': '', 'variant_label': '', 'cost_price': null, 'sell_price': null})),
+                     icon: const Icon(Icons.add),
+                     label: const Text('إضافة باركود'),
+                   ),
+                 ),
+               ]),
+             ),
+
+             const SizedBox(height: 10),
              SizedBox(
-               width: double.infinity,
-               height: 55,
-               child: ElevatedButton(
-                 style: ElevatedButton.styleFrom(backgroundColor: kPrimaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+               height: 54,
+               child: ElevatedButton.icon(
+                 style: ElevatedButton.styleFrom(backgroundColor: kPrimaryColor, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
                  onPressed: _submitProductAndAddToInvoice,
-                 child: const Text('حفظ المنتج وإضافته', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                 icon: const Icon(Icons.check_rounded),
+                 label: const Text('حفظ المنتج وإضافته للفاتورة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
                ),
              ),
           ],
@@ -1272,8 +1193,8 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
   Widget _buildExpandableSection({required String title, String? subtitle, required bool isExpanded, required VoidCallback onToggle, IconData? icon, required Widget child}) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: isExpanded ? kPrimaryColor : Colors.transparent), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))]),
-      child: Column(children: [
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: isExpanded ? kPrimaryColor : Colors.transparent), boxShadow: [BoxShadow(color: Colors.grey.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 4))]),
+      child: Material(type: MaterialType.transparency, child: Column(children: [
         ListTile(
           leading: Icon(icon ?? Icons.list, color: isExpanded ? kPrimaryColor : Colors.grey),
           title: Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: isExpanded ? kPrimaryColor : Colors.black)),
@@ -1283,7 +1204,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
         if (isExpanded) Padding(padding: const EdgeInsets.all(16), child: child),
-      ]),
+      ])),
     );
   }
 
@@ -1320,10 +1241,8 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
        // 2. Prepare Hierarchy JSON
        List<Map<String, dynamic>> finalHierarchy = [];
        // Simple chain assumption for dialog (or user defined)
-       String prev = _baseUnitNameController.text;
        for (var item in _hierarchyItems) {
          finalHierarchy.add({
-           'unit_name': item['unit_name'], // Note: DB expects 'unit', 'factor', 'parent' mostly, OR specific JSON structure.
            // Checking ProductEntryScreen: It saves: {'unit_name': uName, 'quantity': qty}
            // Let's stick to ProductEntryScreen implementation
            'unit_name': item['unit_name'],
@@ -1369,10 +1288,10 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
        // 6. Return to screen
        final savedProduct = product.copyWith(id: id);
        widget.onProductSelected(savedProduct, _parse(_currentBuyQtyController.text), buyUnitCost > 0 ? buyUnitCost : baseCost, _currentBuyUnit);
-       Navigator.pop(context);
+       if (mounted) Navigator.pop(context);
        
     } catch (e) {
-       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
+       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
     }
   }
 }

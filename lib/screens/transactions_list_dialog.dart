@@ -10,6 +10,10 @@ class TransactionsListDialog extends StatefulWidget {
   final DateTime startDate;
   final DateTime endDate;
   final Color themeColor;
+  final String sourceFilter;
+
+  /// all | exclude | only — تسديد دين راجع
+  final String returnsFilter;
 
   const TransactionsListDialog({
     super.key,
@@ -18,6 +22,8 @@ class TransactionsListDialog extends StatefulWidget {
     required this.startDate,
     required this.endDate,
     required this.themeColor,
+    this.sourceFilter = 'all',
+    this.returnsFilter = 'all',
   });
 
   @override
@@ -29,14 +35,17 @@ class TransactionsListDialog extends StatefulWidget {
     required DateTime startDate,
     required DateTime endDate,
     required String periodTitle,
+    String sourceFilter = 'all',
   }) async {
     await showDialog(
       context: context,
       builder: (context) => TransactionsListDialog(
         title: 'معاملات إضافة الدين - $periodTitle',
-        transactionTypes: ['manual_debt', 'opening_balance'],
+        transactionTypes: const ['manual_debt', 'opening_balance'],
         startDate: startDate,
         endDate: endDate,
+        sourceFilter: sourceFilter,
+        returnsFilter: 'exclude', // إلغاء مرتجع مبيعات ليس ديناً يدوياً
         themeColor: const Color(0xFFFF5722),
       ),
     );
@@ -48,15 +57,40 @@ class TransactionsListDialog extends StatefulWidget {
     required DateTime startDate,
     required DateTime endDate,
     required String periodTitle,
+    String sourceFilter = 'all',
   }) async {
     await showDialog(
       context: context,
       builder: (context) => TransactionsListDialog(
         title: 'معاملات تسديد الدين - $periodTitle',
-        transactionTypes: ['manual_payment'],
+        transactionTypes: const ['manual_payment'],
         startDate: startDate,
         endDate: endDate,
+        sourceFilter: sourceFilter,
+        returnsFilter: 'exclude', // نفس رقم البطاقة: بلا تسديد الدين الراجع
         themeColor: const Color(0xFF4CAF50),
+      ),
+    );
+  }
+
+  /// عرض Dialog لمعاملات تسديد الدين الراجع
+  static Future<void> showDebtPaymentReturns({
+    required BuildContext context,
+    required DateTime startDate,
+    required DateTime endDate,
+    required String periodTitle,
+    String sourceFilter = 'all',
+  }) async {
+    await showDialog(
+      context: context,
+      builder: (context) => TransactionsListDialog(
+        title: 'معاملات تسديد دين راجع - $periodTitle',
+        transactionTypes: const ['manual_payment', 'manual_debt'], // + إلغاء مرتجع مبيعات
+        startDate: startDate,
+        endDate: endDate,
+        sourceFilter: sourceFilter,
+        returnsFilter: 'only',
+        themeColor: const Color(0xFFE91E63),
       ),
     );
   }
@@ -83,6 +117,9 @@ class _TransactionsListDialogState extends State<TransactionsListDialog> {
         transactionTypes: widget.transactionTypes,
         startDate: widget.startDate,
         endDate: widget.endDate,
+        unlinkedOnly: true,
+        sourceFilter: widget.sourceFilter,
+        returnsFilter: widget.returnsFilter,
       );
       setState(() {
         _transactions = transactions;
@@ -135,7 +172,7 @@ class _TransactionsListDialogState extends State<TransactionsListDialog> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: widget.themeColor.withOpacity(0.1),
+                color: widget.themeColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
@@ -259,7 +296,7 @@ class _TransactionsListDialogState extends State<TransactionsListDialog> {
                   width: 32,
                   height: 32,
                   decoration: BoxDecoration(
-                    color: widget.themeColor.withOpacity(0.1),
+                    color: widget.themeColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Center(

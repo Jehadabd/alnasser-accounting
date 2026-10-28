@@ -49,6 +49,7 @@ class PurchaseInvoice {
       case 'confirmed': return 'مؤكدة';
       case 'partial': return 'مدفوعة جزئياً';
       case 'paid': return 'مدفوعة';
+      case 'cancelled': return 'ملغاة';
       default: return status;
     }
   }
@@ -65,7 +66,6 @@ class PurchaseInvoice {
       'status': status,
       'date': date.toIso8601String(),
       'due_date': dueDate?.toIso8601String(),
-      'created_by_user_id': createdByUserId,
       'created_by_user_id': createdByUserId,
       'notes': notes,
       'last_modified_at': lastModifiedAt?.toIso8601String(),

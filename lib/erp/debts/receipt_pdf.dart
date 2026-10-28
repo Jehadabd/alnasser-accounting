@@ -9,6 +9,7 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../../accounting/screens/acc_ui.dart';
 import '../../services/settings_manager.dart';
+import '../../services/voucher_print.dart'; // 🧾 تصميم سند القبض
 import '../arabic_words.dart';
 import '../erp_common.dart';
 import '../report_export.dart';
@@ -27,7 +28,21 @@ class ReceiptPdf {
     String? docNo,
     String? notes,
     double commission = 0,
+    String? recordedBy, // 👤 من سجّل الوصل (المحاسب) — بلا قيمة: المستخدم الحالي (وقت الإنشاء)
   }) async {
+    // 🎨 تصميم «سند قبض» من مصمم السندات إن اختير؛ وإلا هذا الشكل كما هو
+    try {
+      final designed = await VoucherPrint.receiptPdf(
+        number: number,
+        date: date,
+        lines: lines,
+        boxName: boxName,
+        docNo: docNo,
+        notes: notes,
+        recordedBy: recordedBy ?? currentUserName(),
+      );
+      if (designed != null) return designed;
+    } catch (_) {}
     final f = await ReportExport.font();
     final settings = await SettingsManager.getAppSettings();
     final branch = settings.branchName.trim();
@@ -74,7 +89,7 @@ class ReceiptPdf {
               'العميل',
               if (!isBase) 'المبلغ ($currency)',
               'المبلغ (دينار)',
-              'الحسم',
+              'الخصم',
               'الرصيد قبل',
               'الرصيد بعد',
             ],
@@ -100,7 +115,7 @@ class ReceiptPdf {
             pw.Text('الصندوق: $boxName', style: st(11)),
             if (!isBase) pw.Text('سعر التعادل: ${fmtMoney(fxRate)}', style: st(11)),
             pw.Text('المجموع: ${fmtMoney(total)} دينار', style: st(13, color: navy)),
-            if (totalDisc > 0) pw.Text('الحسم: ${fmtMoney(totalDisc)}', style: st(11)),
+            if (totalDisc > 0) pw.Text('الخصم: ${fmtMoney(totalDisc)}', style: st(11)),
           ]),
           pw.SizedBox(height: 6),
           pw.Container(

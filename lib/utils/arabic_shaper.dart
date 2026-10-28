@@ -113,10 +113,15 @@ class ArabicShaper {
       }
 
       int formIdx = 0;
-      if (!prevConnects && !nextConnects) formIdx = 0; // Isolated
-      else if (!prevConnects && nextConnects) formIdx = 1; // Initial
-      else if (prevConnects && nextConnects) formIdx = 2; // Medial
-      else if (prevConnects && !nextConnects) formIdx = 3; // Final
+      if (!prevConnects && !nextConnects) {
+        formIdx = 0; // Isolated
+      } else if (!prevConnects && nextConnects) {
+        formIdx = 1; // Initial
+      } else if (prevConnects && nextConnects) {
+        formIdx = 2; // Medial
+      } else if (prevConnects && !nextConnects) {
+        formIdx = 3; // Final
+      }
 
       result.add(_forms[current]![formIdx]);
     }

@@ -7,6 +7,8 @@ import '../models/purchase_invoice.dart';
 import '../models/purchase_invoice_item.dart';
 import '../services/purchase_service.dart';
 import 'create_purchase_invoice_screen.dart';
+import 'suppliers/supplier_ui.dart' show cancelPurchaseInvoiceFlow, invoiceStatusLabel;
+import '../accounting/screens/acc_ui.dart' show accAppBar, accRoute;
 
 class InvoiceDetailsSplitScreen extends StatefulWidget {
   final int invoiceId;
@@ -86,29 +88,32 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
       );
     }
 
+    final inv = _invoice!;
+    final cancelled = inv.status == 'cancelled';
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
-      appBar: AppBar(
-        title: Text('تفاصيل الفاتورة #${_invoice!.invoiceNumber}', 
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
-        backgroundColor: const Color(0xFF0F172A),
-        iconTheme: const IconThemeData(color: Colors.white),
+      appBar: accAppBar(
+        'فاتورة شراء ${inv.invoiceNumber}',
+        icon: Icons.receipt_long_rounded,
+        subtitle: 'الحالة: ${invoiceStatusLabel(inv.status)}',
         actions: [
-          IconButton(
-            icon: const Icon(Icons.edit, color: Colors.blue),
-            tooltip: 'تعديل الفاتورة',
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => CreatePurchaseInvoiceScreen(
-                    existingInvoice: _invoice,
-                  ),
-                ),
-              );
-              if (mounted) _loadData(); // Reload after edit
-            },
-          ),
+          if (!cancelled)
+            IconButton(
+              icon: const Icon(Icons.edit_rounded),
+              tooltip: 'تعديل الفاتورة',
+              onPressed: () async {
+                await Navigator.push(context, accRoute<void>(CreatePurchaseInvoiceScreen(existingInvoice: inv)));
+                if (mounted) _loadData(); // Reload after edit
+              },
+            ),
+          if (!cancelled)
+            IconButton(
+              icon: const Icon(Icons.block_rounded, color: Color(0xFFFCA5A5)),
+              tooltip: 'إلغاء الفاتورة',
+              onPressed: () async {
+                if (await cancelPurchaseInvoiceFlow(context, inv) && mounted) _loadData();
+              },
+            ),
         ],
       ),
       body: Row(
@@ -233,7 +238,7 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(
-              color: _getStatusColor(_invoice!.status).withOpacity(0.1),
+              color: _getStatusColor(_invoice!.status).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
@@ -264,7 +269,7 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4)),
         ],
       ),
       child: Column(
@@ -291,7 +296,7 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 15, offset: const Offset(0, 5)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 15, offset: const Offset(0, 5)),
         ],
       ),
       child: Column(
@@ -310,7 +315,7 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
             ),
           ),
           const Divider(height: 1),
-          ListView.separated(
+          Material(type: MaterialType.transparency, child: ListView.separated(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: _items.length,
@@ -327,7 +332,7 @@ class _InvoiceDetailsSplitScreenState extends State<InvoiceDetailsSplitScreen> {
                 ),
               );
             },
-          ),
+          )),
         ],
       ),
     );

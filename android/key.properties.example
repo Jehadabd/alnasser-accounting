@@ -1,0 +1,6 @@
+# انسخ هذا الملف إلى android/key.properties واملأه أنت (لا يُرفع إلى git).
+# storeFile: المسار الكامل لملف المفتاح، خارج مجلد المشروع، والشرطات مائلة للأمام /
+storeFile=C:/Users/jihad/keys/alnaser-release.jks
+storePassword=اكتب_كلمة_سر_المفتاح
+keyAlias=alnaser
+keyPassword=اكتب_كلمة_سر_المفتاح

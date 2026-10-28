@@ -1,5 +1,6 @@
 // services/logo_service.dart
 // خدمة مساعدة لتحميل اللوجو المخصص
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
@@ -22,7 +23,7 @@ class LogoService {
           final bytes = await logoFile.readAsBytes();
           return pw.MemoryImage(bytes);
         } catch (e) {
-          print('خطأ في تحميل اللوجو المخصص: $e');
+          debugPrint('خطأ في تحميل اللوجو المخصص: $e');
         }
       }
     }
@@ -42,7 +43,7 @@ class LogoService {
         try {
           return await logoFile.readAsBytes();
         } catch (e) {
-          print('خطأ في تحميل اللوجو المخصص: $e');
+          debugPrint('خطأ في تحميل اللوجو المخصص: $e');
         }
       }
     }

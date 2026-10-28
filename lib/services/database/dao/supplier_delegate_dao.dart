@@ -1,6 +1,5 @@
 import 'package:sqflite/sqflite.dart';
 import '../../../models/supplier_delegate.dart';
-import '../core/database_helpers.dart';
 
 class SupplierDelegateDao {
   final Future<Database> Function() getDatabase;
@@ -9,8 +8,8 @@ class SupplierDelegateDao {
 
   /// إضافة مندوب جديد
   Future<int> insert(SupplierDelegate delegate) async {
-    final _db = await getDatabase();
-    return await _db.insert(
+    final db = await getDatabase();
+    return await db.insert(
       'supplier_delegates',
       delegate.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
@@ -19,8 +18,8 @@ class SupplierDelegateDao {
 
   /// الحصول على قائمة المندوبين لمورد معين
   Future<List<SupplierDelegate>> getBySupplierId(int supplierId) async {
-    final _db = await getDatabase();
-    final List<Map<String, dynamic>> maps = await _db.query(
+    final db = await getDatabase();
+    final List<Map<String, dynamic>> maps = await db.query(
       'supplier_delegates',
       where: 'supplier_id = ? AND is_active = 1',
       whereArgs: [supplierId],
@@ -31,8 +30,8 @@ class SupplierDelegateDao {
 
   /// تحديث بيانات مندوب
   Future<int> update(SupplierDelegate delegate) async {
-    final _db = await getDatabase();
-    return await _db.update(
+    final db = await getDatabase();
+    return await db.update(
       'supplier_delegates',
       delegate.toMap(),
       where: 'id = ?',
@@ -42,9 +41,9 @@ class SupplierDelegateDao {
 
   /// حذف (أو تعطيل) مندوب
   Future<int> delete(int id) async {
-    final _db = await getDatabase();
+    final db = await getDatabase();
     // نفضل التعطيل بدلاً من الحذف للحفاظ على التكامل المرجعي
-    return await _db.update(
+    return await db.update(
       'supplier_delegates',
       {'is_active': 0},
       where: 'id = ?',

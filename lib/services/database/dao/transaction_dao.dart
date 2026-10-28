@@ -1,13 +1,14 @@
 // lib/services/database/dao/transaction_dao.dart
 // عمليات CRUD للمعاملات المالية
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import '../../../models/transaction.dart';
 import '../../../models/customer.dart';
 import '../../../utils/money_calculator.dart';
 import '../core/database_helpers.dart';
 import '../business/customer_locking.dart';
-import '../../../utils/uuid_helper.dart';
+import '../business/tx_author.dart';
 import '../../sync/sync_security.dart';
 
 /// DAO للمعاملات المالية - عمليات CRUD والأمان
@@ -46,7 +47,7 @@ class TransactionDao {
             limit: 1,
           );
           if (existingTx.isNotEmpty) {
-            print('⚠️ تم اكتشاف معاملة مكررة بنفس UUID: ${transaction.transactionUuid}');
+            debugPrint('⚠️ تم اكتشاف معاملة مكررة بنفس UUID: ${transaction.transactionUuid}');
             // إرجاع ID المعاملة الموجودة بدلاً من إضافة مكررة
             return existingTx.first['id'] as int;
           }
@@ -80,7 +81,7 @@ class TransactionDao {
         double verifiedBalanceBefore =
             (sumRows.first['total'] as num?)?.toDouble() ?? 0.0;
         if ((verifiedBalanceBefore - customer.currentTotalDebt).abs() > 0.01) {
-          print('🛡️ رصيد العميل ${transaction.customerId} المخزّن '
+          debugPrint('🛡️ رصيد العميل ${transaction.customerId} المخزّن '
               '(${customer.currentTotalDebt}) ≠ مجموع معاملاته '
               '($verifiedBalanceBefore) — اعتُمد المجموع');
         }
@@ -136,7 +137,7 @@ class TransactionDao {
         // 5. إدراج المعاملة
         final transactionMap = updatedTransaction.toMap();
         transactionMap['checksum'] = checksum;
-        final id = await txn.insert('transactions', transactionMap);
+        final id = await txn.insert('transactions', await TxAuthor.stamped(txn, transactionMap));
 
         // 6. تحديث رصيد العميل
         await txn.update(
@@ -242,7 +243,7 @@ class TransactionDao {
         return DebtTransaction.fromMap(maps.first);
       }
     } catch (e) {
-      print('Error getting invoice debt transaction for invoice $invoiceId: $e');
+      debugPrint('Error getting invoice debt transaction for invoice $invoiceId: $e');
     }
     return null;
   }

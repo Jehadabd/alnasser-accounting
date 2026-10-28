@@ -254,8 +254,10 @@ class VouchersService {
           userId: userId);
       return id;
     });
-    if (_logActivity) ActivityLog.log('إنشاء', 'السندات',
-        '${voucherTypeLabels[type]} #$newId — ${roundMoney(amount)}${description == null || description.isEmpty ? '' : ' — $description'}');
+    if (_logActivity) {
+      ActivityLog.log('إنشاء', 'السندات',
+          '${voucherTypeLabels[type]} #$newId — ${roundMoney(amount)}${description == null || description.isEmpty ? '' : ' — $description'}');
+    }
     return newId;
   }
 

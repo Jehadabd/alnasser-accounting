@@ -94,7 +94,7 @@ class _ExpenseAnalysisScreenState extends State<ExpenseAnalysisScreen> {
     'manual': 'قيد يدوي',
     'stock_doc': 'مستند مخزني',
     'invoice': 'فاتورة',
-    'invoice_commission': 'عمولة بائع',
+    'invoice_commission': 'عمولة مندوب',
     'supplier_tx': 'حركة مورد',
     'customer_tx': 'حركة عميل',
     'fx_reval': 'فروقات عملة',
@@ -406,7 +406,7 @@ class _CashMovementScreenState extends State<CashMovementScreen> {
                             borderRadius: BorderRadius.circular(12),
                             border: Border(right: BorderSide(color: inflow ? ErpColors.green : ErpColors.red, width: 4)),
                           ),
-                          child: ListTile(
+                          child: Material(type: MaterialType.transparency, child: ListTile(
                             dense: true,
                             leading: Icon(inflow ? Icons.south_west_rounded : Icons.north_east_rounded,
                                 color: inflow ? ErpColors.green : ErpColors.red),
@@ -419,7 +419,7 @@ class _CashMovementScreenState extends State<CashMovementScreen> {
                               Text('الرصيد ${fmtMoney(d0(r['balance']))}',
                                   style: const TextStyle(fontSize: 11, color: ErpColors.muted)),
                             ]),
-                          ),
+                          )),
                         );
                       },
                     ),
@@ -798,7 +798,7 @@ class _PartyBalancesScreenState extends State<PartyBalancesScreen> {
                               borderRadius: BorderRadius.circular(12), side: const BorderSide(color: ErpColors.border)),
                           child: ListTile(
                             leading: CircleAvatar(
-                              backgroundColor: (isCust ? ErpColors.blue : ErpColors.orange).withOpacity(.12),
+                              backgroundColor: (isCust ? ErpColors.blue : ErpColors.orange).withValues(alpha: .12),
                               child: Icon(isCust ? Icons.person_outline : Icons.local_shipping_outlined,
                                   color: isCust ? ErpColors.blue : ErpColors.orange),
                             ),

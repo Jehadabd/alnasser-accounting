@@ -52,6 +52,7 @@ class DocLinesEditor extends StatefulWidget {
     this.readOnly = false,
     this.priceLabel = 'السعر',
     this.allowNegativeQty = false,
+    this.allowAdd = true,
   });
   final List<DocLine> lines;
   final VoidCallback onChanged;
@@ -63,14 +64,40 @@ class DocLinesEditor extends StatefulWidget {
   final String priceLabel;
   final bool allowNegativeQty;
 
+  /// false = لا بحث ولا إضافة مواد (مرتجع من فاتورة: موادها فقط). الحذف والكميات مسموحة.
+  final bool allowAdd;
+
   @override
   State<DocLinesEditor> createState() => _DocLinesEditorState();
 }
 
 class _DocLinesEditorState extends State<DocLinesEditor> {
   final _search = TextEditingController();
+
+  /// 🔎 بحث داخل مواد المستند نفسه (مرتجع من فاتورة فيها مئات المواد)
+  String _filter = '';
+  bool _onlyEntered = false;
+  final _filterCtrl = TextEditingController();
+
+  bool _matches(DocLine l) {
+    if (_onlyEntered && l.quantity <= 0) return false;
+    final q = _filter.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    final p = l.product;
+    return p.name.toLowerCase().contains(q) ||
+        '${p.id}' == q ||
+        (p.barcode != null && p.barcode == q) ||
+        (p.itemCode != null && p.itemCode!.toLowerCase() == q);
+  }
   List<ProductLite> _hits = const [];
   int _seq = 0;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _filterCtrl.dispose();
+    super.dispose();
+  }
 
   double _defaultPrice(ProductLite p, UnitOption u) {
     switch (widget.priceSource) {
@@ -127,7 +154,7 @@ class _DocLinesEditorState extends State<DocLinesEditor> {
   Widget build(BuildContext context) {
     final lines = widget.lines;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      if (!widget.readOnly) ...[
+      if (!widget.readOnly && widget.allowAdd) ...[
         Row(children: [
           Expanded(
             child: TextField(
@@ -162,25 +189,73 @@ class _DocLinesEditorState extends State<DocLinesEditor> {
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: ErpColors.border),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 10)],
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10)],
             ),
-            child: ListView(shrinkWrap: true, children: [
-              for (final p in _hits)
-                ListTile(
-                  dense: true,
-                  title: Text(p.name),
-                  subtitle: Text('رقم ${p.id} • المخزون ${fmtQty(p.stock)} ${p.baseUnitName}'),
-                  trailing: Text(fmtMoney(_defaultPrice(p, p.units.first)), textDirection: TextDirection.ltr),
-                  onTap: () => _add(p),
-                ),
-            ]),
+            clipBehavior: Clip.antiAlias,
+            // Material شفافة داخل الصندوق الملوّن: بدونها يرمي ListTile تحذير
+            // «ink splashes may be invisible» لأن خلفية الصندوق تغطي تأثير الضغط.
+            child: Material(
+              type: MaterialType.transparency,
+              child: ListView(shrinkWrap: true, children: [
+                for (final p in _hits)
+                  ListTile(
+                    dense: true,
+                    title: Text(p.name),
+                    subtitle: Text('رقم ${p.id} • المخزون ${fmtQty(p.stock)} ${p.baseUnitName}'),
+                    trailing: Text(fmtMoney(_defaultPrice(p, p.units.first)), textDirection: TextDirection.ltr),
+                    onTap: () => _add(p),
+                  ),
+              ]),
+            ),
           ),
         const SizedBox(height: 10),
+      ],
+      if (!widget.allowAdd && lines.length > 1) ...[
+        Row(children: [
+          Expanded(
+            child: TextField(
+              decoration: InputDecoration(
+                hintText: 'ابحث داخل مواد الفاتورة: الاسم أو الرقم أو الباركود',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _filter.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: 'مسح البحث',
+                        onPressed: () => setState(() {
+                          _filterCtrl.clear();
+                          _filter = '';
+                        }),
+                      ),
+                filled: true,
+                fillColor: const Color(0xFFF8FAFD),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                isDense: true,
+              ),
+              controller: _filterCtrl,
+              onChanged: (v) => setState(() => _filter = v),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilterChip(
+            label: Text('المُرجع فقط (${lines.where((l) => l.quantity > 0).length})'),
+            selected: _onlyEntered,
+            onSelected: (v) => setState(() => _onlyEntered = v),
+          ),
+        ]),
+        Padding(
+          padding: const EdgeInsets.only(top: 4, bottom: 8),
+          child: Text(
+            'يظهر ${lines.where(_matches).length} من ${lines.length} مادة',
+            style: const TextStyle(color: ErpColors.muted, fontSize: 12),
+          ),
+        ),
       ],
       if (lines.isEmpty)
         const EmptyState('لا توجد مواد بعد', icon: Icons.add_shopping_cart)
       else
-        for (var i = 0; i < lines.length; i++) _row(i),
+        for (var i = 0; i < lines.length; i++)
+          if (widget.allowAdd || _matches(lines[i])) _row(i),
     ]);
   }
 
@@ -201,7 +276,7 @@ class _DocLinesEditorState extends State<DocLinesEditor> {
           child: Row(children: [
             CircleAvatar(
               radius: 13,
-              backgroundColor: ErpColors.navy.withOpacity(0.1),
+              backgroundColor: ErpColors.navy.withValues(alpha: 0.1),
               child: Text('${i + 1}', style: const TextStyle(fontSize: 12, color: ErpColors.navy)),
             ),
             const SizedBox(width: 8),
@@ -237,7 +312,7 @@ class _DocLinesEditorState extends State<DocLinesEditor> {
         }, width: 110),
         if (widget.priceSource != PriceSource.none)
           _num(l, widget.priceLabel, l.price, (v) => l.price = v.abs(), width: 140),
-        if (widget.showDiscount) _num(l, 'حسم %', l.discountPercent, (v) => l.discountPercent = v.clamp(0, 100).toDouble(), width: 90),
+        if (widget.showDiscount) _num(l, 'خصم %', l.discountPercent, (v) => l.discountPercent = v.clamp(0, 100).toDouble(), width: 90),
         if (widget.priceSource != PriceSource.none)
           InfoTile('الإجمالي', fmtMoney(l.total), width: 120, color: ErpColors.navy),
         if (!widget.readOnly)

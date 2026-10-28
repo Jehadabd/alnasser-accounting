@@ -13,6 +13,7 @@ import '../accounting/screens/acc_ui.dart';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
 import '../widgets/formatters.dart';
+import 'erp_kit.dart';
 
 class ErpException implements Exception {
   ErpException(this.message);
@@ -154,13 +155,7 @@ class MoneyField extends StatelessWidget {
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [ThousandSeparatorDecimalInputFormatter(allowNegative: true)],
       textDirection: TextDirection.ltr,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        isDense: true,
-        filled: true,
-        fillColor: Colors.white,
-      ),
+      decoration: InputDecoration(labelText: label, isDense: true, filled: true, fillColor: Colors.white),
       onChanged: onChanged,
     );
     return width == null ? f : SizedBox(width: width, child: f);
@@ -191,13 +186,7 @@ class TextBox extends StatelessWidget {
       controller: controller,
       maxLines: maxLines,
       enabled: enabled,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        isDense: true,
-        filled: true,
-        fillColor: Colors.white,
-      ),
+      decoration: InputDecoration(labelText: label, isDense: true, filled: true, fillColor: Colors.white),
       onChanged: onChanged,
     );
     return width == null ? f : SizedBox(width: width, child: f);
@@ -211,38 +200,30 @@ class DateButton extends StatelessWidget {
   final DateTime? value;
   final ValueChanged<DateTime> onChanged;
 
+  // نفس زر التاريخ في شاشات المحاسبة: بطاقة صغيرة والتاريخ بالأرقام (yyyy/MM/dd)
   @override
-  Widget build(BuildContext context) => OutlinedButton.icon(
-        icon: const Icon(Icons.event, size: 18),
-        label: Text('$label: ${value == null ? '—' : fmtDate(value!)}'),
-        onPressed: () async {
-          final d = await showDatePicker(
-            context: context,
-            initialDate: value ?? DateTime.now(),
-            firstDate: DateTime(2015),
-            lastDate: DateTime(2100),
-          );
-          if (d != null) onChanged(d);
-        },
+  Widget build(BuildContext context) => DatePill(
+        label: label,
+        value: value,
+        emptyText: '—',
+        onPicked: onChanged,
       );
 }
 
 /// سؤال تأكيد.
 Future<bool> confirmDialog(BuildContext context, String title, String message,
     {String ok = 'تأكيد', Color? color}) async {
+  final c = color ?? AccColors.navy;
+  final danger = c == AccColors.red;
   final r = await showDialog<bool>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: Text(message),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: color ?? AccColors.navy, foregroundColor: Colors.white),
-          onPressed: () => Navigator.pop(ctx, true),
-          child: Text(ok),
-        ),
-      ],
+    builder: (ctx) => ErpDialog(
+      title: title,
+      icon: danger ? Icons.warning_amber_rounded : Icons.help_outline_rounded,
+      color: c,
+      width: 440,
+      content: Text(message, style: const TextStyle(fontSize: 14, height: 1.6)),
+      actions: erpDialogActions(ctx, ok: ok, color: c, icon: danger ? Icons.delete_outline_rounded : Icons.check_rounded),
     ),
   );
   return r ?? false;
@@ -254,15 +235,14 @@ Future<double?> askNumber(BuildContext context, String title,
   final c = TextEditingController(text: initial == null ? '' : fmtMoney(initial));
   final r = await showDialog<double>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
+    builder: (ctx) => ErpDialog(
+      title: title,
+      icon: Icons.dialpad_rounded,
+      width: 400,
       content: MoneyField(controller: c, label: label, autofocus: true),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-        ElevatedButton(
-          onPressed: () => Navigator.pop(ctx, parseMoney(c.text)),
-          child: const Text('موافق'),
-        ),
+        FilledButton(onPressed: () => Navigator.pop(ctx, parseMoney(c.text)), child: const Text('موافق')),
       ],
     ),
   );
@@ -274,16 +254,19 @@ Future<String?> askText(BuildContext context, String title, {String label = '', 
   final c = TextEditingController(text: initial ?? '');
   final r = await showDialog<String>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
+    builder: (ctx) => ErpDialog(
+      title: title,
+      icon: Icons.edit_note_rounded,
+      width: 420,
       content: TextField(
         controller: c,
         autofocus: true,
-        decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
+        decoration: InputDecoration(labelText: label),
+        onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('موافق')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('موافق')),
       ],
     ),
   );
@@ -303,9 +286,10 @@ class HubTile {
 
 /// مجموعة أزرار بعنوان داخل مركز (مثل قوائم الإداري وسهل).
 class HubSection {
-  const HubSection(this.title, this.tiles);
+  const HubSection(this.title, this.tiles, {this.subtitle});
   final String title;
   final List<HubTile> tiles;
+  final String? subtitle;
 }
 
 /// مركز مقسّم إلى مجموعات بعناوين؛ كل مجموعة شبكة أزرار.
@@ -321,12 +305,14 @@ class HubSections extends StatelessWidget {
         for (final s in sections)
           if (s.tiles.isNotEmpty) ...[
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
               child: Row(children: [
+                Container(width: 4, height: 18, decoration: BoxDecoration(color: AccColors.navy, borderRadius: BorderRadius.circular(4))),
+                const SizedBox(width: 8),
                 Text(s.title,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AccColors.navy)),
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15.5, color: AccColors.text)),
                 const SizedBox(width: 10),
-                Expanded(child: Divider(color: Colors.grey.shade300)),
+                const Expanded(child: Divider(color: Color(0xFFE3E9F1))),
               ]),
             ),
             HubGrid(tiles: s.tiles, shrinkWrap: true),
@@ -343,63 +329,97 @@ class HubGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final cols = width > 1200 ? 5 : width > 900 ? 4 : width > 600 ? 3 : 2;
-    return GridView.count(
+    return GridView.builder(
       shrinkWrap: shrinkWrap,
       physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
-      padding: const EdgeInsets.all(12),
-      crossAxisCount: cols,
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      childAspectRatio: 1.25,
-      children: [
-        for (final t in tiles)
-          Card(
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(color: Colors.grey.shade200),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () {
-                if (t.permission != null && !requirePermission(context, t.permission!)) return;
-                t.onTap();
-              },
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color: t.color.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(t.icon, color: t.color, size: 28),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(t.title,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                    if (t.subtitle != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(t.subtitle!,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12, color: AccColors.muted)),
-                      ),
-                  ],
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 360,
+        mainAxisExtent: 86,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+      ),
+      itemCount: tiles.length,
+      itemBuilder: (context, i) => _HubTileCard(tile: tiles[i]),
+    );
+  }
+}
+
+class _HubTileCard extends StatefulWidget {
+  const _HubTileCard({required this.tile});
+  final HubTile tile;
+  @override
+  State<_HubTileCard> createState() => _HubTileCardState();
+}
+
+class _HubTileCardState extends State<_HubTileCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.tile;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: _hover
+              ? [BoxShadow(color: t.color.withValues(alpha: 0.16), blurRadius: 16, offset: const Offset(0, 6))]
+              : const [BoxShadow(color: Color(0x080F172A), blurRadius: 6, offset: Offset(0, 2))],
+        ),
+        child: Material(
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: _hover ? t.color.withValues(alpha: 0.45) : const Color(0xFFE3E9F1)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () {
+              if (t.permission != null && !requirePermission(context, t.permission!)) return;
+              t.onTap();
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Row(children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: _hover ? t.color : t.color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(t.icon, color: _hover ? Colors.white : t.color, size: 25),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(t.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: AccColors.text)),
+                      if (t.subtitle != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(t.subtitle!,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12, height: 1.35, color: AccColors.muted)),
+                        ),
+                    ],
+                  ),
+                ),
+              ]),
             ),
           ),
-      ],
+        ),
+      ),
     );
   }
 }
@@ -431,7 +451,9 @@ class SimpleTable extends StatelessWidget {
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: DataTable(
-          headingRowColor: WidgetStateProperty.all(AccColors.navy.withOpacity(0.08)),
+          headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F4F9)),
+          headingTextStyle: const TextStyle(fontWeight: FontWeight.w800, color: AccColors.navy, fontSize: 13),
+          dividerThickness: 0.6,
           columnSpacing: 22,
           showCheckboxColumn: false,
           columns: [

@@ -1,6 +1,7 @@
 // lib/services/database/dao/audit_dao.dart
 // عمليات سجل التدقيق المالي
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -58,7 +59,7 @@ class AuditDao {
         return Uint8List.fromList(packed);
       }
     } catch (e) {
-      print('⚠️ تعذّر ضغط أصناف اللقطة (سيُحفظ نصاً): $e');
+      debugPrint('⚠️ تعذّر ضغط أصناف اللقطة (سيُحفظ نصاً): $e');
     }
     return Uint8List.fromList(raw);
   }
@@ -73,9 +74,13 @@ class AuditDao {
         if (raw.length > 2 && raw[0] == 0x1f && raw[1] == 0x8b) {
           return utf8.decode(GZipDecoder().decodeBytes(raw));
         }
+        // zlib (78 01 / 78 5E / 78 9C / 78 DA): لقطات حفظتها نسخة سابقة من البرنامج
+        if (raw.length > 2 && raw[0] == 0x78 && (raw[0] * 256 + raw[1]) % 31 == 0) {
+          return utf8.decode(ZLibDecoder().decodeBytes(raw));
+        }
         return utf8.decode(raw);
       } catch (e) {
-        print('⚠️ تعذّر فكّ ضغط أصناف اللقطة: $e');
+        debugPrint('⚠️ تعذّر فكّ ضغط أصناف اللقطة: $e');
       }
     }
     return '[]';
@@ -93,7 +98,7 @@ class AuditDao {
             .toList();
       }
     } catch (e) {
-      print('⚠️ تعذّرت قراءة أصناف اللقطة: $e');
+      debugPrint('⚠️ تعذّرت قراءة أصناف اللقطة: $e');
     }
     return <Map<String, dynamic>>[];
   }
@@ -149,11 +154,11 @@ class AuditDao {
       } catch (_) {}
 
       if (deletedAudit > 0 || deletedLogs > 0) {
-        print(
+        debugPrint(
             '🧹 تنظيف السجلات: $deletedAudit سجل تدقيق و $deletedLogs سجل فاتورة أقدم من $kLogRetentionDays يوماً');
       }
     } catch (e) {
-      print('⚠️ تعذّر تنظيف السجلات القديمة: $e');
+      debugPrint('⚠️ تعذّر تنظيف السجلات القديمة: $e');
     }
   }
 
@@ -185,7 +190,7 @@ class AuditDao {
       await _pruneOldLogsIfDue(db);
       return insertedId;
     } catch (e) {
-      print('خطأ في إدراج سجل التدقيق: $e');
+      debugPrint('خطأ في إدراج سجل التدقيق: $e');
       return 0;
     }
   }
@@ -204,7 +209,7 @@ class AuditDao {
         orderBy: 'created_at DESC',
       );
     } catch (e) {
-      print('خطأ في جلب سجل التدقيق: $e');
+      debugPrint('خطأ في جلب سجل التدقيق: $e');
       return [];
     }
   }
@@ -226,7 +231,7 @@ class AuditDao {
         orderBy: 'created_at DESC',
       );
     } catch (e) {
-      print('خطأ في جلب سجل التدقيق للفترة: $e');
+      debugPrint('خطأ في جلب سجل التدقيق للفترة: $e');
       return [];
     }
   }
@@ -241,7 +246,7 @@ class AuditDao {
         limit: limit,
       );
     } catch (e) {
-      print('خطأ في جلب آخر العمليات: $e');
+      debugPrint('خطأ في جلب آخر العمليات: $e');
       return [];
     }
   }
@@ -257,7 +262,7 @@ class AuditDao {
         whereArgs: [sixMonthsAgo.toIso8601String()],
       );
     } catch (e) {
-      print('خطأ في حذف سجلات التدقيق القديمة: $e');
+      debugPrint('خطأ في حذف سجلات التدقيق القديمة: $e');
       return 0;
     }
   }
@@ -326,7 +331,7 @@ class AuditDao {
         'created_by': createdBy,
       });
     } catch (e) {
-      print('خطأ في حفظ نسخة الفاتورة: $e');
+      debugPrint('خطأ في حفظ نسخة الفاتورة: $e');
       return 0;
     }
   }
@@ -342,7 +347,7 @@ class AuditDao {
         orderBy: 'version_number ASC',
       );
     } catch (e) {
-      print('خطأ في جلب نسخ الفاتورة: $e');
+      debugPrint('خطأ في جلب نسخ الفاتورة: $e');
       return [];
     }
   }
@@ -397,7 +402,7 @@ class AuditDao {
       await _pruneOldLogsIfDue(db);
       return insertedId;
     } catch (e) {
-      print('خطأ في تسجيل عملية الفاتورة: $e');
+      debugPrint('خطأ في تسجيل عملية الفاتورة: $e');
       return 0;
     }
   }
@@ -413,7 +418,7 @@ class AuditDao {
         orderBy: 'created_at DESC',
       );
     } catch (e) {
-      print('خطأ في جلب سجل عمليات الفاتورة: $e');
+      debugPrint('خطأ في جلب سجل عمليات الفاتورة: $e');
       return [];
     }
   }

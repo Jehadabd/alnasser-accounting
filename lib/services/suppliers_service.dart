@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:io';
 import 'dart:convert';
 import 'package:path/path.dart' as p;
@@ -13,20 +14,22 @@ import '../models/supplier_delegate.dart';
 
 import 'database_service.dart';
 import 'database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
-import '../services/database/dao/supplier_dao.dart';
 import '../services/database/dao/supplier_delegate_dao.dart';
 import 'package:intl/intl.dart' show NumberFormat; // 🔢 فواصل الآلاف
+import 'database/supplier_compat.dart';
 
 typedef SupplierInvoice = PurchaseInvoice;
 typedef SupplierReceipt = SupplierPayment;
 
 class SuppliersService {
   final DatabaseService _dbService = DatabaseService();
-  late SupplierDao _supplierDao;
   late SupplierDelegateDao _delegateDao;
 
   // 🚀 متغير ثابت للتأكد من تشغيل ensureTables مرة واحدة فقط
-  static bool _tablesEnsured = false;
+  // مرتبط بالقاعدة المفتوحة: قاعدة مستعادة تُجهَّز جداولها من جديد
+  static int _tablesEnsuredGen = -1;
+  static bool get _tablesEnsured => _tablesEnsuredGen == DatabaseService.openGeneration;
+  static set _tablesEnsured(bool v) => _tablesEnsuredGen = v ? DatabaseService.openGeneration : -1;
   static final List<Supplier> _suppliersCache = [];
   static DateTime? _lastCacheUpdate;
   static const Duration _cacheValidDuration = Duration(minutes: 5);
@@ -44,7 +47,6 @@ class SuppliersService {
   }
 
   SuppliersService() {
-    _supplierDao = SupplierDao(getDatabase: () => _dbService.database);
     _delegateDao = SupplierDelegateDao(getDatabase: () => _dbService.database);
   }
 
@@ -132,7 +134,7 @@ class SuppliersService {
     final db = await _db;
     final map = supplier.toMap();
     map['last_modified_at'] = DateTime.now().toIso8601String();
-    final result = await db.insert('suppliers', map);
+    final result = await db.insert('suppliers', await supplierInsertCompat(db, map));
     
     // 🚀 إبطال Cache بعد الكتابة
     _invalidateSuppliersCache();
@@ -305,8 +307,8 @@ class SuppliersService {
   /// Update product costs from invoice items
   /// Update product costs AND STOCK from invoice items
   Future<List<String>> updateProductStatsFromInvoice(int invoiceId) async {
-    print('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    print('🔄 Starting updateProductStatsFromInvoice for invoice: $invoiceId');
+    debugPrint('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    debugPrint('🔄 Starting updateProductStatsFromInvoice for invoice: $invoiceId');
     
     final items = await getInvoiceItems(invoiceId);
     final db = await _db;
@@ -352,7 +354,7 @@ class SuppliersService {
                    }
                 }
               } catch (e) {
-                print('Error parsing hierarchy for stock: $e');
+                debugPrint('Error parsing hierarchy for stock: $e');
               }
            }
            totalStockIncrease += (item.quantity * multiplier);
@@ -369,7 +371,7 @@ class SuppliersService {
                  kind: 'purchase',
                  note: 'فاتورة مورد');
            }
-           print('  📈 $productName: Stock increased by $totalStockIncrease items');
+           debugPrint('  📈 $productName: Stock increased by $totalStockIncrease items');
         }
 
         // 3. Update Cost (Using the item with 'قطعة' or converting from largest unit)
@@ -394,7 +396,7 @@ class SuppliersService {
                    final uName = level['unit_name'];
                    final uQty = level['quantity'] as int? ?? 1;
                    currentCumulative *= uQty;
-                   if (uName == bestItem!.unit) {
+                   if (uName == bestItem.unit) {
                       conversion = currentCumulative.toDouble();
                       break;
                    }
@@ -403,7 +405,7 @@ class SuppliersService {
                   newCostPerPiece = bestItem.unitPrice / conversion;
                 }
             } catch(e) {
-               print('Error converting cost: $e');
+               debugPrint('Error converting cost: $e');
             }
         }
         
@@ -429,7 +431,7 @@ class SuppliersService {
               }
               newUnitCosts = json.encode(unitCosts);
             } catch (e) {
-              print('Error calculating unit costs: $e');
+              debugPrint('Error calculating unit costs: $e');
             }
           } else if (unit == 'meter') {
              final lengthPerUnit = (productMap['length_per_unit'] as num?)?.toDouble() ?? 0.0;
@@ -455,7 +457,7 @@ class SuppliersService {
           updatedProducts.add('$productName: ${NumberFormat('#,##0.##', 'en').format(oldCost)} -> ${NumberFormat('#,##0.##', 'en').format(newCostPerPiece)}');
         }
       } catch (e) {
-        print('Error updating product $productId: $e');
+        debugPrint('Error updating product $productId: $e');
       }
     }
     return updatedProducts;

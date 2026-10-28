@@ -8,6 +8,7 @@ import '../models/app_user.dart';
 import 'database_service.dart';
 import 'firebase_sync/users_sync_service.dart';
 import '../erp/activity/activity_log.dart';
+import 'seat_service.dart';
 
 class AuthService {
   static final AuthService _instance = AuthService._internal();
@@ -17,7 +18,8 @@ class AuthService {
   final DatabaseService _db = DatabaseService();
   
   AppUser? _currentUser;
-  static const String _sessionKey = 'current_user_session';
+  // 🖥️ لكل شاشة جلستها (شاشة ثانية على نفس الحاسبة = محاسب آخر)
+  static String get _sessionKey => SeatService.key('current_user_session');
 
   /// المستخدم الحالي المسجل دخوله
   AppUser? get currentUser => _currentUser;
@@ -44,7 +46,7 @@ class AuthService {
   // عشوائي خاص بالجهاز وببصمة كلمة سر المستخدم: إن غُيّرت كلمة سره، أو حُذف،
   // أو ضُغط «تبديل المستخدم» ⇒ تُطلب كلمة السر من جديد.
   static const String _kStay = 'stay_logged_in';
-  static const String _kSaved = 'alnaser_saved_login';
+  static String get _kSaved => SeatService.key('alnaser_saved_login');
   static const String _kDevSecret = 'alnaser_login_device_secret';
   static const _secure = FlutterSecureStorage();
 

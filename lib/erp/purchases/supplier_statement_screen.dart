@@ -1,14 +1,16 @@
 // lib/erp/purchases/supplier_statement_screen.dart
 //
-// 📒 كشف حساب المورد: كل حركات دفتر المورد (supplier_transactions) بترتيب
-// زمني، مع الرصيد بعد كل حركة لكل عملة. قراءة فقط — لا يغيّر أي رصيد.
-// الرصيد = مجموع الحركات (نفس قاعدة SupplierDebtReconciler).
+// 📒 كشف حساب المورد: حركات دفتر المورد (supplier_transactions) لفترة، بعملة
+// واحدة في كل مرة، مع «رصيد سابق» قبل بداية الفترة والرصيد بعد كل حركة.
+// قراءة فقط — لا يغيّر أي رصيد. الرصيد = مجموع الحركات (قاعدة SupplierDebtReconciler).
+// طباعة PDF وتصدير Excel للفترة المعروضة.
 
 import 'package:flutter/material.dart';
 
 import '../../accounting/screens/acc_ui.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
+import '../report_export.dart';
 
 class SupplierStatementScreen extends StatefulWidget {
   const SupplierStatementScreen({super.key, required this.supplierId, required this.supplierName});
@@ -23,6 +25,9 @@ class _SupplierStatementScreenState extends State<SupplierStatementScreen> {
   List<Map<String, Object?>> _rows = const [];
   bool _loading = true;
   String? _error;
+  DateTime? _from;
+  DateTime _to = DateTime.now();
+  String _currency = 'IQD';
 
   @override
   void initState() {
@@ -41,8 +46,11 @@ class _SupplierStatementScreenState extends State<SupplierStatementScreen> {
         ORDER BY transaction_date ASC, id ASC
       ''', [widget.supplierId]);
       if (!mounted) return;
+      // العملة الافتراضية: التي لها حركات (الدينار أولاً)
+      final curs = rows.map((r) => '${r['currency']}').toSet();
       setState(() {
         _rows = rows;
+        if (!curs.contains(_currency) && curs.isNotEmpty) _currency = curs.contains('IQD') ? 'IQD' : curs.first;
         _loading = false;
       });
     } catch (e) {
@@ -73,57 +81,145 @@ class _SupplierStatementScreenState extends State<SupplierStatementScreen> {
     return t ?? '—';
   }
 
+  String get _curName => _currency == 'IQD' ? 'دينار' : (_currency == 'USD' ? 'دولار' : _currency);
+
+  String get _periodText => _from == null ? 'حتى ${fmtDate(_to)}' : 'من ${fmtDate(_from!)} إلى ${fmtDate(_to)}';
+
   @override
   Widget build(BuildContext context) {
-    final balances = <String, double>{};
+    final currencies = _rows.map((r) => '${r['currency']}').toSet().toList()..sort();
+    final fromDay = _from == null ? null : DateTime(_from!.year, _from!.month, _from!.day);
+    final toEnd = DateTime(_to.year, _to.month, _to.day).add(const Duration(days: 1));
+
+    double opening = 0, debit = 0, credit = 0;
     final table = <List<String>>[];
-    double debit = 0, credit = 0;
+    var bal = 0.0;
     for (final r in _rows) {
-      final cur = '${r['currency']}';
+      if ('${r['currency']}' != _currency) continue;
       final amt = d0(r['amount_changed']);
-      final bal = (balances[cur] ?? 0) + amt;
-      balances[cur] = bal;
-      if (amt >= 0) {
-        debit += cur == 'IQD' ? amt : 0;
-      } else {
-        credit += cur == 'IQD' ? -amt : 0;
-      }
       final date = DateTime.tryParse('${r['transaction_date']}');
+      if (date != null && !date.isBefore(toEnd)) continue; // بعد نهاية الفترة
+      if (fromDay != null && date != null && date.isBefore(fromDay)) {
+        opening += amt; // قبل بداية الفترة ⇒ رصيد سابق
+        continue;
+      }
+      if (table.isEmpty) bal = opening;
+      bal += amt;
+      if (amt >= 0) {
+        debit += amt;
+      } else {
+        credit += -amt;
+      }
       table.add([
         date == null ? '${r['transaction_date']}' : fmtDate(date),
         _typeLabel(r['transaction_type'] as String?, r['invoice_id'], r['payment_id']),
         '${r['description'] ?? ''}',
         amt >= 0 ? fmtMoney(amt) : '',
         amt < 0 ? fmtMoney(-amt) : '',
-        '${fmtMoney(bal)} ${cur == 'IQD' ? '' : cur}'.trim(),
+        fmtMoney(bal),
       ]);
     }
-    final balanceText = balances.isEmpty
-        ? '0'
-        : balances.entries.map((e) => '${fmtMoney(e.value)} ${e.key == 'IQD' ? 'دينار' : e.key}').join(' + ');
+    final closing = opening + debit - credit;
+    final rows = <List<String>>[
+      if (fromDay != null) ['', 'رصيد سابق', 'قبل ${fmtDate(fromDay)}', '', '', fmtMoney(opening)],
+      ...table,
+    ];
+    const headers = ['التاريخ', 'النوع', 'البيان', 'له (دين علينا)', 'دفعنا له', 'الرصيد'];
+    final footer = ['', 'المجموع', '', fmtMoney(debit), fmtMoney(credit), fmtMoney(closing)];
+    String caption(double v) => v > 0.01 ? 'له علينا' : (v < -0.01 ? 'لنا عنده' : 'لا رصيد');
 
     return ErpPage(
       title: 'كشف حساب المورد',
-      subtitle: widget.supplierName,
-      icon: Icons.list_alt,
-      actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: Colors.white))],
-      headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
-        StatCard(label: 'الرصيد الحالي (له علينا)', value: balanceText, icon: Icons.account_balance_wallet_outlined,
-            color: ErpColors.orange),
-        StatCard(label: 'عدد الحركات', value: '${_rows.length}', icon: Icons.format_list_numbered, color: ErpColors.blue),
-      ]),
+      subtitle: '${widget.supplierName} — $_periodText — بال$_curName',
+      icon: Icons.list_alt_rounded,
+      actions: [
+        IconButton(
+          tooltip: 'تصدير Excel',
+          icon: const Icon(Icons.table_view_rounded),
+          onPressed: rows.isEmpty
+              ? null
+              : () => ReportExport.exportCsv(context,
+                  title: 'كشف حساب ${widget.supplierName}', headers: headers, rows: [...rows, footer]),
+        ),
+        IconButton(
+          tooltip: 'PDF / طباعة',
+          icon: const Icon(Icons.picture_as_pdf_rounded),
+          onPressed: rows.isEmpty
+              ? null
+              : () => ReportExport.exportPdf(
+                    context,
+                    title: 'كشف حساب مورد',
+                    subtitle: '${widget.supplierName} — $_periodText — بال$_curName',
+                    headers: headers,
+                    rows: rows,
+                    footer: footer,
+                    summaryLines: ['الرصيد الختامي: ${fmtMoney(closing.abs())} $_curName (${caption(closing)})'],
+                  ),
+        ),
+        IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
+      ],
+      headerExtra: Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: Wrap(spacing: 10, runSpacing: 8, children: [
+          if (_from != null)
+            HeaderStat(label: 'رصيد سابق', value: fmtMoney(opening), icon: Icons.history_rounded),
+          HeaderStat(
+              label: 'له (فواتير ورصيد)', value: fmtMoney(debit), icon: Icons.north_east_rounded, accent: const Color(0xFFFCA5A5)),
+          HeaderStat(
+              label: 'دفعنا ومرتجعات', value: fmtMoney(credit), icon: Icons.south_west_rounded, accent: const Color(0xFF86EFAC)),
+          HeaderStat(
+            label: 'الرصيد الختامي — ${caption(closing)}',
+            value: '${fmtMoney(closing.abs())} $_curName',
+            icon: Icons.account_balance_wallet_rounded,
+            accent: const Color(0xFFFDE68A),
+          ),
+        ]),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(child: Text('تعذّر تحميل الكشف: $_error'))
-              : _rows.isEmpty
-                  ? const Center(child: Text('لا توجد حركات لهذا المورد'))
-                  : SimpleTable(
-                      headers: const ['التاريخ', 'النوع', 'البيان', 'له (دين علينا)', 'دفعنا له', 'الرصيد'],
-                      numericColumns: const {3, 4, 5},
-                      rows: table.reversed.toList(),
-                      footer: ['', 'المجموع (دينار)', '', fmtMoney(debit), fmtMoney(credit), balanceText],
-                    ),
+              : Column(children: [
+                  PeriodBar(
+                    from: _from,
+                    to: _to,
+                    onChanged: (f, t) => setState(() {
+                      _from = f;
+                      _to = t;
+                    }),
+                    trailing: currencies.length > 1
+                        ? SegmentedButton<String>(
+                            segments: [
+                              for (final c in currencies)
+                                ButtonSegment(value: c, label: Text(c == 'IQD' ? 'دينار' : (c == 'USD' ? 'دولار' : c))),
+                            ],
+                            selected: {_currency},
+                            onSelectionChanged: (v) => setState(() => _currency = v.first),
+                          )
+                        : null,
+                  ),
+                  Expanded(
+                    child: rows.isEmpty
+                        ? const EmptyState('لا توجد حركات لهذا المورد في الفترة', icon: Icons.list_alt_outlined)
+                        : Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: ErpColors.border),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: SimpleTable(
+                                headers: headers,
+                                numericColumns: const {3, 4, 5},
+                                rows: rows,
+                                footer: footer,
+                              ),
+                            ),
+                          ),
+                  ),
+                ]),
     );
   }
 }

@@ -6,20 +6,19 @@ import 'dart:convert';
 import '../models/invoice_item.dart';
 import '../models/product.dart';
 import '../models/invoice.dart';
-import '../models/customer.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/models/app_settings.dart';
 import 'package:alnaser/models/font_settings.dart';
 import 'package:alnaser/services/font_manager.dart';
 import 'package:alnaser/services/pdf_header.dart';
 import 'package:alnaser/utils/arabic_shaper.dart';
-import 'database_service.dart';
+import 'product_codes.dart'; // 🏷️ رمز المادة
 
 class InvoicePdfService {
   static Future<pw.Document> generateInvoicePdf({
+    pw.Document? into, // 📎 ملف مجمّع: تُضاف صفحات هذه الفاتورة إليه بدل ملف جديد
     required List<InvoiceItem> invoiceItems,
     required List<Product> allProducts,
     required String customerName,
@@ -42,7 +41,8 @@ class InvoicePdfService {
     required DateTime? createdAt,
     required AppSettings appSettings,
   }) async {
-    final pdf = pw.Document();
+    final pdf = into ?? pw.Document();
+    await ProductCodes.ensureLoaded(); // 🏷️ رموز المواد (عمود «الرمز» إن كان ظاهراً)
     const itemsPerPage = 20;
     final totalPages = (invoiceItems.length / itemsPerPage).ceil();
     
@@ -50,11 +50,6 @@ class InvoicePdfService {
     final dateTime = createdAt ?? DateTime.now();
     final formattedDateTime = '${selectedDate.day.toString().padLeft(2, '0')}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.year} ${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
     
-    // تقليص النصوص للحد الأقصى المسموح
-    String truncate(String text, int maxLen) {
-      if (text.length <= maxLen) return text;
-      return text.substring(0, maxLen - 2) + '..';
-    }
     
     for (var pageIndex = 0; pageIndex < totalPages; pageIndex++) {
       final start = pageIndex * itemsPerPage;
@@ -65,7 +60,7 @@ class InvoicePdfService {
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat.a4,
-          margin: pw.EdgeInsets.only(top: 0, bottom: 2, left: 10, right: 10),
+          margin: const pw.EdgeInsets.only(top: 0, bottom: 2, left: 10, right: 10),
           build: (pw.Context context) {
             return pw.Directionality(
               textDirection: pw.TextDirection.rtl,
@@ -268,7 +263,7 @@ class InvoicePdfService {
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat.a4,
-          margin: pw.EdgeInsets.only(top: 0, bottom: 2, left: 10, right: 10),
+          margin: const pw.EdgeInsets.only(top: 0, bottom: 2, left: 10, right: 10),
           build: (pw.Context context) {
             return pw.Directionality(
               textDirection: pw.TextDirection.rtl,
@@ -348,7 +343,7 @@ class InvoicePdfService {
                             } catch (_) {}
                             return pw.TableRow(children: [
                               dataCell('', font), // التأشيرة
-                              dataCell('${formatNumber(quantity, forceDecimal: true)}', font, color: PdfColor.fromInt(appSettings.itemQuantityColor), fontSettings: appSettings.fontSettings.quantity),
+                              dataCell(formatNumber(quantity, forceDecimal: true), font, color: PdfColor.fromInt(appSettings.itemQuantityColor), fontSettings: appSettings.fontSettings.quantity),
                               dataCell(item.saleType ?? '', font),
                               dataCell(item.productName, font, align: pw.TextAlign.right, color: PdfColor.fromInt(appSettings.itemDetailsColor), fontSettings: appSettings.fontSettings.productDetails),
                               dataCell(formatProductId(product?.id), font, color: PdfColor.fromInt(appSettings.itemSerialColor), fontSettings: appSettings.fontSettings.productId),
@@ -645,6 +640,8 @@ class InvoicePdfService {
       case 'serial':
         return headerCell(shapedLabel, font, color: PdfColor.fromInt(appSettings.itemSerialColor), fontSettings: appSettings.fontSettings.serialNumber);
       case 'productId':
+      case 'itemCode':
+      case 'barcode':
         return headerCell(shapedLabel, font, color: PdfColor.fromInt(appSettings.itemSerialColor), fontSettings: appSettings.fontSettings.productId);
       case 'details':
         return headerCell(shapedLabel, font, color: PdfColor.fromInt(appSettings.itemDetailsColor), fontSettings: appSettings.fontSettings.productDetails);
@@ -677,6 +674,10 @@ class InvoicePdfService {
         return dataCell('${index + 1}', font, color: PdfColor.fromInt(appSettings.itemSerialColor), fontSettings: appSettings.fontSettings.serialNumber);
       case 'productId':
         return dataCell(formatProductId(product?.id), font, color: PdfColor.fromInt(appSettings.itemSerialColor), fontSettings: appSettings.fontSettings.productId);
+      case 'itemCode':
+        return dataCell(ArabicShaper.shape(ProductCodes.codeOf(product?.id) ?? ''), font, color: PdfColor.fromInt(appSettings.itemSerialColor), fontSettings: appSettings.fontSettings.productId);
+      case 'barcode':
+        return dataCell((product?.barcode ?? '').trim(), font, color: PdfColor.fromInt(appSettings.itemSerialColor), fontSettings: appSettings.fontSettings.productId);
       case 'details':
         return dataCell(ArabicShaper.shape(item.productName), font, align: pw.TextAlign.right, color: PdfColor.fromInt(appSettings.itemDetailsColor), fontSettings: appSettings.fontSettings.productDetails);
       case 'quantity':

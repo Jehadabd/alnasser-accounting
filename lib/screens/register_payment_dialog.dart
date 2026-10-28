@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' as intl;
 import '../models/supplier.dart';
@@ -23,28 +24,14 @@ class _RegisterPaymentDialogState extends State<RegisterPaymentDialog> {
   String _currency = 'IQD';
   String _paymentMethod = 'cash';
   bool _isSaving = false;
-  List<SupplierDelegate> _delegates = [];
   SupplierDelegate? _selectedDelegate;
 
   @override
   void initState() {
     super.initState();
     _currency = widget.supplier.currency;
-    _loadDelegates();
   }
 
-  Future<void> _loadDelegates() async {
-    // Wait for frame to access context safely if needed, though initState context is usually fine for read, 
-    // but better to use Future.microtask or just await in async wrapper
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-       try {
-         final list = await context.read<PurchaseService>().getDelegatesForSupplier(widget.supplier.id!);
-         if (mounted) setState(() => _delegates = list);
-       } catch (e) {
-         print('Error loading delegates: $e');
-       }
-    });
-  }
 
   double get _currentDebt => _currency == 'USD' 
       ? widget.supplier.totalDebtUsd 
@@ -67,7 +54,7 @@ class _RegisterPaymentDialogState extends State<RegisterPaymentDialog> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
+                    color: Colors.green.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(Icons.payments, color: Colors.green, size: 28),
@@ -101,13 +88,13 @@ class _RegisterPaymentDialogState extends State<RegisterPaymentDialog> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: _currentDebt > 0 
-                    ? Colors.red.withOpacity(0.1) 
-                    : Colors.green.withOpacity(0.1),
+                    ? Colors.red.withValues(alpha: 0.1) 
+                    : Colors.green.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: _currentDebt > 0 
-                      ? Colors.red.withOpacity(0.3) 
-                      : Colors.green.withOpacity(0.3),
+                      ? Colors.red.withValues(alpha: 0.3) 
+                      : Colors.green.withValues(alpha: 0.3),
                 ),
               ),
               child: Row(
@@ -149,7 +136,7 @@ class _RegisterPaymentDialogState extends State<RegisterPaymentDialog> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<String>(
-                    value: _currency,
+                    initialValue: _currency,
                     decoration: const InputDecoration(
                       labelText: 'العملة',
                       border: OutlineInputBorder(),
@@ -165,7 +152,7 @@ class _RegisterPaymentDialogState extends State<RegisterPaymentDialog> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: DropdownButtonFormField<String>(
-                    value: _paymentMethod,
+                    initialValue: _paymentMethod,
                     decoration: const InputDecoration(
                       labelText: 'طريقة الدفع',
                       border: OutlineInputBorder(),
@@ -255,7 +242,11 @@ class _RegisterPaymentDialogState extends State<RegisterPaymentDialog> {
     );
   }
 
-  void _savePayment() async {
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
+  Future<void> _savePayment() async {
+    await SaveLock.run(() => _savePaymentUnlocked(), message: 'جارٍ حفظ الدفعة…');
+  }
+  Future<void> _savePaymentUnlocked() async {
     final amount = double.tryParse(_amountController.text) ?? 0.0;
     if (amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(

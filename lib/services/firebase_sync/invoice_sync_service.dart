@@ -1,7 +1,9 @@
 // lib/services/firebase_sync/invoice_sync_service.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart' show Firebase;
 // نخفي Transaction من sqflite لأن الملف يستخدم Transaction بمعنى Firestore
 // (دالة db.transaction تستقبل DatabaseTransaction الذي هو نفسه Transaction هنا).
 // لإزالة الالتباس نستخدم alias.
@@ -15,6 +17,7 @@ import 'smart_pipe_cleanup_service.dart';
 import 'sync_event_bus.dart';
 import '../database_service.dart';
 import '../database/business/customer_visibility.dart';
+import '../database/business/customer_name_rule.dart'; // 🛡️ الحساب المدموج يتبع الباقي
 import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 import 'windowed_listener.dart'; // 👂
 
@@ -58,6 +61,9 @@ class InvoiceSyncService {
     'monthly_sequence_number',
     'invoice_year', 'invoice_month', // أعمدة السنة/الشهر للقيد الفريد المركّب
     'is_deleted', // 🛡️ حذف الفاتورة يتزامن (كان يُهمل فيبقى دينها على الأجهزة)
+    // 👤 اسم المحاسب الذي أنشأها: يُرفع مع الحزمة منذ البداية لكنه كان يُهمل عند
+    // الاستقبال. يلزم لمعرفة من يحق له إنشاء مرتجع لفاتورة جاءت من جهاز آخر.
+    'created_by_username',
   };
 
   /// أعمدة المعاملات المسموح بكتابتها محلياً. أي حقل إضافي من السحابة
@@ -83,31 +89,31 @@ class InvoiceSyncService {
   /// 🚀 بدء مزامنة الفواتير: رفع المعلّق، ثم الاستماع الدائم للوارد.
   Future<void> startSync() async {
     if (!await FirebaseSyncConfig.isEnabled()) {
-      print('🧾 مزامنة الفواتير: المزامنة معطّلة (isEnabled=false)، تخطّي startSync');
+      debugPrint('🧾 مزامنة الفواتير: المزامنة معطّلة (isEnabled=false)، تخطّي startSync');
       return;
     }
 
-    print('🧾 بدء محرك مزامنة الفواتير...');
+    debugPrint('🧾 بدء محرك مزامنة الفواتير...');
 
     // 🔄 تهيئة جدول الفواتير المؤجّلة (الأيتام) — لا نفشل كلياً إن تعذّر إنشاؤه.
     try {
       await _createInvoiceOrphanTable();
     } catch (e) {
-      print('⚠️ تعذّر إنشاء جدول الفواتير المؤجّلة (متابعة بدونها): $e');
+      debugPrint('⚠️ تعذّر إنشاء جدول الفواتير المؤجّلة (متابعة بدونها): $e');
     }
 
     // 🛡️ لا ننتظر الرفع: بلا شبكة لا يكتمل set() حتى يعود الاتصال، فكان
     // يحجز الاستماع للفواتير — ويحجز تهيئة المزامنة كلها (initialize ينتظر
     // startSync). المؤقت الدوري أدناه يعيد المحاولة على أي حال.
     unawaited(syncPendingInvoices().catchError((e) {
-      print('⚠️ تعذّر رفع الفواتير المعلقة أولية: $e');
+      debugPrint('⚠️ تعذّر رفع الفواتير المعلقة أولية: $e');
       return 0;
     }));
 
     try {
       await _repairCreditInvoicesMissingCustomers();
     } catch (e) {
-      print('⚠️ تعذّر إصلاح فواتير الدين الناقصة: $e');
+      debugPrint('⚠️ تعذّر إصلاح فواتير الدين الناقصة: $e');
     }
 
     // 🔒 الاستماع هو الأهم: يجب أن يبدأ حتى لو فشل رفع المعلّق.
@@ -115,7 +121,7 @@ class InvoiceSyncService {
       try {
         await _startListening();
       } catch (e) {
-        print('❌ فشل بدء الاستماع للفواتير: $e');
+        debugPrint('❌ فشل بدء الاستماع للفواتير: $e');
       }
     }
 
@@ -141,7 +147,7 @@ class InvoiceSyncService {
     _retryTimer?.cancel();
     _orphanReprocessTimer?.cancel();
     _isListening = false;
-    print('🛑 تم إيقاف محرك مزامنة الفواتير');
+    debugPrint('🛑 تم إيقاف محرك مزامنة الفواتير');
   }
 
   /// 📤 رفع الفواتير غير المرفوعة.
@@ -173,7 +179,7 @@ class InvoiceSyncService {
     final pending = await _coordinator.getPendingInvoices();
     if (pending.isEmpty) return 0;
 
-    print('📤 جاري رفع ${pending.length} فاتورة معلقة...');
+    debugPrint('📤 جاري رفع ${pending.length} فاتورة معلقة...');
     final collection = _firestore.collection('invoices');
     int uploaded = 0;
 
@@ -200,7 +206,7 @@ class InvoiceSyncService {
           // السحابة أحدث: لم نكتب فوقها، ونؤشّر كمرفوعة عمداً — النسخة
           // الأحدث تصل عبر المستمع وتحلّ محل المحلية (إبقاؤها معلّقة يعيد
           // محاولة لا تُكتب أبداً في كل دورة)
-          print('ℹ️ الفاتورة $uuid: في السحابة نسخة أحدث — لم تُكتب فوقها');
+          debugPrint('ℹ️ الفاتورة $uuid: في السحابة نسخة أحدث — لم تُكتب فوقها');
         }
 
         // 🛡️ مقارنة قبل التأشير: تغيّرت الفاتورة أثناء الرفع = تبقى معلّقة
@@ -212,11 +218,11 @@ class InvoiceSyncService {
         uploaded++;
       } catch (e) {
         // تبقى is_synced = 0 فتُعاد محاولتها تلقائياً في الدورة التالية.
-        print('❌ فشل رفع الفاتورة $uuid: $e');
+        debugPrint('❌ فشل رفع الفاتورة $uuid: $e');
       }
     }
 
-    print('✅ رُفعت $uploaded من ${pending.length} فاتورة');
+    debugPrint('✅ رُفعت $uploaded من ${pending.length} فاتورة');
     return uploaded;
   }
 
@@ -227,13 +233,15 @@ class InvoiceSyncService {
   /// عند الفشل تبقى is_synced = 0 فيلتقطها المؤقت الدوري لاحقاً (ضمان عدم الفقدان).
   Future<bool> syncInvoiceBundleNow(String invoiceUuid) async {
     if (!await FirebaseSyncConfig.isEnabled()) return false;
+    // المزامنة مفعّلة في الإعدادات لكن Firebase لم يُهيّأ (لا إعدادات مخصصة): لا محاولة
+    if (Firebase.apps.isEmpty) return false;
     if (invoiceUuid.isEmpty) return false;
     if (FirebaseSyncService().isRecovering) return false;
 
     try {
       final fullInvoice = await _coordinator.getFullInvoiceByUuid(invoiceUuid);
       if (fullInvoice == null) {
-        print('⚠️ الفاتورة $invoiceUuid غير موجودة محلياً للرفع');
+        debugPrint('⚠️ الفاتورة $invoiceUuid غير موجودة محلياً للرفع');
         return false;
       }
       // تخطّي إن كانت مرفوعة بالفعل
@@ -245,17 +253,17 @@ class InvoiceSyncService {
 
       if (!await _uploadBundleIfNotOlder(collection.doc(invoiceUuid), payload)) {
         // السحابة أحدث (انظر syncPendingInvoices): تصل عبر المستمع
-        print('ℹ️ الفاتورة $invoiceUuid: في السحابة نسخة أحدث — لم تُكتب فوقها');
+        debugPrint('ℹ️ الفاتورة $invoiceUuid: في السحابة نسخة أحدث — لم تُكتب فوقها');
       }
       final marked = await _coordinator.markAsSynced(invoiceUuid,
           uploadedVersion: (fullInvoice['version'] as num?)?.toInt() ?? 1);
       if (!marked) return false; // تغيّرت أثناء الرفع: الدورة التالية ترفعها
       await _markInvoiceTransactionsAsSynced(fullInvoice);
 
-      print('⚡ رفع فوري ناجح لحزمة الفاتورة $invoiceUuid');
+      debugPrint('⚡ رفع فوري ناجح لحزمة الفاتورة $invoiceUuid');
       return true;
     } catch (e) {
-      print('❌ فشل الرفع الفوري للفاتورة $invoiceUuid: $e');
+      debugPrint('❌ فشل الرفع الفوري للفاتورة $invoiceUuid: $e');
       return false;
     }
   }
@@ -286,7 +294,7 @@ class InvoiceSyncService {
         }).timeout(const Duration(seconds: 30));
         if (created) n++;
       } catch (e) {
-        print('⚠️ إعادة بث الفاتورة $uuid: $e');
+        debugPrint('⚠️ إعادة بث الفاتورة $uuid: $e');
       }
     }
     return n;
@@ -441,7 +449,7 @@ class InvoiceSyncService {
                 c.type == DocumentChangeType.modified)
             .toList();
         if (changes.isNotEmpty) {
-          print('🧾 استماع الفواتير: ${changes.length} تغيير وارد');
+          debugPrint('🧾 استماع الفواتير: ${changes.length} تغيير وارد');
         }
         for (final change in changes) {
           final data = change.doc.data();
@@ -451,13 +459,13 @@ class InvoiceSyncService {
         }
       },
       onError: (e) {
-        print('❌ خطأ في استماع الفواتير: $e');
+        debugPrint('❌ خطأ في استماع الفواتير: $e');
       },
     );
     await _invoicesListener!.start();
 
     _isListening = true;
-    print('👂 الاستماع لفواتير الأجهزة الأخرى فعّال (نافذة زمنية بساعة السيرفر)');
+    debugPrint('👂 الاستماع لفواتير الأجهزة الأخرى فعّال (نافذة زمنية بساعة السيرفر)');
   }
 
   /// 🛡️ رفع حزمة لا يكتب فوق نسخة أحدث في السحابة (معاملة Firestore).
@@ -497,11 +505,11 @@ class InvoiceSyncService {
     final creatorId = data['creator_device_id']?.toString() ?? 'unknown';
 
     // 🔍 تشخيص: تتبع وصول الفاتورة ومنع مقارنتها بمعرّف جهازي.
-    print('🧾 فاتورة واردة: uuid=$uuid creator=$creatorId جهازي=$myDeviceId');
+    debugPrint('🧾 فاتورة واردة: uuid=$uuid creator=$creatorId جهازي=$myDeviceId');
 
     // فاتورة من صنعي: نسختي المحلية هي المرجع.
     if (creatorId == myDeviceId) {
-      print('⏭️ تخطّي فاتورة من صنع هذا الجهاز: $uuid');
+      debugPrint('⏭️ تخطّي فاتورة من صنع هذا الجهاز: $uuid');
       return;
     }
 
@@ -660,7 +668,7 @@ class InvoiceSyncService {
           final currentVersion = (rows.first['version'] as num?)?.toInt() ?? 0;
           final currentMod = rows.first['last_modified_at']?.toString() ?? '';
           if (!_isNewerInvoice(incomingVersion, incomingMod, currentVersion, currentMod)) {
-            print('🚫 رُفضت فاتورة واردة: النسخة المحلية أحدث أو مطابقة ($uuid)');
+            debugPrint('🚫 رُفضت فاتورة واردة: النسخة المحلية أحدث أو مطابقة ($uuid)');
             return;
           }
           invoiceId = rows.first['id'] as int;
@@ -806,7 +814,7 @@ class InvoiceSyncService {
             txMap['customer_id'] = localCustomerId;
           } else {
             // معاملة بلا عميل محلي لا يمكن إدراجها (customer_id NOT NULL)
-            print('⚠️ تخطّي معاملة فاتورة $uuid: لا يوجد عميل محلي');
+            debugPrint('⚠️ تخطّي معاملة فاتورة $uuid: لا يوجد عميل محلي');
             continue;
           }
           txMap['invoice_id'] = invoiceId;
@@ -840,7 +848,7 @@ class InvoiceSyncService {
               final exMine = (existingTx.first['is_created_by_me'] as int?) != 0;
               if ((exInv != null && exInv.isNotEmpty && exInv != uuid) ||
                   (exMine && !ownRestore)) {
-                print('🛑 تصادم معرّف معاملة فاتورة $txUuid — لم يُكتب فوق صف آخر');
+                debugPrint('🛑 تصادم معرّف معاملة فاتورة $txUuid — لم يُكتب فوق صف آخر');
                 continue;
               }
               await txn.update('transactions', txMap,
@@ -871,7 +879,7 @@ class InvoiceSyncService {
           await CustomerVisibility.apply(txn, cid);
         }
       });
-      print('📥 استُلمت فاتورة من جهاز $creatorId: $uuid (نسخة $incomingVersion، '
+      debugPrint('📥 استُلمت فاتورة من جهاز $creatorId: $uuid (نسخة $incomingVersion، '
           '${transactionsList.length} معاملة، عميل=${localCustomerId ?? "بدون"})');
       if (localCustomerId != null) {
         syncBus.success(
@@ -895,7 +903,7 @@ class InvoiceSyncService {
         // ACK غير حرج للاستلام — يُعاد عند وصول نسخة أحدث
       }
     } catch (e) {
-      print('❌ فشل حفظ الفاتورة $uuid: $e');
+      debugPrint('❌ فشل حفظ الفاتورة $uuid: $e');
     }
   }
 
@@ -914,7 +922,7 @@ class InvoiceSyncService {
           {'current_total_debt': total, 'last_modified_at': DateTime.now().toIso8601String()},
           where: 'id = ?', whereArgs: [customerId]);
     } catch (e) {
-      print('⚠️ تعذّر إعادة حساب رصيد العميل $customerId: $e');
+      debugPrint('⚠️ تعذّر إعادة حساب رصيد العميل $customerId: $e');
     }
   }
 
@@ -945,7 +953,7 @@ class InvoiceSyncService {
         try {
           await _processIncomingInvoice(doc.id, data);
         } catch (e) {
-          print('⚠️ downloadAllInvoices: تعذّر تطبيق ${doc.id}: $e');
+          debugPrint('⚠️ downloadAllInvoices: تعذّر تطبيق ${doc.id}: $e');
         }
         processed++;
         if (total > 0 && onProgress != null) {
@@ -953,10 +961,10 @@ class InvoiceSyncService {
           onProgress(p, 'تنزيل الفواتير ($processed/$total)...');
         }
       }
-      print('📥 downloadAllInvoices: عُولجت $processed فاتورة.');
+      debugPrint('📥 downloadAllInvoices: عُولجت $processed فاتورة.');
       return processed;
     } catch (e) {
-      print('❌ downloadAllInvoices فشلت: $e');
+      debugPrint('❌ downloadAllInvoices فشلت: $e');
       if (rethrowErrors) rethrow;
       return 0;
     }
@@ -1008,7 +1016,7 @@ class InvoiceSyncService {
       repaired++;
     }
     if (repaired > 0) {
-      print('🔧 أُصلحت $repaired فاتورة دين واردة (عميل + معاملة)');
+      debugPrint('🔧 أُصلحت $repaired فاتورة دين واردة (عميل + معاملة)');
       syncBus.success(
         SyncPhase.applyRemote,
         'أُصلحت $repaired فاتورة دين واردة في سجل الديون',
@@ -1043,9 +1051,8 @@ class InvoiceSyncService {
     if (uuid != null && uuid.isEmpty) uuid = null;
 
     if (uuid != null) {
-      final byUuid = await db.query('customers',
-          columns: ['id'], where: 'sync_uuid = ?', whereArgs: [uuid], limit: 1);
-      if (byUuid.isNotEmpty) return byUuid.first['id'] as int;
+      final byUuid = await CustomerNameRule.byUuidResolved(db, uuid, columns: ['id']);
+      if (byUuid != null) return byUuid['id'] as int;
     }
 
     // 🛡️ مع هوية مزامنة معروفة لا نربط بالاسم إلا سجلاً قديماً بلا هوية:
@@ -1107,7 +1114,7 @@ class InvoiceSyncService {
     };
     try {
       final newId = await db.insert('customers', row);
-      print('👤 أُنشئ عميل من فاتورة واردة: $name (id=$newId)');
+      debugPrint('👤 أُنشئ عميل من فاتورة واردة: $name (id=$newId)');
       return newId;
     } catch (e) {
       // 🛡️ سباق: مستمع العملاء أدرج نفس العميل للتو (قيد فريد على sync_uuid)
@@ -1130,7 +1137,7 @@ class InvoiceSyncService {
         [name.replaceAll(' ', '')],
       );
       if (fallback.isNotEmpty) return fallback.first['id'] as int;
-      print('⚠️ تعذّر إنشاء العميل من الفاتورة: $e');
+      debugPrint('⚠️ تعذّر إنشاء العميل من الفاتورة: $e');
       return null;
     }
   }
@@ -1194,7 +1201,7 @@ class InvoiceSyncService {
         where: 'id = ?',
         whereArgs: [matchId],
       );
-      print('🔗 [InvoiceSync] رُبطت المعاملة الواردة (id=$matchId) بالفاتورة $invoiceUuid بدلاً من مضاعفة الدين');
+      debugPrint('🔗 [InvoiceSync] رُبطت المعاملة الواردة (id=$matchId) بالفاتورة $invoiceUuid بدلاً من مضاعفة الدين');
       return;
     }
 
@@ -1227,7 +1234,7 @@ class InvoiceSyncService {
       'is_uploaded': 1,
       'created_at': now,
     });
-    print('💳 أُنشئت معاملة دين محلية لفاتورة واردة بلا معاملات: $invoiceUuid '
+    debugPrint('💳 أُنشئت معاملة دين محلية لفاتورة واردة بلا معاملات: $invoiceUuid '
         '(المتبقي=$remaining)');
   }
 
@@ -1256,27 +1263,6 @@ class InvoiceSyncService {
     ''');
   }
 
-  /// حفظ فاتورة مؤجّلة (عميلها لم يصل بعد).
-  Future<void> _addToInvoiceOrphans(
-      String uuid, Map<String, dynamic> data) async {
-    final db = await _db.database;
-    final customerSyncUuid = data['customer_sync_uuid'] as String?;
-
-    // تحويل أي Timestamp إلى نص قبل jsonEncode لتجنب الأخطاء.
-    final cleanData = _convertTimestampsToStrings(data);
-
-    await db.insert(
-      'sync_invoice_orphans',
-      {
-        'invoice_uuid': uuid,
-        'data': jsonEncode(cleanData),
-        'customer_sync_uuid': customerSyncUuid,
-        'received_at': DateTime.now().toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-    print('👻 فاتورة مؤجّلة بانتظار عميلها: $uuid (العميل: $customerSyncUuid)');
-  }
 
   /// إعادة معالجة كل الفواتير المؤجّلة التي وصل عميلها أخيراً.
   Future<void> _reprocessOrphanInvoices() async {
@@ -1318,41 +1304,18 @@ class InvoiceSyncService {
             await db.delete('sync_invoice_orphans',
                 where: 'invoice_uuid = ?', whereArgs: [uuid]);
             resolved++;
-            print('✅ فاتورة مؤجّلة عُولجت بعد وصول عميلها: $uuid');
+            debugPrint('✅ فاتورة مؤجّلة عُولجت بعد وصول عميلها: $uuid');
           } catch (e) {
-            print('⚠️ فشلت إعادة معالجة الفاتورة المؤجّلة $uuid: $e');
+            debugPrint('⚠️ فشلت إعادة معالجة الفاتورة المؤجّلة $uuid: $e');
           }
         }
       }
       if (resolved > 0) {
-        print('👻 عُولجت $resolved فاتورة مؤجّلة هذا الدور');
+        debugPrint('👻 عُولجت $resolved فاتورة مؤجّلة هذا الدور');
       }
     } catch (e) {
-      print('⚠️ خطأ في إعادة معالجة الفواتير المؤجّلة: $e');
+      debugPrint('⚠️ خطأ في إعادة معالجة الفواتير المؤجّلة: $e');
     }
   }
 
-  /// تحويل قيم Timestamp في خريطة إلى نصوص ISO8601 (لتجنب أخطاء jsonEncode).
-  Map<String, dynamic> _convertTimestampsToStrings(Map<String, dynamic> data) {
-    final result = <String, dynamic>{};
-    data.forEach((key, value) {
-      if (value is Timestamp) {
-        result[key] = value.toDate().toIso8601String();
-      } else if (value is Map) {
-        result[key] =
-            _convertTimestampsToStrings(Map<String, dynamic>.from(value));
-      } else if (value is List) {
-        result[key] = value.map((item) {
-          if (item is Timestamp) return item.toDate().toIso8601String();
-          if (item is Map) {
-            return _convertTimestampsToStrings(Map<String, dynamic>.from(item));
-          }
-          return item;
-        }).toList();
-      } else {
-        result[key] = value;
-      }
-    });
-    return result;
-  }
 }

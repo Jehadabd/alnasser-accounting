@@ -114,6 +114,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 30), children: [
+                _whatIsThis(),
+                const SizedBox(height: 14),
                 _heroRow(),
                 const SizedBox(height: 16),
                 LayoutBuilder(builder: (_, c) {
@@ -187,6 +189,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  /// ما هذه الشاشة؟ (كانت تُفتح بلا أي توضيح فلا يُعرف الفرق بينها وبين التقارير.)
+  Widget _whatIsThis() => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: ErpColors.blue.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: ErpColors.blue.withValues(alpha: 0.20)),
+        ),
+        child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.info_outline_rounded, color: ErpColors.blue, size: 20),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'لوحة المؤشرات = نظرة واحدة على حال المحل الآن: مبيعات وربح اليوم والشهر، آخر 14 يوماً، '
+              'ديون العملاء والموردين، الصناديق، المواد الناقصة وسعر الدولار. '
+              'لا تُدخل فيها شيئاً ولا تغني عن التقارير — للتفاصيل افتح تقرير اليوم أو الشهر.',
+              style: TextStyle(fontSize: 12.5, height: 1.6, color: ErpColors.text),
+            ),
+          ),
+        ]),
+      );
+
   Widget _heroRow() {
     final todaySales = _n(_today, 'totalSales');
     final monthSales = _n(_month, 'totalSales');
@@ -212,7 +236,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         decoration: BoxDecoration(
           gradient: LinearGradient(colors: colors, begin: Alignment.topRight, end: Alignment.bottomLeft),
           borderRadius: BorderRadius.circular(18),
-          boxShadow: [BoxShadow(color: colors.first.withOpacity(.3), blurRadius: 14, offset: const Offset(0, 6))],
+          boxShadow: [BoxShadow(color: colors.first.withValues(alpha: .3), blurRadius: 14, offset: const Offset(0, 6))],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [

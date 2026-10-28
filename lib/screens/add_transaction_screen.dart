@@ -1,30 +1,37 @@
 // screens/add_transaction_screen.dart
 // screens/add_transaction_screen.dart
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import '../providers/app_provider.dart';
 import '../models/customer.dart';
 import '../models/transaction.dart';
-import 'package:intl/intl.dart'; // For currency formatting
+import 'package:intl/intl.dart' hide TextDirection; // For currency formatting (TextDirection من Flutter)
 import '../widgets/formatters.dart';
 import 'dart:io';
+import 'dart:async';
 
 import '../services/receipt_voucher_pdf_service.dart';
 import '../models/customer_receipt_voucher.dart';
-import '../services/printing_service.dart';
 import '../services/database_service.dart';
+import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 // import '../services/drive_service.dart'; // Removed
 import 'package:uuid/uuid.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:flutter/services.dart' show rootBundle;
 import '../utils/money_calculator.dart'; // 🔒 إضافة MoneyCalculator للأمان المالي
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import '../accounting/vouchers_service.dart' show VouchersService;
 import '../erp/device_defaults.dart';
 import '../erp/debts/receipts_service.dart';
 import '../erp/debts/receipt_pdf.dart';
+import '../services/voucher_print.dart'; // 🧾 إعداد طباعة سند القبض
 import '../erp/report_export.dart';
+import '../accounting/screens/acc_ui.dart' show accAppBar;
+import 'dart:math' as math;
+import '../erp/debts/customer_money.dart';
+import '../owner/founder_service.dart';
+import '../services/debt_return_service.dart';
 
 class AddTransactionScreen extends StatefulWidget {
   final Customer customer;
@@ -49,16 +56,70 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   bool _isDebt = true; // true for adding debt, false for paying debt
   bool _isSaving = false; // 🔒 منع الضغط المزدوج على زر الحفظ
 
+  // ↩️ تسديد دين راجع (كما في سجل الديون): يُنقص الدين بلا نقد، ويخصم نقاط المؤسس
+  bool _isReturn = false;
+  bool _loadingInv = false;
+  List<ReturnableInvoice> _invoices = [];
+  final List<int> _picked = []; // بترتيب الاختيار: المبلغ يُوزَّع عليها بهذا الترتيب
+  final _invSearch = TextEditingController();
+
+
+  // 🔒 لا يضيف جهازان (أو شاشتان على نفس الحاسبة) معاملة لنفس العميل في اللحظة
+  //    نفسها: الشاشة تحجز العميل ما دامت مفتوحة، وتحرره عند الإغلاق.
+  static const _lockType = 'debt_entry';
+  bool _holdsLock = false;
+  Timer? _lockBeat;
 
   @override
   void initState() {
     super.initState();
     _isDebt = widget.initialIsDebt;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _lockCustomer());
+  }
+
+  Future<void> _lockCustomer() async {
+    final id = widget.customer.id;
+    if (id == null) return;
+    final locks = DatabaseService().lockingService;
+    final r = await locks.acquireLock(resourceType: _lockType, resourceId: id);
+    if (!mounted) {
+      if (r.success) await locks.releaseLock(resourceType: _lockType, resourceId: id);
+      return;
+    }
+    if (r.success) {
+      _holdsLock = true;
+      _lockBeat = Timer.periodic(const Duration(minutes: 2), (_) {
+        locks.keepAlive(resourceType: _lockType, resourceId: id);
+      });
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('العميل مشغول الآن'),
+        content: Text(
+          'يُضاف الآن دين أو تسديد للعميل «${widget.customer.name}»'
+          '${r.lockedBy != null && r.lockedBy!.isNotEmpty ? ' عند ${r.lockedBy}' : ' على جهاز أو شاشة أخرى'}.\n'
+          'انتظر حتى تُحفظ تلك المعاملة أو تُغلق شاشتها، ثم أعد المحاولة.',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+      ),
+    );
+    if (mounted) Navigator.pop(context);
   }
 
   @override
-  @override
   void dispose() {
+    _lockBeat?.cancel();
+    final id = widget.customer.id;
+    if (_holdsLock && id != null) {
+      DatabaseService().lockingService.releaseLock(resourceType: _lockType, resourceId: id);
+    }
+    _amountController.dispose();
+    _noteController.dispose();
+    _invSearch.dispose();
     super.dispose();
   }
 
@@ -67,7 +128,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     return NumberFormat('#,##0', 'en_US').format(value);
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _saveTransaction() async {
+    await SaveLock.run(() => _saveTransactionUnlocked(), message: 'جارٍ حفظ المعاملة…');
+  }
+  Future<void> _saveTransactionUnlocked() async {
     // 🔒 منع الضغط المزدوج - إذا كانت العملية جارية، لا تفعل شيئاً
     if (_isSaving) return;
     
@@ -93,7 +158,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       );
       
       if (!verification.isValid) {
-        print('⚠️ تحذير أمني في المعاملة: ${verification.errorMessage}');
+        debugPrint('⚠️ تحذير أمني في المعاملة: ${verification.errorMessage}');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('خطأ في الحساب: ${verification.errorMessage}'),
@@ -114,6 +179,22 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         return;
       }
       
+      // 🚫 سقف الدين: إضافة دين يدوي تخضع له (الاستثناء للمدير)
+      if (_isDebt) {
+        final go = await CreditLimitGuard.enforce(
+          context,
+          customerId: widget.customer.id,
+          increase: amount,
+          what: 'إضافة دين يدوي — ${widget.customer.name}',
+        );
+        if (!go) return;
+      }
+
+      // ↩️ تسديد دين راجع: بلا صندوق، مع خصم نقاط المؤسس
+      if (!_isDebt && _isReturn) {
+        await _saveReturnPayment(amount);
+        return;
+      }
       // 🧾 التسديد = وصل قبض (سجل وصولات واحد، بالصندوق)، مع نفس سؤال الطباعة.
       if (!_isDebt) {
         await _savePaymentAsReceipt(amount);
@@ -210,7 +291,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             await Process.start('cmd', ['/c', 'start', 'msedge', filePath]);
           }
         }
-        Navigator.pop(context);
+        if (mounted) Navigator.pop(context);
       }
       } catch (e) {
         // 🔒 في حالة حدوث خطأ، نعيد تفعيل الزر
@@ -231,7 +312,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('الرجاء تصحيح الأخطاء في النموذج قبل الحفظ.'),
+          content: const Text('الرجاء تصحيح الأخطاء في النموذج قبل الحفظ.'),
           backgroundColor: Theme.of(context).colorScheme.error,
         ),
       );
@@ -239,6 +320,258 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
 
+
+  // ═══════════════════ ↩️ تسديد دين راجع ═══════════════════
+
+  Future<void> _toggleReturn(bool v) async {
+    setState(() => _isReturn = v);
+    if (v && _invoices.isEmpty && !_loadingInv) await _loadInvoices();
+  }
+
+  Future<void> _loadInvoices() async {
+    final id = widget.customer.id;
+    if (id == null) return;
+    setState(() => _loadingInv = true);
+    try {
+      final list = await DebtReturnService.customerInvoices(id, widget.customer.name);
+      if (mounted) setState(() => _invoices = list);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('تعذّر تحميل فواتير العميل: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _loadingInv = false);
+    }
+  }
+
+  ReturnableInvoice? _inv(int id) {
+    for (final i in _invoices) {
+      if (i.id == id) return i;
+    }
+    return null;
+  }
+
+  Future<void> _pick(ReturnableInvoice inv) async {
+    if (_picked.contains(inv.id)) {
+      setState(() => _picked.remove(inv.id));
+      return;
+    }
+    setState(() => _picked.add(inv.id));
+    if (inv.hasFounder && inv.points == null) {
+      try {
+        final fi = await FounderService.invoiceWithPoints(inv.id);
+        final (_, donePts) = await FounderService.returnedOn(inv.id);
+        if (mounted) {
+          setState(() {
+            inv.points = fi?.points ?? 0;
+            inv.pointsDeductedBefore = donePts;
+          });
+        }
+      } catch (_) {
+        if (mounted) setState(() => inv.points = 0);
+      }
+    }
+  }
+
+  /// يوزّع المبلغ على الفواتير المختارة بترتيب اختيارها، بحدّ صافي كل فاتورة ناقص ما رجع منها سابقاً
+  Map<int, double> _allocation(double amount) {
+    final out = <int, double>{};
+    var left = amount;
+    for (final id in _picked) {
+      final inv = _inv(id);
+      if (inv == null) continue;
+      final a = math.max(0.0, math.min(left, inv.room));
+      out[id] = a;
+      left -= a;
+    }
+    return out;
+  }
+
+  /// نفس حساب FounderService.previewReturnDeduction (للعرض قبل الحفظ)
+  double _previewPts(ReturnableInvoice inv, double alloc) {
+    final p = inv.points;
+    if (!inv.hasFounder || p == null || p <= 0 || inv.net <= 0 || alloc <= 0) return 0;
+    final want = FounderService.round2(p * math.min(1.0, alloc / inv.net));
+    return FounderService.round2(math.max(0, math.min(want, p - inv.pointsDeductedBefore)));
+  }
+
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
+  Future<void> _saveReturnPayment(double amount) async {
+    await SaveLock.run(() => _saveReturnPaymentUnlocked(amount), message: 'جارٍ الحفظ…');
+  }
+  Future<void> _saveReturnPaymentUnlocked(double amount) async {
+    final note = _noteController.text.trim();
+    final alloc = _allocation(amount);
+    final nums = [
+      for (final id in _picked)
+        if ((alloc[id] ?? 0) > 0) _inv(id)!.number
+    ];
+    // 1) المعاملة: تسديد على الحساب بوصف «مرتجع مبيعات» (لا يدخل الصندوق)
+    final uuid = await CustomerMoney.post(
+      context,
+      customerId: widget.customer.id!,
+      amount: -amount,
+      kind: CustomerTxKind.salesReturn,
+      note: 'تسديد دين راجع${nums.isEmpty ? '' : ' — فاتورة ${nums.join('، ')}'}${note.isEmpty ? '' : ' — $note'}',
+    );
+    // 2) من هنا الدين نقص فعلاً؛ تسجيله كراجع وخصم النقاط بعده، وفشلهما لا يلغيه
+    final problems = <String>[];
+    int? txId;
+    try {
+      txId = await DebtReturnService.recordReturn(
+          transactionUuid: uuid, customerId: widget.customer.id!, amount: amount, note: note.isEmpty ? null : note);
+    } catch (e) {
+      problems.add('تسجيله في تقارير الراجع: $e');
+    }
+    var pts = 0.0;
+    for (final e in alloc.entries) {
+      if (e.value <= 0) continue;
+      try {
+        pts += await FounderService.deductForReturnedPayment(
+          invoiceId: e.key,
+          amount: e.value,
+          customer: widget.customer.name,
+          transactionId: txId,
+          note: note.isEmpty ? null : note,
+        );
+      } catch (err) {
+        problems.add('نقاط فاتورة ${_inv(e.key)?.number ?? e.key}: $err');
+      }
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: Duration(seconds: problems.isEmpty ? 4 : 10),
+      content: Text('سُجّل تسديد دين راجع بمبلغ ${formatCurrency(amount)} دينار'
+          '${pts > 0 ? ' — خُصم ${FounderService.round2(pts)} نقطة من المؤسس' : ''}'
+          '${problems.isEmpty ? '' : '\n⚠️ لم يكتمل: ${problems.join(' — ')}'}'),
+      backgroundColor: problems.isEmpty ? Colors.green[600] : Colors.orange[800],
+    ));
+    Navigator.pop(context, true);
+  }
+
+  Widget _returnSection(double entered) {
+    const pink = Color(0xFFE91E63);
+    final alloc = _allocation(entered);
+    final allocated = alloc.values.fold(0.0, (s, v) => s + v);
+    var pts = 0.0;
+    for (final e in alloc.entries) {
+      final inv = _inv(e.key);
+      if (inv != null) pts += _previewPts(inv, e.value);
+    }
+    final q = _invSearch.text.trim();
+    final shown = [
+      for (final i in _invoices)
+        if (q.isEmpty || i.number.contains(q) || i.founder.contains(q) || _picked.contains(i.id)) i
+    ];
+    final df = DateFormat('yyyy/MM/dd', 'en');
+    // Material لا Container: الـ ListTile يرسم خلفيته على أقرب Material، وخلفية
+    // Container ملوّنة تجعل Flutter يرمي خطأ فيختفي القسم كله.
+    return Material(
+      color: _isReturn ? const Color(0xFFFFF1F5) : const Color(0xFFFBFCFE),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: _isReturn ? pink.withValues(alpha: 0.35) : _line),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        SwitchListTile(
+          value: _isReturn,
+          onChanged: _toggleReturn,
+          activeThumbColor: pink,
+          secondary: const Icon(Icons.assignment_return_rounded, color: pink),
+          title: const Text('تسديد دين راجع', style: TextStyle(fontWeight: FontWeight.w800, color: _ink)),
+          subtitle: const Text('بضاعة رجعت بدل النقد: لا يدخل الصندوق، ويظهر في التقارير «تسديد دين راجع»، ويُخصم من المؤسس نقاط المبلغ',
+              style: TextStyle(fontSize: 12, color: _muted, height: 1.5)),
+        ),
+        if (_isReturn) ...[
+          const Divider(height: 1, color: _line),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+            child: Row(children: [
+              const Expanded(
+                  child: Text('اختر الفاتورة التي رجع منها (لخصم نقاط مؤسسها)',
+                      style: TextStyle(fontWeight: FontWeight.w700, color: _ink))),
+              SizedBox(
+                width: 180,
+                height: 38,
+                child: TextField(
+                  controller: _invSearch,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'رقم الفاتورة…',
+                    prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+          if (_loadingInv)
+            const Padding(padding: EdgeInsets.all(18), child: Center(child: CircularProgressIndicator()))
+          else if (_invoices.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('لا فواتير محفوظة لهذا العميل — يُسجَّل الراجع بلا خصم نقاط.',
+                  textAlign: TextAlign.center, style: TextStyle(color: _muted)),
+            )
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 300),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: shown.length,
+                itemBuilder: (_, k) {
+                  final inv = shown[k];
+                  final on = _picked.contains(inv.id);
+                  final a = alloc[inv.id] ?? 0;
+                  final p = on ? _previewPts(inv, a) : 0.0;
+                  return CheckboxListTile(
+                    dense: true,
+                    value: on,
+                    activeColor: pink,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    onChanged: inv.room <= 0 && !on ? null : (_) => _pick(inv),
+                    title: Row(children: [
+                      Text('فاتورة ${inv.number}', style: const TextStyle(fontWeight: FontWeight.w800, color: _ink)),
+                      const SizedBox(width: 8),
+                      Text(df.format(inv.date), style: const TextStyle(fontSize: 12, color: _muted)),
+                      const Spacer(),
+                      Text(formatCurrency(inv.net),
+                          textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w800, color: _ink)),
+                    ]),
+                    subtitle: Text(
+                      [
+                        inv.hasFounder ? 'المؤسس: ${inv.founder}' : 'بلا مؤسس',
+                        if (inv.paymentType.isNotEmpty) inv.paymentType,
+                        if (inv.returnedBefore > 0) 'رجع منها سابقاً ${formatCurrency(inv.returnedBefore)}',
+                        if (inv.room <= 0) 'لا متبقٍ للراجع',
+                        if (on) 'يُحتسب منها ${formatCurrency(a)}',
+                        if (on && inv.hasFounder) inv.points == null ? 'تحميل النقاط…' : 'يُخصم ${FounderService.round2(p)} نقطة',
+                      ].join(' • '),
+                      style: TextStyle(fontSize: 12, color: on ? pink : _muted, fontWeight: on ? FontWeight.w700 : null),
+                    ),
+                  );
+                },
+              ),
+            ),
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+            child: Text(
+              _picked.isEmpty
+                  ? 'لم تُختر فاتورة: يُسجَّل المبلغ راجعاً بلا خصم نقاط.'
+                  : 'على ${_picked.length} فاتورة: ${formatCurrency(allocated)} دينار — يُخصم ${FounderService.round2(pts)} نقطة'
+                      '${entered - allocated > 0.5 ? '\nالباقي ${formatCurrency(entered - allocated)} أكبر مما بقي في الفواتير المختارة: يُسجَّل راجعاً بلا نقاط.' : ''}',
+              style: const TextStyle(fontSize: 12.5, color: _ink, height: 1.6, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
 
   /// التسديد يُحفظ كوصل قبض عبر ReceiptsService ⇒ CustomerMoney ⇒ AppProvider.addTransaction
   /// (نفس دالة الرصيد)، فيظهر في «سجل الوصولات» ويُرحَّل على الصندوق.
@@ -284,7 +617,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       content: Text('تم تسديد ${formatCurrency(amount)} دينار — وصل قبض رقم ${res.receiptNo}'),
       backgroundColor: Colors.green[600],
     ));
-    final shouldPrint = await showDialog<bool>(
+    // 🧾 اسألني / اطبع دائماً / لا تُظهر — من «مصمم السندات» (سند قبض)
+    final pmode = await VoucherPrint.modeFor(VoucherKinds.receipt);
+    if (!mounted) return;
+    final shouldPrint = pmode == 'always'
+        ? true
+        : pmode == 'never'
+            ? false
+            : await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('طباعة سند قبض'),
@@ -322,400 +662,327 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     if (mounted) Navigator.pop(context, true);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🎨 الواجهة فقط — الحقول والتحقق والحفظ (_saveTransaction) كما كانت تماماً.
+  // ═══════════════════════════════════════════════════════════════════════
+  static const _navy = Color(0xFF0F3460);
+  static const _ink = Color(0xFF1B2433);
+  static const _muted = Color(0xFF667085);
+  static const _line = Color(0xFFE4E9F1);
+  static const _bg = Color(0xFFF3F6FB);
+  static const _debtC = Color(0xFFB42318);
+  static const _payC = Color(0xFF067647);
+
   @override
   Widget build(BuildContext context) {
-    // Define the consistent theme colors for the screen
-    final Color primaryColor = const Color(0xFF3F51B5); // Indigo 700
-    final Color accentColor =
-        const Color(0xFF8C9EFF); // Light Indigo Accent (Indigo A200)
-    final Color textColor =
-        const Color(0xFF212121); // Dark grey for general text
-    final Color lightBackgroundColor =
-        const Color(0xFFF8F8F8); // Very light grey for text field fill
-    final Color successColor =
-        Colors.green[600]!; // Green for success messages/positive debt
-    final Color errorColor =
-        Colors.red[700]!; // Red for error messages/negative debt
+    final current = widget.customer.currentTotalDebt;
+    final accent = _isDebt ? _debtC : _payC;
+    final soft = _isDebt ? const Color(0xFFFDECEA) : const Color(0xFFE7F6EE);
+    final entered = double.tryParse(_amountController.text.replaceAll(',', '')) ?? 0.0;
+    final signed = _isDebt ? entered : -entered;
+    // 🔒 استخدام MoneyCalculator للمعاينة أيضاً (كما كان)
+    final newBalance = MoneyCalculator.add(current, signed);
+    final overPay = !_isDebt && entered > current;
 
-    return Theme(
-      data: ThemeData(
-        // Define color scheme for light theme
-        colorScheme: ColorScheme.light(
-          primary: primaryColor,
-          onPrimary: Colors.white, // Text/icons on primary color
-          secondary: accentColor,
-          onSecondary: Colors.black, // Text/icons on secondary color
-          surface: Colors.white, // Card/sheet background
-          onSurface: textColor, // Text/icons on surface
-          background: Colors.white, // Scaffold background
-          onBackground: textColor, // Text/icons on background
-          error: errorColor,
-          onError: Colors.white, // Text/icons on error color
-          tertiary: successColor, // Custom color for success, used in SnackBars
-        ),
-        // Define typography (font family and text styles)
-        fontFamily: 'Roboto', // Modern, clean font
-        textTheme: TextTheme(
-          titleLarge: TextStyle(
-              fontSize: 22.0,
-              fontWeight: FontWeight.bold,
-              color: Colors.white), // AppBar title
-          titleMedium: TextStyle(
-              fontSize: 18.0,
-              fontWeight: FontWeight.w600,
-              color: textColor), // Section titles
-          bodyLarge:
-              TextStyle(fontSize: 16.0, color: textColor), // General body text
-          bodyMedium:
-              TextStyle(fontSize: 14.0, color: textColor), // Smaller body text
-          labelLarge: TextStyle(
-              fontSize: 16.0,
-              color: Colors.white,
-              fontWeight: FontWeight.w600), // Button text
-          labelMedium: TextStyle(
-              fontSize: 14.0, color: Colors.grey[600]), // Input field labels
-          bodySmall: TextStyle(
-              fontSize: 12.0, color: Colors.grey[700]), // Hint text / captions
-        ),
-        // Define input field decoration theme
-        inputDecorationTheme: InputDecorationTheme(
-          border: OutlineInputBorder(
-            // Default border style
-            borderRadius: BorderRadius.circular(10.0), // Rounded corners
-            borderSide:
-                BorderSide(color: Colors.grey[400]!), // Light grey border
-          ),
-          enabledBorder: OutlineInputBorder(
-            // Border when enabled and not focused
-            borderRadius: BorderRadius.circular(10.0),
-            borderSide: BorderSide(color: Colors.grey[400]!),
-          ),
-          focusedBorder: OutlineInputBorder(
-            // Border when focused
-            borderRadius: BorderRadius.circular(10.0),
-            borderSide: BorderSide(
-                color: primaryColor, width: 2.0), // Primary color, thicker
-          ),
-          errorBorder: OutlineInputBorder(
-            // Border when in error state
-            borderRadius: BorderRadius.circular(10.0),
-            borderSide: BorderSide(
-                color: errorColor, width: 2.0), // Error color, thicker
-          ),
-          focusedErrorBorder: OutlineInputBorder(
-            // Border when focused and in error state
-            borderRadius: BorderRadius.circular(10.0),
-            borderSide: BorderSide(color: errorColor, width: 2.0),
-          ),
-          labelStyle: TextStyle(
-              color: Colors.grey[700], fontSize: 15.0), // Label text style
-          hintStyle: TextStyle(
-              color: Colors.grey[500], fontSize: 14.0), // Hint text style
-          contentPadding: const EdgeInsets.symmetric(
-              vertical: 16.0, horizontal: 16.0), // Inner padding
-          filled: true, // Enable fill color
-          fillColor: lightBackgroundColor, // Light background for fields
-        ),
-        // Define ElevatedButton theme
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: primaryColor, // Button background color
-            foregroundColor: Colors.white, // Button text/icon color
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10.0), // Rounded corners
-            ),
-            padding: const EdgeInsets.symmetric(
-                vertical: 16.0, horizontal: 20.0), // Inner padding
-            elevation: 4, // Shadow elevation
-            textStyle: TextStyle(
-                fontSize: 18.0, fontWeight: FontWeight.bold), // Text style
-          ),
-        ),
-        // Define AppBar theme
-        appBarTheme: AppBarTheme(
-          backgroundColor: primaryColor, // AppBar background color
-          foregroundColor: Colors.white, // AppBar text/icon color
-          centerTitle: true, // Center title
-          elevation: 4, // Shadow elevation
-          titleTextStyle: TextStyle(
-            // Title text style (inherits from TextTheme.titleLarge)
-            fontSize: 24.0,
-            fontWeight: FontWeight.w600,
+    final name = widget.customer.name.trim();
+    final initial = name.isEmpty ? '؟' : name.substring(0, 1);
+    final owes = current > 0.5;
+    final balColor = owes ? _debtC : _payC;
+
+    Widget customerPanel() => Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
             color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _line),
           ),
-        ),
-        // Define Card theme
-        cardTheme: CardThemeData(
-          elevation: 3, // Consistent shadow for cards
-          shape: RoundedRectangleBorder(
-            borderRadius:
-                BorderRadius.circular(12.0), // Rounded corners for cards
-          ),
-          margin: EdgeInsets
-              .zero, // Reset default card margin to manage it manually
-        ),
-        // Define ListTile theme
-        listTileTheme: ListTileThemeData(
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-          tileColor: Colors.transparent, // Default transparent
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.0)),
-        ),
-        // Define TextButton theme (if any are used in future updates)
-        textButtonTheme: TextButtonThemeData(
-          style: TextButton.styleFrom(
-            foregroundColor: primaryColor,
-            textStyle: TextStyle(fontSize: 16.0, fontWeight: FontWeight.w600),
-          ),
-        ),
-        // Define IconButton theme (if any are used in future updates)
-        iconTheme: IconThemeData(color: Colors.grey[700], size: 24.0),
-        // SegmentedButton specific styling
-        segmentedButtonTheme: SegmentedButtonThemeData(
-          style: SegmentedButton.styleFrom(
-            foregroundColor: primaryColor, // Unselected text/icon color
-            selectedForegroundColor: Colors.white, // Selected text/icon color
-            selectedBackgroundColor: primaryColor, // Selected background color
-            backgroundColor:
-                lightBackgroundColor, // Unselected background color
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10.0),
-              side: BorderSide(
-                  color: primaryColor, width: 1.0), // Border color for segments
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              Container(
+                width: 56,
+                height: 56,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(color: balColor.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(16)),
+                child: Text(initial, style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: balColor)),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(widget.customer.name,
+                      style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: _ink)),
+                  if ((widget.customer.phone ?? '').trim().isNotEmpty)
+                    Text(widget.customer.phone!.trim(),
+                        textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 13, color: _muted)),
+                ]),
+              ),
+            ]),
+            const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider(height: 1, color: _line)),
+            const Text('الدين الحالي', style: TextStyle(fontSize: 13, color: _muted)),
+            const SizedBox(height: 2),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(formatCurrency(current),
+                  textDirection: TextDirection.ltr,
+                  style: TextStyle(
+                      fontSize: 38,
+                      fontWeight: FontWeight.w900,
+                      color: balColor,
+                      height: 1.15,
+                      fontFeatures: const [FontFeature.tabularFigures()])),
             ),
-            textStyle: TextStyle(fontSize: 16.0, fontWeight: FontWeight.w500),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            Text(owes ? 'دينار — عليه' : (current < -0.5 ? 'دينار — له' : 'دينار — مسدَّد'),
+                style: const TextStyle(fontSize: 12, color: _muted)),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(color: const Color(0xFFF7F9FC), borderRadius: BorderRadius.circular(12)),
+              child: const Text(
+                'العميل محجوز على هذه الشاشة ما دامت مفتوحة: لا يضيف له جهاز آخر معاملة في اللحظة نفسها.',
+                style: TextStyle(fontSize: 12.5, color: _muted, height: 1.7),
+              ),
+            ),
+          ]),
+        );
+
+    Widget modeTab(bool debtTab) {
+      final on = _isDebt == debtTab;
+      final c = debtTab ? _debtC : _payC;
+      return Expanded(
+        child: Material(
+          color: on ? c : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => setState(() => _isDebt = debtTab),
+            child: SizedBox(
+              height: 54,
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(debtTab ? Icons.north_east_rounded : Icons.south_west_rounded,
+                    size: 20, color: on ? Colors.white : _muted),
+                const SizedBox(width: 8),
+                Text(debtTab ? 'إضافة دين' : 'تسديد',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: on ? Colors.white : _muted)),
+              ]),
+            ),
           ),
         ),
+      );
+    }
+
+    Widget part(String label, String value, TextStyle style) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 12.5, color: _muted)),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(value, textDirection: TextDirection.ltr, style: style),
+            ),
+          ],
+        );
+    Widget op(String s, Color c) => SizedBox(
+          width: 40,
+          child: Text(s, textAlign: TextAlign.center, style: TextStyle(fontSize: 26, fontWeight: FontWeight.w300, color: c)),
+        );
+    const tab = [FontFeature.tabularFigures()];
+
+    final form = Container(
+      padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _line),
       ),
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('إضافة معاملة'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // نوع المعاملة
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(16)),
+          child: Row(children: [modeTab(true), const SizedBox(width: 10), modeTab(false)]),
         ),
-        body: Form(
-          key: _formKey,
-          child: ListView(
-            padding: const EdgeInsets.all(
-                24.0), // Consistent padding for the entire view
-            children: [
-              Card(
-                margin: const EdgeInsets.only(
-                    bottom: 24.0), // Margin below the card
-                child: Padding(
-                  padding:
-                      const EdgeInsets.all(20.0), // Increased internal padding
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'معلومات العميل',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primary, // Primary color for heading
-                                  fontWeight: FontWeight.bold,
-                                ),
-                      ),
-                      const SizedBox(height: 20.0), // Increased spacing
-                      _buildInfoRow('الاسم', widget.customer.name, context),
-                      const SizedBox(height: 12.0), // Increased spacing
-                      _buildInfoRow(
-                        'الدين الحالي',
-                        '${formatCurrency(widget.customer.currentTotalDebt)} دينار', // Formatted currency
-                        context,
-                        valueColor: widget.customer.currentTotalDebt > 0
-                            ? Theme.of(context)
-                                .colorScheme
-                                .error // Red for debt
-                            : Theme.of(context)
-                                .colorScheme
-                                .tertiary, // Green for no debt
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12.0), // Spacing before segmented button
-              SegmentedButton<bool>(
-                segments: [
-                  ButtonSegment<bool>(
-                    value: true,
-                    label: Text('إضافة دين'),
-                    icon:
-                        Icon(Icons.add_circle_outline, size: 28), // Themed icon
-                  ),
-                  ButtonSegment<bool>(
-                    value: false,
-                    label: Text('تسديد دين'),
-                    icon: Icon(Icons.remove_circle_outline,
-                        size: 28), // Themed icon
-                  ),
-                ],
-                selected: {_isDebt},
-                onSelectionChanged: (Set<bool> newSelection) {
-                  setState(() {
-                    _isDebt = newSelection.first;
-                  });
-                },
-              ),
-              const SizedBox(height: 20.0), // Increased spacing
-              TextFormField(
-                controller: _amountController,
-                decoration: InputDecoration(
-                  labelText: 'المبلغ',
-                  hintText: 'أدخل المبلغ',
-                  suffixText: ' دينار', // Added space for better readability
-                  prefixIcon: Icon(Icons.attach_money,
-                      color:
-                          Theme.of(context).colorScheme.primary), // Themed icon
-                ),
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  ThousandSeparatorInputFormatter(),
-                  LengthLimitingTextInputFormatter(15),
-                ],
-                onChanged: (_) => setState(() {}),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'الرجاء إدخال المبلغ';
-                  }
-                  final number = double.tryParse(value.replaceAll(',', ''));
-                  if (number == null) {
-                    return 'الرجاء إدخال رقم صحيح';
-                  }
-                  if (number <= 0) {
-                    return 'يجب أن يكون المبلغ أكبر من صفر';
-                  }
-                  if (number > 1000000000) {
-                    // Preserving original functional constraint
-                    return 'المبلغ أكبر من الحد المسموح به';
-                  }
-                  if (!_isDebt && number > widget.customer.currentTotalDebt) {
-                    // Preserving original functional constraint
-                    return 'المبلغ المدخل أكبر من الدين الحالي';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16.0),
-              // معاينة الرصيد بعد الحفظ
-              Builder(builder: (ctx) {
-                final entered = double.tryParse(_amountController.text.replaceAll(',', '')) ?? 0.0;
-                final signed = _isDebt ? entered : -entered;
-                // 🔒 استخدام MoneyCalculator للمعاينة أيضاً
-                final newBalance = MoneyCalculator.add(widget.customer.currentTotalDebt, signed);
-                final color = newBalance > widget.customer.currentTotalDebt
-                    ? Theme.of(ctx).colorScheme.error
-                    : Theme.of(ctx).colorScheme.tertiary;
-                return Card(
-                  elevation: 0,
-                  color: Theme.of(ctx).colorScheme.surfaceVariant,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('المعاينة', style: Theme.of(ctx).textTheme.titleSmall),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text('الرصيد الحالي', style: Theme.of(ctx).textTheme.bodyMedium),
-                            Text(formatCurrency(widget.customer.currentTotalDebt), style: Theme.of(ctx).textTheme.bodyMedium),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(_isDebt ? 'إضافة' : 'تسديد', style: Theme.of(ctx).textTheme.bodyMedium),
-                            Text(formatCurrency(signed.abs()), style: Theme.of(ctx).textTheme.bodyMedium),
-                          ],
-                        ),
-                        const Divider(height: 20),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text('الرصيد الجديد بعد الحفظ', style: Theme.of(ctx).textTheme.bodyLarge),
-                            Text(
-                              formatCurrency(newBalance),
-                              style: Theme.of(ctx).textTheme.bodyLarge?.copyWith(color: color, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }),
-              const SizedBox(height: 20.0), // Increased spacing
-              TextFormField(
-                controller: _noteController,
-                decoration: InputDecoration(
-                  labelText: 'ملاحظات',
-                  hintText: 'أدخل ملاحظات إضافية (اختياري)',
-                  prefixIcon: Icon(Icons.notes_outlined,
-                      color: Theme.of(context).colorScheme.primary),
+        const SizedBox(height: 20),
+        const Text('المبلغ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _ink)),
+        const SizedBox(height: 8),
+        // ⚠️ الحقل نفسه: نفس المُنسّقات والتحقق حرفياً
+        TextFormField(
+          controller: _amountController,
+          autofocus: true,
+          textDirection: TextDirection.ltr,
+          textAlign: TextAlign.left,
+          style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w900, color: _ink, fontFeatures: tab),
+          decoration: InputDecoration(
+            hintText: '0',
+            hintStyle: TextStyle(fontSize: 40, fontWeight: FontWeight.w900, color: _muted.withValues(alpha: 0.4)),
+            suffixText: 'دينار',
+            suffixStyle: const TextStyle(fontSize: 16, color: _muted, fontWeight: FontWeight.w700),
+            filled: true,
+            fillColor: soft,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: accent, width: 2)),
+            enabledBorder:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: accent, width: 2)),
+            focusedBorder:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: accent, width: 2.4)),
+            errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _debtC, width: 2)),
+            focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _debtC, width: 2.4)),
+            errorStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          ),
+          keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            ThousandSeparatorInputFormatter(),
+            LengthLimitingTextInputFormatter(15),
+          ],
+          onChanged: (_) => setState(() {}),
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'الرجاء إدخال المبلغ';
+            }
+            final number = double.tryParse(value.replaceAll(',', ''));
+            if (number == null) {
+              return 'الرجاء إدخال رقم صحيح';
+            }
+            if (number <= 0) {
+              return 'يجب أن يكون المبلغ أكبر من صفر';
+            }
+            if (number > 1000000000) {
+              return 'المبلغ أكبر من الحد المسموح به';
+            }
+            if (!_isDebt && number > widget.customer.currentTotalDebt) {
+              return 'المبلغ المدخل أكبر من الدين الحالي';
+            }
+            return null;
+          },
+        ),
+        if (overPay)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text('المبلغ المدخل أكبر من الدين الحالي',
+                style: TextStyle(fontSize: 13, color: _debtC, fontWeight: FontWeight.w700)),
+          ),
+        const SizedBox(height: 16),
+        // المعاينة: الرصيد الحالي ± المبلغ = الرصيد بعد الحفظ
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFCBD5E1)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Expanded(
+                child: part('الرصيد الحالي', formatCurrency(current),
+                    const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _ink, fontFeatures: tab))),
+            op(_isDebt ? '+' : '−', accent),
+            Expanded(
+                child: part(_isDebt ? 'دين جديد' : 'تسديد', formatCurrency(signed.abs()),
+                    TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: accent, fontFeatures: tab))),
+            op('=', _navy),
+            Expanded(
+                child: part(
+                    'الرصيد بعد الحفظ',
+                    formatCurrency(newBalance),
+                    TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        color: newBalance > 0.5 ? _debtC : _payC,
+                        fontFeatures: tab))),
+          ]),
+        ),
+        if (!_isDebt) ...[
+          const SizedBox(height: 16),
+          _returnSection(entered),
+        ],
+        const SizedBox(height: 20),
+        const Text.rich(TextSpan(children: [
+          TextSpan(text: 'ملاحظات ', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _ink)),
+          TextSpan(text: '(اختياري)', style: TextStyle(fontSize: 13, color: _muted)),
+        ])),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: _noteController,
+          maxLines: 2,
+          style: const TextStyle(fontSize: 15, color: _ink),
+          decoration: InputDecoration(
+            hintText: 'مثلاً: بضاعة يوم الخميس، أو دفعة عن طريق المندوب',
+            hintStyle: const TextStyle(color: _muted, fontSize: 14),
+            filled: true,
+            fillColor: const Color(0xFFFBFCFE),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _line)),
+            enabledBorder:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _line)),
+            focusedBorder:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _navy, width: 1.6)),
+          ),
+        ),
+        const SizedBox(height: 24),
+        SizedBox(
+          height: 58,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: accent,
+              disabledBackgroundColor: const Color(0xFF98A2B3),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            // 🔒 تعطيل الزر أثناء عملية الحفظ (كما كان)
+            onPressed: _isSaving ? null : _saveTransaction,
+            icon: _isSaving
+                ? const SizedBox(
+                    width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : Icon(_isDebt ? Icons.add_task_rounded : Icons.check_circle_outline_rounded),
+            label: Text(_isSaving ? 'جاري الحفظ...' : (_isDebt ? 'حفظ الدين' : (_isReturn ? 'حفظ تسديد الدين الراجع' : 'حفظ التسديد')),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          ),
+        ),
+      ]),
+    );
 
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(primary: _navy, error: _debtC),
+        ),
+        child: Scaffold(
+          backgroundColor: _bg,
+          appBar: accAppBar(
+            _isDebt ? 'إضافة دين' : 'تسديد',
+            icon: _isDebt ? Icons.north_east_rounded : Icons.south_west_rounded,
+            subtitle: widget.customer.name,
+          ),
+          body: Form(
+            key: _formKey,
+            child: LayoutBuilder(builder: (context, c) {
+              final wide = c.maxWidth >= 900;
+              return SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1180),
+                    child: wide
+                        ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            SizedBox(width: 360, child: customerPanel()),
+                            const SizedBox(width: 20),
+                            Expanded(child: form),
+                          ])
+                        : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                            customerPanel(),
+                            const SizedBox(height: 16),
+                            form,
+                          ]),
+                  ),
                 ),
-                maxLines: 3,
-              ),
-
-              const SizedBox(height: 32.0), // Increased spacing before button
-              ElevatedButton.icon(
-                // 🔒 تعطيل الزر أثناء عملية الحفظ
-                onPressed: _isSaving ? null : _saveTransaction,
-                icon: _isSaving
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Icon(_isDebt
-                        ? Icons.add_task
-                        : Icons.check_circle_outline),
-                label: Text(_isSaving
-                    ? 'جاري الحفظ...'
-                    : (_isDebt ? 'إضافة دين' : 'تسديد دين')),
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size(double.infinity,
-                      56), // Larger button for better tap target
-                ),
-              ),
-            ],
+              );
+            }),
           ),
         ),
       ),
     );
   }
 
-  // Modified to take BuildContext for theme access and ensure consistent text styles
-  Widget _buildInfoRow(String label, String value, BuildContext context,
-      {Color? valueColor}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-        Text(
-          value,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: valueColor,
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-      ],
-    );
-  }
 }

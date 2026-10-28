@@ -38,7 +38,7 @@ class InvoiceProductService {
                 .map((e) => (e['unit_name'] ?? e['name'] ?? '').toString())
           ]);
         } catch (e) {
-          print('Error parsing unit hierarchy for ${product.name}: $e');
+          debugPrint('Error parsing unit hierarchy for ${product.name}: $e');
         }
       }
     } else if (product.unit == 'meter') {
@@ -96,8 +96,8 @@ class InvoiceProductService {
     setSuppressSearch(true);
     productSearchController.text = product.name;
     setQuantityAutofocus(true);
-    Future.delayed(Duration(milliseconds: 100), () {
-      FocusScope.of(context).requestFocus(FocusNode());
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (context.mounted) FocusScope.of(context).requestFocus(FocusNode());
     });
   }
 

@@ -5,7 +5,6 @@ import '../models/invoice.dart';
 import '../models/analytics_data.dart';
 import '../services/database_service.dart';
 import 'invoice_details_screen.dart';
-import '../models/analytics_data.dart'; // Using ProductInvoiceAnalytics
 import 'package:intl/intl.dart';
 import 'product_customers_dialog.dart';
 
@@ -62,7 +61,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
       double totalSellingPrice = 0.0;
       for (final inv in invoices) {
         totalQuantity += inv.quantitySold;
-        totalSellingPrice += inv.sellingPrice! * inv.quantitySold;
+        totalSellingPrice += inv.sellingPrice * inv.quantitySold;
       }
       setState(() {
         _invoices = invoices;
@@ -85,7 +84,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
     }
   }
 
-  String _numericMonth(int year, int month) => '${year}-${month.toString().padLeft(2, '0')}';
+  String _numericMonth(int year, int month) => '$year-${month.toString().padLeft(2, '0')}';
 
   void _showCustomersBuying() {
     showDialog(
@@ -131,7 +130,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
       backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
         title: Text(
-          '${widget.product.name} - ${monthName}',
+          '${widget.product.name} - $monthName',
           style: const TextStyle(fontSize: 16),
         ),
         centerTitle: true,
@@ -227,7 +226,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Colors.green.withOpacity(0.3), width: 1),
+        side: BorderSide(color: Colors.green.withValues(alpha: 0.3), width: 1),
       ),
       child: Container(
         padding: const EdgeInsets.all(20),
@@ -237,8 +236,8 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              Colors.green.withOpacity(0.1),
-              Colors.green.withOpacity(0.05),
+              Colors.green.withValues(alpha: 0.1),
+              Colors.green.withValues(alpha: 0.05),
             ],
           ),
         ),
@@ -250,7 +249,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
+                    color: Colors.green.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
@@ -306,7 +305,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.7),
+                color: Colors.white.withValues(alpha: 0.7),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.grey[300]!),
               ),
@@ -375,7 +374,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Colors.blue.withOpacity(0.3), width: 1),
+        side: BorderSide(color: Colors.blue.withValues(alpha: 0.3), width: 1),
       ),
       child: InkWell(
         onTap: () => _navigateToInvoiceDetails(invoiceData.invoice),
@@ -388,8 +387,8 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [
-                Colors.blue.withOpacity(0.1),
-                Colors.blue.withOpacity(0.05),
+                Colors.blue.withValues(alpha: 0.1),
+                Colors.blue.withValues(alpha: 0.05),
               ],
             ),
           ),
@@ -401,7 +400,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.1),
+                      color: Colors.blue.withValues(alpha: 0.1),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
@@ -472,7 +471,7 @@ class _ProductMonthDetailsScreenState extends State<ProductMonthDetailsScreen> {
                         Expanded(
                           child: _buildDetailInfo(
                             title: 'سعر البيع للوحدة',
-                            value: '${invoiceData.sellingPrice != null ? _fmt(invoiceData.sellingPrice!) : 'غير محدد'} د.ع',
+                            value: '${_fmt(invoiceData.sellingPrice)} د.ع',
                             color: const Color(0xFFFF9800),
                           ),
                         ),

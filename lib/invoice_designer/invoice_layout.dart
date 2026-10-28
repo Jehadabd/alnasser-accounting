@@ -96,18 +96,31 @@ class LayoutCatalog {
     'address': 'العنوان',
     'paymentType': 'طريقة الدفع',
     'user': 'المستخدم',
+    'preparer': 'المجهز',
+    'accountant': 'المحاسب',
     'branch': 'الفرع',
     'itemsCount': 'عدد المواد',
     'amountWords': 'المبلغ كتابةً',
     'footer': 'عبارة أسفل الفاتورة',
     'copy': 'نسخة',
+    // 🧾 إشعار مدين / دائن (سند إضافة أو إرجاع على فاتورة)
+    'voucherTitle': 'نوع السند (إشعار مدين/دائن)',
+    'voucherNo': 'رقم السند',
+    'voucherReason': 'سبب السند / ملاحظة',
+    // 🧾 سندات القبض والصرف
+    'boxName': 'الصندوق',
+    'docNo': 'رقم المستند',
+    // 🖨️ تُملأ لحظة الطباعة
+    'printedAt': 'وقت الطباعة',
+    'printedBy': 'طُبع بواسطة',
   };
 
   /// أعمدة جدول المواد
   static const columns = <String, String>{
     'serial': 'ت',
-    'productId': 'رقم المادة',
+    'productId': 'المعرّف الداخلي (ID)',
     'barcode': 'الباركود',
+    'itemCode': 'رمز المادة',
     'details': 'التفاصيل',
     'quantity': 'الكمية والوحدة',
     'qty': 'العدد',
@@ -118,7 +131,7 @@ class LayoutCatalog {
     'price': 'السعر',
     'amount': 'المبلغ',
     'weight': 'الوزن',
-    'expiry': 'الصلاحية',
+    'expiry': 'تاريخ الانتهاء',
     'blank': 'ملاحظات',
   };
 
@@ -135,6 +148,10 @@ class LayoutCatalog {
     'currentDebt': 'المطلوب الحالي',
     'itemsCount': 'عدد المواد',
     'paymentType': 'طريقة الدفع',
+    // 🧾 إشعار مدين / دائن
+    'voucherAmount': 'مبلغ السند',
+    'invoiceBefore': 'الفاتورة قبل السند',
+    'invoiceAfter': 'الفاتورة بعد السند',
   };
 
   /// أسطر «معلومات الشركة»
@@ -234,12 +251,21 @@ class InvoiceLayout {
     required this.paper,
     double? heightMm,
     List<LayoutElement>? elements,
+    this.kind = 'invoice',
+    this.mono = false,
   })  : heightMm = heightMm ?? paper.defaultHeightMm,
         elements = elements ?? <LayoutElement>[];
 
   final String id;
   String name;
   final LayoutPaper paper;
+
+  /// 🧾 نوع المستند: 'invoice' (فاتورة وإيصال) أو نوع سند من مصمم السندات
+  /// (receipt / cash_receipt / cash_refund / debit_note / credit_note).
+  String kind;
+
+  /// ⚫ أبيض وأسود: كل الألوان تُطبع (وتُعرض) بتدرّج الرمادي — للطابعات بلا ألوان
+  bool mono;
   double heightMm;
   List<LayoutElement> elements;
 
@@ -264,6 +290,8 @@ class InvoiceLayout {
         'id': id,
         'name': name,
         'paper': paper.name,
+        'kind': kind,
+        'mono': mono,
         'heightMm': heightMm,
         'elements': elements.map((e) => e.toJson()).toList(),
       };
@@ -274,6 +302,8 @@ class InvoiceLayout {
       id: '${j['id'] ?? ''}',
       name: '${j['name'] ?? 'تصميم'}',
       paper: paper,
+      kind: (j['kind'] as String?)?.trim().isNotEmpty == true ? j['kind'] as String : 'invoice',
+      mono: j['mono'] == true,
       heightMm: (j['heightMm'] as num?)?.toDouble(),
       elements: (j['elements'] is List)
           ? (j['elements'] as List)

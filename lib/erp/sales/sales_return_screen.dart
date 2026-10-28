@@ -2,9 +2,11 @@
 //
 // ↩️ شاشة مرتجع المبيعات + سجل المرتجعات.
 
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 
 import '../../accounting/ledger.dart' show roundMoney;
+import '../debts/customer_money.dart' show CustomerMoney;
 import '../../accounting/screens/acc_ui.dart';
 import '../doc_lines.dart';
 import '../erp_common.dart';
@@ -14,6 +16,8 @@ import '../report_export.dart';
 import '../stock_helpers.dart';
 import 'doc_pdf.dart';
 import 'sales_return_service.dart';
+import '../../services/settings_manager.dart';
+import '../../services/invoice_edit_log.dart';
 
 class SalesReturnScreen extends StatefulWidget {
   const SalesReturnScreen({super.key, this.invoiceId});
@@ -41,26 +45,48 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
   double? _invRemaining;
   bool _saving = false;
 
+  /// الفاتورة المفتوحة من «تعديل الفواتير» (بمعرّفها الداخلي) — تُحمَّل مرة واحدة.
+  int? _presetId;
+
+  /// رأس الفاتورة المحمّلة (رقمها المطبوع، التاريخ، المجموع).
+  Map<String, Object?>? _invHeader;
+
   @override
   void initState() {
     super.initState();
     if (widget.invoiceId != null) {
-      _invoiceCtrl.text = '${widget.invoiceId}';
+      _presetId = widget.invoiceId;
       _loadInvoice();
     }
   }
 
+  /// يفك ربط الفاتورة: مرتجع حر بلا فاتورة (أي مادة).
+  void _unlinkInvoice() => setState(() {
+        _invoiceId = null;
+        _invHeader = null;
+        _returnable = const {};
+        _invRemaining = null;
+        _lines.clear();
+        _invoiceCtrl.clear();
+      });
+
   Future<void> _loadInvoice() async {
-    final id = widget.invoiceId != null && _invoiceCtrl.text.trim() == '${widget.invoiceId}'
-        ? widget.invoiceId
-        : await _svc.findInvoice(_invoiceCtrl.text);
+    final preset = _presetId;
+    _presetId = null;
+    final id = preset ?? await _svc.findInvoice(_invoiceCtrl.text);
     if (id == null) {
       if (mounted && _invoiceCtrl.text.trim().isNotEmpty) showError(context, 'لا توجد فاتورة بهذا الرقم');
       return;
     }
     final h = await _svc.invoiceHeader(id);
     if (h == null) {
-      if (mounted) showError(context, 'الفاتورة #$id غير موجودة');
+      if (mounted) showError(context, 'الفاتورة غير موجودة');
+      return;
+    }
+    // 🔒 فاتورة من جهاز آخر: لا تُحمَّل إلا لجهازها أو لمحاسبها
+    final blocked = await _svc.returnBlockReason(id);
+    if (blocked != null) {
+      if (mounted) showError(context, blocked);
       return;
     }
     final allowed = await _svc.returnableFromInvoice(id);
@@ -85,7 +111,11 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
     }
     if (!mounted) return;
     final rem = d0(h['total_amount']) - d0(h['amount_paid_on_invoice']);
+    final number = (h['invoice_number'] as String?)?.trim();
     setState(() {
+      _invHeader = h;
+      // الرقم المطبوع على الفاتورة، لا المعرّف الداخلي
+      _invoiceCtrl.text = (number != null && number.isNotEmpty) ? number : '#$id';
       _invRemaining = rem > 0 ? rem : 0;
       _invoiceId = id;
       _returnable = allowed;
@@ -94,11 +124,27 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
         ..addAll(lines);
       if (h['customer_id'] != null) {
         _customer = PartyLite(h['customer_id'] as int, (h['customer_name'] as String?) ?? '', null, 0);
+        // فاتورة مدفوعة بالكامل لا دين فيها يُنزل منه: الردّ الطبيعي نقداً.
+        // (كان الافتراضي «من حسابه» دائماً، فيصير العميل دائناً دون قصد.)
+        _mode = rem > 0 ? 'credit' : 'cash';
       } else {
         _walkInName = (h['customer_name'] as String?) ?? '';
         _mode = 'cash';
       }
     });
+  }
+
+  /// المواد التي تجاوزت كميتها المتبقي في الفاتورة (بالوحدة الأساسية).
+  Set<int> _overReturned() {
+    if (_invoiceId == null) return const {};
+    final want = <int, double>{};
+    for (final l in _lines) {
+      want[l.product.id] = (want[l.product.id] ?? 0) + l.baseQty;
+    }
+    return {
+      for (final e in want.entries)
+        if (e.value > (_returnable[e.key] ?? 0) + 1e-6) e.key
+    };
   }
 
   /// مثل سهل: يُنزل من دين الفاتورة بقدر آجلها، والباقي يُرد نقداً.
@@ -115,12 +161,41 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
     _cashCtrl.text = cash <= 0 ? '' : fmtMoney(cash);
   }
 
+  /// الردّ «من حسابه» يُنزل دين العميل؛ إن تجاوز دينه الحالي يصير العميل
+  /// دائناً (له عندكم مال). لا يحدث ذلك إلا بتأكيد صريح.
+  Future<bool> _confirmCreditBalance() async {
+    final customer = _customer;
+    if (customer == null || _mode == 'cash') return true;
+    final total = linesTotal(_lines);
+    final credit = _mode == 'mixed' ? total - (parseMoney(_cashCtrl.text) ?? 0) : total;
+    if (credit <= 0) return true;
+    final balance = await CustomerMoney.balance(await erpDb(), customer.id);
+    final after = roundMoney(balance - credit);
+    if (after >= 0) return true;
+    if (!mounted) return false;
+    return confirmDialog(
+      context,
+      'سيصبح للعميل رصيد دائن',
+      'دين «${customer.name}» الآن ${fmtMoney(balance)}، والمرتجع من حسابه ${fmtMoney(credit)}.\n'
+          'بعد الحفظ يصبح له عندكم ${fmtMoney(-after)}.\n\n'
+          'إن أعدتم له المبلغ نقداً فاختر «نقداً من الصندوق» بدلاً من ذلك.',
+      ok: 'حفظ ويصبح دائناً',
+      color: AccColors.red,
+    );
+  }
+
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked(), message: 'جارٍ حفظ المرتجع…');
+  }
+  Future<void> _saveUnlocked() async {
     final name = _customer?.name ?? _walkInName.trim();
     if (name.isEmpty) {
       showError(context, 'اختر العميل أو اكتب اسم الزبون');
       return;
     }
+    if (!await _confirmCreditBalance()) return;
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       final id = await _svc.create(
@@ -141,7 +216,14 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
       );
       if (!mounted) return;
       showOk(context, 'حُفظ المرتجع (#$id)');
-      final pr = await confirmDialog(context, 'طباعة', 'طباعة مستند المرتجع؟', ok: 'طباعة');
+      // رسالة الطباعة حسب الإعداد: اسأل / اطبع دائماً / لا تطبع
+      final mode = (await SettingsManager.getAppSettings()).adjustmentVoucherMode;
+      if (!mounted) return;
+      final pr = mode == 'always'
+          ? true
+          : mode == 'never'
+              ? false
+              : await confirmDialog(context, 'طباعة', 'طباعة مستند المرتجع؟', ok: 'طباعة');
       if (pr && mounted) await printSalesReturn(context, id);
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -155,9 +237,12 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
   @override
   Widget build(BuildContext context) {
     final total = linesTotal(_lines);
+    final over = _overReturned();
     return ErpPage(
       title: 'مرتجع مبيعات',
-      subtitle: 'إعادة بضاعة من زبون — نقداً أو من حسابه',
+      subtitle: _invoiceId == null
+          ? 'إعادة بضاعة من زبون — نقداً أو من حسابه'
+          : 'من فاتورة ${_invoiceCtrl.text} — موادها فقط وبكمياتها المتبقية',
       icon: Icons.assignment_return,
       bottom: SafeArea(
         child: Container(
@@ -168,7 +253,7 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
               child: Text('إجمالي المرتجع: ${fmtMoney(total)}',
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: ErpColors.navy)),
             ),
-            PrimaryButton(label: 'حفظ المرتجع', icon: Icons.save, busy: _saving, onPressed: _save),
+            PrimaryButton(label: 'حفظ المرتجع', icon: Icons.save, busy: _saving, onPressed: over.isEmpty ? _save : null),
           ]),
         ),
       ),
@@ -181,14 +266,25 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
               width: 200,
               child: TextField(
                 controller: _invoiceCtrl,
-                keyboardType: TextInputType.number,
+                readOnly: _invoiceId != null,
                 decoration: const InputDecoration(
-                    labelText: 'رقم الفاتورة', border: OutlineInputBorder(), isDense: true, filled: true,
+                    labelText: 'رقم الفاتورة (المطبوع)', border: OutlineInputBorder(), isDense: true, filled: true,
                     fillColor: Colors.white),
                 onSubmitted: (_) => _loadInvoice(),
               ),
             ),
-            OutlinedButton.icon(onPressed: _loadInvoice, icon: const Icon(Icons.download), label: const Text('تحميل موادها')),
+            if (_invoiceId == null)
+              OutlinedButton.icon(onPressed: _loadInvoice, icon: const Icon(Icons.download), label: const Text('تحميل موادها'))
+            else
+              OutlinedButton.icon(
+                onPressed: _unlinkInvoice,
+                icon: const Icon(Icons.link_off),
+                label: const Text('مرتجع بلا فاتورة'),
+              ),
+            if (_invHeader != null)
+              StatusBadge(
+                  '${_invHeader!['customer_name'] ?? ''} • ${fmtDate(parseDate(_invHeader!['invoice_date']))} • ${fmtMoney(d0(_invHeader!['total_amount']))}',
+                  color: ErpColors.navy),
             if (_invoiceId != null)
               TextButton.icon(
                 onPressed: () => setState(() {
@@ -268,12 +364,27 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Wrap(spacing: 6, runSpacing: 6, children: [
-                  for (final l in _lines)
-                    StatusBadge('${l.product.name}: متاح ${fmtQty(_returnable[l.product.id] ?? 0)} ${l.product.baseUnitName}',
-                        color: ErpColors.muted),
+                  for (final pid in {for (final l in _lines) l.product.id})
+                    StatusBadge(
+                        '${_lines.firstWhere((l) => l.product.id == pid).product.name}: '
+                        'متاح ${fmtQty(_returnable[pid] ?? 0)} ${_lines.firstWhere((l) => l.product.id == pid).product.baseUnitName}'
+                        '${over.contains(pid) ? ' — تجاوزت المتاح' : ''}',
+                        color: over.contains(pid) ? ErpColors.red : ErpColors.muted),
                 ]),
               ),
-            DocLinesEditor(lines: _lines, onChanged: () => setState(() {}), showDiscount: true),
+            if (_invoiceId != null)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text('المواد من الفاتورة فقط — اكتب كمية المُرجع لكل مادة، أو احذف ما لن يُرجع.',
+                    style: TextStyle(color: ErpColors.muted)),
+              ),
+            DocLinesEditor(
+              lines: _lines,
+              onChanged: () => setState(() {}),
+              showDiscount: true,
+              // من فاتورة: لا بحث ولا إضافة مواد ليست فيها
+              allowAdd: _invoiceId == null,
+            ),
           ]),
         ),
       ]),
@@ -292,6 +403,9 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
   DateTime _to = DateTime.now();
   List<Map<String, Object?>> _rows = const [];
 
+  /// ما نقص من الفواتير بتعديلها (حذف مادة أو إنقاص كميتها) — للعرض.
+  List<Map<String, Object?>> _editRows = const [];
+
   @override
   void initState() {
     super.initState();
@@ -300,7 +414,36 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
 
   Future<void> _load() async {
     final r = await SalesReturnService().list(from: _from, to: _to);
-    if (mounted) setState(() => _rows = r);
+    final e = await InvoiceEditLog.returnsInPeriod(await erpDb(), from: _from ?? DateTime(2000), to: _to);
+    if (mounted) {
+      setState(() {
+        _rows = r;
+        _editRows = e;
+      });
+    }
+  }
+
+  Widget _editCard(Map<String, Object?> r) {
+    final n = (r['invoice_number'] as String?)?.trim();
+    final inv = (n != null && n.isNotEmpty) ? n : '#${r['invoice_id']}';
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: ErpColors.border)),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: ErpColors.purple.withValues(alpha: 0.12),
+          child: const Icon(Icons.edit_note_rounded, color: ErpColors.purple, size: 20),
+        ),
+        title: Text('${r['product_name']}  ${fmtQty(d0(r['qty_before']))} ← ${fmtQty(d0(r['qty_after']))} ${r['unit'] ?? ''}'),
+        subtitle: Text([
+          fmtDate(parseDate(r['edited_at'])),
+          '${r['customer_name'] ?? ''}',
+          'فاتورة $inv',
+          if ((r['edited_by'] as String?)?.isNotEmpty ?? false) '👤 ${r['edited_by']}',
+        ].join(' • ')),
+        trailing: MoneyText(InvoiceEditLog.returnedAmount(r), bold: true),
+      ),
+    );
   }
 
   Future<void> _details(Map<String, Object?> r) async {
@@ -349,9 +492,11 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
   @override
   Widget build(BuildContext context) {
     final total = _rows.where((r) => r['status'] == 'posted').fold(0.0, (s, r) => s + d0(r['total']));
+    final editTotal = _editRows.fold(0.0, (s, r) => s + InvoiceEditLog.returnedAmount(r));
     return ErpPage(
       title: 'مرتجعات المبيعات',
-      subtitle: '${fmtQty(_rows.length)} مرتجع — ${fmtMoney(total)}',
+      subtitle: '${fmtQty(_rows.length)} مرتجع — ${fmtMoney(total)}'
+          '${_editRows.isEmpty ? '' : ' • بتعديل الفواتير ${fmtQty(_editRows.length)} — ${fmtMoney(editTotal)}'}',
       icon: Icons.assignment_return,
       actions: [
         ...exportActions(context,
@@ -363,7 +508,7 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
                       '${r['return_no']}',
                       fmtDate(parseDate(r['return_date'])),
                       '${r['customer_name']}',
-                      r['original_invoice_id'] == null ? '' : '#${r['original_invoice_id']}',
+                      _invLabel(r),
                       _modeLabel(r),
                       fmtMoney(d0(r['total'])),
                       fmtMoney(d0(r['cost_total'])),
@@ -384,12 +529,23 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
           _load();
         }),
         Expanded(
-          child: _rows.isEmpty
+          child: _rows.isEmpty && _editRows.isEmpty
               ? const EmptyState('لا توجد مرتجعات في الفترة')
               : ListView.builder(
                   padding: const EdgeInsets.all(8),
-                  itemCount: _rows.length,
+                  itemCount: _rows.length + (_editRows.isEmpty ? 0 : _editRows.length + 1),
                   itemBuilder: (_, i) {
+                    if (i >= _rows.length) {
+                      final k = i - _rows.length;
+                      if (k == 0) {
+                        return const Padding(
+                          padding: EdgeInsets.fromLTRB(8, 14, 8, 6),
+                          child: Text('بتعديل الفواتير (حذف مادة أو إنقاص كميتها بعد الحفظ)',
+                              style: TextStyle(fontWeight: FontWeight.bold, color: ErpColors.purple)),
+                        );
+                      }
+                      return _editCard(_editRows[k - 1]);
+                    }
                     final r = _rows[i];
                     final voided = r['status'] != 'posted';
                     return Card(
@@ -399,7 +555,7 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
                       child: ListTile(
                         onTap: () => _details(r),
                         leading: CircleAvatar(
-                          backgroundColor: (voided ? ErpColors.muted : ErpColors.orange).withOpacity(0.12),
+                          backgroundColor: (voided ? ErpColors.muted : ErpColors.orange).withValues(alpha: 0.12),
                           child: Text('${r['return_no']}',
                               style: TextStyle(color: voided ? ErpColors.muted : ErpColors.orange, fontSize: 12)),
                         ),
@@ -408,7 +564,7 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
                         subtitle: Text([
                           fmtDate(parseDate(r['return_date'])),
                           _modeLabel(r),
-                          if (r['original_invoice_id'] != null) 'فاتورة #${r['original_invoice_id']}',
+                          if (r['original_invoice_id'] != null) 'فاتورة ${_invLabel(r)}',
                           '${r['n_items']} مادة',
                         ].join(' • ')),
                         trailing: voided
@@ -422,6 +578,13 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
       ]),
     );
   }
+}
+
+/// رقم الفاتورة الأصلية المطبوع (أو #المعرّف للقديمة).
+String _invLabel(Map<String, Object?> r) {
+  if (r['original_invoice_id'] == null) return '';
+  final n = (r['invoice_number'] as String?)?.trim();
+  return (n != null && n.isNotEmpty) ? n : '#${r['original_invoice_id']}';
 }
 
 String _modeLabel(Map<String, Object?> r) {
@@ -439,7 +602,11 @@ String _modeLabel(Map<String, Object?> r) {
 Future<void> printSalesReturn(BuildContext context, int id) async {
   try {
     final db = await erpDb();
-    final h = (await db.query('sales_returns', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+    final h = (await db.rawQuery(
+            'SELECT r.*, (SELECT inv.invoice_number FROM invoices inv WHERE inv.id = r.original_invoice_id) AS invoice_number '
+            'FROM sales_returns r WHERE r.id = ? LIMIT 1',
+            [id]))
+        .first;
     final items = await SalesReturnService().items(id);
     final bytes = await DocPdf.build(
       title: h['status'] == 'posted' ? 'مرتجع مبيعات' : 'مرتجع مبيعات (ملغى)',
@@ -449,7 +616,7 @@ Future<void> printSalesReturn(BuildContext context, int id) async {
       partyName: '${h['customer_name'] ?? ''}',
       infos: [
         MapEntry('طريقة الرد', _modeLabel(h)),
-        if (h['original_invoice_id'] != null) MapEntry('الفاتورة الأصلية', '#${h['original_invoice_id']}'),
+        if (h['original_invoice_id'] != null) MapEntry('الفاتورة الأصلية', _invLabel(h)),
       ],
       headers: const ['#', 'المادة', 'الوحدة', 'الكمية', 'السعر', 'الإجمالي'],
       rows: [

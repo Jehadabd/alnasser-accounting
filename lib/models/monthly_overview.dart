@@ -14,6 +14,8 @@ class MonthlyOverview {
   final int invoiceCount; // عدد الفواتير
   final int manualDebtCount; // عدد معاملات إضافة الدين
   final int manualPaymentCount; // عدد معاملات تسديد الدين
+  final double totalManualPaymentReturn; // تسديد دين راجع
+  final int manualPaymentReturnCount; // عدد معاملات تسديد دين راجع
 
   const MonthlyOverview({
     required this.monthYear,
@@ -31,6 +33,8 @@ class MonthlyOverview {
     this.invoiceCount = 0,
     this.manualDebtCount = 0,
     this.manualPaymentCount = 0,
+    this.totalManualPaymentReturn = 0.0,
+    this.manualPaymentReturnCount = 0,
   });
 }
 

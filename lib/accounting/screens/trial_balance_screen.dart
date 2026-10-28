@@ -96,7 +96,7 @@ class _TrialBalanceScreenState extends State<TrialBalanceScreen> {
                   for (final r in rows)
                     DataRow(
                       color: WidgetStateProperty.all(
-                          r.account.isGroup ? AccColors.navy.withOpacity(0.05) : Colors.white),
+                          r.account.isGroup ? AccColors.navy.withValues(alpha: 0.05) : Colors.white),
                       onSelectChanged: r.account.isGroup
                           ? null
                           : (_) => Navigator.push(
@@ -120,7 +120,7 @@ class _TrialBalanceScreenState extends State<TrialBalanceScreen> {
                       ],
                     ),
                   DataRow(
-                    color: WidgetStateProperty.all(AccColors.cyan.withOpacity(0.15)),
+                    color: WidgetStateProperty.all(AccColors.cyan.withValues(alpha: 0.15)),
                     cells: [
                       const DataCell(Text('المجموع', style: TextStyle(fontWeight: FontWeight.bold))),
                       m(sum((r) => r.openingDebit > r.openingCredit ? r.openingDebit - r.openingCredit : 0), bold: true),

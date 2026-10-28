@@ -2,6 +2,7 @@
 // 🩹 خدمة معالجة الفروقات: تستعيد المعاملة المفقودة من مصدرها.
 // 🔒 لا تحتوي على أي طريق لاختراع مبلغ تصحيحي — المعاملة تُجلب أو لا شيء.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../database_service.dart';
 import 'firebase_sync_config.dart';
@@ -98,7 +99,7 @@ class DiscrepancyResolutionService {
         );
       }
     } catch (e) {
-      print('❌ خطأ في تحليل العميل: $e');
+      debugPrint('❌ خطأ في تحليل العميل: $e');
       return ResolutionAssessment(
         type: ResolutionType.unresolved,
         discrepancyAmount: diff,
@@ -132,7 +133,7 @@ class DiscrepancyResolutionService {
           restoredCount++;
         }
       } catch (e) {
-        print('❌ فشل استعادة المعاملة $uuid: $e');
+        debugPrint('❌ فشل استعادة المعاملة $uuid: $e');
       }
     }
     

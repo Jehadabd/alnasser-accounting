@@ -2,6 +2,7 @@
 // منسق المزامنة بين Firebase و Google Drive
 // يضمن عدم تكرار العمليات وتنسيق الرفع بين النظامين
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import '../database_service.dart';
@@ -57,7 +58,7 @@ class FirebaseSyncCoordinator {
     ''');
     
     _isInitialized = true;
-    print('✅ تم تهيئة منسق المزامنة');
+    debugPrint('✅ تم تهيئة منسق المزامنة');
   }
   
   /// ═══════════════════════════════════════════════════════════════════════
@@ -388,7 +389,7 @@ class FirebaseSyncCoordinator {
       whereArgs: [cutoff],
     );
     
-    print('🧹 تم حذف $deleted سجل تنسيق قديم');
+    debugPrint('🧹 تم حذف $deleted سجل تنسيق قديم');
     return deleted;
   }
 }

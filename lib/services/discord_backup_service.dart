@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -30,14 +31,14 @@ class DiscordBackupService {
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        print('✅ تم الإرسال إلى Discord بنجاح');
+        debugPrint('✅ تم الإرسال إلى Discord بنجاح');
         return true;
       } else {
-        print('❌ خطأ في الإرسال إلى Discord: ${response.statusCode} - ${response.body}');
+        debugPrint('❌ خطأ في الإرسال إلى Discord: ${response.statusCode} - ${response.body}');
         return false;
       }
     } catch (e) {
-      print('❌ خطأ استثنائي في Discord: $e');
+      debugPrint('❌ خطأ استثنائي في Discord: $e');
       return false;
     }
   }
@@ -48,7 +49,7 @@ class DiscordBackupService {
     final url = await SettingsManager.getDiscordWebhookUrl();
 
     try {
-      print('📤 جاري إرسال ملف إلى Discord...');
+      debugPrint('📤 جاري إرسال ملف إلى Discord...');
       
       final request = http.MultipartRequest('POST', Uri.parse(url!));
       
@@ -65,14 +66,14 @@ class DiscordBackupService {
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        print('✅ تم إرسال الملف إلى Discord بنجاح');
+        debugPrint('✅ تم إرسال الملف إلى Discord بنجاح');
         return true;
       } else {
-        print('❌ خطأ في إرسال الملف إلى Discord: ${response.statusCode} - ${response.body}');
+        debugPrint('❌ خطأ في إرسال الملف إلى Discord: ${response.statusCode} - ${response.body}');
         return false;
       }
     } catch (e) {
-      print('❌ خطأ استثنائي في إرسال الملف لـ Discord: $e');
+      debugPrint('❌ خطأ استثنائي في إرسال الملف لـ Discord: $e');
       return false;
     }
   }

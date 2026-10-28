@@ -186,7 +186,7 @@ class Harness {
       deviceMain,
       DeviceBoot(
         name: name,
-        dir: dir!,
+        dir: dir,
         cloud: cloud.sendPort,
         controller: h.replies.sendPort,
         sqlite: _sqlite!.sendPort,

@@ -34,7 +34,7 @@ class InvoiceExtrasService {
   }
 
   Future<void> saveSeller({int? id, required String name, double commission = 0, String? phone, bool active = true}) async {
-    if (name.trim().isEmpty) throw ErpException('اكتب اسم البائع');
+    if (name.trim().isEmpty) throw ErpException('اكتب اسم المندوب');
     if (commission < 0 || commission > 100) throw ErpException('نسبة العمولة بين 0 و 100');
     final db = await erpDb();
     final row = {'name': name.trim(), 'commission_percent': commission, 'phone': phone, 'is_active': active ? 1 : 0};
@@ -146,7 +146,7 @@ Future<void> showInvoiceExtrasDialog(BuildContext context, int invoiceId) async 
           child: SingleChildScrollView(
             child: FieldGrid(children: [
               DropBox<int>(
-                label: 'البائع',
+                label: 'المندوب',
                 width: 250,
                 value: sellers.any((s) => s.id == sellerId) ? sellerId : null,
                 items: [
@@ -240,7 +240,7 @@ class _SellersScreenState extends State<SellersScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) => AlertDialog(
-          title: Text(s == null ? 'بائع جديد' : 'تعديل البائع'),
+          title: Text(s == null ? 'مندوب جديد' : 'تعديل المندوب'),
           content: SizedBox(
             width: 380,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -272,12 +272,12 @@ class _SellersScreenState extends State<SellersScreen> {
   @override
   Widget build(BuildContext context) {
     return ErpPage(
-      title: 'البائعون والعمولات',
-      subtitle: 'مبيعات كل بائع وعمولته (تُرحَّل تلقائياً)',
+      title: 'المندوبون والعمولات',
+      subtitle: 'مبيعات كل مندوب وعمولته (تُرحَّل تلقائياً)',
       icon: Icons.badge,
       actions: exportActions(context,
-          title: 'عمولات البائعين',
-          headers: () => ['البائع', 'عدد الفواتير', 'المبيعات', 'العمولة'],
+          title: 'عمولات المندوبين',
+          headers: () => ['المندوب', 'عدد الفواتير', 'المبيعات', 'العمولة'],
           rows: () => [
                 for (final r in _report)
                   ['${r['seller_name']}', fmtQty(d0(r['n'])), fmtMoney(d0(r['sales'])), fmtMoney(d0(r['commission']))],
@@ -303,9 +303,9 @@ class _SellersScreenState extends State<SellersScreen> {
           icon: Icons.leaderboard,
           color: ErpColors.green,
           child: _report.isEmpty
-              ? const EmptyState('لا توجد فواتير مرتبطة ببائع في الفترة')
+              ? const EmptyState('لا توجد فواتير مرتبطة بمندوب في الفترة')
               : SimpleTable(
-                  headers: const ['البائع', 'عدد الفواتير', 'المبيعات', 'العمولة'],
+                  headers: const ['المندوب', 'عدد الفواتير', 'المبيعات', 'العمولة'],
                   numericColumns: const {1, 2, 3},
                   rows: [
                     for (final r in _report)
@@ -314,13 +314,13 @@ class _SellersScreenState extends State<SellersScreen> {
                 ),
         ),
         ErpSection(
-          title: 'البائعون',
+          title: 'المندوبون',
           icon: Icons.people_outline,
           child: Column(children: [
             for (final s in _sellers)
               ListTile(
                 leading: CircleAvatar(
-                  backgroundColor: (s.isActive ? ErpColors.navy : ErpColors.muted).withOpacity(0.1),
+                  backgroundColor: (s.isActive ? ErpColors.navy : ErpColors.muted).withValues(alpha: 0.1),
                   child: Icon(Icons.person, color: s.isActive ? ErpColors.navy : ErpColors.muted),
                 ),
                 title: Text(s.name),
@@ -328,7 +328,7 @@ class _SellersScreenState extends State<SellersScreen> {
                 trailing: s.isActive ? null : const StatusBadge('موقوف', color: ErpColors.muted),
                 onTap: () => _edit(s),
               ),
-            if (_sellers.isEmpty) const EmptyState('أضف بائعاً بزر +'),
+            if (_sellers.isEmpty) const EmptyState('أضف مندوباً بزر +'),
           ]),
         ),
       ]),

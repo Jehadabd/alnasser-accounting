@@ -106,7 +106,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         if (_loading) const LinearProgressIndicator(),
         if (s != null) ...[
           Container(
-            color: AccColors.navy.withOpacity(0.06),
+            color: AccColors.navy.withValues(alpha: 0.06),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(children: [
               const Text('رصيد أول المدة: '),

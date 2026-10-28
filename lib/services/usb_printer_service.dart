@@ -1,6 +1,6 @@
 // services/usb_printer_service.dart
 // خدمة الطباعة عبر USB OTG - تتواصل مع Native Android عبر Platform Channel
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 import 'package:alnaser/models/printer_device.dart';
 
@@ -26,7 +26,7 @@ class UsbPrinterService {
         );
       }).toList();
     } on PlatformException catch (e) {
-      print('UsbPrinterService.findUsbPrinters error: ${e.message}');
+      debugPrint('UsbPrinterService.findUsbPrinters error: ${e.message}');
       return [];
     }
   }
@@ -41,7 +41,7 @@ class UsbPrinterService {
       });
       return granted;
     } on PlatformException catch (e) {
-      print('UsbPrinterService.requestPermission error: ${e.message}');
+      debugPrint('UsbPrinterService.requestPermission error: ${e.message}');
       return false;
     }
   }
@@ -57,7 +57,7 @@ class UsbPrinterService {
       // طلب الإذن أولاً إذا لم يكن ممنوحاً
       final hasPermission = await requestPermission(deviceId);
       if (!hasPermission) {
-        print('UsbPrinterService: Permission denied for device $deviceId');
+        debugPrint('UsbPrinterService: Permission denied for device $deviceId');
         return false;
       }
 
@@ -67,7 +67,7 @@ class UsbPrinterService {
       });
       return success;
     } on PlatformException catch (e) {
-      print('UsbPrinterService.printBytes error: ${e.message}');
+      debugPrint('UsbPrinterService.printBytes error: ${e.message}');
       return false;
     }
   }

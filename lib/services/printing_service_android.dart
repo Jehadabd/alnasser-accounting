@@ -1,8 +1,7 @@
 // services/printing_service_android.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:pdf/pdf.dart';
-import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:alnaser/models/printer_device.dart';
 import 'package:alnaser/services/settings_manager.dart';
@@ -26,7 +25,7 @@ class PrintingServiceAndroid implements PrintingService {
       await printer.printTicket(commands);
       printer.disconnect();
     } else {
-      print('Error connecting to Wi-Fi printer: $res');
+      debugPrint('Error connecting to Wi-Fi printer: $res');
       // TODO: Handle connection error
     }
   }
@@ -43,19 +42,19 @@ class PrintingServiceAndroid implements PrintingService {
     }
 
     if (await PrintBluetoothThermal.bluetoothEnabled == false) {
-      print('Bluetooth is off. Please turn on Bluetooth.');
+      debugPrint('Bluetooth is off. Please turn on Bluetooth.');
       return [];
     }
 
     try {
       final List<BluetoothInfo> listResult = await PrintBluetoothThermal.pairedBluetooths;
-      return listResult.where((b) => b.macAdress != null && b.macAdress.isNotEmpty).map((b) => PrinterDevice(
+      return listResult.where((b) => b.macAdress.isNotEmpty).map((b) => PrinterDevice(
         name: b.name.isNotEmpty ? b.name : 'Unknown Device',
-        address: b.macAdress!,
+        address: b.macAdress,
         connectionType: PrinterConnectionType.bluetooth,
       )).toList();
     } catch (e) {
-      print('Error finding Bluetooth printers: $e');
+      debugPrint('Error finding Bluetooth printers: $e');
       // Optionally, you could throw a custom exception or log to a crash reporting service
       return [];
     }
@@ -69,12 +68,12 @@ class PrintingServiceAndroid implements PrintingService {
     var bluetoothScanPermission = await Permission.bluetoothScan.request();
 
     if (!(bluetoothPermission.isGranted && bluetoothConnectPermission.isGranted && bluetoothScanPermission.isGranted)) {
-      print('Cannot print: Bluetooth permissions not granted.');
+      debugPrint('Cannot print: Bluetooth permissions not granted.');
       return;
     }
 
     if (await PrintBluetoothThermal.bluetoothEnabled == false) {
-      print('Cannot print: Bluetooth is off. Please turn on Bluetooth.');
+      debugPrint('Cannot print: Bluetooth is off. Please turn on Bluetooth.');
       return;
     }
 
@@ -84,7 +83,7 @@ class PrintingServiceAndroid implements PrintingService {
       await PrintBluetoothThermal.writeBytes(commands);
       await PrintBluetoothThermal.disconnect;
     } else {
-      print('Error connecting to Bluetooth printer: $macAddress');
+      debugPrint('Error connecting to Bluetooth printer: $macAddress');
     }
   }
 
@@ -92,7 +91,7 @@ class PrintingServiceAndroid implements PrintingService {
   Future<void> printData(Uint8List dataToPrint, {List<int>? escPosCommands, PrinterDevice? printerDevice}) async {
     final defaultPrinter = printerDevice ?? await SettingsManager.getDefaultPrinter();
     if (defaultPrinter == null) {
-      print('No default printer set.');
+      debugPrint('No default printer set.');
       return;
     }
 
@@ -101,14 +100,14 @@ class PrintingServiceAndroid implements PrintingService {
         if (escPosCommands != null) {
           await printWithWifiPrinter(defaultPrinter.address, escPosCommands, port: defaultPrinter.port ?? 9100);
         } else {
-          print('ESC/POS commands are required for Wi-Fi printer.');
+          debugPrint('ESC/POS commands are required for Wi-Fi printer.');
         }
         break;
       case PrinterConnectionType.bluetooth:
         if (escPosCommands != null) {
           await printWithBluetoothPrinter(defaultPrinter.address, escPosCommands);
         } else {
-          print('ESC/POS commands are required for Bluetooth printer.');
+          debugPrint('ESC/POS commands are required for Bluetooth printer.');
         }
         break;
       case PrinterConnectionType.usb:
@@ -117,11 +116,11 @@ class PrintingServiceAndroid implements PrintingService {
         if (deviceId != null) {
           await printWithUsbPrinter(deviceId, dataToPrint);
         } else {
-          print('USB device ID not found for printer: ${defaultPrinter.name}');
+          debugPrint('USB device ID not found for printer: ${defaultPrinter.name}');
         }
         break;
       default:
-        print('Unsupported printer type for Android.');
+        debugPrint('Unsupported printer type for Android.');
         break;
     }
   }

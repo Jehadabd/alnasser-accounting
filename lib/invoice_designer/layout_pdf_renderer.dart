@@ -30,8 +30,12 @@ class LayoutPdfRenderer {
   /// ارتفاع السطر التقريبي لخط Cairo (بالنقطة) لحجم خط معيّن
   static double lineHeight(double fontSize) => fontSize * 1.85;
 
+  /// ⚫ تصميم «أبيض وأسود» قيد الرسم (العناصر تُبنى فوراً داخل render).
+  static bool _mono = false;
+
   static Future<pw.Document> render(InvoiceLayout layout, InvoicePrintData data) async {
     await _fonts();
+    _mono = layout.mono;
     final doc = pw.Document(title: 'فاتورة ${data.field('invoiceNo')}');
     final table = layout.table;
     final w = layout.widthMm;
@@ -124,6 +128,11 @@ class LayoutPdfRenderer {
   static pw.Widget _place(LayoutElement e, InvoicePrintData d, double dy, {int page = 1, int pages = 1}) =>
       _at(e, dy, e.w, e.h, _content(e, d, page, pages));
 
+  /// 🔢 نص بلا حروف عربية (رقم سند، تسلسل، مبلغ…) يُرسم من اليسار لليمين.
+  /// رسمه «من اليمين» في مكتبة PDF يُظهر الرقم المنفرد («1») علامةً صغيرة بدل الرقم.
+  static final RegExp _arabic = RegExp(r'[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]');
+  static pw.TextDirection _dirOf(String s) => _arabic.hasMatch(s) ? pw.TextDirection.rtl : pw.TextDirection.ltr;
+
   static pw.Widget _ltr(pw.Widget w) => pw.Directionality(textDirection: pw.TextDirection.ltr, child: w);
 
   static pw.Alignment _alignment(String a) => a == 'center'
@@ -133,7 +142,16 @@ class LayoutPdfRenderer {
   static pw.TextAlign _textAlign(String a) =>
       a == 'center' ? pw.TextAlign.center : (a == 'left' ? pw.TextAlign.left : pw.TextAlign.right);
 
-  static PdfColor _c(int argb) => PdfColor.fromInt(argb);
+  static PdfColor _c(int argb) {
+    if (!_mono) return PdfColor.fromInt(argb);
+    // تدرّج رمادي بإضاءة اللون نفسها (ما كان غامقاً يبقى غامقاً)
+    final a = ((argb >> 24) & 0xFF) / 255.0;
+    final r = ((argb >> 16) & 0xFF) / 255.0;
+    final g = ((argb >> 8) & 0xFF) / 255.0;
+    final b = (argb & 0xFF) / 255.0;
+    final l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return PdfColor(l, l, l, a);
+  }
 
   static pw.TextStyle _style(double fs, {bool bold = false, int color = 0xFF000000}) => pw.TextStyle(
         font: bold ? _bold : _base,
@@ -185,9 +203,9 @@ class LayoutPdfRenderer {
       case ElType.box:
         return pw.Container(decoration: _boxDecoration(e, defaultBorder: 0.8));
       case ElType.barcode:
-        final data = d.field(e.s('data', 'invoiceNo'));
-        if (data.trim().isEmpty) return pw.SizedBox();
         final qr = e.s('kind', 'qr') == 'qr';
+        final data = d.barcodeText(e.s('data', 'invoiceNo'), qr: qr);
+        if (data.trim().isEmpty) return pw.SizedBox();
         return pw.BarcodeWidget(
           barcode: qr ? pw.Barcode.qrCode() : pw.Barcode.code128(),
           data: data,
@@ -243,13 +261,13 @@ class LayoutPdfRenderer {
         ? pw.Text(text,
             style: style,
             textAlign: _textAlign(align),
-            textDirection: pw.TextDirection.rtl,
+            textDirection: _dirOf(text),
             maxLines: math.max(lines, text.split('\n').length),
             overflow: pw.TextOverflow.clip)
         : pw.FittedBox(
             fit: pw.BoxFit.scaleDown,
             alignment: _alignment(align),
-            child: pw.Text(text, style: style, textDirection: pw.TextDirection.rtl, maxLines: 1),
+            child: pw.Text(text, style: style, textDirection: _dirOf(text), maxLines: 1),
           );
     return pw.Container(
       alignment: _alignment(align),
@@ -301,7 +319,7 @@ class LayoutPdfRenderer {
               texts[i],
               style: _style(fs, bold: header, color: header ? headerColor : textColor),
               textAlign: _textAlign(align),
-              textDirection: pw.TextDirection.rtl,
+              textDirection: _dirOf(texts[i]),
               maxLines: header ? 1 : lines,
               overflow: pw.TextOverflow.clip,
             ),
@@ -363,7 +381,7 @@ class LayoutPdfRenderer {
           maxLines: 1,
           style: _style(stacked ? fs * 0.85 : fs, color: isHl ? 0xFFFFFFFF : labelColor));
       final value = pw.Text(valueOf(k),
-          textDirection: pw.TextDirection.rtl,
+          textDirection: _dirOf(valueOf(k)),
           maxLines: 1,
           style: _style(stacked ? fs * 1.15 : fs * 1.05, bold: isHl, color: isHl ? 0xFFFFFFFF : color));
       pw.Border? b;

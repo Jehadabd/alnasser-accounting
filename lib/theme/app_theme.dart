@@ -4,12 +4,12 @@ import 'package:flutter/material.dart';
 class AppTheme {
   static ThemeData lightTheme() {
     return ThemeData(
-      primaryColor: Color(0xFF2E5BFF),
-      primaryColorLight: Color(0xFF8C54FF),
-      scaffoldBackgroundColor: Color(0xFFF9FAFC),
+      primaryColor: const Color(0xFF2E5BFF),
+      primaryColorLight: const Color(0xFF8C54FF),
+      scaffoldBackgroundColor: const Color(0xFFF9FAFC),
       fontFamily: 'Dubai',
-      appBarTheme: AppBarTheme(
-        color: Colors.white,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.white,
         elevation: 1,
         iconTheme: IconThemeData(color: Color(0xFF2E5BFF)),
         titleTextStyle: TextStyle(
@@ -21,8 +21,8 @@ class AppTheme {
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: Color(0xFF2E5BFF),
-          padding: EdgeInsets.symmetric(vertical: 14, horizontal: 24),
+          backgroundColor: const Color(0xFF2E5BFF),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 24),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
@@ -30,14 +30,14 @@ class AppTheme {
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          foregroundColor: Color(0xFF2E5BFF),
-          padding: EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+          foregroundColor: const Color(0xFF2E5BFF),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
-        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,
@@ -48,7 +48,7 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Color(0xFF2E5BFF)),
+          borderSide: const BorderSide(color: Color(0xFF2E5BFF)),
         ),
       ),
     );

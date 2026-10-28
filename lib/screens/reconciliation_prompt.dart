@@ -57,9 +57,9 @@ class ReconciliationPrompt {
     _subNavigate?.cancel();
     _subNavigate = LiveMatchService().onMatchScreenRequested.listen((_) {
       final nav = globalNavigatorKey.currentState;
-      final context = globalNavigatorKey.currentContext;
-      if (nav == null || context == null) return;
-      final currentName = ModalRoute.of(context)?.settings.name;
+      final navContext = globalNavigatorKey.currentContext;
+      if (nav == null || navContext == null || !navContext.mounted) return;
+      final currentName = ModalRoute.of(navContext)?.settings.name;
       if (currentName == '/live_match') return;
       nav.push(MaterialPageRoute(
         settings: const RouteSettings(name: '/live_match'),

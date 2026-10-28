@@ -39,7 +39,7 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
         _isLoading = false;
       });
     } catch (e) {
-      print('خطأ في تحميل الإعدادات: $e');
+      debugPrint('خطأ في تحميل الإعدادات: $e');
       setState(() {
         _isLoading = false;
       });
@@ -88,11 +88,13 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
         if (file.path != null) {
           // إضافة الخط إلى النظام
           final success = await FontManager.addCustomFont(file.path!);
+          if (!mounted) return;
           
           if (success) {
             // تحديث قائمة الخطوط
             _availableFonts = await FontManager.refreshFonts();
             
+            if (!mounted) return;
             setState(() {});
             
             ScaffoldMessenger.of(context).showSnackBar(
@@ -103,7 +105,7 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
             );
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
+              const SnackBar(
                 content: Text('فشل في إضافة الخط'),
                 backgroundColor: Colors.red,
               ),
@@ -112,6 +114,7 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
         }
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('خطأ في إضافة الخط: $e'),
@@ -129,6 +132,7 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
     try {
       _availableFonts = await FontManager.refreshFonts();
       _ensureValidFontSelections();
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -140,6 +144,7 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -157,6 +162,7 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
     try {
       final updatedSettings = _appSettings.copyWith(fontSettings: _fontSettings);
       await SettingsManager.saveSettings(updatedSettings);
+      if (!mounted) return;
       
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -165,6 +171,7 @@ class _FontSettingsScreenState extends State<FontSettingsScreen> {
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('خطأ في حفظ الإعدادات: $e'),

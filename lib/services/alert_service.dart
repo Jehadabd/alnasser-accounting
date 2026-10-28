@@ -4,39 +4,38 @@ import '../models/product.dart';
 import '../models/app_settings.dart';
 import 'database_service.dart';
 import 'settings_manager.dart';
-import 'reports_service.dart'; // 🚨 Added
 import '../screens/alerts_display_dialog.dart';
 
 class AlertService {
   final DatabaseService _databaseService = DatabaseService();
-  final ReportsService _reportsService = ReportsService(); // 🚨 Added
 
   /// التحقق من التنبيهات وعرضها إذا لزم الأمر
   Future<void> checkAndShowAlerts(BuildContext context, {bool forceShow = false}) async {
-    print('🔔 AlertService: بدء فحص التنبيهات...');
+    debugPrint('🔔 AlertService: بدء فحص التنبيهات...');
     final settings = await SettingsManager.getAppSettings();
 
     if (!settings.areAlertsEnabled) {
-      print('🔔 AlertService: التنبيهات معطلة في الإعدادات.');
+      debugPrint('🔔 AlertService: التنبيهات معطلة في الإعدادات.');
       return;
     }
 
     if (_shouldShowAlerts(settings)) {
-      print('🔔 AlertService: سيتم الفحص الآن (تكرار التنبيه مسموح).');
+      debugPrint('🔔 AlertService: سيتم الفحص الآن (تكرار التنبيه مسموح).');
       final lowStockProducts = await _getLowStockProducts();
       final stagnantProducts = await _getStagnantProducts();
       final expiryProducts = await _getExpiringProducts(settings.expiryAlertThresholdMonths);
 
-      print('🔔 AlertService: نتائج الفحص:');
-      print('   - نواقص: ${lowStockProducts.length}');
-      print('   - راكدة: ${stagnantProducts.length}');
-      print('   - منتهية الصلاحية: ${expiryProducts.length}');
+      debugPrint('🔔 AlertService: نتائج الفحص:');
+      debugPrint('   - نواقص: ${lowStockProducts.length}');
+      debugPrint('   - راكدة: ${stagnantProducts.length}');
+      debugPrint('   - منتهية الصلاحية: ${expiryProducts.length}');
 
       if (forceShow || lowStockProducts.isNotEmpty || stagnantProducts.isNotEmpty || expiryProducts.isNotEmpty) {
         if (context.mounted) {
-          print('🔔 AlertService: جاري عرض شاشة التنبيهات ${forceShow ? '(عرض قسري يدوي)' : ''}...');
+          debugPrint('🔔 AlertService: جاري عرض شاشة التنبيهات ${forceShow ? '(عرض قسري يدوي)' : ''}...');
           await _updateLastShownDate(settings);
           
+          if (!context.mounted) return;
           showDialog(
             context: context,
             builder: (context) => AlertsDisplayDialog(
@@ -46,13 +45,13 @@ class AlertService {
             ),
           );
         } else {
-          print('🔔 AlertService: context not mounted!');
+          debugPrint('🔔 AlertService: context not mounted!');
         }
       } else {
-        print('🔔 AlertService: لا توجد منتجات تنطبق عليها شروط التنبيه.');
+        debugPrint('🔔 AlertService: لا توجد منتجات تنطبق عليها شروط التنبيه.');
       }
     } else {
-      print('🔔 AlertService: تم عرض التنبيهات مؤخراً، لن يتم العرض الآن بناءً على الإعدادات (${settings.alertFrequency}).');
+      debugPrint('🔔 AlertService: تم عرض التنبيهات مؤخراً، لن يتم العرض الآن بناءً على الإعدادات (${settings.alertFrequency}).');
     }
   }
 
@@ -112,7 +111,6 @@ class AlertService {
     for (var product in products) {
       if (product.alertQuantity == null) continue;
 
-      double thresholdInBaseUnit = product.alertQuantity!;
       
       // إذا كانت وحدة التنبيه مختلفة عن الوحدة الأساسية، يجب التحويل
       // لكن حالياً سنفترض منطق بسيط:
@@ -167,7 +165,7 @@ class AlertService {
     final nowStr = DateFormat('yyyy-MM-dd').format(now);
     final thresholdStr = DateFormat('yyyy-MM-dd').format(thresholdDate);
 
-    print('🔔 AlertService: فحص الصلاحية بين $nowStr و $thresholdStr');
+    debugPrint('🔔 AlertService: فحص الصلاحية بين $nowStr و $thresholdStr');
 
     final List<Map<String, dynamic>> maps = await db.rawQuery('''
       SELECT * FROM products 
@@ -182,7 +180,6 @@ class AlertService {
   
   double _getMultiplierForUnit(String hierarchyJson, String unitName) {
     try {
-      final List<dynamic> hierarchy = SettingsManager.parseHierarchy(hierarchyJson); // قد نحتاج دالة مساعدة
       // سنبني منطق بسيط هنا parsing مباشر
       // hierarchy: [{"unit_name": "كرتون", "quantity": 12}, ...]
       // هذا ال json يحدد كم "وحدة أساسية" في هذه "الوحدة"

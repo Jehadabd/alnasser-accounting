@@ -3,7 +3,6 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' as intl;
 import '../services/firebase_sync/firebase_sync_config.dart';
 import '../services/firebase_sync/sync_diagnostics.dart'; // 🩺
@@ -17,6 +16,8 @@ import '../services/database_service.dart';
 import 'firebase_custom_setup_screen.dart';
 import 'reconciliation_screen.dart';
 import 'web_hosting_guide_screen.dart';
+import '../erp/erp_kit.dart' show ErpDialog;
+import '../widgets/settings_kit.dart';
 
 class FirebaseSyncSettingsScreen extends StatefulWidget {
   const FirebaseSyncSettingsScreen({super.key});
@@ -216,153 +217,65 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
   Widget build(BuildContext context) {
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('مزامنة Firebase'),
-          backgroundColor: Colors.deepOrange,
-          foregroundColor: Colors.white,
-        ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // بطاقة الحالة
-                    _buildStatusCard(),
-                    const SizedBox(height: 16),
-                    
-                    // بطاقة الإعدادات
-                    _buildSettingsCard(),
-                    const SizedBox(height: 16),
-                    
-                    // بطاقة الإحصائيات
-                    if (_isEnabled)
-                      _buildStatsCard(),
-                    
-                    const SizedBox(height: 16),
-                    
-                    // 🔒 بطاقة إعدادات الأمان
-                    if (_isEnabled)
-                      _buildSecuritySettingsCard(),
-                    
-                    const SizedBox(height: 16),
-
-                    // 🔀 بطاقة سياسة تعارض حذف العملاء
-                    if (_isEnabled)
-                      _buildConflictPolicyCard(),
-                    
-                    const SizedBox(height: 16),
-                    
-                    // ملاحظات
-                    _buildNotesCard(),
-                  ],
-                ),
-              ),
+      child: SettingsScaffold(
+        title: 'مزامنة الأجهزة',
+        subtitle: 'Firebase — مزامنة فورية للديون والفواتير بين أجهزتك',
+        icon: Icons.sync_rounded,
+        maxWidth: 900,
+        loading: _isLoading,
+        actions: [
+          IconButton(
+            tooltip: 'إعدادات ربط Firebase',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()),
+            ),
+            icon: const Icon(Icons.settings_rounded),
+          ),
+        ],
+        children: _isLoading
+            ? null
+            : [
+                _buildStatusCard(),
+                _buildSettingsCard(),
+                if (_isEnabled) ...[
+                  _buildStatsCard(),
+                  _buildActionsCard(),
+                  _buildSecuritySettingsCard(),
+                  _buildConflictPolicyCard(),
+                  _buildDangerCard(),
+                ],
+                _buildNotesCard(),
+              ],
       ),
     );
   }
 
+  static const _fbOrange = Color(0xFFEA580C);
+
   Widget _buildStatusCard() {
     final status = _firebaseSync.status;
-    Color statusColor;
-    String statusText;
-    IconData statusIcon;
-    
-    switch (status) {
-      case FirebaseSyncStatus.online:
-        statusColor = Colors.green;
-        statusText = 'متصل ويستمع للتغييرات اللحظية';
-        statusIcon = Icons.cloud_done_rounded;
-        break;
-      case FirebaseSyncStatus.syncing:
-        statusColor = Colors.blue;
-        statusText = 'جاري المزامنة مع السحابة...';
-        statusIcon = Icons.sync_rounded;
-        break;
-      case FirebaseSyncStatus.offline:
-        statusColor = Colors.orange;
-        statusText = 'غير متصل - يعمل محلياً فقط';
-        statusIcon = Icons.cloud_off_rounded;
-        break;
-      case FirebaseSyncStatus.error:
-        statusColor = Colors.red;
-        statusText = 'خطأ في الاتصال بالمزامنة';
-        statusIcon = Icons.error_rounded;
-        break;
-      case FirebaseSyncStatus.disabled:
-        statusColor = Colors.grey;
-        statusText = 'المزامنة السحابية معطلة';
-        statusIcon = Icons.pause_circle_rounded;
-        break;
-      default:
-        statusColor = Colors.blueGrey;
-        statusText = 'غير مُعد بعد';
-        statusIcon = Icons.settings_rounded;
-    }
-    
-    return Container(
-      decoration: BoxDecoration(
-        color: statusColor.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: statusColor.withOpacity(0.2)),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: statusColor.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(statusIcon, color: statusColor, size: 26),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'حالة المزامنة السحابية',
-                  style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  statusText,
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: statusColor),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: statusColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: statusColor,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  _isEnabled ? 'نشط' : 'معطل',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: statusColor),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    final (Color statusColor, String statusText, IconData statusIcon) = switch (status) {
+      FirebaseSyncStatus.online => (kSetGreen, 'متصل ويستمع للتغييرات اللحظية', Icons.cloud_done_rounded),
+      FirebaseSyncStatus.syncing => (kSetBlue, 'جارٍ المزامنة مع السحابة...', Icons.sync_rounded),
+      FirebaseSyncStatus.offline => (kSetOrange, 'غير متصل — يعمل محلياً فقط', Icons.cloud_off_rounded),
+      FirebaseSyncStatus.error => (kSetRed, 'خطأ في الاتصال بالمزامنة', Icons.error_rounded),
+      FirebaseSyncStatus.disabled => (kSetMuted, 'المزامنة السحابية معطّلة', Icons.pause_circle_rounded),
+      _ => (const Color(0xFF475569), 'غير مُعدّة بعد', Icons.settings_rounded),
+    };
+    return SetHero(
+      icon: statusIcon,
+      color: statusColor,
+      title: statusText,
+      text: _projectId == null
+          ? 'اربط مشروع Firebase من «إعدادات ربط Firebase» ثم فعّل المزامنة.'
+          : 'المشروع: $_projectId',
+      status: Wrap(spacing: 8, runSpacing: 6, children: [
+        SetStatusPill(_isEnabled ? 'المزامنة نشطة' : 'المزامنة معطّلة', ok: _isEnabled),
+        if (_isEnabled && _syncStats?['lastSync'] != null)
+          SetStatusPill('آخر مزامنة: ${_formatLastSync(_syncStats?['lastSync'])}',
+              ok: true, icon: Icons.schedule_rounded),
+      ]),
     );
   }
 
@@ -562,340 +475,270 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
       );
 
   Widget _buildSettingsCard() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-        border: Border.all(color: Colors.grey.withOpacity(0.15)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.deepOrange.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.sync_rounded, color: Colors.deepOrange, size: 20),
-                ),
-                const SizedBox(width: 10),
-                const Text(
-                  'إعدادات المزامنة الفورية',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text(
-                'تفعيل المزامنة التلقائية الحية',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-              subtitle: Text(
-                _isEnabled 
-                    ? 'المزامنة الفورية مفعلة - تتزامن الديون والفواتير تلقائياً عبر الأجهزة'
-                    : 'المزامنة معطلة - يعمل التطبيق في الوضع المحلي فقط',
-                style: const TextStyle(fontSize: 12),
-              ),
-              value: _isEnabled,
-              onChanged: (value) => _toggleSync(value),
-              activeColor: Colors.deepOrange,
-            ),
-          ],
-        ),
+    return SetCard(
+      title: 'المزامنة الفورية',
+      icon: Icons.sync_rounded,
+      color: _fbOrange,
+      child: SetSwitch(
+        title: 'تفعيل المزامنة التلقائية الحيّة',
+        subtitle: _isEnabled
+            ? 'مفعّلة — تتزامن الديون والفواتير تلقائياً عبر الأجهزة'
+            : 'معطّلة — يعمل التطبيق في الوضع المحلي فقط',
+        icon: Icons.bolt_rounded,
+        color: _fbOrange,
+        value: _isEnabled,
+        onChanged: (value) => _toggleSync(value),
       ),
     );
   }
 
   Widget _buildStatsCard() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
+    final pct = (_loadingProgress * 100).toInt();
+    return SetCard(
+      title: 'إحصائيات السحابة',
+      icon: Icons.analytics_rounded,
+      color: kSetBlue,
+      trailing: _isLoadingStats
+          ? Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('$pct%', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _fbOrange)),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  value: _loadingProgress > 0 ? _loadingProgress : null,
+                  color: _fbOrange,
+                  backgroundColor: const Color(0xFFFFEDD5),
+                ),
+              ),
+              const SizedBox(width: 6),
+            ])
+          : null,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SizedBox(height: 12),
+        if (_isLoadingStats && _syncStats == null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Column(children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: _loadingProgress > 0 ? _loadingProgress : null,
+                  minHeight: 8,
+                  color: _fbOrange,
+                  backgroundColor: const Color(0xFFFFEDD5),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text('$pct%', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _fbOrange)),
+              const SizedBox(height: 2),
+              Text(_loadingMessage, textAlign: TextAlign.center, style: const TextStyle(color: kSetMuted, fontSize: 12)),
+            ]),
+          )
+        else if (_syncStats?['error'] != null)
+          SetBanner(
+            _syncStats!['timeout'] == true ? 'انتهت مهلة التحميل — اضغط «مزامنة الآن»' : 'خطأ: ${_syncStats!['error']}',
+            kind: SetBannerKind.warn,
+          )
+        else ...[
+          LayoutBuilder(builder: (context, c) {
+            final cols = c.maxWidth >= 520 ? 3 : 1;
+            final w = (c.maxWidth - (cols - 1) * 10) / cols;
+            return Wrap(spacing: 10, runSpacing: 10, children: [
+              _statTile(w, Icons.people_alt_rounded, 'العملاء', '${_syncStats?['customersInCloud'] ?? 0}', kSetBlue),
+              _statTile(w, Icons.swap_vert_rounded, 'المعاملات', '${_syncStats?['transactionsInCloud'] ?? 0}', kSetGreen),
+              _statTile(w, Icons.receipt_long_rounded, 'الفواتير', '${_syncStats?['invoicesInCloud'] ?? 0}', _fbOrange),
+            ]);
+          }),
+          const SizedBox(height: 12),
+          _infoLine(Icons.cloud_outlined, 'معرّف المشروع', _projectId ?? 'غير متصل'),
+          _infoLine(Icons.fingerprint_rounded, 'معرّف المصادقة', FirebaseAuth.instance.currentUser?.uid ?? 'غير مصادق'),
+          _infoLine(Icons.schedule_rounded, 'آخر مزامنة', _formatLastSync(_syncStats?['lastSync'])),
         ],
-        border: Border.all(color: Colors.grey.withOpacity(0.15)),
-      ),
+        const SizedBox(height: 14),
+        _buildActionButton(
+          icon: Icons.sync_rounded,
+          label: 'مزامنة الآن',
+          isLoading: _isSyncing,
+          progress: _isSyncing ? _loadingProgress : null,
+          message: _isSyncing ? _loadingMessage : null,
+          color: _fbOrange,
+          onPressed: _isSyncing ? null : _performManualSync,
+          isPrimary: true,
+        ),
+      ]),
+    );
+  }
+
+  Widget _statTile(double width, IconData icon, String label, String value, Color c) => Container(
+        width: width,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: c.withValues(alpha: 0.18)),
+        ),
+        child: Row(children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(color: c.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(11)),
+            child: Icon(icon, color: c, size: 21),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label, style: const TextStyle(fontSize: 12, color: kSetMuted)),
+              Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c)),
+            ]),
+          ),
+        ]),
+      );
+
+  Widget _infoLine(IconData icon, String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          Icon(icon, size: 17, color: kSetMuted),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(fontSize: 13, color: kSetMuted)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: SelectableText(
+              value,
+              maxLines: 1,
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: kSetText),
+            ),
+          ),
+        ]),
+      );
+
+  /// أدوات المزامنة مجمّعة حسب الغرض بدل عمود طويل من الأزرار.
+  Widget _buildActionsCard() {
+    Widget group(String title, List<Widget> tiles) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 8),
+            child: Text(title, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: kSetMuted)),
+          ),
+          LayoutBuilder(builder: (context, c) {
+            final cols = c.maxWidth >= 600 ? 2 : 1;
+            final w = (c.maxWidth - (cols - 1) * 10) / cols;
+            return Wrap(spacing: 10, runSpacing: 10, children: [for (final t in tiles) SizedBox(width: w, child: t)]);
+          }),
+        ]);
+
+    return SetCard(
+      title: 'أدوات المزامنة',
+      subtitle: 'رفع، تشخيص، ومراقبة الأجهزة',
+      icon: Icons.build_circle_outlined,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        group('الرفع والإصلاح', [
+          _buildActionButton(
+            icon: Icons.cloud_upload_rounded,
+            label: 'الرفع الشامل',
+            subtitle: 'إصلاح معرّفات المزامنة ورفع كل العملاء والمعاملات',
+            isLoading: _isRepairing,
+            progress: _isRepairing ? _loadingProgress : null,
+            message: _isRepairing ? _loadingMessage : null,
+            color: kSetBlue,
+            onPressed: _isRepairing ? null : _repairAndSyncAll,
+          ),
+          _buildActionButton(
+            icon: Icons.receipt_long_rounded,
+            label: 'رفع الفواتير المعلقة',
+            subtitle: 'الفواتير التي لم تصل إلى السحابة بعد',
+            isLoading: _isSyncingInvoices,
+            color: const Color(0xFF4F46E5),
+            onPressed: _isSyncingInvoices ? null : _syncInvoices,
+          ),
+          _buildActionButton(
+            icon: Icons.done_all_rounded,
+            label: 'اعتبار الفواتير القديمة مرفوعة',
+            subtitle: 'مرة واحدة عند البدء لتجنّب رفع الأرشيف كاملاً',
+            isLoading: _isMarkingOldInvoices,
+            color: const Color(0xFF475569),
+            onPressed: _isMarkingOldInvoices ? null : _markOldInvoicesAsSynced,
+          ),
+        ]),
+        group('التشخيص والمراقبة', [
+          _buildActionButton(
+            icon: Icons.health_and_safety_rounded,
+            label: 'حالة المزامنة والتشخيص',
+            subtitle: 'أخطاء المصادقة والمستمعين بلغة واضحة',
+            isLoading: false,
+            color: const Color(0xFFDC2626),
+            onPressed: () => _showSyncDiagnostics(),
+          ),
+          _buildActionButton(
+            icon: Icons.rule_rounded,
+            label: 'المطابقة بين الأجهزة',
+            subtitle: 'مقارنة الأرصدة والسجلات بين الأجهزة',
+            isLoading: false,
+            color: const Color(0xFF7C3AED),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReconciliationScreen())),
+          ),
+          _buildActionButton(
+            icon: Icons.devices_rounded,
+            label: 'الأجهزة المتصلة',
+            subtitle: 'الأجهزة في المجموعة وحالة كل منها',
+            isLoading: _isLoadingDevices,
+            color: const Color(0xFF9333EA),
+            onPressed: _isLoadingDevices ? null : _showConnectedDevices,
+          ),
+          _buildActionButton(
+            icon: Icons.error_outline_rounded,
+            label: 'المعاملات الفاشلة',
+            subtitle: 'العمليات التي لم تكتمل ومحاولات إعادتها',
+            isLoading: _isLoadingTrackingStats,
+            color: kSetRed,
+            onPressed: _isLoadingTrackingStats ? null : _showFailedOperations,
+          ),
+        ]),
+        group('الإعداد', [
+          _buildActionButton(
+            icon: Icons.settings_rounded,
+            label: 'إعدادات ربط Firebase',
+            subtitle: 'المشروع المخصّص وسرّ المجموعة',
+            isLoading: false,
+            color: const Color(0xFF0F766E),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()),
+            ),
+          ),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _buildDangerCard() {
+    return SetCard(
+      title: 'منطقة الخطر',
+      subtitle: 'عمليات لا يمكن التراجع عنها',
+      icon: Icons.warning_amber_rounded,
+      color: kSetRed,
       child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.analytics_rounded, color: Colors.blue, size: 20),
-                    ),
-                    const SizedBox(width: 10),
-                    const Text(
-                      'إحصائيات المزامنة السحابية',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                // 🔧 مؤشر تحميل الإحصائيات مع النسبة
-                if (_isLoadingStats)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${(_loadingProgress * 100).toInt()}%',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.deepOrange,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          value: _loadingProgress > 0 ? _loadingProgress : null,
-                          backgroundColor: Colors.grey.shade200,
-                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.deepOrange),
-                        ),
-                      ),
-                    ],
-                  ),
-              ],
-            ),
-            const Divider(height: 24),
-            
-            // 🔧 عرض حالة التحميل أو الإحصائيات
-            if (_isLoadingStats && _syncStats == null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Column(
-                  children: [
-                    // شريط التقدم الخطي
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: LinearProgressIndicator(
-                        value: _loadingProgress > 0 ? _loadingProgress : null,
-                        backgroundColor: Colors.grey.shade200,
-                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.deepOrange),
-                        minHeight: 8,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    // النسبة المئوية
-                    Text(
-                      '${(_loadingProgress * 100).toInt()}%',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.deepOrange,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    // رسالة التحميل
-                    Text(
-                      _loadingMessage,
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              )
-            else if (_syncStats?['error'] != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _syncStats!['timeout'] == true 
-                            ? 'انتهت مهلة التحميل - اضغط مزامنة الآن'
-                            : 'خطأ: ${_syncStats!['error']}',
-                        style: const TextStyle(color: Colors.orange, fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else ...[
-              _buildStatRow('معرف المشروع', _projectId ?? 'غير متصل'),
-              _buildStatRow('معرف المصادقة', FirebaseAuth.instance.currentUser?.uid ?? 'غير مصادق'),
-              _buildStatRow('العملاء في السحابة', '${_syncStats?['customersInCloud'] ?? 0}'),
-              _buildStatRow('المعاملات في السحابة', '${_syncStats?['transactionsInCloud'] ?? 0}'),
-              _buildStatRow('الفواتير في السحابة', '${_syncStats?['invoicesInCloud'] ?? 0}'),
-              _buildStatRow('آخر مزامنة', _formatLastSync(_syncStats?['lastSync'])),
-            ],
-            
-            const SizedBox(height: 16),
-            
-            // 1. مزامنة الآن
-            _buildActionButton(
-              icon: Icons.sync,
-              label: 'مزامنة الآن',
-              isLoading: _isSyncing,
-              progress: _isSyncing ? _loadingProgress : null,
-              message: _isSyncing ? _loadingMessage : null,
-              color: Colors.deepOrange,
-              onPressed: _isSyncing ? null : _performManualSync,
-              isPrimary: true,
-            ),
-            
-            const SizedBox(height: 8),
-            
-            // 2. الرفع الشامل
-            _buildActionButton(
-              icon: Icons.cloud_upload,
-              label: 'الرفع الشامل',
-              isLoading: _isRepairing,
-              progress: _isRepairing ? _loadingProgress : null,
-              message: _isRepairing ? _loadingMessage : null,
-              color: Colors.blue,
-              onPressed: _isRepairing ? null : _repairAndSyncAll,
-            ),
-            
-            const SizedBox(height: 8),
-
-            // 3. رفع الفواتير المعلقة
-            _buildActionButton(
-              icon: Icons.receipt_long,
-              label: 'رفع الفواتير المعلقة',
-              isLoading: _isSyncingInvoices,
-              color: Colors.indigo,
-              onPressed: _isSyncingInvoices ? null : _syncInvoices,
-            ),
-
-            const SizedBox(height: 8),
-
-            // 4. اعتبار الفواتير القديمة مرفوعة
-            _buildActionButton(
-              icon: Icons.done_all,
-              label: 'اعتبار الفواتير القديمة مرفوعة',
-              isLoading: _isMarkingOldInvoices,
-              color: Colors.blueGrey,
-              onPressed: _isMarkingOldInvoices ? null : _markOldInvoicesAsSynced,
-            ),
-
-            const SizedBox(height: 8),
-
-            // 4.5 🩺 حالة المزامنة والتشخيص — عرض الأخطاء بوضوح للمستخدم
-            _buildActionButton(
-              icon: Icons.health_and_safety,
-              label: '🩺 حالة المزامنة والتشخيص',
-              isLoading: false,
-              color: Colors.redAccent,
-              onPressed: () => _showSyncDiagnostics(),
-            ),
-
-            const SizedBox(height: 8),
-
-            // 5. المطابقة بين الأجهزة
-            _buildActionButton(
-              icon: Icons.rule,
-              label: 'المطابقة بين الأجهزة',
-              isLoading: false,
-              color: Colors.deepPurple,
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const ReconciliationScreen()),
-                );
-              },
-            ),
-
-            const SizedBox(height: 8),
-
-            // 6. إعدادات فايربيس
-            _buildActionButton(
-              icon: Icons.settings,
-              label: 'إعدادات فايربيس',
-              isLoading: false,
-              color: Colors.teal,
-              onPressed: () {
-                // فتح شاشة إعدادات فايربيس المخصصة
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()),
-                );
-              },
-            ),
-            
-            const SizedBox(height: 8),
-            
-            // 4. الأجهزة المتصلة
-            _buildActionButton(
-              icon: Icons.devices,
-              label: 'الأجهزة المتصلة',
-              isLoading: _isLoadingDevices,
-              color: Colors.purple,
-              onPressed: _isLoadingDevices ? null : _showConnectedDevices,
-            ),
-            
-            const SizedBox(height: 8),
-            
-            // 4. المعاملات الفاشلة
-            _buildActionButton(
-              icon: Icons.error_outline,
-              label: 'المعاملات الفاشلة',
-              isLoading: _isLoadingTrackingStats,
-              color: Colors.red,
-              onPressed: _isLoadingTrackingStats ? null : _showFailedOperations,
-            ),
-            
-            const SizedBox(height: 8),
-            
-            // 5. مسح قاعدة البيانات السحابية بالكامل
-            _buildActionButton(
-              icon: Icons.delete_forever,
-              label: 'حذف قاعدة البيانات السحابية بالكامل',
-              isLoading: _isCleaning,
-              progress: _isCleaning ? _loadingProgress : null,
-              message: _isCleaning ? _loadingMessage : null,
-              color: Colors.red.shade900,
-              onPressed: _isCleaning ? null : _deleteCloudDatabase,
-            ),
-          ],
+        padding: const EdgeInsets.only(top: 12),
+        child: _buildActionButton(
+          icon: Icons.delete_forever_rounded,
+          label: 'حذف قاعدة البيانات السحابية بالكامل',
+          subtitle: 'تُحذف بيانات المجموعة من السحابة — البيانات المحلية تبقى',
+          isLoading: _isCleaning,
+          progress: _isCleaning ? _loadingProgress : null,
+          message: _isCleaning ? _loadingMessage : null,
+          color: const Color(0xFF991B1B),
+          onPressed: _isCleaning ? null : _deleteCloudDatabase,
         ),
       ),
     );
   }
-  
-  /// 🆕 Widget لبناء زر مع مؤشر تقدم
+
+  /// زر إجراء: الأساسي = زر عريض مملوء، والبقية = بطاقة صغيرة بأيقونة وشرح وتقدّم.
   Widget _buildActionButton({
     required IconData icon,
     required String label,
+    String? subtitle,
     required bool isLoading,
     double? progress,
     String? message,
@@ -903,105 +746,91 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     required VoidCallback? onPressed,
     bool isPrimary = false,
   }) {
-    return SizedBox(
-      width: double.infinity,
-      child: Column(
-        children: [
-          SizedBox(
-            height: 48,
-            width: double.infinity,
-            child: isPrimary
-                ? ElevatedButton.icon(
-                    onPressed: onPressed,
-                    icon: isLoading 
-                        ? SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              value: progress,
-                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
-                          )
-                        : Icon(icon, size: 20),
-                    label: Text(
-                      isLoading && progress != null 
-                          ? '$label (${(progress * 100).toInt()}%)'
-                          : label,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: color,
-                      foregroundColor: Colors.white,
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  )
-                : OutlinedButton.icon(
-                    onPressed: onPressed,
-                    icon: isLoading 
-                        ? SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              value: progress,
-                              valueColor: AlwaysStoppedAnimation<Color>(color),
-                            ),
-                          )
-                        : Icon(icon, size: 20),
-                    label: Text(
-                      isLoading && progress != null 
-                          ? '$label (${(progress * 100).toInt()}%)'
-                          : label,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: color,
-                      side: BorderSide(color: color.withOpacity(0.4), width: 1.2),
-                      backgroundColor: color.withOpacity(0.04),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
+    final pctLabel = isLoading && progress != null ? ' (${(progress * 100).toInt()}%)' : '';
+    if (isPrimary) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        FilledButton.icon(
+          style: FilledButton.styleFrom(backgroundColor: color, minimumSize: const Size(0, 50)),
+          onPressed: onPressed,
+          icon: isLoading
+              ? SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, value: progress, color: Colors.white),
+                )
+              : Icon(icon, size: 20),
+          label: Text('$label$pctLabel', style: const TextStyle(fontSize: 15)),
+        ),
+        if (isLoading && message != null && message.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(message, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: kSetMuted)),
           ),
-          // عرض رسالة التقدم إذا كانت موجودة
-          if (isLoading && message != null && message.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                message,
-                style: TextStyle(fontSize: 11, color: color.withOpacity(0.9), fontWeight: FontWeight.w500),
-                textAlign: TextAlign.center,
+      ]);
+    }
+
+    final enabled = onPressed != null;
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: isLoading ? color.withValues(alpha: 0.5) : kSetBorder),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        hoverColor: color.withValues(alpha: 0.05),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(11)),
+                child: isLoading
+                    ? Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: CircularProgressIndicator(strokeWidth: 2, value: progress, color: color),
+                      )
+                    : Icon(icon, size: 21, color: enabled ? color : kSetMuted),
               ),
-            ),
-        ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('$label$pctLabel',
+                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: enabled || isLoading ? kSetText : kSetMuted)),
+                  if (subtitle != null)
+                    Text(subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12, color: kSetMuted, height: 1.35)),
+                ]),
+              ),
+            ]),
+            if (isLoading) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 5,
+                  color: color,
+                  backgroundColor: color.withValues(alpha: 0.12),
+                ),
+              ),
+              if (message != null && message.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(message, style: TextStyle(fontSize: 11.5, color: color)),
+                ),
+            ],
+          ]),
+        ),
       ),
     );
   }
 
-  Widget _buildStatRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(color: Colors.grey.shade600, fontSize: 13, fontWeight: FontWeight.w500)),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.grey.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-          ),
-        ],
-      ),
-    );
-  }
 
   String _formatLastSync(String? isoString) {
     if (isoString == null) return 'لم تتم بعد';
@@ -1009,7 +838,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
       final date = DateTime.parse(isoString);
       final now = DateTime.now();
       final diff = now.difference(date);
-      
+
       if (diff.inMinutes < 1) return 'الآن';
       if (diff.inMinutes < 60) return 'منذ ${diff.inMinutes} دقيقة';
       if (diff.inHours < 24) return 'منذ ${diff.inHours} ساعة';
@@ -1021,344 +850,316 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
 
   /// 🔒 بطاقة إعدادات الأمان
   Widget _buildSecuritySettingsCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    Widget daysChips(List<int> options, int value, ValueChanged<int> onPick, Color c) => Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Row(
-              children: const [
-                Icon(Icons.security, color: Colors.green),
-                SizedBox(width: 8),
-                Text(
-                  'إعدادات الأمان',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            const Divider(),
-            
-            // 🔒 رفض المعاملات القديمة
-            SwitchListTile(
-              title: const Text('رفض المعاملات القديمة'),
-              subtitle: Text(
-                _rejectOldTransactions 
-                    ? 'سيتم رفض المعاملات الأقدم من $_maxTransactionAgeDays يوم'
-                    : 'قبول جميع المعاملات بغض النظر عن تاريخها',
+            for (final d in options)
+              ChoiceChip(
+                label: Text('$d يوم'),
+                selected: value == d,
+                showCheckmark: false,
+                selectedColor: c.withValues(alpha: 0.12),
+                side: BorderSide(color: value == d ? c : kSetBorder),
+                labelStyle: TextStyle(fontWeight: FontWeight.w700, color: value == d ? c : kSetText),
+                onSelected: (_) => onPick(d),
               ),
-              value: _rejectOldTransactions,
-              onChanged: (value) async {
-                await FirebaseSyncSecuritySettings.setRejectOldTransactionsEnabled(value);
-                setState(() => _rejectOldTransactions = value);
-              },
-              activeColor: Colors.green,
-              secondary: const Icon(Icons.history, color: Colors.orange),
-            ),
-            
-            // عدد الأيام (يظهر فقط إذا كان الرفض مفعلاً)
-            if (_rejectOldTransactions)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    const Text('الحد الأقصى للعمر: '),
+          ],
+        );
+    const ttlOptions = [30, 60, 90, 180, 365, 730];
+
+    return SetCard(
+      title: 'إعدادات الأمان',
+      subtitle: 'حماية البيانات المتزامنة من الأخطاء والتلاعب',
+      icon: Icons.security_rounded,
+      color: kSetGreen,
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        SetSwitch(
+          title: 'رفض المعاملات القديمة',
+          subtitle: _rejectOldTransactions
+              ? 'تُرفض المعاملات الأقدم من $_maxTransactionAgeDays يوم'
+              : 'قبول جميع المعاملات بغض النظر عن تاريخها',
+          icon: Icons.history_rounded,
+          color: kSetGreen,
+          value: _rejectOldTransactions,
+          onChanged: (value) async {
+            await FirebaseSyncSecuritySettings.setRejectOldTransactionsEnabled(value);
+            if (mounted) setState(() => _rejectOldTransactions = value);
+          },
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          alignment: AlignmentDirectional.topStart,
+          child: !_rejectOldTransactions
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 50, bottom: 10),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('الحد الأقصى لعمر المعاملة', style: TextStyle(fontSize: 12.5, color: kSetMuted)),
+                    const SizedBox(height: 6),
+                    daysChips(const [7, 14, 30, 60, 90], _maxTransactionAgeDays, (v) async {
+                      await FirebaseSyncSecuritySettings.setMaxTransactionAgeDays(v);
+                      if (mounted) setState(() => _maxTransactionAgeDays = v);
+                    }, kSetGreen),
+                  ]),
+                ),
+        ),
+        const Divider(height: 20),
+        Row(children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(color: kSetOrange.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+            child: const Icon(Icons.auto_delete_rounded, size: 19, color: kSetOrange),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('الحذف التلقائي للبيانات القديمة (TTL)',
+                  style: TextStyle(fontWeight: FontWeight.w700, color: kSetText)),
+              Text('تُحذف البيانات الأقدم من $_autoDeleteDays يوم نهائياً من السحابة لتوفير المساحة.',
+                  style: const TextStyle(fontSize: 12.5, color: kSetMuted, height: 1.4)),
+            ]),
+          ),
+        ]),
+        Padding(
+          padding: const EdgeInsetsDirectional.only(start: 50, top: 8, bottom: 6),
+          child: daysChips(ttlOptions, ttlOptions.contains(_autoDeleteDays) ? _autoDeleteDays : 90, (v) async {
+            await FirebaseSyncSecuritySettings.setAutoDeleteDays(v);
+            if (mounted) setState(() => _autoDeleteDays = v);
+          }, kSetOrange),
+        ),
+        const Divider(height: 20),
+        SetSwitch(
+          title: 'التحقق من الأرصدة بعد المزامنة',
+          subtitle: _postSyncVerification
+              ? 'يُتحقَّق من صحة الأرصدة بعد كل مزامنة'
+              : 'لن يُتحقَّق من الأرصدة تلقائياً',
+          icon: Icons.account_balance_wallet_rounded,
+          color: kSetGreen,
+          value: _postSyncVerification,
+          onChanged: (value) async {
+            await FirebaseSyncSecuritySettings.setPostSyncVerificationEnabled(value);
+            if (mounted) setState(() => _postSyncVerification = value);
+          },
+        ),
+        const Divider(height: 20),
+        SetSwitch(
+          title: 'رفض البيانات غير الموقّعة (الوضع الصارم)',
+          subtitle: _strictSignature
+              ? 'يُرفض أي مستند لم يوقَّع بسرّ المجموعة — يحمي من الكتابة المزوّرة'
+              : 'تُقبل البيانات غير الموقّعة (للتوافق مع الأجهزة القديمة)',
+          icon: Icons.verified_user_rounded,
+          color: kSetGreen,
+          value: _strictSignature,
+          onChanged: _onStrictSignatureChanged,
+        ),
+      ]),
+    );
+  }
+
+  /// 🔐 الوضع الصارم للتوقيع: رفض أي بيانات لم توقَّع بسرّ المجموعة
+  Future<void> _onStrictSignatureChanged(bool value) async {
+    if (value) {
+      // 🛡️ لا نفعّله إن كان جهاز لا يشارك نفس السرّ: كانت بياناته
+      // ستُرفض بصمت وتفترق الأرصدة.
+      List<String> mismatched;
+      try {
+        mismatched = await _firebaseSync.devicesWithMismatchedSecret();
+      } catch (e) {
+        if (!mounted) return;
+        setToast(context, 'تعذّر التحقق من أسرار الأجهزة (يلزم اتصال): $e', error: true);
+        return;
+      }
+      if (mismatched.isNotEmpty) {
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => ErpDialog(
+            title: 'لا يمكن التفعيل الآن',
+            subtitle: 'أجهزة لا تشارك نفس سرّ المجموعة أو لم تُحدَّث بعد',
+            icon: Icons.gpp_maybe_rounded,
+            color: kSetOrange,
+            content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              for (final d in mismatched)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(children: [
+                    const Icon(Icons.computer_rounded, size: 18, color: kSetOrange),
                     const SizedBox(width: 8),
-                    DropdownButton<int>(
-                      value: _maxTransactionAgeDays,
-                      items: [7, 14, 30, 60, 90].map((days) {
-                        return DropdownMenuItem(
-                          value: days,
-                          child: Text('$days يوم'),
-                        );
-                      }).toList(),
-                      onChanged: (value) async {
-                        if (value != null) {
-                          await FirebaseSyncSecuritySettings.setMaxTransactionAgeDays(value);
-                          setState(() => _maxTransactionAgeDays = value);
-                        }
-                      },
-                    ),
-                  ],
+                    Expanded(child: Text(d, style: const TextStyle(fontWeight: FontWeight.w700))),
+                  ]),
                 ),
+              const SizedBox(height: 8),
+              const SetBanner(
+                'أدخل نفس السرّ عليها (إعداد Firebase المخصص) وحدّثها، ثم افتحها مرة واحدة متصلة، ثم أعد المحاولة.',
               ),
-            
-            const Divider(),
-            
-            // 🗑️ الحذف التلقائي للبيانات
-            ListTile(
-              title: const Text('الحذف التلقائي للبيانات القديمة (TTL)'),
-              subtitle: Text('سيتم حذف البيانات الأقدم من $_autoDeleteDays يوم نهائياً من السحابة لتوفير المساحة.'),
-              trailing: DropdownButton<int>(
-                value: [30, 60, 90, 180, 365, 730].contains(_autoDeleteDays) ? _autoDeleteDays : 90,
-                items: [30, 60, 90, 180, 365, 730].map((days) {
-                  return DropdownMenuItem(
-                    value: days,
-                    child: Text('$days يوم'),
-                  );
-                }).toList(),
-                onChanged: (value) async {
-                  if (value != null) {
-                    await FirebaseSyncSecuritySettings.setAutoDeleteDays(value);
-                    setState(() => _autoDeleteDays = value);
-                  }
-                },
-              ),
+            ]),
+            actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => ErpDialog(
+          title: 'تفعيل الوضع الصارم',
+          icon: Icons.verified_user_rounded,
+          color: kSetGreen,
+          content: const Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            SetSteps([
+              'حدّث كل الأجهزة إلى هذه النسخة.',
+              'أدخل نفس سرّ المجموعة على كل الأجهزة.',
+            ], color: kSetGreen),
+            SizedBox(height: 6),
+            SetBanner(
+              'وإلا ستُرفض بيانات أي جهاز يختلف سرّه، ولن تصل معاملاته إلى هذا الجهاز حتى يُصحَّح السرّ.',
+              kind: SetBannerKind.warn,
             ),
-            
-            const Divider(),
-            
-            // 🔍 التحقق من الأرصدة بعد المزامنة
-            SwitchListTile(
-              title: const Text('التحقق من الأرصدة بعد المزامنة'),
-              subtitle: Text(
-                _postSyncVerification 
-                    ? 'سيتم التحقق من صحة الأرصدة بعد كل مزامنة'
-                    : 'لن يتم التحقق من الأرصدة تلقائياً',
-              ),
-              value: _postSyncVerification,
-              onChanged: (value) async {
-                await FirebaseSyncSecuritySettings.setPostSyncVerificationEnabled(value);
-                setState(() => _postSyncVerification = value);
-              },
-              activeColor: Colors.green,
-              secondary: const Icon(Icons.account_balance_wallet, color: Colors.blue),
-            ),
-
-            const Divider(),
-
-            // 🔐 الوضع الصارم للتوقيع: رفض أي بيانات لم توقَّع بسرّ المجموعة
-            SwitchListTile(
-              title: const Text('رفض البيانات غير الموقّعة (الوضع الصارم)'),
-              subtitle: Text(
-                _strictSignature
-                    ? 'يُرفض أي مستند لم يوقَّع بسرّ المجموعة — يحمي من الكتابة المزوّرة'
-                    : 'تُقبل البيانات غير الموقّعة (للتوافق مع الأجهزة القديمة)',
-              ),
-              value: _strictSignature,
-              onChanged: (value) async {
-                if (value) {
-                  // 🛡️ لا نفعّله إن كان جهاز لا يشارك نفس السرّ: كانت بياناته
-                  // ستُرفض بصمت وتفترق الأرصدة.
-                  List<String> mismatched;
-                  try {
-                    mismatched = await _firebaseSync.devicesWithMismatchedSecret();
-                  } catch (e) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text('تعذّر التحقق من أسرار الأجهزة (يلزم اتصال): $e')));
-                    return;
-                  }
-                  if (mismatched.isNotEmpty) {
-                    if (!mounted) return;
-                    await showDialog<void>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('لا يمكن التفعيل الآن'),
-                        content: Text(
-                          'هذه الأجهزة لا تشارك نفس سرّ المجموعة أو لم تُحدَّث بعد:\n'
-                          '• ${mismatched.join('\n• ')}\n\n'
-                          'أدخل نفس السرّ عليها (إعداد Firebase المخصص) وحدّثها، '
-                          'ثم افتحها مرة واحدة متصلة، ثم أعد المحاولة.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx),
-                            child: const Text('حسناً'),
-                          ),
-                        ],
-                      ),
-                    );
-                    return;
-                  }
-                  if (!mounted) return;
-                  final ok = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('تفعيل الوضع الصارم'),
-                      content: const Text(
-                        'فعّله فقط بعد:\n'
-                        '• تحديث كل الأجهزة إلى هذه النسخة.\n'
-                        '• إدخال نفس سرّ المجموعة على كل الأجهزة.\n\n'
-                        'وإلا ستُرفض بيانات أي جهاز يختلف سرّه، ولن تصل معاملاته '
-                        'إلى هذا الجهاز حتى يُصحَّح السرّ.',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('إلغاء'),
-                        ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('تفعيل'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (ok != true) return;
-                }
-                await FirebaseSyncSecuritySettings.setStrictSignatureEnabled(value);
-                if (mounted) setState(() => _strictSignature = value);
-              },
-              activeColor: Colors.green,
-              secondary: const Icon(Icons.verified_user, color: Colors.deepPurple),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: kSetGreen),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('تفعيل'),
             ),
           ],
         ),
-      ),
-    );
+      );
+      if (ok != true) return;
+    }
+    await FirebaseSyncSecuritySettings.setStrictSignatureEnabled(value);
+    if (mounted) setState(() => _strictSignature = value);
   }
 
   /// 🔀 بطاقة سياسة معالجة تعارض حذف العملاء
   Widget _buildConflictPolicyCard() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.alt_route_rounded, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    'سياسة تعارض حذف العملاء عند المزامنة',
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'تحدد ماذا يحدث إذا حُذف عميل من جهاز، بينما قام جهاز آخر (أثناء انقطاع الإنترنت) بإضافة فاتورة أو دين له:',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
-            ),
-            const Divider(height: 24),
-            
-            // 🌟 الخيار الأول: التنشيط الذكي
-            RadioListTile<CustomerConflictPolicy>(
-              title: const Text(
-                'إعادة التنشيط الذكي بالمعاملات الجديدة فقط (موصى به)',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-              subtitle: const Text(
-                'يُعاد تنشيط العميل تلقائياً ويُسجل عليه فقط مبلغ المعاملة الجديدة التي أُنشئت أوفلاين، مع إبقاء ديونه القديمة المحذوفة ملغاة ومصفرة.',
-                style: TextStyle(fontSize: 12),
-              ),
-              value: CustomerConflictPolicy.smartReactivate,
-              groupValue: _customerConflictPolicy,
-              activeColor: Colors.teal,
-              contentPadding: EdgeInsets.zero,
-              secondary: const CircleAvatar(
-                radius: 16,
-                backgroundColor: Color(0xFFE0F2F1),
-                child: Icon(Icons.auto_awesome, color: Colors.teal, size: 18),
-              ),
-              onChanged: (value) async {
-                if (value != null) {
-                  await FirebaseSyncSecuritySettings.setCustomerConflictPolicy(value);
-                  setState(() => _customerConflictPolicy = value);
-                }
-              },
-            ),
-            
-            const SizedBox(height: 8),
-            
-            // 🔒 الخيار الثاني: الحذف الصارم
-            RadioListTile<CustomerConflictPolicy>(
-              title: const Text(
-                'الحذف الصارم (الحذف يلغي أي معاملة أوفلاين)',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-              subtitle: const Text(
-                'يعتبر قرار الحذف نهائياً وتُلغى أي فاتورة أو حركة أُضيفت للعميل أثناء انقطاع الإنترنت لمنع أي حركة غير مصرح بها.',
-                style: TextStyle(fontSize: 12),
-              ),
-              value: CustomerConflictPolicy.strictDelete,
-              groupValue: _customerConflictPolicy,
-              activeColor: Colors.red.shade700,
-              contentPadding: EdgeInsets.zero,
-              secondary: CircleAvatar(
-                radius: 16,
-                backgroundColor: Colors.red.shade50,
-                child: Icon(Icons.delete_forever, color: Colors.red.shade700, size: 18),
-              ),
-              onChanged: (value) async {
-                if (value != null) {
-                  await FirebaseSyncSecuritySettings.setCustomerConflictPolicy(value);
-                  setState(() => _customerConflictPolicy = value);
-                }
-              },
-            ),
-          ],
+    Widget option({
+      required CustomerConflictPolicy value,
+      required String title,
+      required String text,
+      required IconData icon,
+      required Color color,
+      String? badge,
+    }) {
+      final selected = _customerConflictPolicy == value;
+      return Material(
+        color: selected ? color.withValues(alpha: 0.06) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: selected ? color : kSetBorder, width: selected ? 1.6 : 1),
         ),
-      ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () async {
+            await FirebaseSyncSecuritySettings.setCustomerConflictPolicy(value);
+            if (mounted) setState(() => _customerConflictPolicy = value);
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: selected ? color : color.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(icon, size: 21, color: selected ? Colors.white : color),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                    Text(title, style: TextStyle(fontWeight: FontWeight.w800, color: selected ? color : kSetText)),
+                    if (badge != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+                        child: Text(badge, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w800)),
+                      ),
+                  ]),
+                  const SizedBox(height: 4),
+                  Text(text, style: const TextStyle(fontSize: 12.5, color: kSetMuted, height: 1.5)),
+                ]),
+              ),
+              const SizedBox(width: 8),
+              Icon(selected ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded,
+                  color: selected ? color : const Color(0xFFB8C2CF)),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return SetCard(
+      title: 'سياسة تعارض حذف العملاء',
+      subtitle: 'إذا حُذف عميل من جهاز بينما أضاف جهاز آخر (بلا إنترنت) فاتورة أو ديناً له',
+      icon: Icons.alt_route_rounded,
+      color: const Color(0xFF0F766E),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SizedBox(height: 12),
+        option(
+          value: CustomerConflictPolicy.smartReactivate,
+          title: 'إعادة التنشيط الذكي',
+          badge: 'موصى به',
+          text: 'يُعاد تنشيط العميل تلقائياً ويُسجَّل عليه فقط مبلغ المعاملة الجديدة التي أُنشئت أوفلاين، '
+              'مع إبقاء ديونه القديمة المحذوفة ملغاة ومصفّرة.',
+          icon: Icons.auto_awesome_rounded,
+          color: const Color(0xFF0F766E),
+        ),
+        const SizedBox(height: 10),
+        option(
+          value: CustomerConflictPolicy.strictDelete,
+          title: 'الحذف الصارم',
+          text: 'قرار الحذف نهائي: تُلغى أي فاتورة أو حركة أُضيفت للعميل أثناء انقطاع الإنترنت لمنع أي حركة غير مصرّح بها.',
+          icon: Icons.delete_forever_rounded,
+          color: kSetRed,
+        ),
+      ]),
     );
   }
 
   Widget _buildNotesCard() {
-    return Card(
-      color: Colors.blue.shade50,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(Icons.info, color: Colors.blue),
-                SizedBox(width: 8),
-                Text(
-                  'ملاحظات مهمة',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            const Text('• المزامنة تتم تلقائياً في الخلفية'),
-            const Text('• يعمل التطبيق بدون إنترنت ويزامن عند العودة'),
-            const Text('• كل مجموعة مستقلة تماماً عن الأخرى'),
-            const Text('• تغيير المجموعة يتطلب تأكيد صارم'),
-            const SizedBox(height: 14),
-            const Divider(),
-            const SizedBox(height: 6),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
-                  );
-                },
-                icon: const Icon(Icons.language_rounded, size: 20),
-                label: const Text(
-                  '🌐 دليل واستضافة نسخة المتصفح (Web App)',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF0288D1),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
+    return SetCard(
+      title: 'ملاحظات مهمة',
+      icon: Icons.lightbulb_outline_rounded,
+      color: kSetBlue,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SizedBox(height: 10),
+        for (final n in const [
+          'المزامنة تتم تلقائياً في الخلفية.',
+          'يعمل التطبيق بدون إنترنت ويزامن عند عودة الاتصال.',
+          'كل مجموعة مستقلة تماماً عن الأخرى.',
+          'تغيير المجموعة يتطلب تأكيداً صارماً.',
+        ])
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 3),
+                child: Icon(Icons.check_circle_rounded, size: 16, color: kSetBlue),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Expanded(child: Text(n, style: const TextStyle(fontSize: 13, color: kSetText, height: 1.5))),
+            ]),
+          ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), foregroundColor: const Color(0xFF0369A1)),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
+          ),
+          icon: const Icon(Icons.language_rounded, size: 20),
+          label: const Text('دليل واستضافة نسخة المتصفح (Web App)'),
         ),
-      ),
+      ]),
     );
   }
 
@@ -1377,9 +1178,9 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
   Future<void> _performManualSync() async {
     if (_isSyncing) return;
     
-    final _sw = Stopwatch()..start();
-    print('⏱️ [_performManualSync/UI] ▶️ ═══════════════════════════════════════');
-    print('⏱️ [_performManualSync/UI] ▶️ المستخدم ضغط على زر مزامنة الآن...');
+    final sw = Stopwatch()..start();
+    debugPrint('⏱️ [_performManualSync/UI] ▶️ ═══════════════════════════════════════');
+    debugPrint('⏱️ [_performManualSync/UI] ▶️ المستخدم ضغط على زر مزامنة الآن...');
     
     setState(() {
       _isSyncing = true;
@@ -1392,8 +1193,8 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
       if (_firebaseSync.status == FirebaseSyncStatus.notConfigured ||
           _firebaseSync.status == FirebaseSyncStatus.idle ||
           _firebaseSync.status == FirebaseSyncStatus.error) {
-        var _swStep = Stopwatch()..start();
-        print('⏱️ [_performManualSync/UI] 🔧 بدء التهيئة...');
+        var swStep = Stopwatch()..start();
+        debugPrint('⏱️ [_performManualSync/UI] 🔧 بدء التهيئة...');
         setState(() {
           _loadingProgress = 0.05;
           _loadingMessage = 'جاري تهيئة المزامنة...';
@@ -1411,15 +1212,15 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
           const Duration(minutes: 2),
           onTimeout: () => false,
         );
-        print('⏱️ [_performManualSync/UI] 🔧 انتهت التهيئة في ${_swStep.elapsedMilliseconds}ms | النتيجة: ${initSuccess ? "نجاح" : "فشل"}');
+        debugPrint('⏱️ [_performManualSync/UI] 🔧 انتهت التهيئة في ${swStep.elapsedMilliseconds}ms | النتيجة: ${initSuccess ? "نجاح" : "فشل"}');
         if (!initSuccess) {
           throw Exception('فشلت تهيئة المزامنة - تأكد من الاتصال بالإنترنت');
         }
       }
       
       // استخدام callback للتقدم
-      var _swSync = Stopwatch()..start();
-      print('⏱️ [_performManualSync/UI] 🔄 بدء performFullSync...');
+      var swSync = Stopwatch()..start();
+      debugPrint('⏱️ [_performManualSync/UI] 🔄 بدء performFullSync...');
       final syncSucceeded = await _firebaseSync.performFullSync(
         onProgress: (progress, message) {
           if (mounted) {
@@ -1430,7 +1231,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
           }
         },
       );
-      print('⏱️ [_performManualSync/UI] 🔄 انتهت performFullSync في ${_swSync.elapsedMilliseconds}ms (${(_swSync.elapsedMilliseconds / 1000).toStringAsFixed(1)}s)');
+      debugPrint('⏱️ [_performManualSync/UI] 🔄 انتهت performFullSync في ${swSync.elapsedMilliseconds}ms (${(swSync.elapsedMilliseconds / 1000).toStringAsFixed(1)}s)');
       
       // ⚠️ إذا فشلت المزامنة (بدون اتصال أو خطأ)، لا نكمل تدفق النجاح
       if (!syncSucceeded) {
@@ -1465,10 +1266,10 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
         _loadingMessage = 'تمت المزامنة بنجاح!';
       });
       
-      _sw.stop();
-      print('⏱️ [_performManualSync/UI] ⏹️ ═══════════════════════════════════════');
-      print('⏱️ [_performManualSync/UI] ⏹️ إجمالي وقت العملية: ${_sw.elapsedMilliseconds}ms (${(_sw.elapsedMilliseconds / 1000).toStringAsFixed(1)}s)');
-      print('⏱️ [_performManualSync/UI] ⏹️ ═══════════════════════════════════════');
+      sw.stop();
+      debugPrint('⏱️ [_performManualSync/UI] ⏹️ ═══════════════════════════════════════');
+      debugPrint('⏱️ [_performManualSync/UI] ⏹️ إجمالي وقت العملية: ${sw.elapsedMilliseconds}ms (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)}s)');
+      debugPrint('⏱️ [_performManualSync/UI] ⏹️ ═══════════════════════════════════════');
       
       await Future.delayed(const Duration(milliseconds: 500));
       await _loadSettingsQuick();
@@ -1508,8 +1309,8 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Row(
-          children: const [
+        title: const Row(
+          children: [
             Icon(Icons.warning, color: Colors.orange),
             SizedBox(width: 8),
             Text('تحذير: فروقات في الأرصدة'),
@@ -1580,8 +1381,8 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Row(
-          children: const [
+        title: const Row(
+          children: [
             Icon(Icons.warning, color: Colors.red),
             SizedBox(width: 8),
             Text('تحذير خطير جداً', style: TextStyle(color: Colors.red)),
@@ -1700,6 +1501,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
         "SELECT COUNT(*) FROM invoices WHERE is_synced = 0 AND invoice_uuid IS NOT NULL",
       )) ?? 0;
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(remaining == 0
@@ -1776,8 +1578,8 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Row(
-          children: const [
+        title: const Row(
+          children: [
             Icon(Icons.build_circle, color: Colors.purple),
             SizedBox(width: 8),
             Text('إصلاح ورفع البيانات'),
@@ -1974,7 +1776,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
       if (_firebaseSync.statsListenersActive && _firebaseSync.liveDevices.isNotEmpty) {
         // ✅ البيانات متوفرة لحظياً — لا حاجة للانتظار
         devices = _firebaseSync.liveDevices;
-        print('📊 تم جلب الأجهزة من الكاش اللحظي (${devices.length} جهاز)');
+        debugPrint('📊 تم جلب الأجهزة من الكاش اللحظي (${devices.length} جهاز)');
       } else {
         // 🔄 Fallback: جلب من Firebase مباشرة
         if (_firebaseSync.status == FirebaseSyncStatus.notConfigured ||
@@ -2011,7 +1813,6 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
         
         devices = await _firebaseSync.getConnectedDevices();
       }
-      final currentDeviceId = _firebaseSync.deviceId;
       
       // المرحلة 3: الانتهاء (80-100%)
       setState(() {
@@ -2218,9 +2019,9 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                 decoration: BoxDecoration(
-                                  color: statusColor.withOpacity(0.1),
+                                  color: statusColor.withValues(alpha: 0.1),
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: statusColor.withOpacity(0.3)),
+                                  border: Border.all(color: statusColor.withValues(alpha: 0.3)),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
@@ -2408,7 +2209,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     );
     
     if (confirmed == true) {
-      Navigator.pop(context); // إغلاق نافذة الأجهزة
+      if (mounted) Navigator.pop(context); // إغلاق نافذة الأجهزة
       
       final success = await _firebaseSync.removeDevice(device['deviceId']);
       
@@ -2562,7 +2363,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
                               ),
                               subtitle: Text(
                                 'المحاولات: $retryCount'
-                                '${lastError.isNotEmpty ? '\nالخطأ: ${lastError.length > 60 ? lastError.substring(0, 60) + '...' : lastError}' : ''}',
+                                '${lastError.isNotEmpty ? '\nالخطأ: ${lastError.length > 60 ? '${lastError.substring(0, 60)}...' : lastError}' : ''}',
                                 style: const TextStyle(fontSize: 11),
                               ),
                               trailing: IconButton(
@@ -2638,235 +2439,4 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
     );
   }
 
-  Future<void> _showTrackingStats() async {
-    
-    setState(() {
-      _isLoadingTrackingStats = true;
-      _loadingProgress = 0.0;
-      _loadingMessage = 'جاري جلب الإحصائيات...';
-    });
-    
-    try {
-      // 🔄 محاولة التهيئة إذا لم تكن مكتملة
-      if (_firebaseSync.status == FirebaseSyncStatus.notConfigured ||
-          _firebaseSync.status == FirebaseSyncStatus.idle ||
-          _firebaseSync.status == FirebaseSyncStatus.error) {
-        setState(() {
-          _loadingProgress = 0.05;
-          _loadingMessage = 'جاري تهيئة المزامنة...';
-        });
-        final initSuccess = await _firebaseSync.initialize().timeout(
-          const Duration(minutes: 2),
-          onTimeout: () => false,
-        );
-        if (!initSuccess) {
-          throw Exception('فشلت تهيئة المزامنة - تأكد من الاتصال بالإنترنت');
-        }
-      }
-      
-      // المرحلة 1: جلب إحصائيات التتبع (0-25%)
-      setState(() {
-        _loadingProgress = 0.15;
-        _loadingMessage = 'جاري جلب إحصائيات التتبع...';
-      });
-      final trackerStats = await _firebaseSync.getOperationTrackerStats();
-      
-      // المرحلة 2: جلب ملخص التأكيدات (25-50%)
-      setState(() {
-        _loadingProgress = 0.35;
-        _loadingMessage = 'جاري جلب ملخص التأكيدات...';
-      });
-      final ackSummary = await _firebaseSync.getAckSummary();
-      
-      // المرحلة 3: جلب التأكيدات المعلقة (50-70%)
-      setState(() {
-        _loadingProgress = 0.55;
-        _loadingMessage = 'جاري جلب التأكيدات المعلقة...';
-      });
-      final pendingAcks = await _firebaseSync.getPendingAckTransactions();
-      
-      // المرحلة 4: جلب إحصائيات WAL (70-90%)
-      setState(() {
-        _loadingProgress = 0.75;
-        _loadingMessage = 'جاري جلب إحصائيات الحماية...';
-      });
-      final walStats = await _firebaseSync.getWalRecoveryStats();
-      final pendingWal = await _firebaseSync.getPendingWalOperationsCount();
-      
-      // المرحلة 5: الانتهاء (90-100%)
-      setState(() {
-        _loadingProgress = 1.0;
-        _loadingMessage = 'تم جلب الإحصائيات!';
-      });
-      
-      await Future.delayed(const Duration(milliseconds: 200));
-      
-      if (!mounted) return;
-      
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Row(
-            children: const [
-              Icon(Icons.analytics, color: Colors.indigo),
-              SizedBox(width: 8),
-              Text('إحصائيات التتبع والإقرار'),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 🛡️ قسم WAL (الحماية من الانقطاع)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.purple.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        '🛡️ الحماية من الانقطاع (WAL)',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      _buildStatRow('العمليات المعلقة', '$pendingWal'),
-                      _buildStatRow('إجمالي العمليات', '${walStats['totalOperations'] ?? 0}'),
-                      _buildStatRow('العمليات المستردة', '${walStats['recoveredOperations'] ?? 0}'),
-                      _buildStatRow('نقاط الاسترداد', '${walStats['activeCheckpoints'] ?? 0}'),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 12),
-                
-                // قسم تتبع العمليات
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.indigo.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        '🔄 تتبع العمليات',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      _buildStatRow('العمليات المعلقة', '${trackerStats['pendingOperations'] ?? 0}'),
-                      _buildStatRow('الكيانات المتتبعة', '${trackerStats['trackedEntities'] ?? 0}'),
-                      _buildStatRow('سجلات العمليات', '${trackerStats['logEntries'] ?? 0}'),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 12),
-                
-                // قسم تأكيدات الاستلام
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        '📬 تأكيدات الاستلام (ACK)',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      _buildStatRow('المعاملات المرسلة', '${ackSummary['sentTransactions'] ?? 0}'),
-                      _buildStatRow('التأكيدات المستلمة', '${ackSummary['receivedAcks'] ?? 0}'),
-                      _buildStatRow('في انتظار التأكيد', '${pendingAcks.length}'),
-                    ],
-                  ),
-                ),
-                
-                if (pendingAcks.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.orange.shade200),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: const [
-                            Icon(Icons.warning, color: Colors.orange, size: 18),
-                            SizedBox(width: 8),
-                            Text(
-                              'معاملات لم يتم تأكيدها',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.orange,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'هناك ${pendingAcks.length} معاملة لم يتم تأكيد استلامها من الأجهزة الأخرى بعد.',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                // تنظيف السجلات القديمة
-                final deletedAcks = await _firebaseSync.cleanupOldAcks();
-                final deletedLogs = await _firebaseSync.cleanupOldOperationLogs();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('تم حذف $deletedAcks تأكيد و $deletedLogs سجل قديم'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                }
-              },
-              child: const Text('تنظيف القديم'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إغلاق'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('فشل جلب الإحصائيات: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-    
-    if (!mounted) return;
-    setState(() {
-      _isLoadingTrackingStats = false;
-      _loadingProgress = 0.0;
-      _loadingMessage = '';
-    });
-  }
 }

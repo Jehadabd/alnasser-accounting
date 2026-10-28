@@ -1,13 +1,8 @@
 // خدمة تصدير جميع الفواتير كملفات PDF منفصلة
 import 'dart:io';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:pdf/pdf.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
-import '../models/invoice.dart';
-import '../models/invoice_item.dart';
-import '../models/product.dart';
-import '../models/customer.dart';
 import 'database_service.dart';
 import 'settings_manager.dart';
 import 'invoice_pdf_service.dart';

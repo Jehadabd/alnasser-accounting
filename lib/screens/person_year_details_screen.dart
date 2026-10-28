@@ -64,7 +64,7 @@ class _PersonYearDetailsScreenState extends State<PersonYearDetailsScreen> {
   }
 
   String getNumericMonthLabel(int year, int month) {
-    return '${year}-${month.toString().padLeft(2, '0')}';
+    return '$year-${month.toString().padLeft(2, '0')}';
   }
 
   void _showCumulativeSales() {
@@ -182,7 +182,7 @@ class _PersonYearDetailsScreenState extends State<PersonYearDetailsScreen> {
         borderRadius: BorderRadius.circular(16),
         side: hasData
             ? BorderSide(
-                color: const Color(0xFF2196F3).withOpacity(0.3), width: 1)
+                color: const Color(0xFF2196F3).withValues(alpha: 0.3), width: 1)
             : BorderSide.none,
       ),
       child: InkWell(
@@ -210,12 +210,12 @@ class _PersonYearDetailsScreenState extends State<PersonYearDetailsScreen> {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      const Color(0xFF2196F3).withOpacity(0.1),
-                      const Color(0xFF2196F3).withOpacity(0.05),
+                      const Color(0xFF2196F3).withValues(alpha: 0.1),
+                      const Color(0xFF2196F3).withValues(alpha: 0.05),
                     ],
                   )
                 : null,
-            color: hasData ? null : Colors.grey.withOpacity(0.1),
+            color: hasData ? null : Colors.grey.withValues(alpha: 0.1),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -226,8 +226,8 @@ class _PersonYearDetailsScreenState extends State<PersonYearDetailsScreen> {
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: hasData
-                          ? const Color(0xFF2196F3).withOpacity(0.1)
-                          : Colors.grey.withOpacity(0.3),
+                          ? const Color(0xFF2196F3).withValues(alpha: 0.1)
+                          : Colors.grey.withValues(alpha: 0.3),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
@@ -253,7 +253,7 @@ class _PersonYearDetailsScreenState extends State<PersonYearDetailsScreen> {
                         const SizedBox(height: 4),
                         Text(
                           hasData
-                              ? '${monthData!.totalInvoices} فاتورة'
+                              ? '${monthData.totalInvoices} فاتورة'
                               : 'لا توجد تعاملات',
                           style: TextStyle(
                             fontSize: 14,
@@ -274,7 +274,7 @@ class _PersonYearDetailsScreenState extends State<PersonYearDetailsScreen> {
                         icon: Icons.trending_up,
                         title: 'الربح',
                         value:
-                            '${monthData!.totalProfit >= 0 ? _fmt(monthData.totalProfit) : _fmt(-monthData.totalProfit)} د.ع',
+                            '${monthData.totalProfit >= 0 ? _fmt(monthData.totalProfit) : _fmt(-monthData.totalProfit)} د.ع',
                         color: const Color(0xFF4CAF50),
                       ),
                     ),
@@ -306,9 +306,9 @@ class _PersonYearDetailsScreenState extends State<PersonYearDetailsScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Column(
         children: [

@@ -485,7 +485,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: isSessionActive ? Colors.green.withOpacity(0.1) : const Color(0xFF4A90E2).withOpacity(0.1),
+                    color: isSessionActive ? Colors.green.withValues(alpha: 0.1) : const Color(0xFF4A90E2).withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
@@ -690,7 +690,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
+                    color: Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(

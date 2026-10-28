@@ -1,8 +1,16 @@
-import 'package:flutter/material.dart';
-import '../models/app_settings.dart';
-import '../services/settings_manager.dart';
-import '../services/alert_service.dart'; // ✅ Added
+// lib/screens/alert_settings_screen.dart
+//
+// 🔔 تنبيهات المخزون والركود وانتهاء الصلاحية — بالشكل الموحّد لشاشات الإعدادات.
+// المنطق كما هو: تفعيل/إيقاف، تكرار الظهور، حدّ أشهر انتهاء الصلاحية، فحص فوري.
 
+import 'package:flutter/material.dart';
+
+import '../erp/erp_kit.dart' show ChoiceTile;
+import '../models/app_settings.dart';
+import '../services/alert_service.dart';
+import '../services/settings_manager.dart';
+import '../widgets/settings_kit.dart';
+import 'debt_reminders_screen.dart'; // 📅
 
 class AlertSettingsScreen extends StatefulWidget {
   const AlertSettingsScreen({super.key});
@@ -14,9 +22,21 @@ class AlertSettingsScreen extends StatefulWidget {
 class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   late AppSettings _appSettings;
   bool _isLoading = true;
+  bool _saving = false;
   bool _areAlertsEnabled = true;
   String _alertFrequency = 'startup';
-  int _expiryAlertThresholdMonths = 3; // ✅ Added
+  int _expiryAlertThresholdMonths = 3;
+
+  static const _orange = Color(0xFFEA580C);
+
+  // النصوص تطابق ما يفعله AlertService فعلاً: «أسبوعياً» = بعد 7 أيام من آخر ظهور،
+  // و«شهرياً» = بعد 30 يوماً (وليس بداية الأسبوع/الشهر كما كان مكتوباً سابقاً).
+  static const _frequencies = <(String, String, String, IconData)>[
+    ('startup', 'عند كل تشغيل', 'في كل مرة تفتح فيها التطبيق', Icons.power_settings_new_rounded),
+    ('daily', 'يومياً', 'مرة واحدة في اليوم', Icons.today_rounded),
+    ('weekly', 'أسبوعياً', 'مرة كل 7 أيام', Icons.date_range_rounded),
+    ('monthly', 'شهرياً', 'مرة كل 30 يوماً', Icons.calendar_month_rounded),
+  ];
 
   @override
   void initState() {
@@ -26,192 +46,222 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
 
   Future<void> _loadSettings() async {
     _appSettings = await SettingsManager.getAppSettings();
+    if (!mounted) return;
     setState(() {
       _areAlertsEnabled = _appSettings.areAlertsEnabled;
       _alertFrequency = _appSettings.alertFrequency;
-      _expiryAlertThresholdMonths = _appSettings.expiryAlertThresholdMonths; // ✅ Loaded
+      _expiryAlertThresholdMonths = _appSettings.expiryAlertThresholdMonths.clamp(1, 12).toInt();
       _isLoading = false;
     });
   }
 
   Future<void> _saveSettings() async {
-    final newSettings = _appSettings.copyWith(
-      areAlertsEnabled: _areAlertsEnabled,
-      alertFrequency: _alertFrequency,
-      expiryAlertThresholdMonths: _expiryAlertThresholdMonths, // ✅ Saved
-    );
-    await SettingsManager.saveAppSettings(newSettings);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم حفظ إعدادات التنبيهات')),
+    setState(() => _saving = true);
+    try {
+      final newSettings = _appSettings.copyWith(
+        areAlertsEnabled: _areAlertsEnabled,
+        alertFrequency: _alertFrequency,
+        expiryAlertThresholdMonths: _expiryAlertThresholdMonths,
       );
+      await SettingsManager.saveAppSettings(newSettings);
+      if (!mounted) return;
+      setToast(context, 'تم حفظ إعدادات التنبيهات');
       Navigator.pop(context);
+    } catch (e) {
+      if (mounted) setToast(context, 'تعذّر الحفظ: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
+  String _months(int n) => n == 1 ? 'شهر واحد' : (n == 2 ? 'شهرين' : (n <= 10 ? '$n أشهر' : '$n شهراً'));
+
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('إعدادات التنبيهات'),
-        backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          SwitchListTile(
-            title: const Text('تفعيل التنبيهات'),
-            subtitle: const Text('تفعيل نظام التنبيهات للنواقص والمواد الراكدة'),
-            value: _areAlertsEnabled,
-            onChanged: (val) {
-              setState(() {
-                _areAlertsEnabled = val;
-              });
-            },
-            activeColor: Colors.deepPurple,
-          ),
-          
-          const Divider(),
-          const SizedBox(height: 16),
-          
-          const Text(
-            'تكرار التنبيه',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.deepPurple),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'اختر متى تريد أن يظهر لك تنبيه النواقص عند فتح التطبيق',
-            style: TextStyle(color: Colors.grey),
-          ),
-          const SizedBox(height: 16),
-          
-          _buildRadioOption('startup', 'عند كل تشغيل', 'يظهر التنبيه في كل مرة تفتح فيها التطبيق'),
-          _buildRadioOption('daily', 'يومياً', 'يظهر مرة واحدة في اليوم'),
-          _buildRadioOption('weekly', 'أسبوعياً', 'يظهر مرة واحدة في بداية الأسبوع'),
-          _buildRadioOption('monthly', 'شهرياً', 'يظهر مرة واحدة في بداية الشهر'),
-          
-          _buildRadioOption('monthly', 'شهرياً', 'يظهر مرة واحدة في بداية الشهر'),
-          
-          const Divider(),
-          const SizedBox(height: 16),
-          
-          const Text(
-            'تنبيهات انتهاء الصلاحية',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.deepPurple),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'نبهني عن المواد التي ستنتهي صلاحيتها خلال أقل من:',
-            style: TextStyle(color: Colors.grey[700]),
-          ),
-          const SizedBox(height: 16),
-          
-          Row(
-            children: [
-              const Icon(Icons.timer, color: Colors.orange),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  children: [
-                    Slider(
-                      value: _expiryAlertThresholdMonths.toDouble(),
-                      min: 1,
-                      max: 12,
-                      divisions: 11,
-                      label: '$_expiryAlertThresholdMonths أشهر',
-                      activeColor: Colors.orange,
-                      onChanged: _areAlertsEnabled ? (val) {
-                        setState(() {
-                          _expiryAlertThresholdMonths = val.toInt();
-                        });
-                      } : null,
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: const [
-                          Text('1 شهر', style: TextStyle(color: Colors.grey, fontSize: 12)),
-                          Text('12 شهر', style: TextStyle(color: Colors.grey, fontSize: 12)),
-                        ],
-                      ),
-                    )
-                  ],
+    return SettingsScaffold(
+      title: 'تنبيهات المخزون والركود',
+      subtitle: 'النواقص، المواد الراكدة، وقرب انتهاء الصلاحية',
+      icon: Icons.notifications_active_rounded,
+      loading: _isLoading,
+      bottom: _isLoading ? null : _bottomBar(),
+      children: _isLoading
+          ? null
+          : [
+              SetHero(
+                icon: Icons.notifications_active_rounded,
+                color: _orange,
+                title: 'تنبيهات ذكية عند فتح التطبيق',
+                text: 'يعرض التطبيق قائمة بالمواد الناقصة والراكدة والقريبة من انتهاء الصلاحية '
+                    'حسب التكرار الذي تختاره أدناه.',
+                status: SetStatusPill(_areAlertsEnabled ? 'التنبيهات مفعّلة' : 'التنبيهات متوقفة',
+                    ok: _areAlertsEnabled),
+              ),
+              // 📅 تذكير الديون له إعداده الخاص في شاشته
+              SetCard(
+                title: 'مواعيد المطالبة بالدين',
+                subtitle: 'تذكير بعملاء محددين في أيام تختارها — إعداد منفصل',
+                icon: Icons.event_repeat_rounded,
+                color: const Color(0xFF4F46E5),
+                child: SetActionRow(
+                  icon: Icons.event_note_rounded,
+                  color: const Color(0xFF4F46E5),
+                  title: 'فتح مواعيد المطالبة',
+                  subtitle: 'كل المواعيد، وظهورها: أول تشغيل في اليوم أو كل تشغيل',
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DebtRemindersScreen())),
                 ),
               ),
-              Container(
-                width: 60,
-                height: 60,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange),
+              SetCard(
+                title: 'التشغيل',
+                icon: Icons.toggle_on_rounded,
+                color: _orange,
+                child: SetSwitch(
+                  title: 'تفعيل التنبيهات',
+                  subtitle: 'نظام تنبيهات النواقص والمواد الراكدة وانتهاء الصلاحية',
+                  icon: Icons.notifications_rounded,
+                  color: _orange,
+                  value: _areAlertsEnabled,
+                  onChanged: (v) => setState(() => _areAlertsEnabled = v),
                 ),
-                child: Text(
-                  '$_expiryAlertThresholdMonths',
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.orange),
+              ),
+              _disabledWrap(
+                SetCard(
+                  title: 'تكرار ظهور التنبيه',
+                  subtitle: 'متى تظهر نافذة التنبيهات عند فتح التطبيق',
+                  icon: Icons.repeat_rounded,
+                  color: _orange,
+                  child: LayoutBuilder(builder: (context, c) {
+                    final cols = c.maxWidth >= 520 ? 2 : 1;
+                    final w = (c.maxWidth - (cols - 1) * 10) / cols;
+                    return Wrap(spacing: 10, runSpacing: 10, children: [
+                      for (final f in _frequencies)
+                        ChoiceTile(
+                          width: w,
+                          title: f.$2,
+                          subtitle: f.$3,
+                          icon: f.$4,
+                          color: _orange,
+                          selected: _alertFrequency == f.$1,
+                          onTap: () => setState(() => _alertFrequency = f.$1),
+                        ),
+                    ]);
+                  }),
+                ),
+              ),
+              _disabledWrap(
+                SetCard(
+                  title: 'انتهاء الصلاحية',
+                  subtitle: 'نبّهني عن المواد التي تنتهي صلاحيتها خلال أقل من:',
+                  icon: Icons.hourglass_bottom_rounded,
+                  color: kSetRed,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Row(children: [
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            activeTrackColor: kSetRed,
+                            thumbColor: kSetRed,
+                            inactiveTrackColor: const Color(0xFFFDE2E2),
+                            overlayColor: kSetRed.withValues(alpha: 0.10),
+                            valueIndicatorColor: kSetRed,
+                            trackHeight: 6,
+                          ),
+                          child: Slider(
+                            value: _expiryAlertThresholdMonths.toDouble(),
+                            min: 1,
+                            max: 12,
+                            divisions: 11,
+                            label: _months(_expiryAlertThresholdMonths),
+                            onChanged: _areAlertsEnabled
+                                ? (v) => setState(() => _expiryAlertThresholdMonths = v.round())
+                                : null,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        width: 74,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: kSetRed.withValues(alpha: 0.25)),
+                        ),
+                        child: Column(children: [
+                          Text('$_expiryAlertThresholdMonths',
+                              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kSetRed)),
+                          const Text('شهر', style: TextStyle(fontSize: 11.5, color: kSetRed)),
+                        ]),
+                      ),
+                    ]),
+                    // أزرار سريعة لقيم شائعة
+                    Wrap(spacing: 8, runSpacing: 8, children: [
+                      for (final m in const [1, 3, 6, 12])
+                        ChoiceChip(
+                          label: Text(_months(m)),
+                          selected: _expiryAlertThresholdMonths == m,
+                          onSelected: _areAlertsEnabled ? (_) => setState(() => _expiryAlertThresholdMonths = m) : null,
+                          selectedColor: kSetRed.withValues(alpha: 0.12),
+                          labelStyle: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: _expiryAlertThresholdMonths == m ? kSetRed : kSetText,
+                          ),
+                          side: BorderSide(color: _expiryAlertThresholdMonths == m ? kSetRed : kSetBorder),
+                          showCheckmark: false,
+                        ),
+                    ]),
+                    const SizedBox(height: 12),
+                    SetBanner(
+                      'سيظهر تنبيه لأي مادة تنتهي صلاحيتها خلال ${_months(_expiryAlertThresholdMonths)} القادمة.',
+                      kind: SetBannerKind.warn,
+                      icon: Icons.event_busy_rounded,
+                    ),
+                  ]),
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 8),
-          Center(
-            child: Text(
-              'سيظهر تنبيه لأي مادة ستنتهي صلاحيتها خلال $_expiryAlertThresholdMonths أشهر القادمة',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ),
-
-          const SizedBox(height: 32),
-          
-          ElevatedButton.icon(
-            onPressed: _saveSettings,
-            icon: const Icon(Icons.save),
-            label: const Text('حفظ الإعدادات'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.deepPurple,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.all(16),
-              textStyle: const TextStyle(fontSize: 18),
-            ),
-          ),
-          
-          const SizedBox(height: 12), // ✅ Added
-          
-          OutlinedButton.icon( // ✅ Added manual trigger button
-            onPressed: () {
-              AlertService().checkAndShowAlerts(context, forceShow: true);
-            },
-            icon: const Icon(Icons.notifications_active_outlined),
-            label: const Text('فحص التنبيهات الآن'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.all(16),
-              foregroundColor: Colors.deepPurple,
-              side: const BorderSide(color: Colors.deepPurple),
-              textStyle: const TextStyle(fontSize: 18),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
-  Widget _buildRadioOption(String value, String title, String subtitle) {
-    return RadioListTile<String>(
-      title: Text(title),
-      subtitle: Text(subtitle),
-      value: value,
-      groupValue: _alertFrequency,
-      onChanged: _areAlertsEnabled ? (val) {
-        setState(() {
-          _alertFrequency = val!;
-        });
-      } : null,
-      activeColor: Colors.deepPurple,
-    );
-  }
+  Widget _disabledWrap(Widget child) => AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: _areAlertsEnabled ? 1 : 0.45,
+        child: IgnorePointer(ignoring: !_areAlertsEnabled, child: child),
+      );
+
+  Widget _bottomBar() => Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: kSetBorder)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Align(
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 820),
+              child: Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 50)),
+                    onPressed: () => AlertService().checkAndShowAlerts(context, forceShow: true),
+                    icon: const Icon(Icons.manage_search_rounded),
+                    label: const Text('فحص التنبيهات الآن'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: SetPrimaryButton(
+                    label: 'حفظ الإعدادات',
+                    icon: Icons.save_rounded,
+                    busy: _saving,
+                    onPressed: _saveSettings,
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      );
 }

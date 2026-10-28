@@ -1,29 +1,51 @@
+// lib/screens/pos/widgets/cart_panel.dart
+//
+// 🧺 سلة الكاشير: العميل، أسطر المواد (الوحدة، السعر، الكمية)، والدفع.
+//  • سعر السطر يُكتب بحرية ويُعتمد عند الخروج من الحقل أو Enter (لا يقفز المؤشر)
+//  • زر الدفع يُقفل أثناء الحفظ (منع الحفظ المكرر) — والاختصار F9
+//  • «مسح» السلة يطلب تأكيداً
+
+import '../../../services/save_lock.dart'; // 🔒 قفل الحفظ
+import '../../../services/credit_limit_guard.dart'; // 🚫 سقف الدين
+import '../../../services/database_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
+
 import '../../../providers/pos_provider.dart';
 import '../../../widgets/formatters.dart';
 import '../pos_receipts_screen.dart';
+import 'pos_style.dart';
 
 class CartPanel extends StatefulWidget {
-  const CartPanel({super.key});
+  const CartPanel({super.key, this.onCheckedOut});
+
+  /// يُستدعى بعد حفظ الفاتورة بنجاح (مثلاً لإغلاق السلة المنبثقة على الشاشات الصغيرة)
+  final VoidCallback? onCheckedOut;
 
   @override
-  State<CartPanel> createState() => _CartPanelState();
+  State<CartPanel> createState() => CartPanelState();
 }
 
-class _CartPanelState extends State<CartPanel> {
-  final TextEditingController _customerController = TextEditingController();
-  final TextEditingController _discountController = TextEditingController();
-  final TextEditingController _paidController = TextEditingController();
-  // 💵 المستلم من الزبون (نقداً) لحساب «الباقي للزبون» — عرض فقط، لا يُحفظ
-  final TextEditingController _tenderedController = TextEditingController();
+class CartPanelState extends State<CartPanel> {
+  final _customerController = TextEditingController();
+  final _discountController = TextEditingController();
+  final _paidController = TextEditingController();
+
+  /// 💵 المستلم من الزبون (نقداً) لحساب «الباقي للزبون» — عرض فقط، لا يُحفظ
+  final _tenderedController = TextEditingController();
   double _tendered = 0;
   bool _showSuggestions = false;
-  
-  // Number formatter with thousands separator
-  static final _numberFormat = NumberFormat('#,##0', 'en');
-  String _formatNumber(num value) => _numberFormat.format(value.toInt());
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // عند فتح السلة من جديد (الورقة المنبثقة) تبقى القيم الحالية ظاهرة
+    final pos = context.read<POSProvider>();
+    _customerController.text = pos.customerName;
+    if (pos.discount > 0) _discountController.text = posMoney(pos.discount);
+    if (pos.paidAmount > 0) _paidController.text = posMoney(pos.paidAmount);
+  }
 
   @override
   void dispose() {
@@ -34,452 +56,777 @@ class _CartPanelState extends State<CartPanel> {
     super.dispose();
   }
 
+  void _resetFields() {
+    _customerController.clear();
+    _discountController.clear();
+    _paidController.clear();
+    _tenderedController.clear();
+    _tendered = 0;
+    _showSuggestions = false;
+  }
+
+  /// 💳 حفظ الفاتورة (زر الدفع أو F9)
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
+  Future<void> checkout() async {
+    await SaveLock.run(() => _checkoutUnlocked(), message: 'جارٍ حفظ البيع…');
+  }
+  Future<void> _checkoutUnlocked() async {
+    final pos = context.read<POSProvider>();
+    if (_busy || pos.cartItems.isEmpty) return;
+    FocusScope.of(context).unfocus(); // يُعتمد أي سعر ما زال قيد الكتابة
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    // 🚫 سقف الدين: الباقي على العميل في البيع الآجل
+    if (pos.paymentType == PaymentType.credit) {
+      final dbx = await DatabaseService().database;
+      final cid = await CreditLimitGuard.customerIdByName(dbx, pos.customerName);
+      if (!mounted) return;
+      final go = await CreditLimitGuard.enforce(
+        context,
+        customerId: cid,
+        increase: pos.remainingAmount,
+        what: 'بيع آجل (كاشير) — ${pos.customerName.trim()}',
+      );
+      if (!go || !mounted) return;
+    }
+    setState(() => _busy = true);
+    final ok = await pos.processCheckout();
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _busy = false;
+      if (ok) _resetFields();
+    });
+    if (ok) {
+      messenger.showSnackBar(SnackBar(
+        content: Text('تم حفظ الفاتورة #${pos.lastInvoiceDisplayNumber ?? pos.lastInvoiceId}'),
+        backgroundColor: PosColors.cash,
+        behavior: SnackBarBehavior.floating,
+      ));
+      widget.onCheckedOut?.call();
+    } else {
+      messenger.showSnackBar(SnackBar(
+        content: Text(pos.lastErrorMessage ?? 'حدث خطأ أثناء حفظ الفاتورة'),
+        backgroundColor: PosColors.danger,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  Future<void> _confirmClear(POSProvider pos) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('مسح السلة؟'),
+        content: Text('ستُحذف ${pos.cartItems.length} مادة من السلة الحالية.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: PosColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('مسح'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    pos.clearCart();
+    setState(_resetFields);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Consumer<POSProvider>(
-      builder: (context, provider, child) {
-        final cartItems = provider.cartItems;
-
+      builder: (context, pos, _) {
+        final items = pos.cartItems;
         return Container(
-          color: Colors.white,
-          child: Column(
-            children: [
-              // Header
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Colors.grey.shade200))),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(children: [
-                      const Text('الفاتورة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(10)),
-                        child: Text('${cartItems.length}', style: TextStyle(color: Colors.blue[700], fontWeight: FontWeight.bold, fontSize: 11)),
-                      ),
-                    ]),
-                    Row(children: [
-                      IconButton(onPressed: () => _showQuickInvoicesHistory(context), icon: const Icon(Icons.history, color: Colors.grey, size: 20), tooltip: 'إيصالات الكاشير'),
-                      if (cartItems.isNotEmpty)
-                        TextButton(
-                          onPressed: () {
-                            provider.clearCart();
-                            _customerController.clear();
-                            _discountController.clear();
-                            _paidController.clear();
-                            _tenderedController.clear();
-                            _tendered = 0;
-                          },
-                          child: const Text('مسح', style: TextStyle(color: Colors.grey, fontSize: 12)),
+          decoration: const BoxDecoration(
+            color: PosColors.surface,
+            border: BorderDirectional(start: BorderSide(color: PosColors.border)),
+          ),
+          child: LayoutBuilder(
+            builder: (context, box) => Column(
+              children: [
+                _header(pos),
+                _customerField(pos),
+                Expanded(
+                  child: items.isEmpty
+                      ? const _EmptyCart()
+                      : ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+                          itemCount: items.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (context, i) => _CartLine(
+                            key: ValueKey(items[i].id),
+                            index: i,
+                            item: items[i],
+                            units: pos.getProductUnits(items[i].product),
+                            pos: pos,
+                          ),
                         ),
-                    ]),
-                  ],
                 ),
-              ),
-
-              // Customer Name with Autocomplete
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Column(
-                  children: [
-                    TextField(
-                      controller: _customerController,
-                      onChanged: (value) {
-                        provider.setCustomerName(value);
-                        setState(() => _showSuggestions = value.isNotEmpty && provider.filteredCustomers.isNotEmpty);
-                      },
-                      decoration: InputDecoration(
-                        hintText: 'اسم العميل (اختياري)',
-                        prefixIcon: const Icon(Icons.person_outline, size: 18),
-                        filled: true,
-                        fillColor: Colors.grey[50],
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        isDense: true,
-                      ),
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                    if (_showSuggestions && provider.filteredCustomers.isNotEmpty)
-                      Container(
-                        margin: const EdgeInsets.only(top: 4),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8)]),
-                        child: Column(
-                          children: provider.filteredCustomers.map((customer) => Material(
-                            color: Colors.transparent,
-                            child: ListTile(
-                              dense: true,
-                              visualDensity: VisualDensity.compact,
-                              leading: CircleAvatar(radius: 12, backgroundColor: Colors.blue[50], child: const Icon(Icons.person, size: 14, color: Colors.blue)),
-                              title: Text(customer.name, style: const TextStyle(fontSize: 13)),
-                              subtitle: customer.currentTotalDebt > 0 ? Text('دين: ${_formatNumber(customer.currentTotalDebt)}', style: TextStyle(fontSize: 10, color: Colors.orange[700])) : null,
-                              onTap: () {
-                                _customerController.text = customer.name;
-                                provider.selectCustomer(customer);
-                                setState(() => _showSuggestions = false);
-                              },
-                            ),
-                          )).toList(),
-                        ),
-                      ),
-                  ],
+                ConstrainedBox(
+                  // على الشاشات القصيرة يُمرَّر الملخص بدل أن يفيض
+                  constraints: BoxConstraints(maxHeight: box.maxHeight * 0.62),
+                  child: SingleChildScrollView(child: _summary(pos)),
                 ),
-              ),
-
-              // Cart Items Table
-              Expanded(
-                child: cartItems.isEmpty
-                    ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Icon(Icons.shopping_cart_outlined, size: 48, color: Colors.grey[200]),
-                        const SizedBox(height: 12),
-                        Text('لا توجد عناصر', style: TextStyle(color: Colors.grey[400], fontSize: 13)),
-                      ]))
-                    : Column(
-                        children: [
-                          // Table Header
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
-                            ),
-                            child: Row(
-                              children: [
-                                SizedBox(width: 24, child: Text('ت', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey[600]))),
-                                const SizedBox(width: 4),
-                                Expanded(flex: 14, child: Text('المنتج', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey[600]))),
-                                Expanded(flex: 6, child: Text('العدد', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey[600]))),
-                                Expanded(flex: 5, child: Text('نوع البيع', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey[600]))),
-                                Expanded(flex: 5, child: Text('السعر', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey[600]))),
-                                const SizedBox(width: 24),
-                              ],
-                            ),
-                          ),
-                          // Table Body
-                          Expanded(
-                            child: ListView.builder(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              itemCount: cartItems.length,
-                              itemBuilder: (context, index) {
-                                final item = cartItems[index];
-                                final units = provider.getProductUnits(item.product);
-                                
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      // # Index
-                                      SizedBox(
-                                        width: 24,
-                                        child: Text(
-                                          '${index + 1}',
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      // Product Name
-                                      Expanded(
-                                        flex: 14,
-                                        child: Text(
-                                          item.product.name,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                                        ),
-                                      ),
-                                      // Quantity Controls
-                                      Expanded(
-                                        flex: 6,
-                                        child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          children: [
-                                            InkWell(
-                                              onTap: () => provider.updateQuantity(item.id, -1),
-                                              child: Icon(Icons.remove_circle_outline, size: 20, color: Colors.grey[600]),
-                                            ),
-                                            SizedBox(
-                                              width: 28,
-                                              child: Text(
-                                                '${item.quantity}',
-                                                textAlign: TextAlign.center,
-                                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                                              ),
-                                            ),
-                                            InkWell(
-                                              onTap: () => provider.updateQuantity(item.id, 1),
-                                              child: Icon(Icons.add_circle_outline, size: 20, color: Colors.blue[600]),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      // Unit Type
-                                      Expanded(
-                                        flex: 5,
-                                        child: units.length > 1
-                                            ? DropdownButtonHideUnderline(
-                                                child: DropdownButton<String>(
-                                                  value: item.selectedUnit,
-                                                  isDense: true,
-                                                  isExpanded: true,
-                                                  style: const TextStyle(fontSize: 11, color: Colors.black87),
-                                                  icon: const Icon(Icons.arrow_drop_down, size: 16),
-                                                  items: units.map((u) => DropdownMenuItem(value: u['name'] as String, child: Text(u['name'] as String, style: const TextStyle(fontSize: 11)))).toList(),
-                                                  onChanged: (newUnit) {
-                                                    if (newUnit != null) {
-                                                      final unitData = units.firstWhere((u) => u['name'] == newUnit);
-                                                      provider.updateCartItemUnit(
-                                                        item.id,
-                                                        newUnit,
-                                                        (unitData['price'] as num).toDouble(),
-                                                        (unitData['quantity'] as num).toInt(),
-                                                      );
-                                                    }
-                                                  },
-                                                ),
-                                              )
-                                            : Text(
-                                                item.selectedUnit,
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                                              ),
-                                      ),
-                                      // Price (inline editable TextField with auto-save on focus lost)
-                                      Expanded(
-                                        flex: 5,
-                                        child: Focus(
-                                          onFocusChange: (hasFocus) {
-                                            if (!hasFocus) {
-                                              // Save on focus lost
-                                            }
-                                          },
-                                          child: Builder(
-                                            builder: (ctx) {
-                                              final controller = TextEditingController(text: _formatNumber(item.price));
-                                              return TextField(
-                                                controller: controller,
-                                                keyboardType: TextInputType.number,
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blue[800]),
-                                                decoration: InputDecoration(
-                                                  isDense: true,
-                                                  contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: BorderSide(color: Colors.blue.shade200)),
-                                                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: BorderSide(color: Colors.blue.shade200)),
-                                                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: BorderSide(color: Colors.blue.shade400, width: 2)),
-                                                ),
-                                                onChanged: (value) {
-                                                  final newPrice = double.tryParse(value.replaceAll(',', ''));
-                                                  if (newPrice != null && newPrice > 0) {
-                                                    provider.updateCartItemUnit(item.id, item.selectedUnit, newPrice, item.unitsInLargeUnit);
-                                                  }
-                                                },
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                      ),
-                                      // Delete
-                                      SizedBox(
-                                        width: 24,
-                                        child: IconButton(
-                                          onPressed: () => provider.removeFromCart(item.id),
-                                          icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-              ),
-
-              // Summary Section
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), offset: const Offset(0, -4), blurRadius: 12)]),
-                child: Column(
-                  children: [
-                    // Payment Toggle
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(8)),
-                      child: Row(children: [
-                        Expanded(child: GestureDetector(
-                          onTap: () => provider.setPaymentType(PaymentType.cash),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(color: provider.paymentType == PaymentType.cash ? Colors.green : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-                            child: Center(child: Text('نقد', style: TextStyle(color: provider.paymentType == PaymentType.cash ? Colors.white : Colors.grey[600], fontWeight: FontWeight.bold, fontSize: 13))),
-                          ),
-                        )),
-                        Expanded(child: GestureDetector(
-                          onTap: () => provider.setPaymentType(PaymentType.credit),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(color: provider.paymentType == PaymentType.credit ? Colors.orange : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-                            child: Center(child: Text('دين', style: TextStyle(color: provider.paymentType == PaymentType.credit ? Colors.white : Colors.grey[600], fontWeight: FontWeight.bold, fontSize: 13))),
-                          ),
-                        )),
-                      ]),
-                    ),
-
-                    // Discount + Subtotal Row
-                    Row(children: [
-                      const Text('الخصم:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 100,
-                        child: TextField(
-                          controller: _discountController,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-                          textAlign: TextAlign.center,
-                          onChanged: (v) => provider.setDiscount(double.tryParse(v.replaceAll(',', '')) ?? 0),
-                          decoration: InputDecoration(isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)), hintText: '0'),
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const Spacer(),
-                      Text('المجموع: ${_formatNumber(provider.subtotal)}', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                    ]),
-                    const SizedBox(height: 6),
-
-                    // Paid Amount (Credit only)
-                    if (provider.paymentType == PaymentType.credit)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(children: [
-                          const Text('المسدد:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 100,
-                            child: TextField(
-                              controller: _paidController,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-                              textAlign: TextAlign.center,
-                              onChanged: (v) => provider.setPaidAmount(double.tryParse(v.replaceAll(',', '')) ?? 0),
-                              decoration: InputDecoration(isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)), hintText: '0'),
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                          const Spacer(),
-                          Text('المتبقي: ${_formatNumber(provider.remainingAmount)}', style: TextStyle(color: Colors.orange[700], fontWeight: FontWeight.bold, fontSize: 12)),
-                        ]),
-                      ),
-
-                    // 💵 الباقي للزبون (نقداً)
-                    if (provider.paymentType == PaymentType.cash)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(children: [
-                          const Text('المستلم:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 100,
-                            child: TextField(
-                              controller: _tenderedController,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-                              textAlign: TextAlign.center,
-                              onChanged: (v) => setState(() => _tendered = double.tryParse(v.replaceAll(',', '')) ?? 0),
-                              decoration: InputDecoration(isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)), hintText: '0'),
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                          const Spacer(),
-                          if (_tendered > 0)
-                            Text(
-                              _tendered >= provider.total
-                                  ? 'الباقي للزبون: ${_formatNumber(_tendered - provider.total)}'
-                                  : 'ناقص: ${_formatNumber(provider.total - _tendered)}',
-                              style: TextStyle(
-                                  color: _tendered >= provider.total ? Colors.green[700] : Colors.red[700],
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13),
-                            ),
-                        ]),
-                      ),
-
-                    // Total
-                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      const Text('الإجمالي', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      Text(_formatNumber(provider.total), style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: provider.paymentType == PaymentType.cash ? Colors.green[700] : Colors.orange[700])),
-                    ]),
-                    const SizedBox(height: 10),
-
-                    // Charge Button
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: cartItems.isEmpty ? null : () async {
-                          final success = await provider.processCheckout();
-                          if (success && context.mounted) {
-                            _customerController.clear();
-                            _discountController.clear();
-                            _paidController.clear();
-                            _tenderedController.clear();
-                            _tendered = 0;
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم حفظ الفاتورة #${provider.lastInvoiceDisplayNumber ?? provider.lastInvoiceId} بنجاح!'), backgroundColor: Colors.green));
-                          } else if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                              content: Text(provider.lastErrorMessage ?? 'حدث خطأ أثناء حفظ الفاتورة'),
-                              backgroundColor: Colors.red,
-                            ));
-                          }
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: provider.paymentType == PaymentType.cash ? Colors.green[600] : Colors.orange[600],
-                          foregroundColor: Colors.white,
-                          elevation: 2,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          Icon(provider.paymentType == PaymentType.cash ? Icons.payment : Icons.receipt_long, size: 20),
-                          const SizedBox(width: 6),
-                          Text(provider.paymentType == PaymentType.cash ? 'دفع نقدي' : 'حفظ كدين', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                        ]),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  /// 🧾 إيصالات الكاشير (بحث، تفاصيل، إعادة طباعة، مرتجع) — على طريقة الأنظمة العالمية
-  void _showQuickInvoicesHistory(BuildContext context) {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PosReceiptsScreen()));
+  Widget _header(POSProvider pos) {
+    final n = pos.cartItems.length;
+    return Padding(
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 10, 8, 6),
+      child: Row(
+        children: [
+          const Icon(Icons.shopping_basket_outlined, color: PosColors.primary, size: 22),
+          const SizedBox(width: 8),
+          const Text('السلة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: PosColors.text)),
+          const SizedBox(width: 8),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: n > 0 ? PosColors.accent : PosColors.surfaceAlt,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              '$n',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: n > 0 ? Colors.white : PosColors.muted,
+              ),
+            ),
+          ),
+          const Spacer(),
+          IconButton(
+            tooltip: 'إيصالات الكاشير',
+            icon: const Icon(Icons.history_rounded, color: PosColors.muted, size: 21),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PosReceiptsScreen())),
+          ),
+          if (n > 0)
+            TextButton.icon(
+              onPressed: () => _confirmClear(pos),
+              icon: const Icon(Icons.delete_sweep_outlined, size: 18, color: PosColors.danger),
+              label: const Text('مسح', style: TextStyle(color: PosColors.danger, fontSize: 12.5)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _customerField(POSProvider pos) {
+    final suggestions = pos.filteredCustomers;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Column(
+        children: [
+          TextField(
+            controller: _customerController,
+            onChanged: (v) {
+              pos.setCustomerName(v);
+              setState(() => _showSuggestions = v.trim().isNotEmpty);
+            },
+            style: const TextStyle(fontSize: 13.5),
+            decoration: _inputDecoration(
+              hint: pos.paymentType == PaymentType.credit ? 'اسم العميل (مطلوب للدين)' : 'اسم العميل (اختياري)',
+              icon: Icons.person_outline_rounded,
+            ),
+          ),
+          if (_showSuggestions && suggestions.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.only(top: 4),
+              constraints: const BoxConstraints(maxHeight: 220),
+              decoration: BoxDecoration(
+                color: PosColors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: PosColors.border),
+                boxShadow: const [BoxShadow(color: Color(0x140F172A), blurRadius: 12, offset: Offset(0, 4))],
+              ),
+              child: Material(
+                type: MaterialType.transparency,
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  children: [
+                    for (final c in suggestions)
+                      ListTile(
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        leading: const CircleAvatar(
+                          radius: 13,
+                          backgroundColor: PosColors.accentSoft,
+                          child: Icon(Icons.person_rounded, size: 15, color: PosColors.accent),
+                        ),
+                        title: Text(c.name, style: const TextStyle(fontSize: 13)),
+                        subtitle: c.currentTotalDebt > 0
+                            ? Text('عليه ${posMoney(c.currentTotalDebt)}',
+                                style: const TextStyle(fontSize: 11, color: PosColors.credit))
+                            : null,
+                        onTap: () {
+                          _customerController.text = c.name;
+                          pos.selectCustomer(c);
+                          setState(() => _showSuggestions = false);
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summary(POSProvider pos) {
+    final cash = pos.paymentType == PaymentType.cash;
+    final payColor = cash ? PosColors.cash : PosColors.credit;
+    final total = pos.total;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: const BoxDecoration(
+        color: PosColors.surfaceAlt,
+        border: Border(top: BorderSide(color: PosColors.border)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _PaySwitch(
+            cash: cash,
+            onChanged: (isCash) {
+              pos.setPaymentType(isCash ? PaymentType.cash : PaymentType.credit);
+              setState(() {
+                _paidController.clear();
+                _tenderedController.clear();
+                _tendered = 0;
+              });
+            },
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _moneyField(
+                  label: 'الخصم',
+                  controller: _discountController,
+                  onChanged: (v) => pos.setDiscount(v),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: cash
+                    ? _moneyField(
+                        label: 'المستلم من الزبون',
+                        controller: _tenderedController,
+                        onChanged: (v) => setState(() => _tendered = v),
+                      )
+                    : _moneyField(
+                        label: 'المبلغ المسدد',
+                        controller: _paidController,
+                        onChanged: (v) => pos.setPaidAmount(v),
+                      ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _SumLine(label: 'المجموع', value: posMoney(pos.subtotal)),
+          if (pos.discount > 0) _SumLine(label: 'الخصم', value: '− ${posMoney(pos.discount)}', color: PosColors.danger),
+          if (cash && _tendered > 0)
+            _SumLine(
+              label: _tendered >= total ? 'الباقي للزبون' : 'ناقص',
+              value: posMoney((_tendered - total).abs()),
+              color: _tendered >= total ? PosColors.cash : PosColors.danger,
+              bold: true,
+            ),
+          if (!cash)
+            _SumLine(
+              label: 'المتبقي ديناً',
+              value: posMoney(pos.remainingAmount),
+              color: PosColors.credit,
+              bold: true,
+            ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Divider(height: 1, color: PosColors.border),
+          ),
+          Row(
+            children: [
+              const Text('الإجمالي', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: PosColors.text)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 180),
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: payColor, fontFamily: DefaultTextStyle.of(context).style.fontFamily),
+                    child: Text(posMoney(total)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 52,
+            child: FilledButton(
+              onPressed: pos.cartItems.isEmpty || _busy ? null : checkout,
+              style: FilledButton.styleFrom(
+                backgroundColor: payColor,
+                disabledBackgroundColor: PosColors.border,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (_busy)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                    )
+                  else
+                    Icon(cash ? Icons.payments_rounded : Icons.receipt_long_rounded, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    _busy ? 'جارٍ الحفظ…' : (cash ? 'دفع نقدي' : 'حفظ كدين'),
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text('F9', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _moneyField({
+    required String label,
+    required TextEditingController controller,
+    required ValueChanged<double> onChanged,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+      textAlign: TextAlign.center,
+      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+      onChanged: (v) => onChanged(double.tryParse(v.replaceAll(',', '')) ?? 0),
+      decoration: _inputDecoration(label: label, hint: '0'),
+    );
   }
 }
 
-class _QuantityButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _QuantityButton({required this.icon, required this.onTap});
+InputDecoration _inputDecoration({String? label, String? hint, IconData? icon}) {
+  OutlineInputBorder border(Color c, [double w = 1]) => OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: c, width: w),
+      );
+  return InputDecoration(
+    labelText: label,
+    hintText: hint,
+    labelStyle: const TextStyle(fontSize: 12.5, color: PosColors.muted),
+    hintStyle: const TextStyle(fontSize: 13, color: PosColors.faint),
+    prefixIcon: icon == null ? null : Icon(icon, size: 19, color: PosColors.muted),
+    isDense: true,
+    filled: true,
+    fillColor: PosColors.surface,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+    border: border(PosColors.border),
+    enabledBorder: border(PosColors.border),
+    focusedBorder: border(PosColors.accent, 1.5),
+  );
+}
+
+class _EmptyCart extends StatelessWidget {
+  const _EmptyCart();
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(padding: const EdgeInsets.all(3), decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(6)), child: Icon(icon, size: 14, color: Colors.grey[700])),
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.shopping_basket_outlined, size: 52, color: Color(0xFFCBD5E1)),
+          SizedBox(height: 10),
+          Text('السلة فارغة', style: TextStyle(color: PosColors.muted, fontSize: 14, fontWeight: FontWeight.w600)),
+          SizedBox(height: 4),
+          Text('اضغط على مادة أو امسح باركودها', style: TextStyle(color: PosColors.faint, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaySwitch extends StatelessWidget {
+  const _PaySwitch({required this.cash, required this.onChanged});
+
+  final bool cash;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget seg(bool isCash, String label, IconData icon) {
+      final sel = cash == isCash;
+      final c = isCash ? PosColors.cash : PosColors.credit;
+      return Expanded(
+        child: GestureDetector(
+          onTap: sel ? null : () => onChanged(isCash),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            height: 40,
+            decoration: BoxDecoration(
+              color: sel ? c : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: sel ? [BoxShadow(color: c.withValues(alpha: 0.25), blurRadius: 8, offset: const Offset(0, 3))] : null,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 18, color: sel ? Colors.white : PosColors.muted),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: sel ? Colors.white : PosColors.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: PosColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: PosColors.border),
+      ),
+      child: Row(
+        children: [
+          seg(true, 'نقد', Icons.payments_outlined),
+          const SizedBox(width: 3),
+          seg(false, 'دين', Icons.account_balance_wallet_outlined),
+        ],
+      ),
+    );
+  }
+}
+
+class _SumLine extends StatelessWidget {
+  const _SumLine({required this.label, required this.value, this.color, this.bold = false});
+
+  final String label;
+  final String value;
+  final Color? color;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Text(label, style: TextStyle(fontSize: 13, color: color ?? PosColors.muted, fontWeight: bold ? FontWeight.w700 : FontWeight.w500)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 13.5, color: color ?? PosColors.text, fontWeight: bold ? FontWeight.w800 : FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// سطر مادة في السلة: الاسم والمجموع، ثم الوحدة والسعر والكمية
+class _CartLine extends StatefulWidget {
+  const _CartLine({
+    super.key,
+    required this.index,
+    required this.item,
+    required this.units,
+    required this.pos,
+  });
+
+  final int index;
+  final CartItem item;
+  final List<Map<String, dynamic>> units;
+  final POSProvider pos;
+
+  @override
+  State<_CartLine> createState() => _CartLineState();
+}
+
+class _CartLineState extends State<_CartLine> {
+  late final TextEditingController _price = TextEditingController(text: posMoney(widget.item.price));
+  final FocusNode _priceFocus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _priceFocus.addListener(() {
+      if (!_priceFocus.hasFocus) _commitPrice();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _CartLine old) {
+    super.didUpdateWidget(old);
+    // لا نلمس الحقل أثناء الكتابة فيه (كان المؤشر يقفز مع كل حرف)
+    if (!_priceFocus.hasFocus) {
+      final t = posMoney(widget.item.price);
+      if (_price.text != t) _price.text = t;
+    }
+  }
+
+  @override
+  void dispose() {
+    _price.dispose();
+    _priceFocus.dispose();
+    super.dispose();
+  }
+
+  void _commitPrice() {
+    final it = widget.item;
+    final v = double.tryParse(_price.text.replaceAll(',', ''));
+    if (v != null && v >= 0 && (v - it.price).abs() > 1e-9) {
+      widget.pos.updateCartItemUnit(it.id, it.selectedUnit, v, it.unitsInLargeUnit);
+    } else {
+      _price.text = posMoney(it.price);
+    }
+  }
+
+  Future<void> _editQty() async {
+    final it = widget.item;
+    final c = TextEditingController(text: '${it.quantity}');
+    final q = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(it.product.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16)),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+          decoration: InputDecoration(labelText: 'الكمية (${it.selectedUnit})', border: const OutlineInputBorder()),
+          onSubmitted: (v) => Navigator.pop(ctx, int.tryParse(v.trim())),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, int.tryParse(c.text.trim())), child: const Text('تم')),
+        ],
+      ),
+    );
+    c.dispose();
+    if (q == null || !mounted) return;
+    widget.pos.updateQuantity(it.id, q - it.quantity); // صفر ⇒ يُحذف السطر
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final it = widget.item;
+    final units = widget.units;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: PosColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: PosColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(color: PosColors.surfaceAlt, shape: BoxShape.circle),
+                child: Text('${widget.index + 1}', style: const TextStyle(fontSize: 11, color: PosColors.muted, fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  it.product.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13.5, height: 1.25, fontWeight: FontWeight.w600, color: PosColors.text),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                posMoney(it.total),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: PosColors.primary),
+              ),
+              IconButton(
+                tooltip: 'حذف',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => widget.pos.removeFromCart(it.id),
+                icon: const Icon(Icons.close_rounded, size: 18, color: PosColors.faint),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: units.length > 1
+                    ? Container(
+                        height: 36,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        decoration: BoxDecoration(
+                          color: PosColors.surfaceAlt,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: PosColors.border),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: units.any((u) => u['name'] == it.selectedUnit) ? it.selectedUnit : null,
+                            isExpanded: true,
+                            isDense: true,
+                            icon: const Icon(Icons.expand_more_rounded, size: 18, color: PosColors.muted),
+                            style: const TextStyle(fontSize: 12.5, color: PosColors.text),
+                            items: [
+                              for (final u in units)
+                                DropdownMenuItem(
+                                  value: u['name'] as String,
+                                  child: Text(u['name'] as String, overflow: TextOverflow.ellipsis),
+                                ),
+                            ],
+                            onChanged: (name) {
+                              if (name == null) return;
+                              final u = units.firstWhere((x) => x['name'] == name);
+                              widget.pos.updateCartItemUnit(
+                                it.id,
+                                name,
+                                (u['price'] as num).toDouble(),
+                                (u['quantity'] as num).toInt(),
+                              );
+                            },
+                          ),
+                        ),
+                      )
+                    : Text(it.selectedUnit, style: const TextStyle(fontSize: 12.5, color: PosColors.muted)),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 96,
+                height: 36,
+                child: TextField(
+                  controller: _price,
+                  focusNode: _priceFocus,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                  textAlign: TextAlign.center,
+                  onSubmitted: (_) => _commitPrice(),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: it.price > 0 ? PosColors.text : PosColors.danger,
+                  ),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: true,
+                    fillColor: it.price > 0 ? PosColors.surface : const Color(0xFFFEF2F2),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 9),
+                    hintText: 'السعر',
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: it.price > 0 ? PosColors.border : PosColors.danger),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: PosColors.accent, width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _QtyStepper(
+                qty: it.quantity,
+                onMinus: () => widget.pos.updateQuantity(it.id, -1),
+                onPlus: () => widget.pos.updateQuantity(it.id, 1),
+                onEdit: _editQty,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QtyStepper extends StatelessWidget {
+  const _QtyStepper({required this.qty, required this.onMinus, required this.onPlus, required this.onEdit});
+
+  final int qty;
+  final VoidCallback onMinus;
+  final VoidCallback onPlus;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget btn(IconData icon, VoidCallback onTap, Color color) => InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(width: 30, height: 34, child: Icon(icon, size: 18, color: color)),
+        );
+    return Container(
+      height: 36,
+      decoration: BoxDecoration(
+        color: PosColors.surfaceAlt,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: PosColors.border),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            btn(Icons.remove_rounded, onMinus, PosColors.muted),
+            InkWell(
+              onTap: onEdit,
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 30),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                alignment: Alignment.center,
+                child: Text('$qty', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: PosColors.text)),
+              ),
+            ),
+            btn(Icons.add_rounded, onPlus, PosColors.accent),
+          ],
+        ),
+      ),
     );
   }
 }

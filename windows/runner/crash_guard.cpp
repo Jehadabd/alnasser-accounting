@@ -25,7 +25,9 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -195,8 +197,36 @@ void WriteReport(PEXCEPTION_POINTERS info, const char* kind) {
   AppendText(buf);
 }
 
+// Fatal-looking SEH codes (access violation, stack overflow, heap corruption).
+// Logged as "first chance": some may still be handled, but when the app dies
+// without an UNHANDLED entry (heap corruption fails fast), this is the trace.
+volatile LONG g_fatal_logged = 0;
+constexpr LONG kMaxFatalLogged = 10;
+
+bool IsFatalCode(DWORD code) {
+  return code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW ||
+         code == 0xC0000374 /* STATUS_HEAP_CORRUPTION */ ||
+         code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_IN_PAGE_ERROR;
+}
+
+void OnAbortSignal(int) {
+  AppendText("\n[abort] std::terminate / abort() called - the app is closing\n");
+}
+
+void OnInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int,
+                        uintptr_t) {
+  AppendText("\n[crt] invalid parameter passed to a C runtime function\n");
+}
+
 LONG CALLBACK OnFirstChance(PEXCEPTION_POINTERS info) {
-  if (info->ExceptionRecord->ExceptionCode != kCxxExceptionCode) {
+  const DWORD code = info->ExceptionRecord->ExceptionCode;
+  if (IsFatalCode(code)) {
+    if (::InterlockedIncrement(&g_fatal_logged) <= kMaxFatalLogged) {
+      WriteReport(info, "FATAL-TYPE exception (first chance)");
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  if (code != kCxxExceptionCode) {
     return EXCEPTION_CONTINUE_SEARCH;
   }
   if (::InterlockedIncrement(&g_logged) > kMaxLogged) {
@@ -240,6 +270,8 @@ void InstallCrashGuard() {
 
   ::AddVectoredExceptionHandler(1, OnFirstChance);
   ::SetUnhandledExceptionFilter(OnUnhandled);
+  signal(SIGABRT, OnAbortSignal);
+  _set_invalid_parameter_handler(OnInvalidParameter);
 
   SYSTEMTIME st;
   ::GetLocalTime(&st);

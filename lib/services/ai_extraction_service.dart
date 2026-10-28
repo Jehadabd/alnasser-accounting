@@ -1,6 +1,7 @@
 // services/ai_extraction_service.dart
 // خدمة استخراج بيانات الفواتير باستخدام Gemini مع مطابقة المنتجات
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:io';
 import 'gemini_service.dart';
 import 'database_service.dart';
@@ -33,10 +34,10 @@ class AIExtractionService {
         'unit': row['unit'],
       }).toList();
       
-      print('📦 تم جلب ${products.length} منتج للمطابقة');
+      debugPrint('📦 تم جلب ${products.length} منتج للمطابقة');
       return products;
     } catch (e) {
-      print('⚠️ خطأ في جلب المنتجات: $e');
+      debugPrint('⚠️ خطأ في جلب المنتجات: $e');
       return [];
     }
   }
@@ -47,11 +48,11 @@ class AIExtractionService {
     required String fileMimeType,
     required String extractType,
   }) async {
-    print('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    print('🤖 استخراج البيانات باستخدام Gemini');
-    print('📄 نوع الملف: $fileMimeType');
-    print('📋 نوع الاستخراج: $extractType');
-    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    debugPrint('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    debugPrint('🤖 استخراج البيانات باستخدام Gemini');
+    debugPrint('📄 نوع الملف: $fileMimeType');
+    debugPrint('📋 نوع الاستخراج: $extractType');
+    debugPrint('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
     try {
       // جلب المنتجات للمطابقة (فقط للفواتير)
@@ -75,7 +76,7 @@ class AIExtractionService {
 
       if (result.isNotEmpty && !result.containsKey('error')) {
         final items = result['line_items'] as List? ?? [];
-        print('✅ نجح Gemini! تم استخراج ${items.length} بند');
+        debugPrint('✅ نجح Gemini! تم استخراج ${items.length} بند');
         
         // طباعة تفاصيل المطابقة
         for (final item in items) {
@@ -89,15 +90,15 @@ class AIExtractionService {
             final reason = item['reason'] ?? '';
             
             if (isNew) {
-              print('  🆕 منتج جديد: $name');
-              if (reason.isNotEmpty) print('     📝 السبب: $reason');
+              debugPrint('  🆕 منتج جديد: $name');
+              if (reason.isNotEmpty) debugPrint('     📝 السبب: $reason');
             } else {
               final confPercent = confidence != null ? '${(confidence * 100).toStringAsFixed(0)}%' : '?';
-              print('  ✅ تطابق ($confPercent): "$originalName" → "$name"');
-              if (reason.isNotEmpty) print('     📝 السبب: $reason');
+              debugPrint('  ✅ تطابق ($confPercent): "$originalName" → "$name"');
+              if (reason.isNotEmpty) debugPrint('     📝 السبب: $reason');
               if (oldCost != null && newCost != null && oldCost > 0) {
                 final diff = ((newCost - oldCost) / oldCost * 100).toStringAsFixed(1);
-                print('     💰 التكلفة: $oldCost → $newCost ($diff%)');
+                debugPrint('     💰 التكلفة: $oldCost → $newCost ($diff%)');
               }
             }
           }
@@ -110,7 +111,7 @@ class AIExtractionService {
         );
       } else {
         final error = result['error']?.toString() ?? 'فشل الاستخراج';
-        print('❌ فشل Gemini: $error');
+        debugPrint('❌ فشل Gemini: $error');
         return ExtractionResult(
           data: {},
           source: 'Gemini',
@@ -119,7 +120,7 @@ class AIExtractionService {
         );
       }
     } on HttpException catch (e) {
-      print('❌ خطأ HTTP من Gemini: ${e.message}');
+      debugPrint('❌ خطأ HTTP من Gemini: ${e.message}');
       return ExtractionResult(
         data: {},
         source: 'Gemini',
@@ -127,7 +128,7 @@ class AIExtractionService {
         error: e.message,
       );
     } catch (e) {
-      print('❌ خطأ من Gemini: $e');
+      debugPrint('❌ خطأ من Gemini: $e');
       return ExtractionResult(
         data: {},
         source: 'Gemini',

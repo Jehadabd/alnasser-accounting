@@ -2,9 +2,8 @@
 // عمليات CRUD للموردين (Odoo Style)
 
 import 'package:sqflite/sqflite.dart';
-import '../../database_service.dart';
 import '../core/database_helpers.dart';
-import '../../../models/supplier.dart'; // ستحتاج لإنشاء هذا الموديل لاحقاً
+import '../supplier_compat.dart';
 
 class SupplierDao {
   final Future<Database> Function() getDatabase;
@@ -17,7 +16,7 @@ class SupplierDao {
     try {
       supplierMap['created_at'] = DateTime.now().toIso8601String();
       supplierMap['updated_at'] = DateTime.now().toIso8601String();
-      return await db.insert('suppliers', supplierMap);
+      return await db.insert('suppliers', await supplierInsertCompat(db, supplierMap));
     } catch (e) {
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
@@ -40,7 +39,7 @@ class SupplierDao {
       supplierMap['updated_at'] = DateTime.now().toIso8601String();
       return await db.update(
         'suppliers',
-        supplierMap,
+        await supplierUpdateCompat(db, supplierMap),
         where: 'id = ?',
         whereArgs: [id],
       );

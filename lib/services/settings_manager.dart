@@ -1,18 +1,29 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:alnaser/models/app_settings.dart'; // Import AppSettings model
 import 'package:alnaser/models/printer_device.dart'; // Import PrinterDevice model
+import 'seat_service.dart';
 
 class SettingsManager {
   static const _keyAppSettings = 'app_settings';
-  static const _keyDefaultPrinter = 'default_printer';
-  static const _keyPosThermalPrinter = 'pos_thermal_printer';
-  static const _keyInvoicePrinter = 'invoice_printer';
+
+  /// 🧭 حالة «اللوحة الجانبية» الحية: تتغير فور حفظ الإعدادات، فتظهر أو تختفي
+  /// في كل الشاشات بلا إعادة تشغيل.
+  static final ValueNotifier<bool> sideNavEnabled = ValueNotifier<bool>(false);
+  // 🖥️ الطابعات لكل شاشة: الشاشة الثانية على نفس الحاسبة تطبع على طابعتها هي.
+  //    إن لم تُضبط لها طابعة بعد تستعمل طابعة الشاشة الأولى.
+  static String get _keyDefaultPrinter => SeatService.key('default_printer');
+  static String get _keyPosThermalPrinter => SeatService.key('pos_thermal_printer');
+  static String get _keyInvoicePrinter => SeatService.key('invoice_printer');
+  static String? _seatRead(SharedPreferences prefs, String key, String base) =>
+      prefs.getString(key) ?? (key == base ? null : prefs.getString(base));
 
   static Future<void> saveSettings(AppSettings settings) async {
     final prefs = await SharedPreferences.getInstance();
     final settingsJson = jsonEncode(settings.toJson());
     await prefs.setString(_keyAppSettings, settingsJson);
+    sideNavEnabled.value = settings.showSideNav;
   }
 
   static Future<AppSettings> loadSettings() async {
@@ -28,6 +39,7 @@ class SettingsManager {
     final prefs = await SharedPreferences.getInstance();
     final settingsJson = jsonEncode(settings.toJson());
     await prefs.setString(_keyAppSettings, settingsJson);
+    sideNavEnabled.value = settings.showSideNav;
   }
 
   static Future<AppSettings> getAppSettings() async {
@@ -47,7 +59,7 @@ class SettingsManager {
 
   static Future<PrinterDevice?> getDefaultPrinter() async {
     final prefs = await SharedPreferences.getInstance();
-    final printerJson = prefs.getString(_keyDefaultPrinter);
+    final printerJson = _seatRead(prefs, _keyDefaultPrinter, 'default_printer');
     if (printerJson != null) {
       return PrinterDevice.fromJson(jsonDecode(printerJson));
     }
@@ -103,7 +115,7 @@ class SettingsManager {
   /// جلب طابعة الكاشير الحرارية
   static Future<PrinterDevice?> getPosThermalPrinter() async {
     final prefs = await SharedPreferences.getInstance();
-    final printerJson = prefs.getString(_keyPosThermalPrinter);
+    final printerJson = _seatRead(prefs, _keyPosThermalPrinter, 'pos_thermal_printer');
     if (printerJson != null) {
       return PrinterDevice.fromJson(jsonDecode(printerJson));
     }
@@ -120,7 +132,7 @@ class SettingsManager {
   /// جلب طابعة الفواتير الكبيرة
   static Future<PrinterDevice?> getInvoicePrinter() async {
     final prefs = await SharedPreferences.getInstance();
-    final printerJson = prefs.getString(_keyInvoicePrinter);
+    final printerJson = _seatRead(prefs, _keyInvoicePrinter, 'invoice_printer');
     if (printerJson != null) {
       return PrinterDevice.fromJson(jsonDecode(printerJson));
     }

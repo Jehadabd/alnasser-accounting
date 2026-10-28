@@ -1,3 +1,5 @@
+import '../widgets/popup_screens.dart'; // 🪟
+import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
 import 'dart:io';
 import 'invoice_entry_layout_screen.dart'; // 🧩
 import 'package:flutter/material.dart';
@@ -9,24 +11,27 @@ import 'package:alnaser/models/app_settings.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/widgets/app_side_nav.dart';
 import 'package:alnaser/models/printer_device.dart';
-import 'package:alnaser/services/printing_service.dart';
 import 'package:alnaser/services/printing_service_factory.dart';
-import 'package:alnaser/services/usb_printer_service.dart';
 import 'package:alnaser/services/thermal_receipt_service.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:intl/intl.dart';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:printing/printing.dart'; // 🌐 مشاركة وطباعة الويب
 import '../services/database_service.dart';
-import '../services/password_service.dart';
+import '../services/backup_files.dart';
+import '../services/database/core/migration_guard.dart';
+import '../widgets/migration_guard_views.dart';
 import '../services/pdf_service.dart';
 import '../services/invoice_settings_service.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:cross_file/cross_file.dart';
 import 'alert_settings_screen.dart'; // 🔔
 import 'invoice_design_screen.dart'; // 🧳 تصميم الفاتورة
 import 'telegram_settings_screen.dart'; // 📤 إعدادات تيليغرام
+import '../owner/owner_access.dart'; // 👑 ميزات حساب المالك
+import '../erp/erp_common.dart' show HubSection, HubTile;
+import '../services/upload_targets.dart';
+import '../owner/owner_settings_cards.dart';
+import '../widgets/database_location_card.dart'; // 📂 مكان قاعدة البيانات
 import 'discord_settings_screen.dart'; // 💬 إعدادات Discord
 import 'dropbox_backup_screen.dart'; // ☁️ النسخ الاحتياطي السحابي
 import 'firebase_sync_settings_screen.dart';
@@ -37,19 +42,50 @@ import '../services/license_service.dart';
 import '../widgets/stay_logged_in_tile.dart';
 import '../inventory/product_entry_mode.dart';
 import '../invoice_designer/invoice_designer_screen.dart';
-import '../accounting/screens/acc_ui.dart' show requirePermission;
+import '../invoice_designer/voucher_designer_screen.dart'; // 🧾 مصمم السندات
+import '../accounting/screens/acc_ui.dart' show requirePermission, accAppBar;
+import '../erp/erp_kit.dart' show ErpDialog;
+import '../widgets/settings_kit.dart' show SetBanner, SetBannerKind, SetSteps;
 import '../models/app_user.dart' show AppPermissions;
 import '../erp/erp_settings_screen.dart';
 import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 import '../devtools/stress_test/stress_test_screen.dart'; // 🧪
 
 import '../models/account_statement_item.dart';
-import '../models/verification_result.dart'; // ✅ Added
+import 'duplicate_customers_screen.dart'; // 🔗 دمج الحسابات المكررة
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
+import '../widgets/loading_dialog.dart';
 
 
 class GeneralSettingsScreen extends StatefulWidget {
   const GeneralSettingsScreen({super.key});
+
+  /// 🧭 القسم المطلوب فتحه (من اللوحة الجانبية) — يُطبَّق ثم يُمسح
+  static final ValueNotifier<String?> requestedSection = ValueNotifier<String?>(null);
+  static int _openCount = 0;
+
+  /// يفتح الإعدادات على قسم معيّن؛ إن كانت مفتوحة يبدّل القسم فقط
+  static void openSection(BuildContext context, String title) {
+    requestedSection.value = title;
+    if (_openCount <= 0) Navigator.of(context).pushNamed('/general_settings');
+  }
+
+  /// 🧭 أقسام الإعدادات للوحة الجانبية — العناوين يجب أن تطابق _SettingsSection أدناه
+  static List<HubSection> menu(BuildContext context, void Function(Widget) go) {
+    HubTile t(String title, IconData icon) =>
+        HubTile(title, icon, const Color(0xFF64748B), () => openSection(context, title), permission: AppPermissions.settings);
+    return [
+      HubSection('الأقسام', [
+        t('الحساب والموظفون', Icons.verified_user_outlined),
+        if (OwnerAccess.enabled) t('ميزات المالك', Icons.workspace_premium_outlined),
+        t('الفاتورة والطباعة', Icons.receipt_long_outlined),
+        t('الأسعار والأرباح', Icons.trending_up),
+        t('النسخ الاحتياطي والمزامنة', Icons.cloud_sync_outlined),
+        t('الواجهة', Icons.dashboard_customize_outlined),
+        t('النظام والأدوات', Icons.build_circle_outlined),
+      ]),
+    ];
+  }
 
   @override
   State<GeneralSettingsScreen> createState() => _GeneralSettingsScreenState();
@@ -86,6 +122,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   // 💰 إعدادات الأرباح
   final TextEditingController _adHocProfitController = TextEditingController();
   final TextEditingController _manualDebtProfitController = TextEditingController();
+  final TextEditingController _discountProfitPctController = TextEditingController(); // 🏷️
+  String _voucherMode = 'ask'; // 🧾
   
   // إعدادات الفاتورة والتسعير
   bool _autoScrollInvoice = true;
@@ -106,7 +144,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   String _branchName = 'الفرع الرئيسي';
   
   // 🔐 خدمة كلمة السر
-  final PasswordService _passwordService = PasswordService();
   
   // 🖨️ إعدادات الطابعات
   List<PrinterDevice> _availablePrinters = [];
@@ -116,13 +153,26 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   bool _loadingPrinters = false;
   bool _scanningUsb = false;
   bool _showSideNav = false;
+  bool _enableSmartSearchRamCache = true; // 🧠
+  String _tgRegularMode = 'each'; // 📤 each / combined / off
+  String _tgPosMode = 'each';
+  bool _tgResendEdited = true;
+  List<String> _uploadOrder = List.of(UploadTargets.all); // ☁️ ترتيب وجهات زر الرفع
+  Set<String> _uploadDisabled = {};
   String _screenOrientation = 'landscape';
   bool _isSyncAllowed = false;
 
   @override
   void initState() {
     super.initState();
+    GeneralSettingsScreen._openCount++;
+    GeneralSettingsScreen.requestedSection.addListener(_onSectionRequest);
     _loadSettings();
+  }
+
+  /// الإعدادات مفتوحة وطُلب قسم من اللوحة الجانبية ⇒ أعد البناء ليُطبَّق
+  void _onSectionRequest() {
+    if (GeneralSettingsScreen.requestedSection.value != null && mounted) setState(() {});
   }
 
   Future<void> _loadSettings() async {
@@ -157,6 +207,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     // تحميل إعدادات الأرباح
     _adHocProfitController.text = _appSettings.defaultAdHocProfitPercentage.toString();
     _manualDebtProfitController.text = _appSettings.manualDebtProfitPercentage.toString();
+    _discountProfitPctController.text = _appSettings.discountProfitPercent.toString();
+    _voucherMode = _appSettings.adjustmentVoucherMode;
     
     // تحميل إعدادات الفاتورة والتسعير
     _autoScrollInvoice = _appSettings.autoScrollInvoice;
@@ -165,6 +217,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     _pricingMode = _appSettings.pricingMode;
     _wholesaleCustomerLimitController.text = _appSettings.wholesaleCustomerLimit.toString();
     _showSideNav = _appSettings.showSideNav;
+    _enableSmartSearchRamCache = _appSettings.enableSmartSearchRamCache;
+    _tgRegularMode = _appSettings.telegramRegularInvoicesMode;
+    _tgPosMode = _appSettings.telegramPosInvoicesMode;
+    _tgResendEdited = _appSettings.telegramResendEdited;
+    _uploadOrder = UploadTargets.ordered(_appSettings.uploadOrder, owner: true);
+    _uploadDisabled = _appSettings.uploadDisabled.toSet();
     
     // تحميل رقم الجهاز للفواتير
     _invoiceDeviceId = await InvoiceSettingsService.getInvoiceDeviceId();
@@ -200,11 +258,166 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         !_availablePrinters.any((p) => p.name == _posThermalPrinter!.name && p.address == _posThermalPrinter!.address)) {
       _availablePrinters.add(_posThermalPrinter!);
     }
+    _savedSnapshot = _snapshot();
     if (mounted) {
       setState(() {
         _isLoadingSettings = false;
       });
     }
+  }
+
+  // ═══════════════ تغييرات غير محفوظة ═══════════════
+  // بعض الإعدادات تُحفظ فوراً (مثل الشريط الجانبي واتجاه الشاشة)، وأغلبها كان
+  // يحتاج زر الحفظ الصغير في الشريط العلوي — فالخروج بدونه كان يُضيع التعديل
+  // بصمت. الآن: شريط سفلي يظهر عند وجود تعديل، وسؤال قبل الخروج.
+
+  String? _savedSnapshot;
+
+  String _snapshot() => [
+        _autoScrollInvoice,
+        _allowNegativeStock,
+        _costingMethod,
+        _pricingMode,
+        _adHocProfitController.text,
+        _manualDebtProfitController.text,
+        _discountProfitPctController.text,
+        _voucherMode,
+        _wholesaleCustomerLimitController.text,
+        _invoiceDeviceController.text,
+        _companyDescriptionController.text,
+        _storeSection,
+        _branchName,
+        _showSideNav,
+        _enableSmartSearchRamCache,
+        _tgRegularMode,
+        _tgPosMode,
+        _tgResendEdited,
+        _uploadOrder.join(','),
+        (_uploadDisabled.toList()..sort()).join(','),
+      ].join('§');
+
+  bool get _dirty => _savedSnapshot != null && _snapshot() != _savedSnapshot;
+
+  Listenable get _fieldsListenable => Listenable.merge([
+        _adHocProfitController,
+        _manualDebtProfitController,
+        _discountProfitPctController,
+        _wholesaleCustomerLimitController,
+        _invoiceDeviceController,
+        _companyDescriptionController,
+      ]);
+
+  Future<void> _discardChanges() async {
+    setState(() => _isLoadingSettings = true);
+    await _loadSettings();
+  }
+
+  /// يُسأل قبل الخروج إن وُجد تعديل غير محفوظ. يعيد true إن جاز الخروج.
+  Future<bool> _confirmLeave() async {
+    if (!_dirty) return true;
+    final r = await showDialog<String>(
+      context: context,
+      builder: (ctx) => ErpDialog(
+        title: 'تغييرات غير محفوظة',
+        subtitle: 'عدّلت إعدادات ولم تحفظها بعد',
+        icon: Icons.save_as_rounded,
+        color: const Color(0xFFC2410C),
+        width: 460,
+        content: const Text('هل تريد حفظها قبل الخروج؟', style: TextStyle(height: 1.6)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خروج بلا حفظ')),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, 'save'),
+            icon: const Icon(Icons.save_rounded),
+            label: const Text('حفظ ثم خروج'),
+          ),
+        ],
+      ),
+    );
+    if (r == 'save') {
+      await _saveSettings();
+      return true;
+    }
+    return r == 'discard';
+  }
+
+  Widget _saveBar() {
+    return AnimatedBuilder(
+      animation: _fieldsListenable,
+      builder: (context, _) {
+        final dirty = _dirty;
+        return AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          child: !dirty
+              ? const SizedBox(width: double.infinity)
+              : SafeArea(
+                  top: false,
+                  child: Container(
+                    margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 8, 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F3460),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: const [BoxShadow(color: Color(0x330F3460), blurRadius: 18, offset: Offset(0, 6))],
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.edit_note_rounded, color: Colors.white),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text('لديك تغييرات غير محفوظة',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                      ),
+                      TextButton(
+                        onPressed: _discardChanges,
+                        style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                        child: const Text('تراجع'),
+                      ),
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: 'Ctrl + S',
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: const Color(0xFF0F3460),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onPressed: _saveSettings,
+                          icon: const Icon(Icons.save_rounded, size: 19),
+                          label: const Text('حفظ التغييرات', style: TextStyle(fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+        );
+      },
+    );
+  }
+
+  /// غلاف الشاشة: سؤال قبل الخروج + Ctrl+S للحفظ + لون التبديلات كحلي.
+  Widget _shell(Widget scaffold) {
+    final base = Theme.of(context);
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final nav = Navigator.of(context);
+        if (await _confirmLeave() && mounted) nav.pop(result);
+      },
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () => _saveSettings(),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Theme(
+            data: base.copyWith(colorScheme: base.colorScheme.copyWith(primary: primaryColor)),
+            child: scaffold,
+          ),
+        ),
+      ),
+    );
   }
   
   Future<void> _showAddManualPrinterDialog() async {
@@ -225,7 +438,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 onChanged: (v) => name = v,
               ),
               DropdownButtonFormField<String>(
-                value: connectionType,
+                initialValue: connectionType,
                 items: const [
                   DropdownMenuItem(value: 'wifi', child: Text('Wi-Fi / الشبكة')),
                   DropdownMenuItem(value: 'bluetooth', child: Text('Bluetooth')),
@@ -257,7 +470,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                     port: connectionType == 'wifi' ? 9100 : null,
                   );
                   await SettingsManager.addManualPrinter(printer);
-                  Navigator.pop(context);
+                  if (context.mounted) Navigator.pop(context);
                   _loadPrinters(); // إعادة التحميل لإظهارها
                 }
               },
@@ -281,7 +494,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       _posThermalPrinter = await SettingsManager.getPosThermalPrinter();
       _invoicePrinter = await SettingsManager.getInvoicePrinter();
     } catch (e) {
-      print('خطأ في تحميل الطابعات: $e');
+      debugPrint('خطأ في تحميل الطابعات: $e');
     }
     if (mounted) {
       setState(() => _loadingPrinters = false);
@@ -313,7 +526,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         );
       }
     } catch (e) {
-      print('خطأ في البحث عن طابعات USB: $e');
+      debugPrint('خطأ في البحث عن طابعات USB: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ في البحث: $e'), backgroundColor: Colors.red),
@@ -377,28 +590,30 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
     _appSettings = _appSettings.copyWith(
       phoneNumbers: newPhoneNumbers,
-      remainingAmountColor: _remainingAmountColor.value,
-      discountColor: _discountColor.value,
-      loadingFeesColor: _loadingFeesColor.value,
-      totalBeforeDiscountColor: _totalBeforeDiscountColor.value,
-      totalAfterDiscountColor: _totalAfterDiscountColor.value,
-      previousDebtColor: _previousDebtColor.value,
-      currentDebtColor: _currentDebtColor.value,
-      electricPhoneColor: _electricPhoneColor.value,
-      healthPhoneColor: _healthPhoneColor.value,
-      companyDescriptionColor: _companyDescriptionColor.value,
+      remainingAmountColor: _remainingAmountColor.toARGB32(),
+      discountColor: _discountColor.toARGB32(),
+      loadingFeesColor: _loadingFeesColor.toARGB32(),
+      totalBeforeDiscountColor: _totalBeforeDiscountColor.toARGB32(),
+      totalAfterDiscountColor: _totalAfterDiscountColor.toARGB32(),
+      previousDebtColor: _previousDebtColor.toARGB32(),
+      currentDebtColor: _currentDebtColor.toARGB32(),
+      electricPhoneColor: _electricPhoneColor.toARGB32(),
+      healthPhoneColor: _healthPhoneColor.toARGB32(),
+      companyDescriptionColor: _companyDescriptionColor.toARGB32(),
       companyDescription: _companyDescriptionController.text,
-      companyNameColor: _companyNameColor.value,
-      itemSerialColor: _itemSerialColor.value,
-      itemDetailsColor: _itemDetailsColor.value,
-      itemQuantityColor: _itemQuantityColor.value,
-      itemPriceColor: _itemPriceColor.value,
-      itemTotalColor: _itemTotalColor.value,
-      noticeColor: _noticeColor.value,
-      paidAmountColor: _paidAmountColor.value,
+      companyNameColor: _companyNameColor.toARGB32(),
+      itemSerialColor: _itemSerialColor.toARGB32(),
+      itemDetailsColor: _itemDetailsColor.toARGB32(),
+      itemQuantityColor: _itemQuantityColor.toARGB32(),
+      itemPriceColor: _itemPriceColor.toARGB32(),
+      itemTotalColor: _itemTotalColor.toARGB32(),
+      noticeColor: _noticeColor.toARGB32(),
+      paidAmountColor: _paidAmountColor.toARGB32(),
 
       defaultAdHocProfitPercentage: double.tryParse(_adHocProfitController.text) ?? 10.0,
       manualDebtProfitPercentage: double.tryParse(_manualDebtProfitController.text) ?? 15.0,
+      discountProfitPercent: (double.tryParse(_discountProfitPctController.text) ?? 10.0).clamp(0.0, 100.0),
+      adjustmentVoucherMode: _voucherMode,
       autoScrollInvoice: _autoScrollInvoice,
       allowNegativeStock: _allowNegativeStock,
       costingMethod: _costingMethod,
@@ -408,6 +623,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       storeSection: _storeSection,
       branchName: _branchName,
       showSideNav: _showSideNav,
+      enableSmartSearchRamCache: _enableSmartSearchRamCache,
+      telegramRegularInvoicesMode: _tgRegularMode,
+      telegramPosInvoicesMode: _tgPosMode,
+      telegramResendEdited: _tgResendEdited,
+      uploadOrder: List.of(_uploadOrder),
+      uploadDisabled: _uploadDisabled.toList(),
     );
     await SettingsManager.saveAppSettings(_appSettings);
     
@@ -418,177 +639,25 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       _invoiceDeviceId = parsedDeviceId;
     }
     
+    _savedSnapshot = _snapshot();
     if (mounted) {
+      setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم حفظ الإعدادات بنجاح')),
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Color(0xFF047857),
+          content: Row(children: [
+            Icon(Icons.check_circle_rounded, color: Colors.white),
+            SizedBox(width: 10),
+            Text('تم حفظ الإعدادات بنجاح'),
+          ]),
+        ),
       );
     }
   }
 
-  void _addPhoneNumberField() {
-    setState(() {
-      _phoneNumberControllers.add(TextEditingController());
-    });
-  }
 
-  void _removePhoneNumberField(int index) {
-    setState(() {
-      _phoneNumberControllers[index].dispose();
-      _phoneNumberControllers.removeAt(index);
-    });
-  }
 
-  void _pickColor(String colorType) {
-    Color currentColor;
-    switch (colorType) {
-      case 'remainingAmount':
-        currentColor = _remainingAmountColor;
-        break;
-      case 'discount':
-        currentColor = _discountColor;
-        break;
-      case 'loadingFees':
-        currentColor = _loadingFeesColor;
-        break;
-      case 'totalBeforeDiscount':
-        currentColor = _totalBeforeDiscountColor;
-        break;
-      case 'totalAfterDiscount':
-        currentColor = _totalAfterDiscountColor;
-        break;
-      case 'previousDebt':
-        currentColor = _previousDebtColor;
-        break;
-      case 'currentDebt':
-        currentColor = _currentDebtColor;
-        break;
-      case 'electricPhone':
-        currentColor = _electricPhoneColor;
-        break;
-      case 'healthPhone':
-        currentColor = _healthPhoneColor;
-        break;
-      case 'companyDescription':
-        currentColor = _companyDescriptionColor;
-        break;
-      case 'companyName':
-        currentColor = _companyNameColor;
-        break;
-      case 'itemSerial':
-        currentColor = _itemSerialColor;
-        break;
-      case 'itemDetails':
-        currentColor = _itemDetailsColor;
-        break;
-      case 'itemQuantity':
-        currentColor = _itemQuantityColor;
-        break;
-      case 'itemPrice':
-        currentColor = _itemPriceColor;
-        break;
-      case 'itemTotal':
-        currentColor = _itemTotalColor;
-        break;
-      case 'notice':
-        currentColor = _noticeColor;
-        break;
-      case 'paidAmount':
-        currentColor = _paidAmountColor;
-        break;
-      default:
-        currentColor = Colors.black;
-    }
-
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        Color tempColor = currentColor;
-        return AlertDialog(
-          title: Text('اختر لون $colorType'),
-          content: SingleChildScrollView(
-            child: BlockPicker(
-              pickerColor: currentColor,
-              onColorChanged: (color) {
-                tempColor = color;
-              },
-            ),
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('إلغاء'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            ElevatedButton(
-              child: const Text('حفظ'),
-              onPressed: () {
-                setState(() {
-                  switch (colorType) {
-                    case 'remainingAmount':
-                      _remainingAmountColor = tempColor;
-                      break;
-                    case 'discount':
-                      _discountColor = tempColor;
-                      break;
-                    case 'loadingFees':
-                      _loadingFeesColor = tempColor;
-                      break;
-                    case 'totalBeforeDiscount':
-                      _totalBeforeDiscountColor = tempColor;
-                      break;
-                    case 'totalAfterDiscount':
-                      _totalAfterDiscountColor = tempColor;
-                      break;
-                    case 'previousDebt':
-                      _previousDebtColor = tempColor;
-                      break;
-                    case 'currentDebt':
-                      _currentDebtColor = tempColor;
-                      break;
-                    case 'electricPhone':
-                      _electricPhoneColor = tempColor;
-                      break;
-                    case 'healthPhone':
-                      _healthPhoneColor = tempColor;
-                      break;
-                    case 'companyDescription':
-                      _companyDescriptionColor = tempColor;
-                      break;
-                    case 'companyName':
-                      _companyNameColor = tempColor;
-                      break;
-                    case 'itemSerial':
-                      _itemSerialColor = tempColor;
-                      break;
-                    case 'itemDetails':
-                      _itemDetailsColor = tempColor;
-                      break;
-                    case 'itemQuantity':
-                      _itemQuantityColor = tempColor;
-                      break;
-                    case 'itemPrice':
-                      _itemPriceColor = tempColor;
-                      break;
-                    case 'itemTotal':
-                      _itemTotalColor = tempColor;
-                      break;
-                    case 'notice':
-                      _noticeColor = tempColor;
-                      break;
-                    case 'paidAmount':
-                      _paidAmountColor = tempColor;
-                      break;
-                  }
-                });
-                Navigator.of(context).pop();
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
 
   @override
   void dispose() {
@@ -599,108 +668,15 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
     _adHocProfitController.dispose();
     _manualDebtProfitController.dispose();
+    _discountProfitPctController.dispose();
     _wholesaleCustomerLimitController.dispose();
+    GeneralSettingsScreen._openCount--;
+    GeneralSettingsScreen.requestedSection.removeListener(_onSectionRequest);
     super.dispose();
   }
 
-  /// دالة لعرض حوار تأكيد محمي بكلمة سر
-  Future<bool> _showProtectedChangeDialog({
-    required String title,
-    required String message,
-  }) async {
-    // أولاً: عرض رسالة التحذير
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
-            const SizedBox(width: 8),
-            Text(title, style: const TextStyle(fontSize: 18)),
-          ],
-        ),
-        content: Text(message, style: const TextStyle(fontSize: 16)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('إلغاء', style: TextStyle(fontSize: 16)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('متابعة', style: TextStyle(fontSize: 16)),
-          ),
-        ],
-      ),
-    );
-    
-    if (confirmed != true) return false;
-    
-    // ثانياً: طلب كلمة السر
-    final passwordController = TextEditingController();
-    final passwordConfirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.lock, color: Colors.deepPurple, size: 28),
-            SizedBox(width: 8),
-            Text('أدخل كلمة سر المدير', style: TextStyle(fontSize: 18)),
-          ],
-        ),
-        content: TextField(
-          controller: passwordController,
-          obscureText: true,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: 'كلمة السر',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            prefixIcon: const Icon(Icons.lock_outline),
-          ),
-          onSubmitted: (value) async {
-            final isCorrect = await _passwordService.verifyPassword(value);
-            Navigator.of(context).pop(isCorrect);
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('إلغاء', style: TextStyle(fontSize: 16)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: primaryColor,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              final isCorrect = await _passwordService.verifyPassword(passwordController.text);
-              Navigator.of(context).pop(isCorrect);
-            },
-            child: const Text('تأكيد', style: TextStyle(fontSize: 16)),
-          ),
-        ],
-      ),
-    );
-    
-    if (passwordConfirmed != true) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('كلمة السر غير صحيحة'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return false;
-    }
-    
-    return true;
-  }
 
-  static const Color primaryColor = Color(0xFF3F51B5);
+  static const Color primaryColor = Color(0xFF0F3460); // كحلي البرنامج (كان نيلياً مختلفاً)
 
   Widget _buildActionTile({
     required IconData icon,
@@ -710,80 +686,111 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     required VoidCallback onTap,
   }) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(vertical: 4),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      hoverColor: iconColor.withValues(alpha: 0.05),
       leading: Container(
-        padding: const EdgeInsets.all(8),
+        width: 40,
+        height: 40,
         decoration: BoxDecoration(
-          color: iconColor.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
+          color: iconColor.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
         ),
-        child: Icon(icon, color: iconColor, size: 24),
+        child: Icon(icon, color: iconColor, size: 22),
       ),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
-      subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-      trailing: Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey[400]),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF1E293B))),
+      subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.4)),
+      trailing: Icon(Icons.arrow_forward_ios_rounded, size: 15, color: Colors.grey[400]),
       onTap: onTap,
     );
   }
 
-  Widget _buildColorTile(String title, Color color, VoidCallback onTap) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      title: Text(title),
-      trailing: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade300, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: color.withOpacity(0.4),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-      ),
-      onTap: onTap,
-    );
-  }
 
   // 🧭 الإعدادات مقسّمة إلى أقسام (قائمة جانبية + محتوى) بدل صفحة واحدة طويلة.
   //    🧪 الوضع التجريبي انتقل إلى شاشة الدخول.
   int _settingsSection = 0;
 
+  String _settingsQuery = '';
+
   Widget _buildSectionedSettings(List<_SettingsSection> sections) {
-    final idx = _settingsSection.clamp(0, sections.length - 1);
+    final q = _settingsQuery.trim();
+    final visible = [for (var i = 0; i < sections.length; i++) if (sections[i].matches(q)) i];
+    // 🧭 طلب من اللوحة الجانبية: افتح القسم بالاسم وامسح البحث
+    final want = GeneralSettingsScreen.requestedSection.value;
+    if (want != null) {
+      final i = sections.indexWhere((s) => s.title == want);
+      if (i >= 0) _settingsSection = i;
+      GeneralSettingsScreen.requestedSection.value = null;
+    }
+    var idx = _settingsSection.clamp(0, sections.length - 1);
+    // البحث أخفى القسم المفتوح ⇒ افتح أول قسم مطابق
+    if (q.isNotEmpty && visible.isNotEmpty && !visible.contains(idx)) idx = visible.first;
     final current = sections[idx];
     final wide = MediaQuery.of(context).size.width >= 900;
 
-    final content = ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        Row(children: [
-          Icon(current.icon, color: primaryColor, size: 28),
-          const SizedBox(width: 10),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(current.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            Text(current.description, style: const TextStyle(color: Colors.black54)),
+    final content = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOutCubic,
+      transitionBuilder: (child, a) => FadeTransition(
+        opacity: a,
+        child: SlideTransition(
+          position: Tween(begin: const Offset(0, 0.02), end: Offset.zero).animate(a),
+          child: child,
+        ),
+      ),
+      child: ListView(
+        key: ValueKey(idx),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+        children: [
+          Row(children: [
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                color: primaryColor.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(current.icon, color: primaryColor, size: 26),
+            ),
+            const SizedBox(width: 12),
+            // Expanded: الوصف الطويل كان يتجاوز عرض الشاشة الضيقة
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(current.title,
+                    style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: Color(0xFF1E293B))),
+                Text(current.description, style: const TextStyle(color: Color(0xFF64748B), height: 1.4)),
+              ]),
+            ),
           ]),
-        ]),
-        const SizedBox(height: 16),
-        ...current.cards,
-      ],
+          const SizedBox(height: 18),
+          ...current.cards,
+        ],
+      ),
+    );
+
+    final search = TextField(
+      onChanged: (v) => setState(() => _settingsQuery = v),
+      decoration: InputDecoration(
+        hintText: 'ابحث في الإعدادات… (طابعة، نسخة، موظف)',
+        prefixIcon: const Icon(Icons.search_rounded),
+        isDense: true,
+        filled: true,
+        fillColor: const Color(0xFFF1F4F9),
+        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+      ),
     );
 
     if (!wide) {
       return Column(children: [
+        Padding(padding: const EdgeInsets.fromLTRB(12, 10, 12, 0), child: search),
         SizedBox(
-          height: 56,
+          height: 58,
           child: ListView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             children: [
-              for (var i = 0; i < sections.length; i++)
+              for (final i in visible)
                 Padding(
                   padding: const EdgeInsetsDirectional.only(end: 8),
                   child: ChoiceChip(
@@ -803,32 +810,34 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Container(
-        width: 270,
-        color: Colors.white,
-        child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
-          children: [
-            for (var i = 0; i < sections.length; i++)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Material(
-                  color: i == idx ? primaryColor.withOpacity(0.10) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                  child: ListTile(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    leading: Icon(sections[i].icon, color: i == idx ? primaryColor : Colors.black54),
-                    title: Text(sections[i].title,
-                        style: TextStyle(fontWeight: i == idx ? FontWeight.bold : FontWeight.w500)),
-                    subtitle: Text(sections[i].description,
-                        maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5)),
-                    onTap: () => setState(() => _settingsSection = i),
-                  ),
-                ),
-              ),
-          ],
+        width: 290,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: BorderDirectional(end: BorderSide(color: Color(0xFFE6EBF2))),
         ),
+        child: Column(children: [
+          Padding(padding: const EdgeInsets.fromLTRB(12, 14, 12, 6), child: search),
+          Expanded(
+            child: visible.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('لا يوجد إعداد مطابق', style: TextStyle(color: Color(0xFF64748B))),
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 12),
+                    children: [
+                      for (final i in visible)
+                        _SettingsRailItem(
+                          section: sections[i],
+                          selected: i == idx,
+                          color: primaryColor,
+                          onTap: () => setState(() => _settingsSection = i),
+                        ),
+                    ],
+                  ),
+          ),
+        ]),
       ),
-      const VerticalDivider(width: 1),
       Expanded(
         child: Align(
           alignment: AlignmentDirectional.topStart,
@@ -838,41 +847,165 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     ]);
   }
 
+  /// ☁️ وجهات زر «رفع البيانات» وترتيبها: اسحب ⠿ لتغيير الترتيب، والمفتاح للتفعيل
+  Widget _uploadTargetsCard() {
+    final owner = OwnerAccess.enabled;
+    final list = UploadTargets.ordered(_uploadOrder, owner: owner);
+    const icons = {
+      UploadTargets.telegram: Icons.telegram,
+      UploadTargets.dropbox: Icons.cloud_rounded,
+      UploadTargets.discord: Icons.forum_rounded,
+      UploadTargets.gdrive: Icons.add_to_drive_rounded,
+    };
+    const colors = {
+      UploadTargets.telegram: Color(0xFF229ED9),
+      UploadTargets.dropbox: Color(0xFF0061FE),
+      UploadTargets.discord: Color(0xFF5865F2),
+      UploadTargets.gdrive: Color(0xFF1A73E8),
+    };
+    return _buildSettingsCard(
+      icon: Icons.cloud_upload_rounded,
+      iconColor: Colors.indigo,
+      title: 'زر «رفع البيانات»: الوجهات والترتيب',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Text('يرفع إلى المفعّل فقط، من الأعلى إلى الأسفل. اسحب ⠿ لتغيير الترتيب. '
+              'الوجهة غير المربوطة تُتخطّى.',
+              style: TextStyle(fontSize: 12.5, color: Colors.black54, height: 1.5)),
+        ),
+        ReorderableListView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          onReorderItem: (oldI, newI) => setState(() {
+            final t = list.removeAt(oldI);
+            list.insert(newI, t);
+            // Google Drive المخفي لغير المالك يبقى في آخر الترتيب المحفوظ
+            _uploadOrder = [...list, ...UploadTargets.all.where((x) => !list.contains(x))];
+          }),
+          children: [
+            for (var i = 0; i < list.length; i++)
+              Material(
+                key: ValueKey('ut-${list[i]}'),
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: CircleAvatar(
+                    radius: 14,
+                    backgroundColor: _uploadDisabled.contains(list[i]) ? Colors.grey.shade300 : colors[list[i]],
+                    child: _uploadDisabled.contains(list[i])
+                        ? const Icon(Icons.block_rounded, size: 15, color: Colors.white)
+                        : Text('${list.where((t) => !_uploadDisabled.contains(t)).toList().indexOf(list[i]) + 1}',
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                  title: Row(children: [
+                    Icon(icons[list[i]], size: 18, color: colors[list[i]]),
+                    const SizedBox(width: 8),
+                    Text(UploadTargets.labels[list[i]]!, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ]),
+                  subtitle: Text(UploadTargets.hints[list[i]]!, style: const TextStyle(fontSize: 12)),
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Switch(
+                      value: !_uploadDisabled.contains(list[i]),
+                      onChanged: (v) => setState(() {
+                        if (v) {
+                          _uploadDisabled.remove(list[i]);
+                        } else {
+                          _uploadDisabled.add(list[i]);
+                        }
+                      }),
+                    ),
+                    ReorderableDragStartListener(
+                      index: i,
+                      child: const MouseRegion(
+                        cursor: SystemMouseCursors.grab,
+                        child: Padding(padding: EdgeInsets.all(6), child: Icon(Icons.drag_indicator_rounded, color: Colors.black38)),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+          ],
+        ),
+      ]),
+    );
+  }
+
+  /// 📤 طريقة رفع نوع من الفواتير: فاتورة فاتورة، ملف PDF واحد، أو بلا رفع
+  Widget _invoiceUploadModeTile({
+    required IconData icon,
+    required String title,
+    required String value,
+    required ValueChanged<String> onChanged,
+  }) {
+    const labels = {'each': 'كل فاتورة وحدها', 'combined': 'ملف PDF واحد', 'off': 'لا ترفع'};
+    const hints = {
+      'each': 'كما الآن: لكل فاتورة ملف، وفوقه رقمها والفرع والمبلغ والربح',
+      'combined': 'كل الفواتير في ملف واحد، وفوقه رسالة بأرقامها ومجموعها',
+      'off': 'لا تُرفع هذه الفواتير إلى تيليغرام',
+    };
+    return ListTile(
+      leading: Icon(icon, color: Colors.blue),
+      title: Text(title),
+      subtitle: Text(hints[value] ?? ''),
+      trailing: DropdownButton<String>(
+        value: labels.containsKey(value) ? value : 'each',
+        underline: const SizedBox.shrink(),
+        items: [for (final e in labels.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
+      ),
+    );
+  }
+
   Widget _buildSettingsCard({
     required IconData icon,
     required Color iconColor,
     required String title,
     required Widget child,
   }) {
-    return Card(
+    return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: iconColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE6EBF2)),
+        boxShadow: const [BoxShadow(color: Color(0x0A0F172A), blurRadius: 12, offset: Offset(0, 4))],
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: iconColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: iconColor, size: 22),
                   ),
-                  child: Icon(icon, color: iconColor, size: 24),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            child,
-          ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF1E293B)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(height: 1, color: Color(0xFFEEF2F7)),
+              const SizedBox(height: 8),
+              child,
+            ],
+          ),
         ),
       ),
     );
@@ -893,11 +1026,11 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         color: Colors.grey[50],
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isSelected ? color.withOpacity(0.5) : Colors.grey.shade300,
+          color: isSelected ? color.withValues(alpha: 0.5) : Colors.grey.shade300,
           width: isSelected ? 2 : 1,
         ),
       ),
-      child: ListTile(
+      child: Material(type: MaterialType.transparency, child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: Container(
           padding: const EdgeInsets.all(10),
@@ -940,7 +1073,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             side: BorderSide(color: Colors.grey.shade300),
           ),
         ),
-      ),
+      )),
     );
   }
 
@@ -967,9 +1100,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       return;
     }
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (ctx) => const Center(
         child: Card(
           child: Padding(
@@ -990,7 +1122,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     try {
       final hasInternet = await licenseService.hasInternetConnection();
       if (!hasInternet) {
-        if (mounted) Navigator.pop(context);
+        LoadingDialog.hide();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -1003,7 +1135,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       }
 
       final result = await licenseService.verifyWithServer();
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
 
       if (result.success) {
         await _loadSettings();
@@ -1016,8 +1148,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           modeName = 'التطبيق الشامل الكامل (أوفلاين)';
         }
 
-        String typeLabel = updatedLicense?.type == 'lifetime' || (updatedLicense?.expires.contains('2099') == true)
-            ? 'اشتراك دائم مدى الحياة (Lifetime)'
+        String typeLabel = updatedLicense?.type == 'lifetime' || (updatedLicense?.expires.isEmpty ?? false)
+            ? 'دائم — بلا تاريخ انتهاء'
             : 'اشتراك مؤقت حتى ${updatedLicense?.expires.split("T").first ?? ""}';
 
         if (mounted) {
@@ -1057,7 +1189,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         }
       }
     } catch (e) {
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('حدث خطأ أثناء التحديث: $e'), backgroundColor: Colors.red),
@@ -1080,155 +1212,136 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       return;
     }
 
+    // لا نتخلّص من المتحكم بعد الإغلاق مباشرة: حركة إغلاق النافذة ما زالت تستعمله.
     final passwordController = TextEditingController();
     bool isLoading = false;
     String? errorMessage;
     bool obscurePassword = true;
+    const danger = Color(0xFFC2410C);
 
-    await showDialog(
+    // النافذة تعيد رسالة النجاح؛ التنقّل يتم من سياق الشاشة لا من سياق النافذة المغلقة.
+    final successMessage = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
+      builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: const Row(
-                children: [
-                  Icon(Icons.phonelink_erase, color: Colors.orange, size: 28),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'تصفير ونقل الترخيص للجهاز',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-              content: SingleChildScrollView(
-                child: Column(
+          builder: (dialogContext, setDialogState) {
+            Future<void> confirm() async {
+              final pwd = passwordController.text.trim();
+              if (pwd.isEmpty) {
+                setDialogState(() => errorMessage = 'أدخل كلمة سر حساب الترخيص لتأكيد الملكية');
+                return;
+              }
+              setDialogState(() {
+                isLoading = true;
+                errorMessage = null;
+              });
+              try {
+                final result = await licenseService.selfUnbindDevice(pwd);
+                if (!dialogContext.mounted) return;
+                if (result.success) {
+                  Navigator.pop(dialogContext, result.message ?? 'تم تصفير الترخيص بنجاح');
+                } else {
+                  setDialogState(() {
+                    isLoading = false;
+                    errorMessage = result.message ?? 'فشل تصفير الجهاز';
+                  });
+                }
+              } catch (e) {
+                if (!dialogContext.mounted) return;
+                setDialogState(() {
+                  isLoading = false;
+                  errorMessage = 'حدث خطأ: $e';
+                });
+              }
+            }
+
+            return PopScope(
+              canPop: !isLoading,
+              child: ErpDialog(
+                title: 'تصفير الترخيص ونقل الحساب',
+                subtitle: 'الحساب: ${storedLicense.username}',
+                icon: Icons.phonelink_erase_rounded,
+                color: danger,
+                width: 500,
+                content: Column(
                   mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.amber.shade300),
-                      ),
-                      child: const Text(
-                        '⚠️ عند تأكيد التصفير، سيتم فك ارتباط هذا الجهاز بالسيرفر وتسجيل الخروج فوراً لتستطيع استخدام نفس الحساب على جهاز جديد.',
-                        style: TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
+                    const Text('ماذا سيحدث؟',
+                        style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF1E293B))),
+                    const SizedBox(height: 10),
+                    const SetSteps([
+                      'يُفكّ ارتباط هذا الجهاز بالترخيص على السيرفر.',
+                      'يُسجَّل الخروج من هذا الجهاز فوراً.',
+                      'تستطيع تسجيل الدخول بنفس الحساب من جهاز جديد.',
+                    ], color: danger),
+                    const SizedBox(height: 4),
                     TextField(
                       controller: passwordController,
                       obscureText: obscurePassword,
+                      autofocus: true,
+                      enabled: !isLoading,
+                      onSubmitted: (_) => isLoading ? null : confirm(),
                       decoration: InputDecoration(
                         labelText: 'كلمة سر حساب الترخيص',
-                        prefixIcon: const Icon(Icons.lock),
+                        prefixIcon: const Icon(Icons.lock_outline_rounded),
                         suffixIcon: IconButton(
-                          icon: Icon(
-                            obscurePassword ? Icons.visibility : Icons.visibility_off,
-                          ),
-                          onPressed: () {
-                            setDialogState(() {
-                              obscurePassword = !obscurePassword;
-                            });
-                          },
+                          tooltip: obscurePassword ? 'إظهار' : 'إخفاء',
+                          icon: Icon(obscurePassword ? Icons.visibility_rounded : Icons.visibility_off_rounded),
+                          onPressed: () => setDialogState(() => obscurePassword = !obscurePassword),
                         ),
                       ),
                     ),
-                    if (errorMessage != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        errorMessage!,
-                        style: const TextStyle(color: Colors.red, fontSize: 13),
-                      ),
-                    ],
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: errorMessage == null
+                          ? const SizedBox.shrink()
+                          : Padding(
+                              key: ValueKey(errorMessage),
+                              padding: const EdgeInsets.only(top: 12),
+                              child: SetBanner(errorMessage!, kind: SetBannerKind.error),
+                            ),
+                    ),
                   ],
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isLoading ? null : () => Navigator.pop(context),
-                  child: const Text('إلغاء'),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange.shade800,
-                    foregroundColor: Colors.white,
+                actions: [
+                  TextButton(
+                    onPressed: isLoading ? null : () => Navigator.pop(dialogContext),
+                    child: const Text('إلغاء'),
                   ),
-                  onPressed: isLoading
-                      ? null
-                      : () async {
-                          final pwd = passwordController.text.trim();
-                          if (pwd.isEmpty) {
-                            setDialogState(() {
-                              errorMessage = 'يرجى إدخال كلمة المرور لتأكيد الملكية';
-                            });
-                            return;
-                          }
-
-                          setDialogState(() {
-                            isLoading = true;
-                            errorMessage = null;
-                          });
-
-                          try {
-                            final result = await licenseService.selfUnbindDevice(pwd);
-                            if (result.success) {
-                              if (context.mounted) {
-                                Navigator.pop(context);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(result.message ?? 'تم تصفير الترخيص بنجاح'),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                                Navigator.of(context).pushNamedAndRemoveUntil(
-                                  '/license',
-                                  (route) => false,
-                                );
-                              }
-                            } else {
-                              setDialogState(() {
-                                isLoading = false;
-                                errorMessage = result.message ?? 'فشل تصفير الجهاز';
-                              });
-                            }
-                          } catch (e) {
-                            setDialogState(() {
-                              isLoading = false;
-                              errorMessage = 'حدث خطأ: $e';
-                            });
-                          }
-                        },
-                  child: isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                        )
-                      : const Text('تأكيد التصفير ونقل الترخيص'),
-                ),
-              ],
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: danger),
+                    onPressed: isLoading ? null : confirm,
+                    icon: isLoading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          )
+                        : const Icon(Icons.phonelink_erase_rounded, size: 19),
+                    label: const Text('تأكيد التصفير ونقل الترخيص'),
+                  ),
+                ],
+              ),
             );
           },
         );
       },
     );
+
+    if (successMessage == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(successMessage), backgroundColor: Colors.green),
+    );
+    Navigator.of(context).pushNamedAndRemoveUntil('/license', (route) => false);
   }
 
   Future<void> _restoreDatabaseFromFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
-        dialogTitle: 'اختر ملف قاعدة البيانات النسخة الاحتياطية (.db)',
+        dialogTitle: 'اختر النسخة الاحتياطية (.db أو أرشيف تيليجرام .tar.xz أو .zip)',
       );
 
       if (result == null || result.files.isEmpty) return;
@@ -1247,6 +1360,9 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       }
 
       final fileName = file.path.split(Platform.pathSeparator).last;
+      // 📦 أرشيف تيليجرام/zip/gz ⇒ تُستخرج القاعدة منه؛ ملف غير صالح يُرفض هنا قبل أي شيء
+      final dbFile = await BackupFiles.extractDatabase(file);
+      if (!mounted) return;
       final confirm = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -1279,9 +1395,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       if (confirm != true) return;
 
       if (mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
+        LoadingDialog.show(
+          context,
           builder: (context) => const Center(
             child: Card(
               child: Padding(
@@ -1300,10 +1415,10 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         );
       }
 
-      final success = await DatabaseService().restoreDatabaseFromFile(file);
+      final success = await DatabaseService().restoreDatabaseFromFile(dbFile);
 
+      LoadingDialog.hide(); // إغلاق حوار التحميل
       if (mounted) {
-        Navigator.pop(context); // إغلاق حوار التحميل
         if (success) {
           await showDialog(
             context: context,
@@ -1316,7 +1431,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   Text('تمت الاستعادة بنجاح'),
                 ],
               ),
-              content: const Text('تمت استعادة كافة الفواتير والديون والبيانات بنجاح! سيتم إعادة تحميل التطبيق الآن.'),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 580, maxHeight: 460),
+                child: SingleChildScrollView(
+                  child: SelectableText(restoreSummaryText(), style: const TextStyle(height: 1.55)),
+                ),
+              ),
               actions: [
                 ElevatedButton(
                   onPressed: () => Navigator.pop(context),
@@ -1326,12 +1446,18 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             ),
           );
 
+          if (!mounted) return;
           Navigator.pushNamedAndRemoveUntil(context, '/main', (route) => false);
         }
       }
-    } catch (e) {
+    } on MigrationGuardException catch (e) {
+      LoadingDialog.hide();
       if (mounted) {
-        Navigator.of(context, rootNavigator: true).maybePop();
+        await showMigrationRejectedDialog(context, e);
+      }
+    } catch (e) {
+      LoadingDialog.hide();
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('فشلت استعادة قاعدة البيانات: $e'), backgroundColor: Colors.red),
         );
@@ -1343,30 +1469,26 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   Widget build(BuildContext context) {
     if (_isLoadingSettings) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text('الإعدادات العامة'),
-          centerTitle: true,
-          backgroundColor: primaryColor,
-          foregroundColor: Colors.white,
-        ),
+        backgroundColor: const Color(0xFFF3F6FB),
+        appBar: accAppBar('الإعدادات العامة', icon: Icons.settings_rounded),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('الإعدادات العامة'),
-        centerTitle: true,
-        backgroundColor: primaryColor,
-        foregroundColor: Colors.white,
-        elevation: 0,
+    return _shell(Scaffold(
+      backgroundColor: const Color(0xFFF3F6FB),
+      appBar: accAppBar(
+        'الإعدادات العامة',
+        icon: Icons.settings_rounded,
+        subtitle: 'الحساب، الفاتورة والطباعة، الأسعار، النسخ الاحتياطي، الواجهة، النظام',
         actions: [
           IconButton(
-            icon: const Icon(Icons.save),
-            tooltip: 'حفظ الإعدادات',
+            icon: const Icon(Icons.save_rounded),
+            tooltip: 'حفظ الإعدادات (Ctrl + S)',
             onPressed: _saveSettings,
           ),
         ],
       ),
+      bottomNavigationBar: _saveBar(),
       body: Row(
         children: [
           if (AppSideNav.shouldShow(context, _appSettings))
@@ -1377,6 +1499,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'الحساب والموظفون',
           Icons.verified_user_outlined,
           'الترخيص ونقل الجهاز، الموظفون والصلاحيات',
+          keywords: 'ترخيص اشتراك ترقية جهاز نقل تصفير موظف موظفين صلاحيات كلمة سر دخول مستخدم مدير',
           [
           // 🔐 قسم إدارة الترخيص ونقل الجهاز
           _buildSettingsCard(
@@ -1437,12 +1560,62 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           ),
           ],
         ),
+        // 👑 ميزات المالك — تظهر لحساب المالك فقط، وغير موجودة لغيره إطلاقاً
+        if (OwnerAccess.enabled)
+          const _SettingsSection(
+            'ميزات المالك',
+            Icons.workspace_premium_outlined,
+            'المؤسسون ونقاطهم، الرفع إلى Google Drive',
+            keywords: 'مالك مؤسس مؤسسين فني فنيين نقاط جوجل درايف google drive رفع سجل الديون',
+            [OwnerSettingsCards()],
+          ),
         _SettingsSection(
           'الفاتورة والطباعة',
           Icons.receipt_long_outlined,
           'تصميم الفاتورة، إعدادات الفاتورة، الطابعات',
+          keywords: 'سند إشعار مدين دائن إرجاع إضافة تسوية فاتورة تصميم مصمم شعار شركة هاتف طابعة طابعات إيصال حرارية كاشير A4 رقم الجهاز تمرير مخزون سالب كلفة تكلفة متوسط آخر سعر شراء مجاميع',
           [
           // 🧾 تصميم الفاتورة
+          // 🧾 السند الذي يُطبع بعد إضافة أو إرجاع على فاتورة محفوظة
+          _buildSettingsCard(
+            icon: Icons.request_page_rounded,
+            iconColor: Colors.red.shade700,
+            title: 'السندات: قبض، صرف، إشعار مدين ودائن',
+            child: Column(children: [
+              ListTile(
+                leading: const Icon(Icons.help_outline_rounded, color: Colors.indigo),
+                title: const Text('الإعداد العام لطباعة السندات بعد الحفظ'),
+                subtitle: const Padding(
+                  padding: EdgeInsets.only(top: 4, bottom: 8),
+                  child: Text('يتبعه كل نوع سند لم تحدد له إعداداً في «مصمم السندات»، ومستند مرتجع المبيعات'),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'ask', label: Text('اسألني'), icon: Icon(Icons.help_outline)),
+                    ButtonSegment(value: 'always', label: Text('اطبع دائماً'), icon: Icon(Icons.print_rounded)),
+                    ButtonSegment(value: 'never', label: Text('لا تُظهر'), icon: Icon(Icons.block)),
+                  ],
+                  selected: {_voucherMode == 'always' || _voucherMode == 'never' ? _voucherMode : 'ask'},
+                  onSelectionChanged: (s) => setState(() => _voucherMode = s.first),
+                ),
+              ),
+              const Divider(height: 1),
+              _buildActionTile(
+                icon: Icons.dashboard_customize_outlined,
+                iconColor: Colors.deepOrange,
+                title: 'مصمم السندات — لكل نوع سند قوالبه',
+                subtitle: 'سند قبض (تسديد دين)، سند قبض/صرف تعديل الفاتورة النقدية، إشعار مدين/دائن للآجلة: '
+                    'اختر النوع، صمّمه من قالب جاهز أو ورقة بيضاء، وحدد هل يُسأل عن طباعته',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const VoucherDesignerScreen()),
+                ),
+              ),
+            ]),
+          ),
           _buildSettingsCard(
             icon: Icons.receipt_long,
             iconColor: Colors.indigo,
@@ -1464,7 +1637,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 icon: Icons.design_services,
                 iconColor: Colors.indigo,
                 title: 'معلومات الشركة والشعار (والتصميم الأصلي)',
-                subtitle: 'اسم الشركة، الشعار، العنوان، الهواتف، الرقم الضريبي — تُستعمل في كل التصاميم. وأعمدة وألوان التصميم الأصلي',
+                subtitle: 'اسم الشركة، الشعار، العنوان، حتى 4 هواتف، الرقم الضريبي — تُستعمل في كل التصاميم. '
+                    'أعمدة الجدول من مصمم الفاتورة',
                 onTap: () {
                   Navigator.push(
                     context,
@@ -1481,6 +1655,35 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const InvoiceEntryLayoutScreen()),
+                ),
+              ),
+              const Divider(height: 1),
+              // 🧩 مكان المجاميع والدفع وزر الحفظ — مفتاح مباشر
+              FutureBuilder<bool>(
+                future: InvoiceSidePanelPref.load(),
+                builder: (context, _) => ValueListenableBuilder<bool>(
+                  valueListenable: InvoiceSidePanelPref.notifier,
+                  builder: (context, side, _) => SwitchListTile(
+                    contentPadding: const EdgeInsets.symmetric(vertical: 2),
+                    secondary: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(side ? Icons.view_sidebar_outlined : Icons.call_to_action_outlined,
+                          color: Colors.indigo, size: 24),
+                    ),
+                    title: const Text('عرض المجاميع في لوحة جانبية', style: TextStyle(fontWeight: FontWeight.w500)),
+                    subtitle: Text(
+                      side
+                          ? 'مفعّل: الإجمالي والخصم والدفع وزر الحفظ في لوحة على جانب شاشة الفاتورة'
+                          : 'متوقف: تظهر في شريط مضغوط أسفل الجدول، والجدول بعرض الشاشة كاملاً',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                    value: side,
+                    onChanged: (v) => InvoiceSidePanelPref.set(v),
+                  ),
                 ),
               ),
             ]),
@@ -1500,7 +1703,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
                   value: _autoScrollInvoice,
-                  activeColor: primaryColor,
+                  activeThumbColor: primaryColor,
                   onChanged: (value) {
                     setState(() {
                       _autoScrollInvoice = value;
@@ -1516,7 +1719,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
                   value: _allowNegativeStock,
-                  activeColor: Colors.orange,
+                  activeThumbColor: Colors.orange,
                   onChanged: (value) {
                     setState(() {
                       _allowNegativeStock = value;
@@ -1576,40 +1779,41 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 ),
                 const SizedBox(height: 8),
                 
-                // الخيار الأول: آخر سعر شراء
-                RadioListTile<String>(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('آخر سعر شراء', style: TextStyle(fontWeight: FontWeight.w500)),
-                  subtitle: Text(
-                    'يتم تحديث سعر التكلفة مباشرة بآخر سعر شراء من المورد. أبسط وأوضح.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  value: 'last_purchase',
+                RadioGroup<String>(
                   groupValue: _costingMethod,
-                  activeColor: Colors.green,
                   onChanged: (value) {
                     setState(() {
                       _costingMethod = value!;
                     });
                   },
-                ),
-                
-                // الخيار الثاني: المتوسط المرجح
-                RadioListTile<String>(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('المتوسط المرجح (AVCO)', style: TextStyle(fontWeight: FontWeight.w500)),
-                  subtitle: Text(
-                    'يحسب متوسط التكلفة بناءً على المخزون الحالي والجديد. مفيد لتنعيم تقلبات الأسعار.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // الخيار الأول: آخر سعر شراء
+                      RadioListTile<String>(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('آخر سعر شراء', style: TextStyle(fontWeight: FontWeight.w500)),
+                        subtitle: Text(
+                          'يتم تحديث سعر التكلفة مباشرة بآخر سعر شراء من المورد. أبسط وأوضح.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                        value: 'last_purchase',
+                        activeColor: Colors.green,
+                      ),
+
+                      // الخيار الثاني: المتوسط المرجح
+                      RadioListTile<String>(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('المتوسط المرجح (AVCO)', style: TextStyle(fontWeight: FontWeight.w500)),
+                        subtitle: Text(
+                          'يحسب متوسط التكلفة بناءً على المخزون الحالي والجديد. مفيد لتنعيم تقلبات الأسعار.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                        value: 'avco',
+                        activeColor: Colors.blue,
+                      ),
+                    ],
                   ),
-                  value: 'avco',
-                  groupValue: _costingMethod,
-                  activeColor: Colors.blue,
-                  onChanged: (value) {
-                    setState(() {
-                      _costingMethod = value!;
-                    });
-                  },
                 ),
               ],
             ),
@@ -1713,18 +1917,18 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1A237E).withOpacity(0.05),
+                    color: const Color(0xFF1A237E).withValues(alpha: 0.05),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.2)),
+                    border: Border.all(color: const Color(0xFF1A237E).withValues(alpha: 0.2)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
+                      const Row(
                         children: [
-                          const Icon(Icons.usb, color: Color(0xFF1A237E), size: 20),
-                          const SizedBox(width: 8),
-                          const Text(
+                          Icon(Icons.usb, color: Color(0xFF1A237E), size: 20),
+                          SizedBox(width: 8),
+                          Text(
                             'طباعة عبر USB (Type-C / OTG)',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
@@ -1775,7 +1979,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.3)),
+                            border: Border.all(color: const Color(0xFF1A237E).withValues(alpha: 0.3)),
                           ),
                           child: Row(
                             children: [
@@ -1831,139 +2035,111 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'الأسعار والأرباح',
           Icons.trending_up,
           'حساب الأرباح، التسعير، تنبيهات المخزون',
+          keywords: 'ربح أرباح نسبة تسعير سعر جملة مفرد تنبيه تنبيهات نواقص ركود',
           [
           _buildSettingsCard(
-            icon: Icons.monetization_on,
-            iconColor: Colors.green,
+            icon: Icons.monetization_on_rounded,
+            iconColor: const Color(0xFF047857),
             title: 'إعدادات الأرباح',
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      flex: 2,
-                      child: Text('نسبة ربح الأصناف الخارجية (%):', style: TextStyle(fontSize: 14)),
-                    ),
-                    Expanded(
-                      flex: 1,
-                      child: TextField(
-                        controller: _adHocProfitController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        textAlign: TextAlign.center,
-                        decoration: InputDecoration(
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                          hintText: '10.0',
-                          suffixText: '%',
-                        ),
-                      ),
-                    ),
-                  ],
+            child: LayoutBuilder(builder: (context, c) {
+              final cols = c.maxWidth >= 620 ? 2 : 1;
+              final w = (c.maxWidth - (cols - 1) * 12) / cols;
+              return Wrap(spacing: 12, runSpacing: 12, children: [
+                SizedBox(
+                  width: w,
+                  child: _percentTile(
+                    controller: _adHocProfitController,
+                    icon: Icons.add_shopping_cart_rounded,
+                    color: const Color(0xFF047857),
+                    title: 'ربح الأصناف الخارجية',
+                    hint: '10',
+                    help: 'للأصناف غير الموجودة في قاعدة البيانات (Ad-Hoc) — تُحسب أرباحها بهذه النسبة.',
+                  ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'تستخدم للأصناف غير الموجودة في قاعدة البيانات (Ad-Hoc)',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                SizedBox(
+                  width: w,
+                  child: _percentTile(
+                    controller: _manualDebtProfitController,
+                    icon: Icons.edit_note_rounded,
+                    color: const Color(0xFF2563EB),
+                    title: 'ربح الديون اليدوية',
+                    hint: '15',
+                    help: 'لحساب الأرباح من الديون المسجّلة يدوياً (بلا فاتورة).',
+                  ),
                 ),
-                const Divider(height: 24),
-                Row(
-                  children: [
-                    const Expanded(
-                      flex: 2,
-                      child: Text('نسبة ربح الديون اليدوية (%):', style: TextStyle(fontSize: 14)),
-                    ),
-                    Expanded(
-                      flex: 1,
-                      child: TextField(
-                        controller: _manualDebtProfitController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        textAlign: TextAlign.center,
-                        decoration: InputDecoration(
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                          hintText: '15.0',
-                          suffixText: '%',
-                        ),
-                      ),
-                    ),
-                  ],
+                SizedBox(
+                  width: w,
+                  child: _percentTile(
+                    controller: _discountProfitPctController,
+                    icon: Icons.local_offer_rounded,
+                    color: const Color(0xFFDC2626),
+                    title: 'الخصم من الربح',
+                    hint: '10',
+                    help: 'في الفاتورة: الضغط على كلمة «الخصم» يقترح خصم هذه النسبة من ربح الفاتورة '
+                        '(10% من ربح 200,000 = خصم 20,000). يمكن تغييرها في كل فاتورة.',
+                  ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'تستخدم لحساب الأرباح من الديون المسجلة يدوياً',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-              ],
-            ),
+              ]);
+            }),
           ),
           // 📈 إعدادات التسعير
           _buildSettingsCard(
-            icon: Icons.auto_graph,
-            iconColor: Colors.orange,
-            title: 'محرك التسعير الذكي (Smart Pricing)',
+            icon: Icons.auto_graph_rounded,
+            iconColor: const Color(0xFFEA580C),
+            title: 'محرك التسعير الذكي',
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'اختر الاستراتيجية الافتراضية لتسعير المنتجات:',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                ),
+                const Text('السعر المقترح عند إضافة مادة للفاتورة',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Color(0xFF1E293B))),
+                const SizedBox(height: 2),
+                Text('يُقترح من سجل مبيعات المادة. «ذكي» لا يقترح سعراً أقل من الكلفة؛ بقية الأنماط تعطي السعر كما في السجل، وبلا سجل يبقى سعر المادة.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600])),
                 const SizedBox(height: 12),
                 _buildPricingModeSelector(),
-                
-                const Divider(height: 32),
-                
-                const Text(
-                  'إعدادات تصنيف العملاء:',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.orange.withOpacity(0.3)),
-                        ),
-                        child: TextField(
-                          controller: _wholesaleCustomerLimitController,
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            labelText: 'الحد الأدنى لعميل الجملة (ع.د)',
-                            labelStyle: TextStyle(color: Colors.orange),
-                            icon: Icon(Icons.storefront, color: Colors.orange),
-                          ),
-                        ),
-                      ),
+                const SizedBox(height: 18),
+                const Divider(height: 1, color: Color(0xFFEEF2F7)),
+                const SizedBox(height: 16),
+                LayoutBuilder(builder: (context, c) {
+                  final wide = c.maxWidth >= 620;
+                  final field = TextField(
+                    controller: _wholesaleCustomerLimitController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'الحد الأدنى لمشتريات عميل الجملة',
+                      prefixIcon: Icon(Icons.storefront_rounded),
+                      suffixText: 'د.ع',
+                      helperText: '0 = تعطيل التصنيف التلقائي',
                     ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'المبلغ الإجمالي للمشتريات لتصنيف العميل كـ (جملة) تلقائياً.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                
-                const Divider(height: 32),
-                
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () => _trainPricingModel(),
-                    icon: const Icon(Icons.sync),
-                    label: const Text('تهيئة وتدريب محرك التسعير', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
+                  );
+                  const info = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('تصنيف عملاء الجملة تلقائياً',
+                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Color(0xFF1E293B))),
+                    SizedBox(height: 2),
+                    Text('إذا بلغ مجموع مشتريات العميل (الفواتير المحفوظة) هذا المبلغ يُعامَل كعميل جملة في اقتراح السعر.',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF64748B), height: 1.5)),
+                  ]);
+                  return wide
+                      ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const Expanded(child: info),
+                          const SizedBox(width: 16),
+                          SizedBox(width: 300, child: field),
+                        ])
+                      : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          info,
+                          const SizedBox(height: 10),
+                          field,
+                        ]);
+                }),
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: Color(0xFFEEF2F7)),
+                const SizedBox(height: 6),
+                _buildActionTile(
+                  icon: Icons.build_circle_outlined,
+                  iconColor: const Color(0xFFEA580C),
+                  title: 'إصلاح إحصائيات التسعير',
+                  subtitle: 'يعيد إنشاء جداول الإحصاء التي يقرأ منها المحرك — استعمله إذا توقفت اقتراحات الأسعار عن الظهور',
+                  onTap: _trainPricingModel,
                 ),
               ],
             ),
@@ -1992,7 +2168,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'النسخ الاحتياطي والمزامنة',
           Icons.cloud_sync_outlined,
           'استعادة القاعدة، تيليغرام، ديسكورد، دروب بوكس، المزامنة',
+          keywords: 'رفع البيانات وجهات ترتيب جوجل درايف google drive مسار مكان مجلد ملف قاعدة البيانات نسخ احتياطي نسخة استعادة قاعدة تيليجرام تلغرام telegram discord dropbox فايربيس firebase مزامنة ويب متصفح',
           [
+          // ☁️ زر «رفع البيانات»: إلى أين يرفع وبأي ترتيب
+          _uploadTargetsCard(),
+          // 📂 المسار الوحيد لقاعدة البيانات + فتح المجلد
+          const DatabaseLocationCard(),
           // 📦 قسم استعادة النسخة الاحتياطية لقاعدة البيانات
           _buildSettingsCard(
             icon: Icons.settings_backup_restore_rounded,
@@ -2015,18 +2196,41 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             icon: Icons.telegram,
             iconColor: Colors.blue,
             title: 'النسخ الاحتياطي - تيليغرام',
-            child: _buildActionTile(
-              icon: Icons.cloud_upload,
-              iconColor: Colors.blue,
-              title: 'إعدادات رفع قاعدة البيانات',
-              subtitle: 'ربط البوت والقناة لرفع النسخ الاحتياطية والتقارير',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const TelegramSettingsScreen()),
-                ).then((_) => _loadSettings());
-              },
-            ),
+            child: Column(children: [
+              _buildActionTile(
+                icon: Icons.cloud_upload,
+                iconColor: Colors.blue,
+                title: 'إعدادات رفع قاعدة البيانات',
+                subtitle: 'ربط البوت والقناة لرفع النسخ الاحتياطية والتقارير',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const TelegramSettingsScreen()),
+                  ).then((_) => _loadSettings());
+                },
+              ),
+              const Divider(height: 1),
+              // 📤 طريقة رفع الفواتير مع زر «رفع قاعدة البيانات»
+              _invoiceUploadModeTile(
+                icon: Icons.receipt_long_rounded,
+                title: 'رفع الفواتير العادية والجملة',
+                value: _tgRegularMode,
+                onChanged: (v) => setState(() => _tgRegularMode = v),
+              ),
+              _invoiceUploadModeTile(
+                icon: Icons.point_of_sale_rounded,
+                title: 'رفع إيصالات الكاشير',
+                value: _tgPosMode,
+                onChanged: (v) => setState(() => _tgPosMode = v),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.edit_note_rounded, color: Colors.blue),
+                title: const Text('إعادة رفع الفاتورة بعد تعديلها'),
+                subtitle: const Text('فاتورة رُفعت ثم عُدّلت تُرفع نسختها الجديدة مع علامة «معدّلة»'),
+                value: _tgResendEdited,
+                onChanged: (v) => setState(() => _tgResendEdited = v),
+              ),
+            ]),
           ),
           // 💬 إعدادات Discord Webhook
           _buildSettingsCard(
@@ -2119,7 +2323,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _SettingsSection(
           'الواجهة',
           Icons.dashboard_customize_outlined,
-          'الشريط الجانبي، واجهة إدخال البضاعة، واتجاه الشاشة',
+          'الشريط الجانبي، فتح الشاشات كنافذة، واجهة إدخال البضاعة، واتجاه الشاشة',
+          keywords: 'شريط جانبي تنقل واجهة إدخال بضاعة اتجاه أفقي تدوير نافذة منبثقة بوب اب مسج بوكس popup رمز المادة لغة انجليزي لوحة المفاتيح كيبورد',
           [
           // 🧭 قسم إعدادات الواجهة والشريط الجانبي
           _buildSettingsCard(
@@ -2132,7 +2337,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   title: const Text('إظهار شريط التنقل الجانبي دائماً', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                   subtitle: const Text('يظهر تلقائياً على الشاشات الكبيرة (تابلت/ديسكتوب). يمكنك تفعيله هنا للهواتف أيضاً.', style: TextStyle(fontSize: 12)),
                   value: _showSideNav,
-                  activeColor: const Color(0xFF1E1E2E),
+                  activeThumbColor: const Color(0xFF1E1E2E),
                   onChanged: (val) {
                     setState(() => _showSideNav = val);
                     _saveSettings();
@@ -2140,6 +2345,20 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 ),
               ],
             ),
+          ),
+          // 🪟 فتح الشاشات الرئيسية كنافذة منبثقة
+          _buildSettingsCard(
+            icon: Icons.picture_in_picture_alt_rounded,
+            iconColor: const Color(0xFF0F2A4A),
+            title: 'فتح الشاشات كنافذة منبثقة',
+            child: const PopupScreensTile(),
+          ),
+          // ⌨️ رمز المادة بالإنجليزية تلقائياً
+          _buildSettingsCard(
+            icon: Icons.keyboard_alt_outlined,
+            iconColor: const Color(0xFF1E3A8A),
+            title: 'لغة الكتابة في رمز المادة',
+            child: const ItemCodeKeyboardTile(),
           ),
           // 📦 واجهة إدخال البضاعة
           _buildSettingsCard(
@@ -2154,24 +2373,24 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               icon: Icons.screen_rotation,
               iconColor: Colors.purple,
               title: 'اتجاه الشاشة (الجوال والتابلت)',
-              child: Column(
-                children: [
-                  RadioListTile<String>(
-                    title: const Text('أفقي ثابت (Landscape)'),
-                    subtitle: const Text('تثبيت الشاشة بالوضع الأفقي فقط وتفادي التدوير التلقائي'),
-                    value: 'landscape',
-                    groupValue: _screenOrientation,
-                    onChanged: (val) => _changeOrientation(val!),
-                  ),
-                  const Divider(height: 1),
-                  RadioListTile<String>(
-                    title: const Text('عرض تلقائي (Auto-Rotate)'),
-                    subtitle: const Text('السماح بالتدوير التلقائي حسب وضع الجوال ومستشعر الدوران'),
-                    value: 'auto',
-                    groupValue: _screenOrientation,
-                    onChanged: (val) => _changeOrientation(val!),
-                  ),
-                ],
+              child: RadioGroup<String>(
+                groupValue: _screenOrientation,
+                onChanged: (val) => _changeOrientation(val!),
+                child: const Column(
+                  children: [
+                    RadioListTile<String>(
+                      title: Text('أفقي ثابت (Landscape)'),
+                      subtitle: Text('تثبيت الشاشة بالوضع الأفقي فقط وتفادي التدوير التلقائي'),
+                      value: 'landscape',
+                    ),
+                    Divider(height: 1),
+                    RadioListTile<String>(
+                      title: Text('عرض تلقائي (Auto-Rotate)'),
+                      subtitle: Text('السماح بالتدوير التلقائي حسب وضع الجوال ومستشعر الدوران'),
+                      value: 'auto',
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -2180,6 +2399,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'النظام والأدوات',
           Icons.build_circle_outlined,
           'الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
+          keywords: 'شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات اختبار تحمل طباعة مخزون باركود ميزان',
           [
           // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
           _buildSettingsCard(
@@ -2205,6 +2425,17 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   title: 'إعدادات الطباعة والمخزون',
                   subtitle: 'A4 أو 80mm، ملصقات الباركود، باركود الميزان، حسابات الجرد',
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ErpSettingsScreen())),
+                ),
+                _buildActionTile(
+                  icon: Icons.merge_type,
+                  iconColor: Colors.deepOrange,
+                  title: 'دمج الحسابات المكررة',
+                  subtitle: 'حسابان بالاسم نفسه في سجل الديون ← حساب واحد (بتأكيدك ونسخة احتياطية)',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.manageUsers)) {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const DuplicateCustomersScreen()));
+                    }
+                  },
                 ),
                 _buildActionTile(
                   icon: Icons.manage_search,
@@ -2239,6 +2470,15 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             title: 'البحث الذكي (AI)',
             child: Column(
               children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.bolt_rounded, color: Colors.deepPurple),
+                  title: const Text('تسريع البحث (الذاكرة المؤقتة)'),
+                  subtitle: const Text('يحفظ علاقات مواد الفاتورة الحالية في الذاكرة، فلا يتأخر البحث أثناء الكتابة'),
+                  value: _enableSmartSearchRamCache,
+                  activeThumbColor: Colors.deepPurple,
+                  onChanged: (v) => setState(() => _enableSmartSearchRamCache = v),
+                ),
+                const Divider(height: 1),
                 _buildActionTile(
                   icon: Icons.model_training,
                   iconColor: Colors.purple,
@@ -2305,7 +2545,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   // 🧠 دالة تدريب البحث الذكي
@@ -2343,12 +2583,11 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       ),
     );
 
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted) return;
 
     // عرض مؤشر التقدم
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (context) => const AlertDialog(
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2369,11 +2608,11 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     try {
       final stats = await smart_search.SmartSearchService.instance.trainOnAllInvoices(
         onProgress: (current, total, message) {
-          print('🧠 $message ($current/$total)');
+          debugPrint('🧠 $message ($current/$total)');
         },
       );
 
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
 
       if (!mounted) return;
 
@@ -2410,8 +2649,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         ),
       );
     } catch (e) {
+      LoadingDialog.hide();
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ في التدريب: $e'), backgroundColor: Colors.red),
         );
@@ -2421,9 +2660,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
   // 🧠 دالة عرض إحصائيات البحث الذكي
   Future<void> _showSmartSearchStats() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (context) => const AlertDialog(
         content: Row(
           children: [
@@ -2438,7 +2676,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     try {
       final stats = await smart_search.SmartSearchService.instance.getTrainingStats();
 
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
 
       if (!mounted) return;
 
@@ -2485,8 +2723,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         ),
       );
     } catch (e) {
+      LoadingDialog.hide();
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
         );
@@ -2513,9 +2751,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
   // 🏷️ دالة إدارة الماركات
   Future<void> _showBrandsManagement() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (context) => const AlertDialog(
         content: Row(
           children: [
@@ -2530,7 +2767,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     try {
       final brands = await smart_search.SmartSearchService.instance.getAllBrandsWithCount();
       
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
       if (!mounted) return;
 
       await showDialog(
@@ -2542,8 +2779,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       await smart_search.SmartSearchService.instance.loadAutoDiscoveredBrands();
       
     } catch (e) {
+      LoadingDialog.hide();
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
         );
@@ -2553,9 +2790,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
   // 🛡️ دالة الفحص الشامل
   Future<void> _runFullIntegrityCheck() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (context) => const AlertDialog(
         content: Row(
           children: [
@@ -2571,7 +2807,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       final db = DatabaseService();
       final reports = await db.verifyAllCustomersFinancialIntegrity();
       
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
       
       final healthyCount = reports.where((r) => r.isHealthy).length;
       final issueCount = reports.where((r) => !r.isHealthy).length;
@@ -2773,8 +3009,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         ),
       );
     } catch (e) {
+      LoadingDialog.hide();
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
         );
@@ -2786,9 +3022,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
   // 🛡️ دالة عرض الملخص المالي
   Future<void> _showFinancialSummary() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (context) => const AlertDialog(
         content: Row(
           children: [
@@ -2804,7 +3039,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       final db = DatabaseService();
       final summary = await db.getFinancialSummary();
       
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
       
       final formatter = NumberFormat('#,##0', 'en_US');
       
@@ -2928,8 +3163,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         ),
       );
     } catch (e) {
+      LoadingDialog.hide();
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
         );
@@ -2939,9 +3174,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 
   // 📄 دالة مشاركة كشوفات حسابات جميع العملاء
   Future<void> _shareAllAccountStatements() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (context) => const AlertDialog(
         content: Row(
           children: [
@@ -2961,7 +3195,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       final customers = await db.getAllCustomers();
       
       if (customers.isEmpty) {
-        if (mounted) Navigator.pop(context);
+        LoadingDialog.hide();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('لا يوجد عملاء في النظام'), backgroundColor: Colors.orange),
@@ -2981,7 +3215,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         getCustomerTransactions: getCustomerTransactionsForStatement,
       );
 
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
 
       // حفظ الملف
       final now = DateTime.now();
@@ -3025,8 +3259,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         );
       }
     } catch (e) {
+      LoadingDialog.hide();
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ في إنشاء كشوفات الحساب: $e'), backgroundColor: Colors.red),
         );
@@ -3042,31 +3276,30 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     );
   }
   // 📈 دالة تدريب التسعيرة التلقائي
+  /// 🔧 «إصلاح إحصائيات التسعير»: يعيد إنشاء الـ Views التي يقرأ منها محرك التسعير.
+  /// (كان اسمه «تدريب» مع انتظار مصطنع لثانيتين؛ لا يوجد تدريب فعلي — الـ Views
+  /// تُحسب لحظياً من الفواتير. الفائدة الحقيقية: إصلاحها إن كانت مفقودة أو تالفة.)
   Future<void> _trainPricingModel() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.price_change, color: Colors.orange),
-            SizedBox(width: 8),
-            Text('تدريب التسعيرة التلقائي'),
-          ],
-        ),
-        content: const Text(
-          'سيتم إعادة بناء البيانات الإحصائية (Views) وتسجيل أنماط تسعير العملاء من جميع الفواتير المحفوظة.\n\n'
-          'هل ترغب بالاستمرار؟',
-          style: TextStyle(fontSize: 16),
+      builder: (context) => ErpDialog(
+        title: 'إصلاح إحصائيات التسعير',
+        icon: Icons.build_circle_outlined,
+        color: const Color(0xFFEA580C),
+        width: 460,
+        content: const SetBanner(
+          'يعيد إنشاء جداول الإحصاء (Views) التي يقترح منها المحرك الأسعار. لا يغيّر أي فاتورة أو سعر. '
+          'الإحصاءات نفسها تتحدّث تلقائياً مع كل فاتورة — هذا الإجراء للإصلاح فقط.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
             child: const Text('إلغاء'),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEA580C)),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('تأكيد وبدء التدريب'),
+            child: const Text('إصلاح الآن'),
           ),
         ],
       ),
@@ -3075,9 +3308,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     if (confirmed != true) return;
 
     if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    LoadingDialog.show(
+      context,
       builder: (context) => const Center(
         child: Card(
           child: Padding(
@@ -3087,7 +3319,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               children: [
                 CircularProgressIndicator(),
                 SizedBox(height: 16),
-                Text('جاري حساب مؤشرات التسعير الذكي...'),
+                Text('جارٍ إصلاح إحصائيات التسعير...'),
               ],
             ),
           ),
@@ -3123,90 +3355,180 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         JOIN invoices i ON ii.invoice_id = i.id
       ''');
 
-      // محاكاة تأخير لمعالجة ضخمة محتملة للذكاء الاصطناعي (حتى لا يبدو لحظياً جداً للمستخدم)
-      await Future.delayed(const Duration(seconds: 2));
-      
+      LoadingDialog.hide(); // إغلاق مربع الحوار
       if (!mounted) return;
-      Navigator.of(context).pop(); // إغلاق مربع الحوار
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ اكتمل تدريب التسعيرة التلقائي بنجاح!'),
+          content: Text('✅ تم إصلاح إحصائيات التسعير'),
           backgroundColor: Colors.green,
         ),
       );
     } catch (e) {
+      LoadingDialog.hide(); // إغلاق مربع الحوار
       if (!mounted) return;
-      Navigator.of(context).pop(); // إغلاق مربع الحوار
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('❌ حدث خطأ أثناء التدريب: $e'),
+          content: Text('❌ تعذّر إصلاح الإحصائيات: $e'),
           backgroundColor: Colors.red,
         ),
       );
     }
   }
 
-  Widget _buildPricingModeSelector() {
-    final modes = [
-      {'value': 99, 'title': 'ذكي (Smart)', 'subtitle': 'خوارزمية متقدمة', 'icon': Icons.psychology},
-      {'value': 1, 'title': 'آخر سعر', 'subtitle': 'آخر سعر بيع', 'icon': Icons.history},
-      {'value': 3, 'title': 'متوسط 3', 'subtitle': 'متوسط 3 فواتير', 'icon': Icons.functions},
-      {'value': 21, 'title': 'الأكثر طلباً', 'subtitle': 'خلال 30 يوم', 'icon': Icons.trending_up},
-    ];
-
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: modes.map((mode) {
-        final isSelected = _pricingMode == mode['value'];
-        return InkWell(
-          onTap: () => setState(() => _pricingMode = mode['value'] as int),
-          borderRadius: BorderRadius.circular(12),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: (MediaQuery.of(context).size.width - 80) / 2, // 2 items per row
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isSelected ? Colors.orange : Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isSelected ? Colors.orange : Colors.grey.shade300,
-                width: 2,
-              ),
-              boxShadow: isSelected
-                  ? [BoxShadow(color: Colors.orange.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))]
-                  : [],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  mode['icon'] as IconData,
-                  color: isSelected ? Colors.white : Colors.orange,
-                  size: 24,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  mode['title'] as String,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isSelected ? Colors.white : Colors.black87,
-                  ),
-                ),
-                Text(
-                  mode['subtitle'] as String,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isSelected ? Colors.white70 : Colors.grey[600],
-                  ),
-                ),
-              ],
+  /// حقل نسبة مئوية ببطاقة: عنوان + شرح + حقل + أزرار سريعة.
+  Widget _percentTile({
+    required TextEditingController controller,
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String hint,
+    required String help,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+            child: Icon(icon, size: 19, color: color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(title,
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Color(0xFF1E293B))),
+          ),
+          SizedBox(
+            width: 110,
+            child: TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: color),
+              decoration: InputDecoration(hintText: hint, suffixText: '%', isDense: true),
             ),
           ),
-        );
-      }).toList(),
+        ]),
+        const SizedBox(height: 8),
+        Text(help, style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.5)),
+        const SizedBox(height: 8),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: controller,
+          builder: (context, v, _) {
+            final current = double.tryParse(v.text.trim());
+            return Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final p in const [5, 10, 15, 20, 25, 30])
+                ChoiceChip(
+                  label: Text('$p%'),
+                  selected: current == p.toDouble(),
+                  showCheckmark: false,
+                  visualDensity: VisualDensity.compact,
+                  selectedColor: color.withValues(alpha: 0.14),
+                  side: BorderSide(color: current == p.toDouble() ? color : const Color(0xFFE6EBF2)),
+                  labelStyle: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: current == p.toDouble() ? color : const Color(0xFF1E293B),
+                  ),
+                  onSelected: (_) => controller.text = '$p',
+                ),
+            ]);
+          },
+        ),
+      ]),
     );
+  }
+
+  Widget _buildPricingModeSelector() {
+    // (كان عرض البطاقة يُحسب من عرض الشاشة كاملة فيخرج عن عرض البطاقة الفعلي
+    // داخل تخطيط الإعدادات — الآن من عرض المكان المتاح.)
+    // أنماط التسعير كلها كما في debt_book (نفس الأرقام المحفوظة)
+    const modes = <(int, String, String, IconData)>[
+      (99, 'ذكي', 'يوازن آخر الأسعار وتكرارها واتجاهها وسعر الزبون المعتاد', Icons.psychology_rounded),
+      (0, 'مطفأ', 'أسعار المادة كما أُدخلت، حسب نوع الفاتورة (مفرد، جملة…) — بلا اقتراح', Icons.block_rounded),
+      (1, 'آخر سعر', 'آخر سعر بيعت به المادة بهذه الوحدة', Icons.history_rounded),
+      (3, 'متوسط آخر 3', 'متوسط آخر ثلاث عمليات بيع', Icons.functions_rounded),
+      (5, 'متوسط آخر 5', 'متوسط آخر خمس عمليات بيع', Icons.functions_rounded),
+      (11, 'متوسط آخر شهر', 'متوسط أسعار البيع خلال 30 يوماً', Icons.calendar_view_month_rounded),
+      (12, 'متوسط آخر شهرين', 'متوسط أسعار البيع خلال 60 يوماً', Icons.calendar_view_month_rounded),
+      (13, 'متوسط آخر 3 أشهر', 'متوسط أسعار البيع خلال 90 يوماً', Icons.calendar_view_month_rounded),
+      (21, 'الأكثر تكراراً — شهر', 'السعر الأكثر تكراراً خلال 30 يوماً', Icons.trending_up_rounded),
+      (22, 'الأكثر تكراراً — شهرين', 'السعر الأكثر تكراراً خلال 60 يوماً', Icons.trending_up_rounded),
+      (23, 'الأكثر تكراراً — 3 أشهر', 'السعر الأكثر تكراراً خلال 90 يوماً', Icons.trending_up_rounded),
+      (101, 'شخصي — بالتكلفة', 'كلفة اليوم + مبلغ الربح من آخر بيع لهذا الزبون (أو للسوق)', Icons.person_pin_rounded),
+      (102, 'شخصي — بالنسبة', 'كلفة اليوم × نسبة الربح من آخر بيع لهذا الزبون (أو للسوق)', Icons.percent_rounded),
+      (103, 'شخصي — هايبرد', 'متوسط الطريقتين: مبلغ الربح ونسبته', Icons.bolt_rounded),
+    ];
+    const c = Color(0xFFEA580C);
+    return LayoutBuilder(builder: (context, box) {
+      final cols = box.maxWidth >= 640 ? 4 : (box.maxWidth >= 360 ? 2 : 1);
+      final w = (box.maxWidth - (cols - 1) * 10) / cols;
+      return Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: [
+          for (final m in modes)
+            SizedBox(
+              width: w,
+              child: Builder(builder: (context) {
+                final selected = _pricingMode == m.$1;
+                return Material(
+                  color: selected ? c.withValues(alpha: 0.07) : Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: selected ? c : const Color(0xFFE6EBF2), width: selected ? 1.6 : 1),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => setState(() => _pricingMode = m.$1),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: selected ? c : c.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(m.$4, size: 19, color: selected ? Colors.white : c),
+                          ),
+                          const Spacer(),
+                          AnimatedOpacity(
+                            duration: const Duration(milliseconds: 160),
+                            opacity: selected ? 1 : 0,
+                            child: const Icon(Icons.check_circle_rounded, size: 19, color: c),
+                          ),
+                        ]),
+                        const SizedBox(height: 10),
+                        Text(m.$2,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: selected ? c : const Color(0xFF1E293B),
+                            )),
+                        const SizedBox(height: 2),
+                        Text(m.$3,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11.5, color: Color(0xFF64748B), height: 1.4)),
+                      ]),
+                    ),
+                  ),
+                );
+              }),
+            ),
+        ],
+      );
+    });
   }
 }
 
@@ -3215,63 +3537,71 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
 // 🏷️ Dialog لإدارة الماركات
 class _BrandsManagementDialog extends StatefulWidget {
   final List<Map<String, dynamic>> brands;
-  
+
   const _BrandsManagementDialog({required this.brands});
-  
+
   @override
   State<_BrandsManagementDialog> createState() => _BrandsManagementDialogState();
 }
 
 class _BrandsManagementDialogState extends State<_BrandsManagementDialog> {
+  static const _teal = Color(0xFF0F766E);
+
   late List<Map<String, dynamic>> _brands;
   final TextEditingController _newBrandController = TextEditingController();
   bool _isLoading = false;
   String _searchQuery = '';
-  
+
+  /// 0 = الكل، 1 = يدوية، 2 = مكتشفة
+  int _filter = 0;
+
+  /// رسالة داخل النافذة (الرسائل السريعة كانت تظهر خلف النافذة فلا تُرى).
+  (bool ok, String msg)? _notice;
+
   @override
   void initState() {
     super.initState();
     _brands = List.from(widget.brands);
   }
-  
+
   @override
   void dispose() {
     _newBrandController.dispose();
     super.dispose();
   }
-  
+
+  static bool _isManual(Map<String, dynamic> b) => ((b['count'] as num?)?.toInt() ?? 0) >= 999;
+
   List<Map<String, dynamic>> get _filteredBrands {
-    if (_searchQuery.isEmpty) return _brands;
-    return _brands.where((b) => 
-      (b['brand'] as String).toLowerCase().contains(_searchQuery.toLowerCase())
-    ).toList();
+    final q = _searchQuery.trim().toLowerCase();
+    return _brands.where((b) {
+      if (_filter == 1 && !_isManual(b)) return false;
+      if (_filter == 2 && _isManual(b)) return false;
+      return q.isEmpty || (b['brand'] as String).toLowerCase().contains(q);
+    }).toList();
   }
-  
+
   Future<void> _addBrand() async {
     final brandName = _newBrandController.text.trim();
     if (brandName.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('أدخل اسم الماركة'), backgroundColor: Colors.orange),
-      );
+      setState(() => _notice = (false, 'أدخل اسم الماركة'));
       return;
     }
-    
-    // التحقق من عدم وجود الماركة
-    final exists = _brands.any((b) => 
-      (b['brand'] as String).toLowerCase() == brandName.toLowerCase()
-    );
+
+    final exists = _brands.any((b) => (b['brand'] as String).toLowerCase() == brandName.toLowerCase());
     if (exists) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الماركة موجودة بالفعل'), backgroundColor: Colors.orange),
-      );
+      setState(() => _notice = (false, 'الماركة «$brandName» موجودة بالفعل'));
       return;
     }
-    
-    setState(() => _isLoading = true);
-    
+
+    setState(() {
+      _isLoading = true;
+      _notice = null;
+    });
+
     try {
       await smart_search.SmartSearchService.instance.addManualBrand(brandName);
-      
+      if (!mounted) return;
       setState(() {
         _brands.insert(0, {
           'brand': brandName,
@@ -3280,214 +3610,208 @@ class _BrandsManagementDialogState extends State<_BrandsManagementDialog> {
         });
         _newBrandController.clear();
         _isLoading = false;
+        _notice = (true, 'تمت إضافة الماركة: $brandName');
       });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('تمت إضافة الماركة: $brandName'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
     } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
-        );
-      }
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _notice = (false, 'خطأ: $e');
+      });
     }
   }
-  
+
   Future<void> _deleteBrand(String brand) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.warning, color: Colors.orange),
-            SizedBox(width: 8),
-            Text('حذف الماركة'),
-          ],
+      builder: (ctx) => ErpDialog(
+        title: 'حذف الماركة',
+        subtitle: brand,
+        icon: Icons.label_off_rounded,
+        color: const Color(0xFFB91C1C),
+        width: 420,
+        content: const SetBanner(
+          'ستُحذف الماركة من قائمة البحث الذكي. المواد نفسها لا تُحذف.',
+          kind: SetBannerKind.warn,
         ),
-        content: Text('هل تريد حذف الماركة "$brand"؟'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('حذف'),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB91C1C)),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.delete_outline_rounded, size: 19),
+            label: const Text('حذف'),
           ),
         ],
       ),
     );
-    
-    if (confirmed != true) return;
-    
-    setState(() => _isLoading = true);
-    
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _notice = null;
+    });
+
     try {
       await smart_search.SmartSearchService.instance.deleteBrand(brand);
-      
+      if (!mounted) return;
       setState(() {
         _brands.removeWhere((b) => b['brand'] == brand);
         _isLoading = false;
+        _notice = (true, 'تم حذف الماركة: $brand');
       });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('تم حذف الماركة: $brand'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
     } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
-        );
-      }
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _notice = (false, 'خطأ: $e');
+      });
     }
   }
-  
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Row(
+    final list = _filteredBrands;
+    final manualCount = _brands.where(_isManual).length;
+    final autoCount = _brands.length - manualCount;
+
+    Widget filterChip(int value, String label, int count) => ChoiceChip(
+          label: Text('$label ($count)'),
+          selected: _filter == value,
+          showCheckmark: false,
+          selectedColor: _teal.withValues(alpha: 0.12),
+          side: BorderSide(color: _filter == value ? _teal : const Color(0xFFE6EBF2)),
+          labelStyle: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 12.5,
+            color: _filter == value ? _teal : const Color(0xFF1E293B),
+          ),
+          onSelected: (_) => setState(() => _filter = value),
+        );
+
+    return ErpDialog(
+      title: 'إدارة الماركات',
+      subtitle: '${_brands.length} ماركة يتعرّف عليها البحث الذكي',
+      icon: Icons.sell_rounded,
+      color: _teal,
+      width: 620,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.label, color: Colors.teal),
-          const SizedBox(width: 8),
-          const Expanded(child: Text('إدارة الماركات')),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.teal[50],
-              borderRadius: BorderRadius.circular(12),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _newBrandController,
+                enabled: !_isLoading,
+                decoration: const InputDecoration(
+                  labelText: 'ماركة جديدة',
+                  hintText: 'مثال: Schneider',
+                  prefixIcon: Icon(Icons.add_rounded),
+                ),
+                onSubmitted: (_) => _addBrand(),
+              ),
             ),
-            child: Text(
-              '${_brands.length}',
-              style: TextStyle(fontSize: 14, color: Colors.teal[700], fontWeight: FontWeight.bold),
+            const SizedBox(width: 10),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: _teal, minimumSize: const Size(0, 46)),
+              onPressed: _isLoading ? null : _addBrand,
+              icon: const Icon(Icons.add_rounded, size: 19),
+              label: const Text('إضافة'),
             ),
+          ]),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            child: _notice == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    key: ValueKey(_notice),
+                    padding: const EdgeInsets.only(top: 10),
+                    child: SetBanner(_notice!.$2, kind: _notice!.$1 ? SetBannerKind.ok : SetBannerKind.warn),
+                  ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            decoration: const InputDecoration(
+              hintText: 'بحث في الماركات...',
+              prefixIcon: Icon(Icons.search_rounded),
+            ),
+            onChanged: (value) => setState(() => _searchQuery = value),
+          ),
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            filterChip(0, 'الكل', _brands.length),
+            filterChip(1, 'يدوية', manualCount),
+            filterChip(2, 'مكتشفة', autoCount),
+          ]),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 340,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : list.isEmpty
+                    ? Center(
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.label_off_rounded, size: 44, color: Colors.grey[400]),
+                          const SizedBox(height: 8),
+                          Text(
+                            _brands.isEmpty
+                                ? 'لا توجد ماركات بعد\nأضف ماركة أو درّب البحث الذكي ليكتشفها من أسماء المواد'
+                                : 'لا توجد نتائج',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey[600], height: 1.6),
+                          ),
+                        ]),
+                      )
+                    : ListView.separated(
+                        itemCount: list.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        itemBuilder: (context, index) {
+                          final brand = list[index];
+                          final brandName = brand['brand'] as String;
+                          final count = (brand['count'] as num?)?.toInt() ?? 0;
+                          final isManual = _isManual(brand);
+                          final c = isManual ? _teal : const Color(0xFF64748B);
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFFE6EBF2)),
+                            ),
+                            child: Material(type: MaterialType.transparency, child: ListTile(
+                              dense: true,
+                              contentPadding: const EdgeInsetsDirectional.fromSTEB(10, 2, 4, 2),
+                              leading: Container(
+                                width: 34,
+                                height: 34,
+                                decoration: BoxDecoration(
+                                  color: c.withValues(alpha: 0.10),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(isManual ? Icons.person_add_alt_1_rounded : Icons.auto_awesome_rounded,
+                                    size: 17, color: c),
+                              ),
+                              title: Text(brandName,
+                                  style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF1E293B))),
+                              subtitle: Text(
+                                isManual ? 'مضافة يدوياً' : 'مكتشفة من $count مادة',
+                                style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
+                              ),
+                              trailing: IconButton(
+                                tooltip: 'حذف',
+                                icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFB91C1C), size: 20),
+                                onPressed: _isLoading ? null : () => _deleteBrand(brandName),
+                              ),
+                            )),
+                          );
+                        },
+                      ),
           ),
         ],
       ),
-      content: SizedBox(
-        width: double.maxFinite,
-        height: 450,
-        child: Column(
-          children: [
-            // حقل إضافة ماركة جديدة
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _newBrandController,
-                    decoration: InputDecoration(
-                      hintText: 'اسم الماركة الجديدة',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      prefixIcon: const Icon(Icons.add, size: 20),
-                    ),
-                    onSubmitted: (_) => _addBrand(),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.teal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  ),
-                  onPressed: _isLoading ? null : _addBrand,
-                  child: const Text('إضافة'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // حقل البحث
-            TextField(
-              decoration: InputDecoration(
-                hintText: 'بحث في الماركات...',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                prefixIcon: const Icon(Icons.search, size: 20),
-              ),
-              onChanged: (value) => setState(() => _searchQuery = value),
-            ),
-            const SizedBox(height: 12),
-            // قائمة الماركات
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _filteredBrands.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.label_off, size: 48, color: Colors.grey[400]),
-                              const SizedBox(height: 8),
-                              Text(
-                                _searchQuery.isEmpty 
-                                    ? 'لا توجد ماركات مكتشفة\nقم بتدريب البحث الذكي أولاً'
-                                    : 'لا توجد نتائج للبحث',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.grey[600]),
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: _filteredBrands.length,
-                          itemBuilder: (context, index) {
-                            final brand = _filteredBrands[index];
-                            final brandName = brand['brand'] as String;
-                            final count = brand['count'] as int;
-                            final isManual = count >= 999;
-                            
-                            return Card(
-                              margin: const EdgeInsets.only(bottom: 4),
-                              child: ListTile(
-                                dense: true,
-                                leading: CircleAvatar(
-                                  radius: 16,
-                                  backgroundColor: isManual ? Colors.teal[100] : Colors.grey[200],
-                                  child: Icon(
-                                    isManual ? Icons.person_add : Icons.auto_awesome,
-                                    size: 16,
-                                    color: isManual ? Colors.teal : Colors.grey[600],
-                                  ),
-                                ),
-                                title: Text(
-                                  brandName,
-                                  style: const TextStyle(fontWeight: FontWeight.w500),
-                                ),
-                                subtitle: Text(
-                                  isManual ? 'مضافة يدوياً' : 'مكتشفة ($count منتج)',
-                                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                                ),
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                                  onPressed: () => _deleteBrand(brandName),
-                                  tooltip: 'حذف',
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-            ),
-          ],
-        ),
-      ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('إغلاق'),
-        ),
+        FilledButton(onPressed: () => Navigator.pop(context), child: const Text('تم')),
       ],
     );
   }
@@ -3495,9 +3819,82 @@ class _BrandsManagementDialogState extends State<_BrandsManagementDialog> {
 
 /// قسم في شاشة الإعدادات: عنوان، أيقونة، وصف قصير، وبطاقاته
 class _SettingsSection {
-  const _SettingsSection(this.title, this.icon, this.description, this.cards);
+  const _SettingsSection(this.title, this.icon, this.description, this.cards, {this.keywords = ''});
   final String title;
   final IconData icon;
   final String description;
   final List<Widget> cards;
+
+  /// كلمات إضافية للبحث في الإعدادات (ما لا يظهر في العنوان والوصف).
+  final String keywords;
+
+  bool matches(String q) => q.isEmpty || title.contains(q) || description.contains(q) || keywords.contains(q);
+}
+
+/// عنصر في قائمة أقسام الإعدادات (المختار بخلفية كحلية وأيقونة بيضاء).
+class _SettingsRailItem extends StatefulWidget {
+  const _SettingsRailItem({required this.section, required this.selected, required this.color, required this.onTap});
+  final _SettingsSection section;
+  final bool selected;
+  final Color color;
+  final VoidCallback onTap;
+  @override
+  State<_SettingsRailItem> createState() => _SettingsRailItemState();
+}
+
+class _SettingsRailItemState extends State<_SettingsRailItem> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    final sel = widget.selected;
+    final c = widget.color;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            decoration: BoxDecoration(
+              color: sel ? c.withValues(alpha: 0.08) : (_hover ? const Color(0xFFF5F7FB) : Colors.transparent),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: sel ? c.withValues(alpha: 0.25) : Colors.transparent),
+            ),
+            child: Row(children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: sel ? c : c.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(widget.section.icon, size: 20, color: sel ? Colors.white : c),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(widget.section.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: sel ? FontWeight.w800 : FontWeight.w600,
+                        color: sel ? c : const Color(0xFF1E293B),
+                      )),
+                  Text(widget.section.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF64748B), height: 1.35)),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
 }

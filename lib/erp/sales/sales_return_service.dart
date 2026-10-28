@@ -22,6 +22,7 @@ import '../debts/customer_money.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
 import '../stock_helpers.dart';
+import '../../services/auth_service.dart';
 
 class ReturnLine {
   ReturnLine({
@@ -113,6 +114,46 @@ class SalesReturnService {
     return {for (final e in qty.entries) if (e.value > 0) e.key: (val[e.key] ?? 0) / e.value};
   }
 
+  /// 🔒 فاتورة جاءت بالمزامنة من جهاز آخر: مرتجعها من الجهاز الذي أنشأها، أو
+  /// بحساب المحاسب الذي أنشأها. يُرجع سبب المنع، أو null إن كان مسموحاً.
+  static String? returnBlockReasonFor({
+    required bool createdByMe,
+    String? creatorUsername,
+    String? currentUsername,
+  }) {
+    if (createdByMe) return null;
+    String norm(String? s) => (s ?? '').trim().toLowerCase();
+    final creator = norm(creatorUsername);
+    if (creator.isNotEmpty && creator == norm(currentUsername)) return null;
+    if (creator.isEmpty) {
+      return 'هذه الفاتورة من جهاز آخر ولا يُعرف محاسبها (وصلت قبل إرسال اسم المحاسب بالمزامنة). '
+          'أنشئ مرتجعها من الجهاز الذي أنشأها.';
+    }
+    final who = (creatorUsername ?? '').trim();
+    return 'هذه الفاتورة من جهاز آخر أنشأها «$who». '
+        'مرتجعها يُنشأ من الجهاز الذي أنشأها أو بالدخول بحساب «$who».';
+  }
+
+  Future<String?> returnBlockReason(int invoiceId) async {
+    final db = await erpDb();
+    final r = await db.query('invoices',
+        columns: ['is_created_by_me', 'created_by_username'], where: 'id = ?', whereArgs: [invoiceId], limit: 1);
+    if (r.isEmpty) return null;
+    return returnBlockReasonFor(
+      createdByMe: ((r.first['is_created_by_me'] as num?)?.toInt() ?? 1) != 0,
+      creatorUsername: r.first['created_by_username'] as String?,
+      currentUsername: AuthService().currentUser?.username,
+    );
+  }
+
+  /// رقم الفاتورة المطبوع (التجاري)، وإلا #المعرّف للفواتير القديمة.
+  Future<String> invoiceLabel(int invoiceId) async {
+    final db = await erpDb();
+    final r = await db.query('invoices', columns: ['invoice_number'], where: 'id = ?', whereArgs: [invoiceId], limit: 1);
+    final n = r.isEmpty ? null : r.first['invoice_number'] as String?;
+    return (n != null && n.trim().isNotEmpty) ? n.trim() : '#$invoiceId';
+  }
+
   /// البحث عن فاتورة برقمها التجاري أو بمعرّفها.
   Future<int?> findInvoice(String text) async {
     final t = text.trim();
@@ -155,6 +196,12 @@ class SalesReturnService {
     if (refundMode != 'credit' && cashBoxId == null) throw ErpException('اختر الصندوق الذي يُردّ منه المبلغ');
     await PeriodLock.assertOpen(date);
 
+    // 🔒 فاتورة من جهاز آخر: من جهازها أو بحساب محاسبها فقط
+    if (originalInvoiceId != null) {
+      final blocked = await returnBlockReason(originalInvoiceId);
+      if (blocked != null) throw ErpException(blocked);
+    }
+
     // التحقق من كميات الفاتورة الأصلية
     if (originalInvoiceId != null) {
       final allowed = await returnableFromInvoice(originalInvoiceId);
@@ -186,6 +233,7 @@ class SalesReturnService {
     String? txUuid;
     // الكلفة بسعرها يوم البيع (من الفاتورة الأصلية)، وإلا الكلفة الحالية
     final origCosts = originalInvoiceId == null ? const <int, double>{} : await invoiceBaseCosts(originalInvoiceId);
+    final invLabel = originalInvoiceId == null ? null : await invoiceLabel(originalInvoiceId);
     if (creditPart > kMoneyEpsilon) {
       if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
       txUuid = await CustomerMoney.post(
@@ -194,7 +242,7 @@ class SalesReturnService {
         customerId: customerId!,
         amount: -creditPart,
         kind: CustomerTxKind.salesReturn,
-        note: 'مرتجع مبيعات رقم $number${originalInvoiceId == null ? '' : ' من فاتورة #$originalInvoiceId'}',
+        note: 'مرتجع مبيعات رقم $number${invLabel == null ? '' : ' من فاتورة $invLabel'}',
         date: date,
         refType: 'sales_return',
       );
@@ -258,11 +306,14 @@ class SalesReturnService {
       ActivityLog.log('إنشاء', 'مرتجع المبيعات', 'مرتجع رقم $number — $customerName — ${fmtMoney(total)}');
       return id;
     } catch (e) {
-      // تعويض: إلغاء أثر الدين إن كان قد سُجّل
-      if (txUuid != null && (context == null || context.mounted)) {
+      // تعويض: إلغاء أثر الدين إن كان قد سُجّل. يُنفَّذ كلما أمكن (المزوّد
+      // مُمرَّر أو الشاشة ما زالت مفتوحة) — كان يُتخطّى إن أُغلقت الشاشة رغم
+      // وجود المزوّد، فيبقى للعميل رصيد مرتجع لم يُحفظ.
+      final liveContext = (context != null && context.mounted) ? context : null;
+      if (txUuid != null && (provider != null || liveContext != null)) {
         try {
           await CustomerMoney.post(
-            context,
+            liveContext,
             provider: provider,
             customerId: customerId!,
             amount: creditPart,
@@ -320,7 +371,8 @@ class SalesReturnService {
   Future<List<Map<String, Object?>>> list({DateTime? from, DateTime? to}) async {
     final db = await erpDb();
     return db.rawQuery('''
-      SELECT r.*, (SELECT COUNT(*) FROM sales_return_items i WHERE i.return_id = r.id) AS n_items
+      SELECT r.*, (SELECT COUNT(*) FROM sales_return_items i WHERE i.return_id = r.id) AS n_items,
+             (SELECT inv.invoice_number FROM invoices inv WHERE inv.id = r.original_invoice_id) AS invoice_number
       FROM sales_returns r
       WHERE (? IS NULL OR r.return_date >= ?) AND r.return_date < ?
       ORDER BY r.return_date DESC, r.id DESC

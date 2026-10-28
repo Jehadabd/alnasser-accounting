@@ -2,6 +2,7 @@
 // هذا الملف يساعد في تسجيل الدخول التلقائي لـ Firebase
 // حتى تعمل قواعد Firestore الآمنة
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:firebase_auth/firebase_auth.dart';
 
 class FirebaseAuthHelper {
@@ -20,13 +21,13 @@ class FirebaseAuthHelper {
       final currentUser = _auth?.currentUser;
       
       if (currentUser != null) {
-        print('✅ مستخدم Firebase موجود بالفعل: ${currentUser.uid}');
+        debugPrint('✅ مستخدم Firebase موجود بالفعل: ${currentUser.uid}');
       } else {
-        print('ℹ️ لا يوجد مستخدم Firebase - سيتم تسجيل الدخول تلقائياً');
+        debugPrint('ℹ️ لا يوجد مستخدم Firebase - سيتم تسجيل الدخول تلقائياً');
         await signInAnonymously();
       }
     } catch (e) {
-      print('⚠️ خطأ في تهيئة Firebase Auth: $e');
+      debugPrint('⚠️ خطأ في تهيئة Firebase Auth: $e');
     }
   }
   
@@ -35,7 +36,7 @@ class FirebaseAuthHelper {
   Future<User?> signInAnonymously() async {
     try {
       if (_auth == null) {
-        print('⚠️ Firebase Auth غير مهيأ');
+        debugPrint('⚠️ Firebase Auth غير مهيأ');
         return null;
       }
       
@@ -43,14 +44,14 @@ class FirebaseAuthHelper {
       final user = userCredential.user;
       
       if (user != null) {
-        print('✅ تم تسجيل الدخول المجهول بنجاح: ${user.uid}');
+        debugPrint('✅ تم تسجيل الدخول المجهول بنجاح: ${user.uid}');
         return user;
       } else {
-        print('❌ فشل تسجيل الدخول المجهول');
+        debugPrint('❌ فشل تسجيل الدخول المجهول');
         return null;
       }
     } catch (e) {
-      print('❌ خطأ في تسجيل الدخول المجهول: $e');
+      debugPrint('❌ خطأ في تسجيل الدخول المجهول: $e');
       return null;
     }
   }
@@ -65,9 +66,9 @@ class FirebaseAuthHelper {
   Future<void> signOut() async {
     try {
       await _auth?.signOut();
-      print('✅ تم تسجيل الخروج بنجاح');
+      debugPrint('✅ تم تسجيل الخروج بنجاح');
     } catch (e) {
-      print('❌ خطأ في تسجيل الخروج: $e');
+      debugPrint('❌ خطأ في تسجيل الخروج: $e');
     }
   }
   

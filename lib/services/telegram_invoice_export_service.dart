@@ -1,9 +1,9 @@
 // خدمة تصدير الفواتير وإرسالها إلى Telegram
 // تستخدم InvoicePdfService لضمان توحيد التصميم ودعم الأعمدة الديناميكية
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:io';
 import 'dart:convert';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:pdf/pdf.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
@@ -14,6 +14,7 @@ import 'database_service.dart';
 import 'settings_manager.dart';
 import 'telegram_backup_service.dart';
 import 'invoice_pdf_service.dart'; // 🔄 استخدام InvoicePdfService الموحد
+import 'invoice_upload_tracker.dart'; // 📤 ما رُفع، وأي فاتورة من الكاشير
 import 'logo_service.dart'; // 🖼️ Custom logo loading
 import 'font_manager.dart'; // 🔡 Font management
 
@@ -45,14 +46,14 @@ class TelegramInvoiceExportService {
     
     try {
       // التحقق من الإعدادات
-      if (!await _telegram.isUserConfigured && !await _telegram.channelIdExists) {
+      if (!await _telegram.isUserConfigured && !_telegram.channelIdExists) {
         result.success = false;
         result.message = 'إعدادات Telegram غير مكتملة';
         return result;
       }
 
       onProgress?.call(0, 0, 'جاري تحضير الموارد...');
-      print('📂 بدء عملية التصدير، المجلد المؤقت سيتم إنشاؤه...');
+      debugPrint('📂 بدء عملية التصدير، المجلد المؤقت سيتم إنشاؤه...');
       
       final tempDir = await getTemporaryDirectory();
       final exportDir = Directory('${tempDir.path}/telegram_export_temp_${DateTime.now().millisecondsSinceEpoch}');
@@ -60,13 +61,13 @@ class TelegramInvoiceExportService {
         await exportDir.delete(recursive: true);
       }
       await exportDir.create();
-      print('✅ تم إنشاء المجلد المؤقت: ${exportDir.path}');
+      debugPrint('✅ تم إنشاء المجلد المؤقت: ${exportDir.path}');
 
       // تحميل الخطوط والإعدادات مرة واحدة
-      print('📂 جاري تهيئة خطوط النظام...');
+      debugPrint('📂 جاري تهيئة خطوط النظام...');
       await FontManager.loadArabicFonts();
       
-      print('📂 جاري تحميل الخطوط للمعالجة...');
+      debugPrint('📂 جاري تحميل الخطوط للمعالجة...');
       // نضمن الحصول على خطوط غير فارغة باستخدام الاحتياطي
       final amiriData = await rootBundle.load("assets/fonts/Amiri-Regular.ttf");
       final fallbackFont = pw.Font.ttf(amiriData);
@@ -74,7 +75,7 @@ class TelegramInvoiceExportService {
       final font = FontManager.getPdfFont('Amiri') ?? fallbackFont;
       final ptbData = await rootBundle.load("assets/fonts/PTBLDHAD.TTF");
       final alnaserFont = pw.Font.ttf(ptbData);
-      print('✅ تم تهيئة الخطوط بنجاح (Amiri & PTBLDHAD)');
+      debugPrint('✅ تم تهيئة الخطوط بنجاح (Amiri & PTBLDHAD)');
       
       final appSettings = await SettingsManager.getAppSettings();
       final logoImage = await LogoService.getLogoImage(appSettings: appSettings);
@@ -82,31 +83,39 @@ class TelegramInvoiceExportService {
 
       // جلب الفواتير
       final db = await _db.database;
+      await InvoiceUploadTracker.ensure(db);
+      final resend = appSettings.telegramResendEdited;
       List<Map<String, Object?>> invoicesData;
-      
+
       if (afterDate != null) {
+        // ما لم يُرفع بعد ضمن الفترة، + (إن فُعّل) ما رُفع ثم عُدّل بعد رفعه
         final dateStr = afterDate.toIso8601String();
-        print('🔍 جلب الفواتير بعد تاريخ: $dateStr');
-        invoicesData = await db.query(
-          'invoices',
-          where: 'created_at > ? AND status = ?',
-          whereArgs: [dateStr, 'محفوظة'],
-          orderBy: 'id ASC',
-        );
+        debugPrint('🔍 جلب الفواتير غير المرفوعة بعد تاريخ: $dateStr');
+        invoicesData = await db.rawQuery("""
+          SELECT i.*, s.sent_at AS _sent_at,
+                 ${InvoiceUploadTracker.isPosSql('i')} AS _is_pos
+          FROM invoices i LEFT JOIN telegram_sent s ON s.invoice_id = i.id
+          WHERE i.status = 'محفوظة' AND COALESCE(i.is_deleted, 0) = 0 AND (
+            (s.invoice_id IS NULL AND i.created_at > ?)
+            ${resend ? "OR (s.invoice_id IS NOT NULL AND COALESCE(i.last_modified_at, '') > s.sent_at)" : ''}
+          )
+          ORDER BY i.id ASC
+        """, [dateStr]);
       } else {
-        print('🔍 جلب جميع الفواتير المحفوظة...');
-        invoicesData = await db.query(
-          'invoices',
-          where: 'status = ?',
-          whereArgs: ['محفوظة'],
-          orderBy: 'id ASC',
-        );
+        // «إرسال الكل» من إعدادات تيليغرام: كل الفواتير المحفوظة صراحةً
+        debugPrint('🔍 جلب جميع الفواتير المحفوظة...');
+        invoicesData = await db.rawQuery("""
+          SELECT i.*, NULL AS _sent_at, ${InvoiceUploadTracker.isPosSql('i')} AS _is_pos
+          FROM invoices i
+          WHERE i.status = 'محفوظة' AND COALESCE(i.is_deleted, 0) = 0
+          ORDER BY i.id ASC
+        """);
       }
-      print('📊 عدد الفواتير الموجودة: ${invoicesData.length}');
+      debugPrint('📊 عدد الفواتير الموجودة: ${invoicesData.length}');
 
       if (invoicesData.isEmpty) {
         result.success = true;
-        result.message = 'لا توجد فواتير لتصديرها';
+        result.message = 'لا توجد فواتير جديدة لرفعها';
         return result;
       }
 
@@ -115,121 +124,160 @@ class TelegramInvoiceExportService {
       final productMap = {for (var p in allProducts) p.name: p};
 
       final totalInvoices = invoicesData.length;
-      
+      result.totalCount = totalInvoices;
+
+      // 🧾 فصل إيصالات الكاشير عن الفواتير العادية، ولكل نوع طريقة رفع
+      final groups = <(String, String, List<Map<String, Object?>>)>[
+        ('🧾 فواتير كاشير', appSettings.telegramPosInvoicesMode,
+            invoicesData.where((m) => (m['_is_pos'] as num?) == 1).toList()),
+        ('📄 فواتير عادية وجملة', appSettings.telegramRegularInvoicesMode,
+            invoicesData.where((m) => (m['_is_pos'] as num?) != 1).toList()),
+      ];
+
       // إرسال رسالة بداية
       final startMsg = '📋 بدء إرسال $totalInvoices فاتورة\n'
           '🏪 $branchName\n'
           '📅 التاريخ: ${_formatDate(DateTime.now())}';
       await _telegram.sendMessage(startMsg);
 
-      for (int i = 0; i < totalInvoices; i++) {
-        final invMap = invoicesData[i];
-        final invoice = Invoice.fromMap(invMap);
-        print('📄 معالجة فاتورة #${invoice.formattedInvoiceNumber} لـ ${invoice.customerName}...');
+      var done = 0;
+      for (final (label, mode, list) in groups) {
+        if (list.isEmpty) continue;
+        if (mode == 'off') {
+          result.skippedCount += list.length; // الرفع معطّل لهذا النوع من الإعدادات
+          done += list.length;
+          continue;
+        }
+        // ملف واحد لكل 100 فاتورة كحد أقصى (حد حجم ملفات تيليغرام 50 ميغا)
+        final chunks = mode == 'combined'
+            ? [for (var k = 0; k < list.length; k += 100) list.sublist(k, k + 100 > list.length ? list.length : k + 100)]
+            : [for (final m in list) [m]];
 
-        onProgress?.call(i + 1, totalInvoices, 'تصدير فاتورة #${invoice.formattedInvoiceNumber}...');
-        
-        try {
-          // جلب عناصر الفاتورة
-          final itemsData = await db.query(
-            'invoice_items',
-            where: 'invoice_id = ?',
-            whereArgs: [invoice.id],
-          );
-          print('   📦 عدد العناصر في الفاتورة: ${itemsData.length}');
-          final items = itemsData.map((e) => InvoiceItem.fromMap(e)).toList();
-          
-          if (items.isEmpty) {
-            result.skippedCount++;
-            continue;
-          }
+        for (final chunk in chunks) {
+          final combined = mode == 'combined';
+          final doc = combined ? pw.Document() : null;
+          final numbers = <String>[];
+          final ids = <int>[];
+          var sumAmount = 0.0, sumProfit = 0.0;
+          String? singleCaption;
 
-          // حساب القيم
-          final itemsTotal = items.fold(0.0, (sum, item) => sum + item.itemTotal);
-          final afterDiscount = (itemsTotal + invoice.loadingFee) - invoice.discount;
-          final remaining = afterDiscount - invoice.amountPaidOnInvoice;
-          
-          // حساب الربح
-          final invoiceProfit = _calculateInvoiceProfit(items, productMap, invoice.discount);
-          
-          double previousDebt = 0.0;
-          double currentDebt = 0.0;
-          
-          String? customerPhone;
-          String invoiceCustomerAddress = '';
-          
-          if (invoice.customerId != null) {
-            final customer = await _db.getCustomerById(invoice.customerId!);
-            if (customer != null) {
-              currentDebt = customer.currentTotalDebt;
-              previousDebt = currentDebt - remaining; // تقديري
-              customerPhone = customer.phone;
-              invoiceCustomerAddress = customer.address ?? '';
+          for (final invMap in chunk) {
+            final invoice = Invoice.fromMap(invMap);
+            final edited = invMap['_sent_at'] != null;
+            done++;
+            onProgress?.call(done, totalInvoices, 'تجهيز فاتورة #${invoice.formattedInvoiceNumber}...');
+            try {
+              final itemsData = await db.query('invoice_items', where: 'invoice_id = ?', whereArgs: [invoice.id]);
+              final items = itemsData.map((e) => InvoiceItem.fromMap(e)).toList();
+              if (items.isEmpty) {
+                result.skippedCount++;
+                continue;
+              }
+              final itemsTotal = items.fold(0.0, (sum, item) => sum + item.itemTotal);
+              final afterDiscount = (itemsTotal + invoice.loadingFee) - invoice.discount;
+              final remaining = afterDiscount - invoice.amountPaidOnInvoice;
+              final invoiceProfit = _calculateInvoiceProfit(items, productMap, invoice.discount);
+
+              double previousDebt = 0.0, currentDebt = 0.0;
+              String? customerPhone;
+              String invoiceCustomerAddress = '';
+              if (invoice.customerId != null) {
+                final customer = await _db.getCustomerById(invoice.customerId!);
+                if (customer != null) {
+                  currentDebt = customer.currentTotalDebt;
+                  previousDebt = currentDebt - remaining; // تقديري
+                  customerPhone = customer.phone;
+                  invoiceCustomerAddress = customer.address ?? '';
+                }
+              }
+
+              final pdf = await InvoicePdfService.generateInvoicePdf(
+                into: doc,
+                invoiceItems: items,
+                allProducts: allProducts,
+                customerName: invoice.customerName,
+                customerAddress: invoiceCustomerAddress,
+                customerPhone: customerPhone,
+                invoiceId: invoice.id!,
+                createdAt: invoice.invoiceDate,
+                selectedDate: invoice.invoiceDate,
+                discount: invoice.discount,
+                paid: invoice.amountPaidOnInvoice,
+                loadingFee: invoice.loadingFee,
+                paymentType: invoice.paymentType,
+                invoiceToManage: invoice,
+                afterDiscount: afterDiscount,
+                remaining: remaining,
+                font: font,
+                alnaserFont: alnaserFont,
+                logoImage: logoImage,
+                appSettings: appSettings,
+                previousDebt: previousDebt,
+                currentDebt: currentDebt,
+              );
+
+              numbers.add('${invoice.formattedInvoiceNumber}${edited ? ' (معدّلة)' : ''}');
+              ids.add(invoice.id!);
+              sumAmount += afterDiscount;
+              sumProfit += invoiceProfit;
+
+              if (!combined) {
+                // فاتورة فاتورة: كما كان (رقم، فرع، عميل، مبلغ، ربح)
+                final fileName = 'فاتورة_${invoice.formattedInvoiceNumber}.pdf';
+                final pdfFile = File('${exportDir.path}/$fileName');
+                await pdfFile.writeAsBytes(await pdf.save());
+                singleCaption = '${edited ? '✏️ نسخة معدّلة — ' : ''}🧾 فاتورة #${invoice.formattedInvoiceNumber}\n'
+                    '🏪 $branchName\n'
+                    '👤 ${invoice.customerName}\n'
+                    '💰 المبلغ: ${_formatNumber(afterDiscount)} د.ع\n'
+                    '📈 الربح: ${_formatNumber(invoiceProfit)} د.ع\n'
+                    '📅 ${_formatDate(invoice.invoiceDate)}';
+                debugPrint('📤 جاري إرسال PDF للفاتورة #${invoice.formattedInvoiceNumber} إلى Telegram...');
+                final sent = await _telegram.sendDocument(file: pdfFile, caption: singleCaption);
+                if (sent) {
+                  result.sentCount++;
+                  await InvoiceUploadTracker.markSent(db, [invoice.id!]);
+                } else {
+                  result.failedCount++;
+                }
+                await Future.delayed(const Duration(milliseconds: 3500)); // تجنّب الحظر
+              }
+            } catch (e, stack) {
+              result.failedCount++;
+              debugPrint('❌ خطأ في معالجة الفاتورة #${invoice.id}: $e');
+              debugPrint('Stack trace: $stack');
             }
           }
 
-          // إنشاء PDF باستخدام InvoicePdfService الموحد
-          final pdf = await InvoicePdfService.generateInvoicePdf(
-            invoiceItems: items,
-            allProducts: allProducts,
-            customerName: invoice.customerName,
-            customerAddress: invoiceCustomerAddress,
-            customerPhone: customerPhone,
-            invoiceId: invoice.id!,
-            createdAt: invoice.invoiceDate, // استخدام تاريخ الفاتورة كـ createdAt
-            selectedDate: invoice.invoiceDate,
-            discount: invoice.discount,
-            paid: invoice.amountPaidOnInvoice, // تم تغيير الاسم من amountPaid إلى paid
-            loadingFee: invoice.loadingFee,
-            paymentType: invoice.paymentType ?? 'نقدي',
-            invoiceToManage: invoice,
-            afterDiscount: afterDiscount,
-            remaining: remaining,
-            font: font,
-            alnaserFont: alnaserFont,
-            logoImage: logoImage,
-            appSettings: appSettings,
-            previousDebt: previousDebt,
-            currentDebt: currentDebt,
-          );
-
-          // تسمية الملف بالشكل المطلوب: فاتورة_[ID]_[العميل]_مبلغ_[المبلغ]_ربح_[الربح].pdf
-          final safeCustomerName = _sanitizeFileName(invoice.customerName);
-          final safeBranch = _sanitizeFileName(branchName);
-          final safeAmount = _formatNumber(afterDiscount).replaceAll('.', '_').replaceAll(',', '');
-          final safeProfit = _formatNumber(invoiceProfit).replaceAll('.', '_').replaceAll(',', '');
-          
-          final fileName = 'فاتورة_${invoice.formattedInvoiceNumber}.pdf';
-          
-          final pdfFile = File('${exportDir.path}/$fileName');
-          await pdfFile.writeAsBytes(await pdf.save());
-
-          // إرسال إلى Telegram
-          final caption = '🧾 فاتورة #${invoice.formattedInvoiceNumber}\n'
-              '🏪 $branchName\n'
-              '👤 ${invoice.customerName}\n'
-              '💰 المبلغ: ${_formatNumber(afterDiscount)} د.ع\n'
-              '📈 الربح: ${_formatNumber(invoiceProfit)} د.ع\n'
-              '📅 ${_formatDate(invoice.invoiceDate)}';
-
-          print('📤 جاري إرسال PDF للفاتورة #${invoice.formattedInvoiceNumber} إلى Telegram...');
-          final sent = await _telegram.sendDocument(file: pdfFile, caption: caption);
-
-          if (sent) {
-            print('✅ نجح إرسال الفاتورة #${invoice.formattedInvoiceNumber}');
-            result.sentCount++;
-          } else {
-            print('❌ فشل إرسال الفاتورة #${invoice.formattedInvoiceNumber}');
-            result.failedCount++;
+          if (combined && ids.isNotEmpty) {
+            // ملف واحد + رسالة فوقه بأرقام الفواتير
+            onProgress?.call(done, totalInvoices, 'إرسال ملف $label (${ids.length} فاتورة)...');
+            final today = _formatDate(DateTime.now()).replaceAll('/', '-');
+            final kind = label.contains('كاشير') ? 'فواتير_كاشير' : 'فواتير_عادية';
+            final pdfFile = File('${exportDir.path}/${kind}_${today}_${ids.length}.pdf');
+            await pdfFile.writeAsBytes(await doc!.save());
+            final header = '$label — ${ids.length} فاتورة\n'
+                '🏪 $branchName\n'
+                '💰 المجموع: ${_formatNumber(sumAmount)} د.ع\n'
+                '📈 الربح: ${_formatNumber(sumProfit)} د.ع\n'
+                '📅 ${_formatDate(DateTime.now())}\n'
+                '🔢 الأرقام: ${numbers.join('، ')}';
+            bool sent;
+            if (header.length <= 1000) {
+              sent = await _telegram.sendDocument(file: pdfFile, caption: header);
+            } else {
+              // تعليق الملف في تيليغرام محدود بـ 1024 حرفاً: الأرقام في رسالة فوقه
+              await _telegram.sendMessage(header);
+              sent = await _telegram.sendDocument(file: pdfFile, caption: '$label — ${ids.length} فاتورة (الأرقام في الرسالة أعلاه)');
+            }
+            if (sent) {
+              result.sentCount += ids.length;
+              await InvoiceUploadTracker.markSent(db, ids);
+            } else {
+              result.failedCount += ids.length;
+            }
+            await Future.delayed(const Duration(milliseconds: 3500));
           }
-
-          // تأخير لتجنب الحظر (مهم جداً عند إرسال كميات كبيرة)
-          await Future.delayed(const Duration(milliseconds: 3500)); // 3.5 ثانية آمنة
-          
-        } catch (e, stack) {
-          result.failedCount++;
-          print('❌ خطأ في معالجة الفاتورة #${invoice.id}: $e');
-          print('Stack trace: $stack');
         }
       }
 
@@ -253,8 +301,8 @@ class TelegramInvoiceExportService {
     } catch (e, stack) {
       result.success = false;
       result.message = 'خطأ عام: $e';
-      print('🔥 خطأ فادح في عملية التصدير: $e');
-      print('Stack trace: $stack');
+      debugPrint('🔥 خطأ فادح في عملية التصدير: $e');
+      debugPrint('Stack trace: $stack');
     }
 
     return result;
@@ -269,14 +317,6 @@ class TelegramInvoiceExportService {
     return '${dt.year}/${dt.month}/${dt.day}';
   }
 
-  String _sanitizeFileName(String name) {
-    // السماح بالحروف العربية والإنجليزية والأرقام، والباقي استبداله بـ underscore
-    // \u0600-\u06FF تغطي النطاق العربي الأساسي
-    return name
-        .replaceAll(RegExp(r'[^\w\u0600-\u06FF0-9\s]+'), '_') // استبدال الرموز الخاصة
-        .replaceAll(RegExp(r'\s+'), '_') // استبدال المسافات
-        .trim();
-  }
 
   /// حساب إجمالي ربح الفاتورة
   double _calculateInvoiceProfit(List<InvoiceItem> items, Map<String, Product> productMap, double discount) {

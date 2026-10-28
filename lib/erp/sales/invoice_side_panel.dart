@@ -4,7 +4,7 @@
 //   • رصيد العميل الحالي، وسقف دينه وما يتبقى منه (تحذير عند التجاوز)
 //   • نسبة حسمه الدائمة ومستوى سعره المعتاد
 //   • إيقاف البيع الآجل
-//   • لفاتورة محفوظة: «حقول إضافية» (البائع، الشحن...) و«مرتجع»
+//   • لفاتورة محفوظة: «مرتجع من هذه الفاتورة»
 
 import 'dart:async';
 
@@ -14,8 +14,8 @@ import '../../accounting/screens/acc_ui.dart';
 import '../debts/customer_ext_service.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
-import 'invoice_extras.dart';
 import 'sales_return_screen.dart';
+import '../../services/invoice_edit_log.dart';
 
 class ErpInvoiceSidePanel extends StatefulWidget {
   const ErpInvoiceSidePanel({
@@ -39,17 +39,30 @@ class _ErpInvoiceSidePanelState extends State<ErpInvoiceSidePanel> {
   String _loadedFor = '';
   double? _balance;
   CustomerExt? _ext;
+  List<InvoiceEditChange> _edits = const [];
+  bool _showEdits = false;
 
   @override
   void initState() {
     super.initState();
     _schedule();
+    _loadEdits();
+  }
+
+  Future<void> _loadEdits() async {
+    final id = widget.invoiceId;
+    if (id == null) return;
+    try {
+      final r = await InvoiceEditLog.forInvoice(await erpDb(), id);
+      if (mounted) setState(() => _edits = r);
+    } catch (_) {}
   }
 
   @override
   void didUpdateWidget(covariant ErpInvoiceSidePanel old) {
     super.didUpdateWidget(old);
     if (old.customerName != widget.customerName) _schedule();
+    if (old.invoiceId != widget.invoiceId) _loadEdits();
   }
 
   @override
@@ -111,7 +124,7 @@ class _ErpInvoiceSidePanelState extends State<ErpInvoiceSidePanel> {
     }
     if (e != null && (e.discountPercent ?? 0) > 0) {
       final amt = widget.invoiceTotal * e.discountPercent! / 100;
-      children.add(_row('حسم العميل الدائم', '${fmtQty(e.discountPercent!)}% ≈ ${fmtMoney(amt)}', ErpColors.purple));
+      children.add(_row('خصم العميل الدائم', '${fmtQty(e.discountPercent!)}% ≈ ${fmtMoney(amt)}', ErpColors.purple));
     }
     if (e != null && (e.priceLevel ?? '').isNotEmpty) {
       children.add(_row('مستوى سعره المعتاد', e.priceLevel!, ErpColors.blue));
@@ -121,19 +134,15 @@ class _ErpInvoiceSidePanelState extends State<ErpInvoiceSidePanel> {
         padding: const EdgeInsets.only(top: 6),
         child: Wrap(spacing: 6, runSpacing: 6, children: [
           OutlinedButton.icon(
-            icon: const Icon(Icons.post_add, size: 18),
-            label: const Text('حقول إضافية'),
-            onPressed: () => showInvoiceExtrasDialog(context, widget.invoiceId!),
-          ),
-          OutlinedButton.icon(
             icon: const Icon(Icons.assignment_return, size: 18),
-            label: const Text('مرتجع'),
+            label: const Text('مرتجع من هذه الفاتورة'),
             onPressed: () => Navigator.push(
                 context, MaterialPageRoute(builder: (_) => SalesReturnScreen(invoiceId: widget.invoiceId))),
           ),
         ]),
       ));
     }
+    if (_edits.isNotEmpty) children.add(_editsBlock());
     if (children.isEmpty) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -144,6 +153,78 @@ class _ErpInvoiceSidePanelState extends State<ErpInvoiceSidePanel> {
         border: Border.all(color: ErpColors.border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+    );
+  }
+
+  /// ✏️ ما تغيّر في مواد الفاتورة بعد حفظها: إضافة / مرتجع / تعديل سعر
+  Widget _editsBlock() {
+    double add = 0, ret = 0;
+    for (final e in _edits) {
+      if (e.kind == InvoiceEditLog.kindAdd) add += e.amountDelta;
+      if (e.kind == InvoiceEditLog.kindReturn) ret += -e.amountDelta;
+    }
+    Color colorOf(String k) => k == InvoiceEditLog.kindAdd
+        ? ErpColors.blue
+        : (k == InvoiceEditLog.kindReturn ? ErpColors.orange : ErpColors.purple);
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFD),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: ErpColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => setState(() => _showEdits = !_showEdits),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(children: [
+              const Icon(Icons.edit_note_rounded, size: 20, color: ErpColors.navy),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'عُدّلت بعد الحفظ: '
+                  '${add > 0 ? 'إضافات ${fmtMoney(add)}' : ''}'
+                  '${add > 0 && ret > 0 ? '، ' : ''}'
+                  '${ret > 0 ? 'مرتجعات ${fmtMoney(ret)}' : ''}'
+                  '${add <= 0 && ret <= 0 ? 'تعديل أسعار' : ''}',
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ),
+              Icon(_showEdits ? Icons.expand_less : Icons.expand_more, color: ErpColors.muted),
+            ]),
+          ),
+        ),
+        if (_showEdits)
+          for (final e in _edits)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+              child: Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: colorOf(e.kind).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(e.kind, style: TextStyle(color: colorOf(e.kind), fontSize: 11.5, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${e.productName}  ${fmtQty(e.qtyBefore)} ← ${fmtQty(e.qtyAfter)} ${e.unit}',
+                    style: const TextStyle(fontSize: 12.5),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(
+                  '${e.amountDelta >= 0 ? '+' : '−'}${fmtMoney(e.amountDelta.abs())}',
+                  textDirection: TextDirection.ltr,
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: colorOf(e.kind)),
+                ),
+              ]),
+            ),
+      ]),
     );
   }
 

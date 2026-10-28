@@ -64,12 +64,12 @@ class _PeriodCloseScreenState extends State<PeriodCloseScreen> {
 
   Future<void> _setLock() async {
     final now = DateTime.now();
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _lock ?? DateTime(now.year, now.month, 1),
-      firstDate: DateTime(2000),
-      lastDate: now.add(const Duration(days: 1)),
-      helpText: 'تثبيت كل ما قبل هذا التاريخ',
+    final d = await pickDate(
+      context,
+      initial: _lock ?? DateTime(now.year, now.month, 1),
+      first: DateTime(2000),
+      last: now.add(const Duration(days: 1)),
+      help: 'تثبيت كل ما قبل هذا التاريخ',
     );
     if (d == null || !mounted) return;
     final ok = await confirmDialog(context, 'تثبيت الإدخالات',

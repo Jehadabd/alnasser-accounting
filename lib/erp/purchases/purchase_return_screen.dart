@@ -2,6 +2,7 @@
 //
 // ↩️ مرتجع المشتريات: محرر (من فاتورة شراء أو حر) + سجل المرتجعات مع الطباعة والإلغاء.
 
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 
 import '../../accounting/ledger.dart' show roundMoney;
@@ -155,7 +156,11 @@ class _PurchaseReturnEditorScreenState extends State<PurchaseReturnEditorScreen>
     });
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked(), message: 'جارٍ حفظ المرتجع…');
+  }
+  Future<void> _saveUnlocked() async {
     final s = _supplier;
     if (s == null) {
       showError(context, 'اختر المورد');
@@ -305,7 +310,7 @@ class _PurchaseReturnEditorScreenState extends State<PurchaseReturnEditorScreen>
             FilterChip(
               label: const Text('السماح بتجاوز المتوفر'),
               selected: _allowNegative,
-              selectedColor: ErpColors.red.withOpacity(.15),
+              selectedColor: ErpColors.red.withValues(alpha: .15),
               onSelected: (v) => setState(() => _allowNegative = v),
             ),
             TextBox(controller: _notes, label: 'سبب الإرجاع / ملاحظات', width: 300),
@@ -325,7 +330,13 @@ class _PurchaseReturnEditorScreenState extends State<PurchaseReturnEditorScreen>
                         color: ErpColors.muted),
                 ]),
               ),
-            DocLinesEditor(lines: _lines, priceSource: PriceSource.cost, priceLabel: 'سعر الشراء', onChanged: () => setState(() {})),
+            DocLinesEditor(
+                lines: _lines,
+                priceSource: PriceSource.cost,
+                priceLabel: 'سعر الشراء',
+                onChanged: () => setState(() {}),
+                // من فاتورة شراء: موادها فقط
+                allowAdd: _invoiceId == null),
           ]),
         ),
       ]),
@@ -521,7 +532,7 @@ class _PurchaseReturnsListScreenState extends State<PurchaseReturnsListScreen> {
                       child: ListTile(
                         onTap: () => _details(r),
                         leading: CircleAvatar(
-                          backgroundColor: (voided ? ErpColors.muted : ErpColors.orange).withOpacity(.12),
+                          backgroundColor: (voided ? ErpColors.muted : ErpColors.orange).withValues(alpha: .12),
                           child: Text('${r['return_no']}',
                               style: TextStyle(color: voided ? ErpColors.muted : ErpColors.orange, fontSize: 12)),
                         ),

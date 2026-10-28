@@ -109,21 +109,21 @@ class PeSectionCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: PeColors.border),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 12, offset: const Offset(0, 3)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 12, offset: const Offset(0, 3)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
-            color: color.withOpacity(0.05),
+            color: color.withValues(alpha: 0.05),
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             child: Row(
               children: [
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.12),
+                    color: color.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(icon, color: color, size: 20),
@@ -157,7 +157,7 @@ class PeSectionCard extends StatelessWidget {
               ],
             ),
           ),
-          Divider(height: 1, thickness: 1, color: color.withOpacity(0.12)),
+          Divider(height: 1, thickness: 1, color: color.withValues(alpha: 0.12)),
           Padding(padding: const EdgeInsets.all(16), child: child),
         ],
       ),
@@ -252,9 +252,9 @@ class PeProfitBadge extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.35)),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
         ),
         child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color)),
       ),
@@ -384,9 +384,9 @@ class _PeMarkupDialogState extends State<PeMarkupDialog> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: PeColors.success.withOpacity(0.07),
+                color: PeColors.success.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: PeColors.success.withOpacity(0.25)),
+                border: Border.all(color: PeColors.success.withValues(alpha: 0.25)),
               ),
               child: Text(
                 _hasPercent ? 'السعر الناتج: ${peFormatNumber(_price)} د.ع' : 'اكتب النسبة لعرض السعر الناتج',

@@ -47,8 +47,21 @@ class LayoutCanvas extends StatelessWidget {
   /// اسم العنصر في الشارة الزرقاء فوق المحدد
   final String Function(LayoutElement e)? labelOf;
 
+  /// ⚫ معاينة «أبيض وأسود» كما ستُطبع
+  static const _grey = ColorFilter.matrix(<double>[
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0, 0, 0, 1, 0,
+  ]);
+
   @override
   Widget build(BuildContext context) {
+    final page = _pageWidget(context);
+    return layout.mono ? ColorFiltered(colorFilter: _grey, child: page) : page;
+  }
+
+  Widget _pageWidget(BuildContext context) {
     final s = scale;
     return Directionality(
       textDirection: TextDirection.ltr,

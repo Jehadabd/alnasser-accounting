@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 import 'dart:io' show Platform; // Use show Platform to avoid conflict with `Platform` in flutter/widgets.dart
 
@@ -11,11 +12,11 @@ class PrinterManager {
       } else if (Platform.isAndroid) {
         // You might want to implement a platform channel for Android settings here as well
         // or simply show a message that Android printer settings are handled internally by the app.
-        print("Opening Android printer settings via platform channel is not yet implemented.");
+        debugPrint("Opening Android printer settings via platform channel is not yet implemented.");
         // Example: await _channel.invokeMethod('openAndroidPrinterSettings');
       }
     } on PlatformException catch (e) {
-      print("فشل فتح إعدادات الطابعة: ${e.message}");
+      debugPrint("فشل فتح إعدادات الطابعة: ${e.message}");
       // عرض رسالة خطأ للمستخدم
     }
   }

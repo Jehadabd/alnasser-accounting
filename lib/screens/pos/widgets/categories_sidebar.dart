@@ -1,6 +1,15 @@
+// lib/screens/pos/widgets/categories_sidebar.dart
+//
+// 🗂️ أقسام المواد في الكاشير:
+//  • CategoriesSidebar — قائمة عمودية للشاشات العريضة
+//  • CategoryChipsBar  — شريط أفقي للشاشات المتوسطة والصغيرة
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../../../models/category.dart';
 import '../../../providers/pos_provider.dart';
+import 'pos_style.dart';
 
 class CategoriesSidebar extends StatelessWidget {
   const CategoriesSidebar({super.key});
@@ -8,86 +17,151 @@ class CategoriesSidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Consumer<POSProvider>(
-      builder: (context, provider, child) {
-        final categories = provider.categories;
-        final selectedId = provider.selectedCategoryId;
-
-        // Build list with "All" as first item
-        final allItems = [null, ...categories];
-
+      builder: (context, pos, _) {
+        final items = <Category?>[null, ...pos.categories];
         return Container(
-          color: Colors.white,
+          decoration: const BoxDecoration(
+            color: PosColors.surface,
+            border: BorderDirectional(end: BorderSide(color: PosColors.border)),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.all(16.0),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 10),
                 child: Text(
                   'الأقسام',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: Colors.grey[800],
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: PosColors.text),
                 ),
               ),
               Expanded(
-                child: GridView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    childAspectRatio: 1.4,
-                    crossAxisSpacing: 8,
-                    mainAxisSpacing: 8,
-                  ),
-                  itemCount: allItems.length,
-                  itemBuilder: (context, index) {
-                    final category = allItems[index];
-                    final bool isAll = category == null;
-                    final bool isSelected = isAll 
-                        ? selectedId == null 
-                        : selectedId == category.id;
-
-                    return InkWell(
-                      onTap: () => provider.selectCategory(isAll ? null : category.id),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: isSelected ? Colors.blue[50] : Colors.grey[50],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isSelected ? Colors.blue : Colors.grey.shade200,
-                            width: isSelected ? 2 : 1,
-                          ),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              isAll ? Icons.dashboard_outlined : Icons.category_outlined,
-                              color: isSelected ? Colors.blue : Colors.grey[600],
-                              size: 24,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              isAll ? 'الكل' : category.name,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: isSelected ? Colors.blue[900] : Colors.black87,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(10, 0, 10, 16),
+                  itemCount: items.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 4),
+                  itemBuilder: (context, i) {
+                    final c = items[i];
+                    final selected = c == null ? pos.selectedCategoryId == null : pos.selectedCategoryId == c.id;
+                    return _RailItem(
+                      label: c?.name ?? 'كل المواد',
+                      icon: c == null ? Icons.apps_rounded : Icons.label_outline_rounded,
+                      tint: c == null ? PosColors.primary : PosColors.tint(c.id),
+                      selected: selected,
+                      onTap: () => pos.selectCategory(c?.id),
                     );
                   },
                 ),
               ),
             ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _RailItem extends StatelessWidget {
+  const _RailItem({
+    required this.label,
+    required this.icon,
+    required this.tint,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color tint;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? PosColors.accentSoft : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: selected ? tint : tint.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 16, color: selected ? Colors.white : tint),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.25,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected ? PosColors.primary : PosColors.text,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// شريط أقسام أفقي (للشاشات المتوسطة والصغيرة)
+class CategoryChipsBar extends StatelessWidget {
+  const CategoryChipsBar({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<POSProvider>(
+      builder: (context, pos, _) {
+        final items = <Category?>[null, ...pos.categories];
+        if (items.length <= 1) return const SizedBox.shrink();
+        return SizedBox(
+          height: 40,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: items.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, i) {
+              final c = items[i];
+              final selected = c == null ? pos.selectedCategoryId == null : pos.selectedCategoryId == c.id;
+              final tint = c == null ? PosColors.primary : PosColors.tint(c.id);
+              return Material(
+                color: selected ? tint : PosColors.surface,
+                shape: StadiumBorder(side: BorderSide(color: selected ? tint : PosColors.border)),
+                child: InkWell(
+                  customBorder: const StadiumBorder(),
+                  onTap: () => pos.selectCategory(c?.id),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: Center(
+                      child: Text(
+                        c?.name ?? 'الكل',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                          color: selected ? Colors.white : PosColors.text,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         );
       },

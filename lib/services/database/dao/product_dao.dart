@@ -1,6 +1,7 @@
 // lib/services/database/dao/product_dao.dart
 // عمليات CRUD للمنتجات
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -63,7 +64,7 @@ class ProductDao {
           productMap['unit_costs'] = jsonEncode(newUnitCosts);
         }
       } catch (e) {
-        print('WARN: Failed to build unit_costs on insert: $e');
+        debugPrint('WARN: Failed to build unit_costs on insert: $e');
       }
       
       return await db.insert('products', productMap);
@@ -124,7 +125,7 @@ class ProductDao {
       
       return List.generate(maps.length, (i) => Product.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting paginated products: $e');
+      debugPrint('Error getting paginated products: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }
@@ -257,7 +258,7 @@ class ProductDao {
           productMap['unit_costs'] = jsonEncode(newUnitCosts);
         }
       } catch (e) {
-        print('WARN: Failed to build unit_costs on update: $e');
+        debugPrint('WARN: Failed to build unit_costs on update: $e');
       }
 
       // 📝 سجل التعديلات: نقارن القديم بالجديد ونسجّل كل حقل تغيّر
@@ -277,7 +278,7 @@ class ProductDao {
           if (deviceBatch != null) await batchHist.commit(noResult: true);
         }
       } catch (e) {
-        print('WARN: Failed to record product edit history: $e');
+        debugPrint('WARN: Failed to record product edit history: $e');
       }
 
       // 🔄 حقول المزامنة: آخر جهاز عدّل + إعادة جدولة الرفع (last_synced_at يصبح
@@ -355,7 +356,7 @@ class ProductDao {
       // المحاولة 3: البحث العادي
       return await _fallbackSearch(db, query);
     } catch (e) {
-      print('Error in smart search: $e');
+      debugPrint('Error in smart search: $e');
       return await _fallbackSearch(db, query);
     }
   }
@@ -378,7 +379,7 @@ class ProductDao {
       
       return results.map((m) => Product.fromMap(m)).toList();
     } catch (e) {
-      print('FTS search failed: $e');
+      debugPrint('FTS search failed: $e');
       return [];
     }
   }
@@ -398,7 +399,7 @@ class ProductDao {
       
       return results.map((m) => Product.fromMap(m)).toList();
     } catch (e) {
-      print('LIKE search failed: $e');
+      debugPrint('LIKE search failed: $e');
       return [];
     }
   }
@@ -424,9 +425,9 @@ class ProductDao {
     final db = await getDatabase();
     try {
       await db.execute("INSERT INTO products_fts(products_fts) VALUES('rebuild');");
-      print('✅ تم إعادة بناء فهرس FTS5');
+      debugPrint('✅ تم إعادة بناء فهرس FTS5');
     } catch (e) {
-      print('❌ خطأ في إعادة بناء فهرس FTS5: $e');
+      debugPrint('❌ خطأ في إعادة بناء فهرس FTS5: $e');
     }
   }
 
@@ -470,9 +471,9 @@ class ProductDao {
         );
       }
       
-      print('✅ تم تهيئة FTS لـ ${products.length} منتج');
+      debugPrint('✅ تم تهيئة FTS لـ ${products.length} منتج');
     } catch (e) {
-      print('❌ خطأ في تهيئة FTS: $e');
+      debugPrint('❌ خطأ في تهيئة FTS: $e');
     }
   }
 
@@ -533,13 +534,13 @@ class ProductDao {
           );
           updated++;
         } catch (e) {
-          print('Error repairing unit costs for product ${product['id']}: $e');
+          debugPrint('Error repairing unit costs for product ${product['id']}: $e');
         }
       }
       
-      print('✅ تم إصلاح تكاليف الوحدات لـ $updated منتج');
+      debugPrint('✅ تم إصلاح تكاليف الوحدات لـ $updated منتج');
     } catch (e) {
-      print('❌ خطأ في إصلاح تكاليف الوحدات: $e');
+      debugPrint('❌ خطأ في إصلاح تكاليف الوحدات: $e');
     }
   }
 
@@ -590,7 +591,7 @@ class ProductDao {
           }
         }
       } catch (e) {
-        print('خطأ في حساب التكلفة الهيراركية: $e');
+        debugPrint('خطأ في حساب التكلفة الهيراركية: $e');
       }
     }
     return product.costPrice ?? 0.0;

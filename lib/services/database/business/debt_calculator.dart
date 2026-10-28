@@ -1,6 +1,7 @@
 // lib/services/database/business/debt_calculator.dart
 // حسابات الديون
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import '../../../utils/money_calculator.dart';
 
@@ -150,7 +151,7 @@ class DebtCalculator {
         whereArgs: [customerId],
       );
     } catch (e) {
-      print('Error fixing customer balance: $e');
+      debugPrint('Error fixing customer balance: $e');
     }
   }
 
@@ -176,7 +177,7 @@ class DebtCalculator {
       
       return fixed;
     } catch (e) {
-      print('Error fixing all customer balances: $e');
+      debugPrint('Error fixing all customer balances: $e');
       return 0;
     }
   }

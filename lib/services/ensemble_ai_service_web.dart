@@ -3,7 +3,6 @@
 // استخراج فاتورة بالصورة غير متاح على الويب؛ مطابقة المنتجات تعمل محلياً.
 
 import 'dart:io';
-import 'dart:typed_data';
 
 class EnsembleAIService {
   Future<Map<String, dynamic>> extractInvoiceData(File file) async {

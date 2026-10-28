@@ -1,4 +1,5 @@
 // services/product_specs_service.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'database_service.dart';
 
 /// خدمة إدارة مواصفات المنتجات - نظام التعلم من الفواتير
@@ -159,7 +160,7 @@ class ProductSpecsService {
           'from_local_db': true,
         };
         
-        print('📚 تم تطبيق مواصفات محفوظة على: $name');
+        debugPrint('📚 تم تطبيق مواصفات محفوظة على: $name');
       }
       
       enriched.add(item);

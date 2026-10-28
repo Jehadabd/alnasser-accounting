@@ -1,9 +1,19 @@
 // lib/screens/dropbox_backup_screen.dart
-// 🔥 واجهة النسخ الاحتياطي إلى Dropbox
+// ☁️ النسخ الاحتياطي السحابي إلى Dropbox — بالشكل الموحّد لشاشات الإعدادات.
+//
+//   • الاتصال: فتح صفحة Dropbox ← الموافقة ← لصق الكود أو رابط الصفحة كاملاً.
+//   • نسخة جديدة: تقدّم ظاهر داخل البطاقة (لا تختفي الشاشة خلف دائرة تحميل).
+//   • عدد النسخ المحتفظ بها يُحفظ ويستعمله الرفع التلقائي أيضاً.
+//   • الاستعادة عبر مسار الاستعادة الآمن ثم إعادة تحميل التطبيق.
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import 'package:url_launcher/url_launcher.dart';
+
+import '../erp/erp_kit.dart' show ErpDialog;
 import '../services/dropbox_backup_service.dart';
+import '../widgets/settings_kit.dart';
+import '../widgets/migration_guard_views.dart' show restoreSummaryText;
 
 class DropboxBackupScreen extends StatefulWidget {
   const DropboxBackupScreen({super.key});
@@ -13,573 +23,43 @@ class DropboxBackupScreen extends StatefulWidget {
 }
 
 class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
+  static const _dbx = Color(0xFF0061FE);
+  static const _redirectUri = 'http://localhost';
+
   final DropboxBackupService _backupService = DropboxBackupService();
-  
+  final _codeController = TextEditingController();
+  final _df = DateFormat('yyyy/MM/dd  HH:mm');
+
   DropboxAuthStatus _authStatus = DropboxAuthStatus.notConfigured;
   List<BackupInfo> _backups = [];
-  bool _isLoading = false;
-  String _statusMessage = '';
-  int _progress = 0;
-  int _maxBackups = 20;
-  
-  // Controller للـ OAuth code
-  final _codeController = TextEditingController();
+  String? _account;
+  String? _listError;
+
+  bool _firstLoad = true;
+  bool _refreshing = false;
+  bool _connecting = false;
   bool _showCodeInput = false;
+  String? _authError;
+
+  // النسخ الجاري
+  bool _backingUp = false;
+  int _progress = 0;
+  String _progressText = '';
+
+  /// نتيجة آخر عملية (نجاح/فشل) تظهر داخل البطاقة.
+  (bool ok, String msg)? _lastResult;
+
+  int _maxBackups = 20;
+
+  bool get _busy => _backingUp || _connecting || _refreshing;
 
   @override
   void initState() {
     super.initState();
+    _backupService.getMaxBackups().then((v) {
+      if (mounted) setState(() => _maxBackups = v);
+    });
     _checkAuthAndLoadBackups();
-  }
-
-  Future<void> _checkAuthAndLoadBackups() async {
-    setState(() => _isLoading = true);
-    
-    _authStatus = await _backupService.checkAuthStatus();
-    
-    if (_authStatus == DropboxAuthStatus.authenticated) {
-      _backups = await _backupService.listBackups();
-      _backups.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
-    }
-    
-    setState(() => _isLoading = false);
-  }
-
-  Future<void> _startOAuthFlow() async {
-    const redirectUri = 'http://localhost';
-    final authUrl = _backupService.getAuthorizationUrl(redirectUri);
-    
-    setState(() {
-      _showCodeInput = true;
-      _statusMessage = 'سيتم فتح صفحة Dropbox للمصادقة...\nبعد الموافقة، انسخ الكود وألصقه هنا';
-    });
-    
-    final uri = Uri.parse(authUrl);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      setState(() {
-        _statusMessage = '❌ لا يمكن فتح الرابط';
-      });
-    }
-  }
-
-  Future<void> _submitAuthCode(String code) async {
-    setState(() {
-      _isLoading = true;
-      _statusMessage = 'جاري التحقق من الكود...';
-    });
-
-    const redirectUri = 'http://localhost';
-    final success = await _backupService.exchangeCodeForToken(code, redirectUri);
-    
-    if (success) {
-      setState(() {
-        _authStatus = DropboxAuthStatus.authenticated;
-        _showCodeInput = false;
-        _statusMessage = '✅ تم الاتصال بنجاح!';
-      });
-      await _checkAuthAndLoadBackups();
-    } else {
-      setState(() {
-        _statusMessage = '❌ فشل في التحقق من الكود. حاول مرة أخرى.';
-      });
-    }
-    
-    setState(() => _isLoading = false);
-  }
-
-  Future<void> _createBackup() async {
-    setState(() {
-      _isLoading = true;
-      _progress = 0;
-      _statusMessage = '';
-    });
-
-    final result = await _backupService.createAndUploadBackup(
-      maxBackups: _maxBackups,
-      onProgress: (progress, status) {
-        setState(() {
-          _progress = progress;
-          _statusMessage = status;
-        });
-      },
-    );
-
-    setState(() {
-      _isLoading = false;
-      if (result.success) {
-        _statusMessage = '✅ تم إنشاء النسخة: ${result.backupName}\n'
-            'حجم الملف: ${(result.backupSize! / 1024).toStringAsFixed(1)} KB\n'
-            'تم حذف ${result.deletedCount} نسخة قديمة';
-      } else {
-        _statusMessage = '❌ ${result.error}';
-      }
-    });
-
-    await _checkAuthAndLoadBackups();
-  }
-
-  Future<void> _restoreBackup(BackupInfo backup) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('تأكيد الاستعادة'),
-        content: Text('هل تريد استعادة النسخة:\n${backup.name}?\n\n'
-            '⚠️ سيتم استبدال قاعدة البيانات الحالية.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('استعادة'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    setState(() {
-      _isLoading = true;
-      _statusMessage = 'جاري الاستعادة...';
-    });
-
-    final success = await _backupService.restoreBackup(backup);
-    
-    setState(() {
-      _isLoading = false;
-      _statusMessage = success 
-          ? '✅ تم استعادة النسخة بنجاح!\nيرجى إعادة تشغيل التطبيق.'
-          : '❌ فشل في الاستعادة';
-    });
-
-    if (success && mounted) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('تمت الاستعادة'),
-          content: const Text('تم استعادة النسخة الاحتياطية بنجاح.\n'
-              'يرجى إعادة تشغيل التطبيق لتطبيق التغييرات.'),
-          actions: [
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                Navigator.pop(context);
-              },
-              child: const Text('حسناً'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
-  Future<void> _deleteBackup(BackupInfo backup) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('تأكيد الحذف'),
-        content: Text('هل تريد حذف النسخة:\n${backup.name}?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('حذف'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    final success = await _backupService.deleteBackup(backup);
-    if (success) {
-      await _checkAuthAndLoadBackups();
-    }
-  }
-
-  Future<void> _logout() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('تسجيل الخروج'),
-        content: const Text('هل تريد قطع الاتصال بـ Dropbox؟'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('تسجيل الخروج'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      await _backupService.logout();
-      setState(() {
-        _authStatus = DropboxAuthStatus.notConfigured;
-        _backups = [];
-        _statusMessage = '';
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('النسخ الاحتياطي السحابي'),
-        centerTitle: true,
-        actions: [
-          if (_authStatus == DropboxAuthStatus.authenticated)
-            IconButton(
-              icon: const Icon(Icons.logout),
-              onPressed: _logout,
-              tooltip: 'تسجيل الخروج',
-            ),
-        ],
-      ),
-      body: _isLoading 
-          ? _buildLoadingView()
-          : _buildContent(),
-    );
-  }
-
-  Widget _buildLoadingView() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 20),
-          if (_progress > 0) ...[
-            SizedBox(
-              width: 200,
-              child: LinearProgressIndicator(value: _progress / 100),
-            ),
-            const SizedBox(height: 10),
-          ],
-          if (_statusMessage.isNotEmpty)
-            Text(_statusMessage, textAlign: TextAlign.center),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContent() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // حالة الاتصال
-          _buildAuthStatus(),
-          const SizedBox(height: 20),
-          
-          // رسالة الحالة
-          if (_statusMessage.isNotEmpty) ...[
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _statusMessage.startsWith('✅') 
-                    ? Colors.green.withOpacity(0.1)
-                    : _statusMessage.startsWith('❌')
-                        ? Colors.red.withOpacity(0.1)
-                        : Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                _statusMessage,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14),
-              ),
-            ),
-            const SizedBox(height: 20),
-          ],
-          
-          // واجهة المصادقة
-          if (_authStatus != DropboxAuthStatus.authenticated)
-            _buildAuthSection()
-          else ...[
-            // إعدادات النسخ
-            _buildSettingsSection(),
-            const SizedBox(height: 20),
-            
-            // زر النسخ الاحتياطي
-            ElevatedButton.icon(
-              onPressed: _isLoading ? null : _createBackup,
-              icon: const Icon(Icons.cloud_upload),
-              label: const Text('إنشاء نسخة احتياطية جديدة'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(16),
-                backgroundColor: Colors.blue,
-                foregroundColor: Colors.white,
-              ),
-            ),
-            const SizedBox(height: 20),
-            
-            // قائمة النسخ
-            _buildBackupsList(),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAuthStatus() {
-    IconData icon;
-    Color color;
-    String text;
-
-    switch (_authStatus) {
-      case DropboxAuthStatus.authenticated:
-        icon = Icons.check_circle;
-        color = Colors.green;
-        text = 'متصل بـ Dropbox';
-        break;
-      case DropboxAuthStatus.needsAuth:
-        icon = Icons.warning;
-        color = Colors.orange;
-        text = 'يجب إعادة المصادقة';
-        break;
-      case DropboxAuthStatus.error:
-        icon = Icons.error;
-        color = Colors.red;
-        text = 'خطأ في الاتصال';
-        break;
-      default:
-        icon = Icons.cloud_off;
-        color = Colors.grey;
-        text = 'غير متصل';
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 32),
-          const SizedBox(width: 12),
-          Text(
-            text,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAuthSection() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            const Icon(Icons.cloud, size: 64, color: Colors.blue),
-            const SizedBox(height: 16),
-            const Text(
-              'النسخ الاحتياطي السحابي',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'احفظ نسخة احتياطية من بياناتك في Dropbox\nمع حماية تلقائية ضد فقدان البيانات',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
-            ),
-            const SizedBox(height: 20),
-            
-            if (_showCodeInput) ...[
-              TextField(
-                controller: _codeController,
-                decoration: const InputDecoration(
-                  labelText: 'أدخل كود المصادقة',
-                  hintText: 'الصق الكود من Dropbox',
-                  border: OutlineInputBorder(),
-                ),
-                maxLines: 2,
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => _submitAuthCode(_codeController.text.trim()),
-                      child: const Text('تأكيد'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => setState(() => _showCodeInput = false),
-                      child: const Text('إلغاء'),
-                    ),
-                  ),
-                ],
-              ),
-            ] else ...[
-              ElevatedButton.icon(
-                onPressed: _startOAuthFlow,
-                icon: const Icon(Icons.login),
-                label: const Text('تسجيل الدخول إلى Dropbox'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.all(16),
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSettingsSection() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'إعدادات النسخ الاحتياطي',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Text('الاحتفاظ بـ '),
-                DropdownButton<int>(
-                  value: _maxBackups,
-                  items: [10, 15, 20, 30, 50].map((n) {
-                    return DropdownMenuItem(
-                      value: n,
-                      child: Text('$n نسخة'),
-                    );
-                  }).toList(),
-                  onChanged: (v) => setState(() => _maxBackups = v ?? 20),
-                ),
-                const Text(' احتياطية'),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'سيتم حذف النسخ الأقدم تلقائياً عند تجاوز العدد',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBackupsList() {
-    if (_backups.isEmpty) {
-      return const Card(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Column(
-            children: [
-              Icon(Icons.inbox, size: 48, color: Colors.grey),
-              SizedBox(height: 12),
-              Text(
-                'لا توجد نسخ احتياطية',
-                style: TextStyle(color: Colors.grey),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'النسخ الاحتياطية (${_backups.length})',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        ...(_backups.map((backup) => _buildBackupItem(backup))),
-      ],
-    );
-  }
-
-  Widget _buildBackupItem(BackupInfo backup) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: const Icon(Icons.backup, color: Colors.blue),
-        title: Text(
-          backup.name,
-          style: const TextStyle(fontSize: 13),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${_formatDate(backup.modifiedTime)} • ${(backup.size / 1024).toStringAsFixed(1)} KB',
-              style: const TextStyle(fontSize: 11),
-            ),
-          ],
-        ),
-        trailing: PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert),
-          onSelected: (value) {
-            if (value == 'restore') _restoreBackup(backup);
-            if (value == 'delete') _deleteBackup(backup);
-          },
-          itemBuilder: (ctx) => [
-            const PopupMenuItem(
-              value: 'restore',
-              child: Row(
-                children: [
-                  Icon(Icons.restore, color: Colors.blue),
-                  SizedBox(width: 8),
-                  Text('استعادة'),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'delete',
-              child: Row(
-                children: [
-                  Icon(Icons.delete, color: Colors.red),
-                  SizedBox(width: 8),
-                  Text('حذف'),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _formatDate(DateTime date) {
-    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} '
-           '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -587,4 +67,549 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     _codeController.dispose();
     super.dispose();
   }
+
+  Future<void> _checkAuthAndLoadBackups() async {
+    setState(() => _refreshing = true);
+    final status = await _backupService.checkAuthStatus();
+    List<BackupInfo> list = _backups;
+    String? listError;
+    String? account = _account;
+    if (status == DropboxAuthStatus.authenticated) {
+      try {
+        list = await _backupService.listBackups();
+      } catch (e) {
+        listError = 'تعذّر جلب قائمة النسخ: $e';
+      }
+      account ??= await _backupService.getAccountLabel();
+    }
+    if (!mounted) return;
+    setState(() {
+      _authStatus = status;
+      _backups = status == DropboxAuthStatus.authenticated ? list : [];
+      _listError = listError;
+      _account = status == DropboxAuthStatus.authenticated ? account : null;
+      _refreshing = false;
+      _firstLoad = false;
+    });
+  }
+
+  Future<void> _startOAuthFlow() async {
+    final uri = Uri.parse(_backupService.getAuthorizationUrl(_redirectUri));
+    setState(() {
+      _showCodeInput = true;
+      _authError = null;
+    });
+    final ok = await canLaunchUrl(uri) && await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && mounted) setState(() => _authError = 'تعذّر فتح المتصفح — تحقّق من وجود متصفح افتراضي.');
+  }
+
+  Future<void> _submitAuthCode() async {
+    final input = _codeController.text.trim();
+    if (input.isEmpty) {
+      setState(() => _authError = 'الصق الكود أو رابط الصفحة أولاً');
+      return;
+    }
+    setState(() {
+      _connecting = true;
+      _authError = null;
+    });
+    final success = await _backupService.exchangeCodeForToken(input, _redirectUri);
+    if (!mounted) return;
+    setState(() => _connecting = false);
+    if (success) {
+      _codeController.clear();
+      setState(() {
+        _showCodeInput = false;
+        _lastResult = (true, 'تم الاتصال بـ Dropbox بنجاح.');
+      });
+      await _checkAuthAndLoadBackups();
+    } else {
+      setState(() => _authError = 'رُفض الكود — قد يكون انتهى (صالح دقائق قليلة) أو نُسخ ناقصاً. اضغط «فتح صفحة Dropbox» مجدداً.');
+    }
+  }
+
+  Future<void> _createBackup() async {
+    setState(() {
+      _backingUp = true;
+      _progress = 0;
+      _progressText = 'جارٍ البدء...';
+      _lastResult = null;
+    });
+
+    final result = await _backupService.createAndUploadBackup(
+      maxBackups: _maxBackups,
+      onProgress: (progress, status) {
+        if (mounted) {
+          setState(() {
+            _progress = progress;
+            _progressText = status;
+          });
+        }
+      },
+    );
+    if (!mounted) return;
+
+    setState(() {
+      _backingUp = false;
+      if (result.success) {
+        final deleted = result.deletedCount ?? 0;
+        _lastResult = (
+          true,
+          'تم رفع النسخة ${result.backupName} (${_size(result.backupSize ?? 0)})'
+              '${deleted > 0 ? ' — وحُذفت $deleted نسخة قديمة' : ''}.'
+        );
+      } else {
+        _lastResult = (false, result.error ?? 'فشل النسخ');
+      }
+    });
+    await _checkAuthAndLoadBackups();
+  }
+
+  Future<void> _restoreBackup(BackupInfo backup) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => ErpDialog(
+        title: 'استعادة نسخة احتياطية',
+        subtitle: '${_df.format(backup.modifiedTime)}  •  ${_size(backup.size)}',
+        icon: Icons.settings_backup_restore_rounded,
+        color: kSetOrange,
+        width: 480,
+        content: const Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          SetBanner(
+            'ستُستبدل قاعدة البيانات الحالية بهذه النسخة. أي عملية تمت بعد تاريخ النسخة ستختفي من هذا الجهاز.',
+            kind: SetBannerKind.warn,
+          ),
+          SizedBox(height: 10),
+          SetBanner('تُحفظ نسخة أمان من القاعدة الحالية تلقائياً، ويُتراجع عن الاستعادة إن كان الملف تالفاً.'),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: kSetOrange),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.restore_rounded, size: 19),
+            label: const Text('استعادة'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(canPop: false, child: _BusyDialog(text: 'جارٍ تحميل النسخة واستعادتها...')),
+    );
+    final result = await _backupService.restoreBackup(backup);
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop(); // إغلاق نافذة الانتظار
+
+    if (!result.success) {
+      setState(() => _lastResult = (false, result.error ?? 'فشلت الاستعادة'));
+      setToast(context, 'فشلت الاستعادة', error: true);
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => ErpDialog(
+        title: 'تمت الاستعادة',
+        icon: Icons.check_circle_rounded,
+        color: kSetGreen,
+        width: 440,
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 460),
+          child: SingleChildScrollView(
+            child: SelectableText(restoreSummaryText(), style: const TextStyle(height: 1.6)),
+          ),
+        ),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+      ),
+    );
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil('/main', (route) => false);
+  }
+
+  Future<void> _deleteBackup(BackupInfo backup) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => ErpDialog(
+        title: 'حذف النسخة',
+        subtitle: '${_df.format(backup.modifiedTime)}  •  ${_size(backup.size)}',
+        icon: Icons.delete_outline_rounded,
+        color: kSetRed,
+        width: 440,
+        content: const SetBanner('ستُحذف هذه النسخة من Dropbox نهائياً.', kind: SetBannerKind.warn),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: kSetRed),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.delete_outline_rounded, size: 19),
+            label: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final success = await _backupService.deleteBackup(backup);
+    if (!mounted) return;
+    setToast(context, success ? 'حُذفت النسخة' : 'تعذّر الحذف', error: !success);
+    if (success) await _checkAuthAndLoadBackups();
+  }
+
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => ErpDialog(
+        title: 'قطع الاتصال بـ Dropbox',
+        icon: Icons.link_off_rounded,
+        color: kSetRed,
+        width: 440,
+        content: const SetBanner('لن تُرفع نسخ جديدة إلى Dropbox. النسخ الموجودة هناك لا تُحذف.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kSetRed),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('قطع الاتصال'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _backupService.logout();
+    if (!mounted) return;
+    setState(() {
+      _authStatus = DropboxAuthStatus.notConfigured;
+      _backups = [];
+      _account = null;
+      _lastResult = null;
+    });
+  }
+
+  static String _size(int bytes) {
+    if (bytes >= 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  }
+
+  // ─────────────────────────── الواجهة ───────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = _authStatus == DropboxAuthStatus.authenticated;
+    return SettingsScaffold(
+      title: 'النسخ الاحتياطي السحابي',
+      subtitle: 'Dropbox — نسخ قاعدة البيانات مع تدوير تلقائي',
+      icon: Icons.cloud_upload_rounded,
+      loading: _firstLoad,
+      actions: [
+        IconButton(
+          tooltip: 'تحديث',
+          onPressed: _busy ? null : _checkAuthAndLoadBackups,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+        if (connected)
+          IconButton(
+            tooltip: 'قطع الاتصال',
+            onPressed: _busy ? null : _logout,
+            icon: const Icon(Icons.logout_rounded),
+          ),
+      ],
+      children: _firstLoad
+          ? null
+          : [
+              _hero(),
+              if (_lastResult != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: SetBanner(_lastResult!.$2, kind: _lastResult!.$1 ? SetBannerKind.ok : SetBannerKind.error),
+                ),
+              if (!connected) _authCard() else ...[
+                _backupCard(),
+                _settingsCard(),
+                _listCard(),
+              ],
+            ],
+    );
+  }
+
+  Widget _hero() {
+    final (String label, bool ok) = switch (_authStatus) {
+      DropboxAuthStatus.authenticated => ('متصل', true),
+      DropboxAuthStatus.needsAuth => ('انتهى الاتصال — سجّل الدخول من جديد', false),
+      DropboxAuthStatus.error => ('تعذّر الوصول — تحقّق من الإنترنت', false),
+      DropboxAuthStatus.notConfigured => ('غير متصل', false),
+    };
+    return SetHero(
+      icon: Icons.cloud_rounded,
+      color: _dbx,
+      title: 'Dropbox',
+      text: _account ?? 'احفظ نسخة من قاعدة بياناتك في حسابك على Dropbox، مع حذف النسخ الأقدم تلقائياً.',
+      status: Wrap(spacing: 8, runSpacing: 6, children: [
+        SetStatusPill(label, ok: ok),
+        if (_authStatus == DropboxAuthStatus.authenticated)
+          SetStatusPill('${_backups.length} نسخة محفوظة', ok: _backups.isNotEmpty, icon: Icons.inventory_2_rounded),
+      ]),
+    );
+  }
+
+  Widget _authCard() {
+    return SetCard(
+      title: 'ربط حساب Dropbox',
+      subtitle: 'مرة واحدة على هذا الجهاز',
+      icon: Icons.link_rounded,
+      color: _dbx,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SizedBox(height: 10),
+        if (_authStatus == DropboxAuthStatus.error) ...[
+          const SetBanner('تعذّر الوصول إلى Dropbox الآن. إن كنت متصلاً سابقاً فلا داعي لتسجيل الدخول — أعد المحاولة بعد عودة الإنترنت.',
+              kind: SetBannerKind.warn),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _checkAuthAndLoadBackups,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('إعادة المحاولة'),
+          ),
+          const SizedBox(height: 14),
+        ],
+        const SetSteps([
+          'اضغط «فتح صفحة Dropbox» وسجّل الدخول ثم اضغط «Allow / السماح».',
+          'سيفتح المتصفح صفحة «localhost» قد تظهر أنها لا تعمل — هذا طبيعي.',
+          'انسخ الرابط كاملاً من شريط العنوان (أو الكود وحده) والصقه في الحقل ثم «تأكيد».',
+        ], color: _dbx),
+        const SizedBox(height: 6),
+        SetPrimaryButton(
+          label: _showCodeInput ? 'فتح صفحة Dropbox مجدداً' : 'فتح صفحة Dropbox',
+          icon: Icons.open_in_new_rounded,
+          color: _dbx,
+          onPressed: _busy ? null : _startOAuthFlow,
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: AlignmentDirectional.topStart,
+          child: !_showCodeInput
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    TextField(
+                      controller: _codeController,
+                      textDirection: TextDirection.ltr,
+                      decoration: const InputDecoration(
+                        labelText: 'الكود أو رابط الصفحة',
+                        hintText: 'http://localhost/?code=...',
+                        prefixIcon: Icon(Icons.key_rounded),
+                      ),
+                      onSubmitted: (_) => _submitAuthCode(),
+                    ),
+                    if (_authError != null) ...[
+                      const SizedBox(height: 10),
+                      SetBanner(_authError!, kind: SetBannerKind.error),
+                    ],
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      TextButton(
+                        onPressed: _busy ? null : () => setState(() => _showCodeInput = false),
+                        child: const Text('إلغاء'),
+                      ),
+                      const Spacer(),
+                      SizedBox(
+                        width: 180,
+                        child: SetPrimaryButton(
+                          label: 'تأكيد',
+                          icon: Icons.check_rounded,
+                          color: _dbx,
+                          busy: _connecting,
+                          onPressed: _busy ? null : _submitAuthCode,
+                        ),
+                      ),
+                    ]),
+                  ]),
+                ),
+        ),
+        if (!_showCodeInput && _authError != null) ...[
+          const SizedBox(height: 10),
+          SetBanner(_authError!, kind: SetBannerKind.error),
+        ],
+      ]),
+    );
+  }
+
+  Widget _backupCard() {
+    return SetCard(
+      title: 'نسخة احتياطية جديدة',
+      subtitle: 'لقطة كاملة من قاعدة البيانات الحالية',
+      icon: Icons.backup_rounded,
+      color: _dbx,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SizedBox(height: 12),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          child: !_backingUp
+              ? SetPrimaryButton(
+                  key: const ValueKey('btn'),
+                  label: 'إنشاء نسخة ورفعها الآن',
+                  icon: Icons.cloud_upload_rounded,
+                  color: _dbx,
+                  onPressed: _busy ? null : _createBackup,
+                )
+              : Column(
+                  key: const ValueKey('prog'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: LinearProgressIndicator(
+                        value: _progress <= 0 ? null : _progress / 100,
+                        minHeight: 10,
+                        color: _dbx,
+                        backgroundColor: const Color(0xFFE0ECFF),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(child: Text(_progressText, style: const TextStyle(color: kSetMuted))),
+                      Text('$_progress%', style: const TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
+                    ]),
+                  ],
+                ),
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'تُرفع نسخة تلقائياً أيضاً مع «رفع قاعدة البيانات» إلى تيليجرام عندما يكون Dropbox متصلاً.',
+          style: TextStyle(fontSize: 12, color: kSetMuted, height: 1.5),
+        ),
+      ]),
+    );
+  }
+
+  Widget _settingsCard() {
+    return SetCard(
+      title: 'عدد النسخ المحتفظ بها',
+      subtitle: 'تُحذف الأقدم تلقائياً عند تجاوز العدد',
+      icon: Icons.layers_rounded,
+      color: _dbx,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final n in DropboxBackupService.maxBackupsChoices)
+            ChoiceChip(
+              label: Text('$n نسخة'),
+              selected: _maxBackups == n,
+              showCheckmark: false,
+              selectedColor: _dbx.withValues(alpha: 0.12),
+              side: BorderSide(color: _maxBackups == n ? _dbx : kSetBorder),
+              labelStyle: TextStyle(fontWeight: FontWeight.w700, color: _maxBackups == n ? _dbx : kSetText),
+              onSelected: _busy
+                  ? null
+                  : (_) {
+                      setState(() => _maxBackups = n);
+                      _backupService.setMaxBackups(n);
+                    },
+            ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _listCard() {
+    return SetCard(
+      title: 'النسخ المحفوظة',
+      subtitle: _backups.isEmpty ? null : 'الأحدث أولاً',
+      icon: Icons.history_rounded,
+      color: _dbx,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      trailing: _refreshing
+          ? const Padding(
+              padding: EdgeInsets.all(8),
+              child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+            )
+          : null,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (_listError != null) ...[
+          SetBanner(_listError!, kind: SetBannerKind.error),
+          const SizedBox(height: 10),
+        ],
+        if (_backups.isEmpty && _listError == null)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 26),
+            child: Column(children: [
+              Icon(Icons.cloud_queue_rounded, size: 44, color: Color(0xFFB8C2CF)),
+              SizedBox(height: 10),
+              Text('لا توجد نسخ بعد', style: TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
+              SizedBox(height: 4),
+              Text('اضغط «إنشاء نسخة ورفعها الآن» لأول نسخة.', style: TextStyle(color: kSetMuted)),
+            ]),
+          ),
+        for (var i = 0; i < _backups.length; i++) _backupTile(_backups[i], latest: i == 0),
+      ]),
+    );
+  }
+
+  Widget _backupTile(BackupInfo b, {required bool latest}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: latest ? const Color(0xFFF5F9FF) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: latest ? _dbx.withValues(alpha: 0.30) : kSetBorder),
+      ),
+      child: Material(type: MaterialType.transparency, child: ListTile(
+        contentPadding: const EdgeInsetsDirectional.fromSTEB(12, 4, 6, 4),
+        leading: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(color: _dbx.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(12)),
+          child: const Icon(Icons.inventory_2_outlined, color: _dbx),
+        ),
+        title: Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          Text(_df.format(b.modifiedTime),
+              textDirection: TextDirection.ltr,
+              style: const TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
+          if (latest)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(color: _dbx.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+              child: const Text('الأحدث', style: TextStyle(fontSize: 11, color: _dbx, fontWeight: FontWeight.w800)),
+            ),
+        ]),
+        subtitle: Text('${_size(b.size)}  •  ${b.name}',
+            maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: kSetMuted)),
+        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+          IconButton(
+            tooltip: 'استعادة هذه النسخة',
+            style: IconButton.styleFrom(backgroundColor: const Color(0xFFFFF7ED)),
+            icon: const Icon(Icons.settings_backup_restore_rounded, color: kSetOrange),
+            onPressed: _busy ? null : () => _restoreBackup(b),
+          ),
+          const SizedBox(width: 6),
+          IconButton(
+            tooltip: 'حذف',
+            style: IconButton.styleFrom(backgroundColor: const Color(0xFFFEF2F2)),
+            icon: const Icon(Icons.delete_outline_rounded, color: kSetRed),
+            onPressed: _busy ? null : () => _deleteBackup(b),
+          ),
+        ]),
+      )),
+    );
+  }
+}
+
+class _BusyDialog extends StatelessWidget {
+  const _BusyDialog({required this.text});
+  final String text;
+  @override
+  Widget build(BuildContext context) => Dialog(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 3)),
+            const SizedBox(width: 16),
+            Flexible(child: Text(text, style: const TextStyle(fontWeight: FontWeight.w700))),
+          ]),
+        ),
+      );
 }

@@ -1,6 +1,7 @@
 // lib/services/database/business/profit_calculator.dart
 // حسابات الأرباح
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import '../../../utils/money_calculator.dart';
@@ -97,7 +98,7 @@ class ProfitCalculator {
       final netSales = MoneyCalculator.subtract(totalAmount, returnAmount);
       return MoneyCalculator.subtract(netSales, totalCost);
     } catch (e) {
-      print('Error calculating invoice profit: $e');
+      debugPrint('Error calculating invoice profit: $e');
       return 0.0;
     }
   }
@@ -121,7 +122,7 @@ class ProfitCalculator {
       
       return totalProfit;
     } catch (e) {
-      print('Error calculating period profit: $e');
+      debugPrint('Error calculating period profit: $e');
       return 0.0;
     }
   }
@@ -180,7 +181,7 @@ class ProfitCalculator {
 
       return totalProfit;
     } catch (e) {
-      print('Error calculating product profit: $e');
+      debugPrint('Error calculating product profit: $e');
       return 0.0;
     }
   }
@@ -213,7 +214,7 @@ class ProfitCalculator {
       
       return totalProfit;
     } catch (e) {
-      print('Error calculating customer profit: $e');
+      debugPrint('Error calculating customer profit: $e');
       return 0.0;
     }
   }

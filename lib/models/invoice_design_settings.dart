@@ -1,5 +1,4 @@
 // models/invoice_design_settings.dart
-import 'dart:convert';
 
 /// إعدادات عمود واحد في جدول الفاتورة
 class InvoiceColumnConfig {
@@ -56,15 +55,17 @@ class InvoiceColumnConfig {
     return [
       const InvoiceColumnConfig(id: 'serial', label: 'ت', visible: true, widthFlex: 0.4, order: 0),
       const InvoiceColumnConfig(id: 'productId', label: 'ID', visible: true, widthFlex: 0.9, order: 1),
-      const InvoiceColumnConfig(id: 'details', label: 'التفاصيل', visible: true, widthFlex: 2.0, order: 2),
-      const InvoiceColumnConfig(id: 'quantity', label: 'العدد', visible: true, widthFlex: 1.2, order: 3),
-      const InvoiceColumnConfig(id: 'unitsCount', label: 'عدد الوحدات', visible: true, widthFlex: 1.0, order: 4),
-      const InvoiceColumnConfig(id: 'priceBeforeDiscount', label: 'السعر قبل الخصم', visible: true, widthFlex: 1.1, order: 5),
-      const InvoiceColumnConfig(id: 'discount', label: 'الخصم', visible: true, widthFlex: 0.9, order: 6),
-      const InvoiceColumnConfig(id: 'price', label: 'السعر', visible: true, widthFlex: 1.1, order: 7),
-      const InvoiceColumnConfig(id: 'amount', label: 'المبلغ', visible: true, widthFlex: 1.4, order: 8),
-      const InvoiceColumnConfig(id: 'weight', label: 'الوزن', visible: false, widthFlex: 1.0, order: 9),
-      const InvoiceColumnConfig(id: 'expiry', label: 'تاريخ الانتهاء', visible: false, widthFlex: 1.2, order: 10),
+      const InvoiceColumnConfig(id: 'itemCode', label: 'الرمز', visible: false, widthFlex: 0.9, order: 2),
+      const InvoiceColumnConfig(id: 'barcode', label: 'الباركود', visible: false, widthFlex: 1.3, order: 3),
+      const InvoiceColumnConfig(id: 'details', label: 'التفاصيل', visible: true, widthFlex: 2.0, order: 4),
+      const InvoiceColumnConfig(id: 'quantity', label: 'العدد', visible: true, widthFlex: 1.2, order: 5),
+      const InvoiceColumnConfig(id: 'unitsCount', label: 'عدد الوحدات', visible: true, widthFlex: 1.0, order: 6),
+      const InvoiceColumnConfig(id: 'priceBeforeDiscount', label: 'السعر قبل الخصم', visible: true, widthFlex: 1.1, order: 7),
+      const InvoiceColumnConfig(id: 'discount', label: 'الخصم', visible: true, widthFlex: 0.9, order: 8),
+      const InvoiceColumnConfig(id: 'price', label: 'السعر', visible: true, widthFlex: 1.1, order: 9),
+      const InvoiceColumnConfig(id: 'amount', label: 'المبلغ', visible: true, widthFlex: 1.4, order: 10),
+      const InvoiceColumnConfig(id: 'weight', label: 'الوزن', visible: false, widthFlex: 1.0, order: 11),
+      const InvoiceColumnConfig(id: 'expiry', label: 'تاريخ الانتهاء', visible: false, widthFlex: 1.2, order: 12),
     ];
   }
 }
@@ -74,7 +75,8 @@ class InvoiceDesignSettings {
   final String? logoPath;           // مسار اللوجو المخصص
   final String companyName;         // اسم الشركة
   final String companyAddress;      // عنوان الشركة
-  final List<String> phoneNumbers;  // أرقام الهاتف (حد أقصى 2)
+  final List<String> phoneNumbers;  // أرقام الهاتف (حد أقصى 4)
+  final List<String> phoneLabels;   // ☎️ اسم كل رقم بنفس الترتيب («كهربائيات»…) — اختياري
   final List<InvoiceColumnConfig> columns; // إعدادات الأعمدة
   final String taxNumber;          // الرقم الضريبي (يظهر في رأس القائمة إن كُتب)
   final String commercialRegister; // رقم السجل التجاري
@@ -85,6 +87,7 @@ class InvoiceDesignSettings {
     this.companyName = 'الــــــنــــــاصــــــر',
     this.companyAddress = 'الموصل - الجدعة - مقابل البرج',
     this.phoneNumbers = const [],
+    this.phoneLabels = const [],
     List<InvoiceColumnConfig>? columns,
     this.taxNumber = '',
     this.commercialRegister = '',
@@ -106,6 +109,7 @@ class InvoiceDesignSettings {
     String? companyName,
     String? companyAddress,
     List<String>? phoneNumbers,
+    List<String>? phoneLabels,
     List<InvoiceColumnConfig>? columns,
     String? taxNumber,
     String? commercialRegister,
@@ -116,6 +120,7 @@ class InvoiceDesignSettings {
       companyName: companyName ?? this.companyName,
       companyAddress: companyAddress ?? this.companyAddress,
       phoneNumbers: phoneNumbers ?? this.phoneNumbers,
+      phoneLabels: phoneLabels ?? this.phoneLabels,
       columns: columns ?? this.columns,
       taxNumber: taxNumber ?? this.taxNumber,
       commercialRegister: commercialRegister ?? this.commercialRegister,
@@ -128,6 +133,7 @@ class InvoiceDesignSettings {
     'companyName': companyName,
     'companyAddress': companyAddress,
     'phoneNumbers': phoneNumbers,
+    'phoneLabels': phoneLabels,
     'columns': columns.map((c) => c.toJson()).toList(),
     'taxNumber': taxNumber,
     'commercialRegister': commercialRegister,
@@ -147,6 +153,18 @@ class InvoiceDesignSettings {
       // 🆕 أعمدة أُضيفت بعد حفظ التصميم (مثل «السعر قبل الخصم» و«الخصم»):
       //    تُضاف قبل «السعر» بترتيبه الحالي، ظاهرة، ويمكن إخفاؤها من تصميم الفاتورة.
       final have = cols.map((c) => c.id).toSet();
+      // رمز المادة والباركود: بعد «رقم المادة» (مخفيان حتى يُظهرهما المستخدم)
+      final pidIdx = cols.indexWhere((c) => c.id == 'productId');
+      if (pidIdx >= 0) {
+        var at = pidIdx + 1;
+        final pidOrder = cols[pidIdx].order;
+        for (final d in InvoiceColumnConfig.defaultColumns()) {
+          if ((d.id == 'itemCode' || d.id == 'barcode') && !have.contains(d.id)) {
+            cols.insert(at++, d.copyWith(order: pidOrder));
+            have.add(d.id);
+          }
+        }
+      }
       final priceIdx = cols.indexWhere((c) => c.id == 'price');
       final priceOrder = priceIdx >= 0 ? cols[priceIdx].order : cols.last.order;
       var insertAt = priceIdx >= 0 ? priceIdx : cols.length;
@@ -162,12 +180,22 @@ class InvoiceDesignSettings {
       companyName: json['companyName'] ?? 'الــــــنــــــاصــــــر',
       companyAddress: json['companyAddress'] ?? 'الموصل - الجدعة - مقابل البرج',
       phoneNumbers: List<String>.from(json['phoneNumbers'] ?? []),
+      phoneLabels: List<String>.from((json['phoneLabels'] as List?)?.map((e) => '${e ?? ''}') ?? const []),
       columns: cols,
       taxNumber: (json['taxNumber'] as String?) ?? '',
       commercialRegister: (json['commercialRegister'] as String?) ?? '',
       footerNote: (json['footerNote'] as String?) ?? 'شكراً لتعاملكم معنا',
     );
   }
+
+  /// ☎️ الأرقام بأسمائها للطباعة: «كهربائيات: 0770…» أو الرقم وحده.
+  List<String> get labeledPhones => [
+        for (var i = 0; i < phoneNumbers.length; i++)
+          if (phoneNumbers[i].trim().isNotEmpty)
+            (i < phoneLabels.length && phoneLabels[i].trim().isNotEmpty)
+                ? '${phoneLabels[i].trim()}: ${phoneNumbers[i].trim()}'
+                : phoneNumbers[i].trim(),
+      ];
 
   /// الحصول على الأعمدة المرئية مرتبة حسب الترتيب
   List<InvoiceColumnConfig> get visibleColumns {

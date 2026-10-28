@@ -4,7 +4,7 @@
 //   • في الواجهة ما تحتاجه أغلب المواد فقط: الاسم والرمز والقسم والباركود،
 //     الوحدات بمعاملات التحويل، الكلفة والأسعار الستة، والكمية والتنبيه.
 //   • كل ما يندر استعماله في نافذة «المزيد»: التعريف الإضافي، أرقام التسجيل
-//     والجمرك والضريبة، الحسم والهدايا، طرق الكلفة، الحدود والمخزن والمورد،
+//     والجمرك والضريبة، الخصم والهدايا، طرق الكلفة، الحدود والمخزن والمورد،
 //     الصلاحية والتسلسلي والوزن والميزان، الباركودات الإضافية، الحالة.
 //     الإعدادات المفعّلة منها تظهر شارات صغيرة تحت الاسم.
 //   • شريط سفلي: حفظ • جديد • السابق/التالي • بحث • البطاقة الموسّعة • ملصق.
@@ -19,6 +19,7 @@
 //     PriceTools.applyPrices (تُسجَّل في سجل تغييرات الأسعار).
 //   • الكمية لا تُعدَّل من هنا — مكانها المستندات المخزنية والجرد.
 
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show mapEquals;
@@ -30,6 +31,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../accounting/screens/acc_ui.dart' show showError, showOk, requirePermission;
 import '../erp/erp_common.dart' show parseMoney, erpDb, confirmDialog, d0;
 import '../erp/inventory/barcode_labels.dart';
+import '../erp/inventory/usd_cost_service.dart' show UsdCostService;
 import '../erp/inventory/price_tools.dart' show PriceTools, priceFieldNames, roundToStep;
 import '../models/app_user.dart';
 import '../models/product.dart';
@@ -76,9 +78,16 @@ class _UnitLine {
         qty = TextEditingController(text: qty);
   final TextEditingController name;
   final TextEditingController qty;
+
+  /// 💲 كلفة هذه الوحدة وسعرها المفرد — مشتقّان من الوحدة الأساسية بالمعامل،
+  /// وكتابة أيٍّ منهما تحسب الأساسية ثم بقية الوحدات (لا يُحفظان بذاتهما).
+  final TextEditingController cost = TextEditingController();
+  final TextEditingController price = TextEditingController();
   void dispose() {
     name.dispose();
     qty.dispose();
+    cost.dispose();
+    price.dispose();
   }
 }
 
@@ -99,10 +108,23 @@ class _MoreSection {
 }
 
 class ItemCardEditorScreen extends StatefulWidget {
-  const ItemCardEditorScreen({super.key, this.productId});
+  const ItemCardEditorScreen({
+    super.key,
+    this.productId,
+    this.quickForPurchase = false,
+    this.initialName,
+    this.initialBarcode,
+  });
 
   /// null = مادة جديدة
   final int? productId;
+
+  /// 🧾 من فاتورة شراء: نفس البطاقة مختصرة (التعريف، الوحدات، الأسعار)، وبعد
+  /// الحفظ تُغلق وتعيد رقم المادة لتُضاف إلى الفاتورة. الرصيد الافتتاحي مخفي:
+  /// الكمية تدخل المخزون من الفاتورة نفسها (وإلا دخلت مرتين).
+  final bool quickForPurchase;
+  final String? initialName;
+  final String? initialBarcode;
 
   @override
   State<ItemCardEditorScreen> createState() => _ItemCardEditorScreenState();
@@ -130,6 +152,10 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   final _price = List.generate(6, (_) => TextEditingController());
   final _markup = List.generate(6, (_) => TextEditingController());
   final _cost = TextEditingController();
+  // 💱 عملة الكلفة: بالدولار تُكتب الكلفة بالدولار وتُحسب بالدينار بآخر سعر
+  String _costCur = 'IQD';
+  final _costUsd = TextEditingController();
+  double _usdRate = 0;
   final _openQty = TextEditingController();
   String? _openUnit;
   final _weight = TextEditingController();
@@ -171,6 +197,16 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   final _nameFocus = FocusNode();
   final _price1Focus = FocusNode();
 
+  // 💲 كلفة/مفرد الوحدة الأساسية داخل بطاقة الوحدات + «المرساة»: آخر وحدة كُتب
+  //    سعرها (null = الأساسية في بطاقة الأسعار هي المصدر). تغيير معامل وحدة يُبقي
+  //    سعر المرساة كما كتبه المستخدم ويعيد حساب الأساسية والباقي.
+  final _baseCostU = TextEditingController();
+  final _basePriceU = TextEditingController();
+  Object? _costAnchor; // 'base' | _UnitLine
+  double? _costAnchorVal;
+  Object? _priceAnchor;
+  double? _priceAnchorVal;
+
   bool get _canSeeCost => AuthService().hasPermission(AppPermissions.viewCostProfit);
   bool get _isNew => _id == null;
   bool get _showCost => _isNew || _canSeeCost;
@@ -187,7 +223,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
 
   @override
   void dispose() {
-    for (final c in [_name, _code, _barcode, _baseUnit, _cost, _openQty, _weight, _alertQty, ..._price, ..._markup]) {
+    for (final c in [_name, _code, _barcode, _baseUnit, _cost, _costUsd, _openQty, _weight, _alertQty, ..._price, ..._markup]) {
       c.dispose();
     }
     for (final c in _dc.values) {
@@ -201,6 +237,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     }
     _nameFocus.dispose();
     _price1Focus.dispose();
+    _baseCostU.dispose();
+    _basePriceU.dispose();
     super.dispose();
   }
 
@@ -246,14 +284,15 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   }
 
   void _resetForm() {
-    for (final c in [_name, _code, _barcode, _cost, _openQty, _weight, _alertQty, ..._price, ..._markup]) {
+    for (final c in [_name, _code, _barcode, _cost, _costUsd, _openQty, _weight, _alertQty, ..._price, ..._markup]) {
       c.clear();
     }
+    _costCur = 'IQD';
     for (final c in _dc.values) {
       c.clear();
     }
     _baseUnit.text = 'قطعة';
-    _disposeLater([for (final u in _units) ...[u.name, u.qty]]);
+    _disposeLater([for (final u in _units) ...[u.name, u.qty, u.cost, u.price]]);
     _units
       ..clear()
       ..addAll([_UnitLine(), _UnitLine()]);
@@ -276,6 +315,12 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _pricingMode = 'fixed';
     _defaultUnit = null;
     _barcodesList = const [];
+    _costAnchor = null;
+    _costAnchorVal = null;
+    _priceAnchor = null;
+    _priceAnchorVal = null;
+    _baseCostU.clear();
+    _basePriceU.clear();
     _balances = const [];
     _reserved = 0;
     _sales30 = const [0, 0];
@@ -287,7 +332,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _barcode.text = p.barcode ?? '';
     _baseUnit.text = _unitDisplay(p.unit);
     final levels = _parseHierarchy(p.unitHierarchy);
-    _disposeLater([for (final u in _units) ...[u.name, u.qty]]);
+    _disposeLater([for (final u in _units) ...[u.name, u.qty, u.cost, u.price]]);
     _units
       ..clear()
       ..addAll([
@@ -301,6 +346,9 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       _price[i].text = _fmt(prices[i]);
     }
     if (_canSeeCost) _cost.text = _fmt(p.costPrice);
+    final usd = (d['cost_usd'] as num?)?.toDouble();
+    _costCur = (d['cost_currency'] == 'USD' && (usd ?? 0) > 0) ? 'USD' : 'IQD';
+    if (_canSeeCost && _costCur == 'USD') _costUsd.text = _fmt(usd);
     _weighable = p.isWeighable;
     _weight.text = _fmt(p.baseWeight);
     _hasExpiry = p.hasExpiry || (d['track_expiry'] as int? ?? 0) == 1;
@@ -347,6 +395,9 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       try {
         units = await _dbs.getAllUnits();
       } catch (_) {}
+      try {
+        _usdRate = await UsdCostService.currentRate(await erpDb());
+      } catch (_) {}
       Product? p;
       Map<String, Object?> d = const {};
       if (id != null) {
@@ -386,9 +437,14 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         try {
           _code.text = await _svc.suggestCode();
         } catch (_) {}
+        if (widget.quickForPurchase && _savedCount == 0) {
+          if ((widget.initialName ?? '').trim().isNotEmpty) _name.text = widget.initialName!.trim();
+          if ((widget.initialBarcode ?? '').trim().isNotEmpty) _barcode.text = widget.initialBarcode!.trim();
+        }
       }
       _id = id;
       _orig = p;
+      _refreshUnitFields();
       _baseline = _snapshot();
     } catch (e) {
       if (mounted) showError(context, e);
@@ -447,6 +503,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         'pricing_mode': _pricingMode,
         'default_unit': _defaultUnit,
         'min_role': _hideFromStaff ? 'admin' : null,
+        'cost_currency': _costCur,
+        'cost_usd': _costCur == 'USD' ? _p(_costUsd) : null,
       };
 
   /// صورة كاملة لقيم النموذج — تُقارن بصورة لحظة الفتح لمعرفة ما تغيّر فعلاً.
@@ -483,7 +541,146 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     return jsonEncode(m);
   }
 
-  void _touch() => setState(() {});
+  void _touch() {
+    _refreshUnitFields();
+    setState(() {});
+  }
+
+  // ═══════════════════ 💲 أسعار الوحدات (الكلفة والمفرد لكل وحدة) ═══════════════════
+
+  /// معامل الوحدة إلى الأساسية (الأساسية = 1). null إن نقص معامل وحدة قبلها.
+  double? _factorOfLine(Object line) {
+    if (line == 'base') return 1;
+    var f = 1.0;
+    for (final u in _units) {
+      final q = _p(u.qty) ?? 0;
+      if (q <= 0) return null;
+      f *= q;
+      if (identical(u, line)) return f;
+    }
+    return null;
+  }
+
+  bool get _costInUsd => _costCur == 'USD';
+
+  /// الكلفة الأساسية بعملة الإدخال (دولار أو دينار)
+  double? get _baseCostValue => _costInUsd ? _p(_costUsd) : _p(_cost);
+
+  void _setBaseCost(double v) {
+    if (_costInUsd) {
+      _costUsd.text = _fmt(v);
+      _syncUsdCost();
+    } else {
+      _cost.text = _fmt(v);
+    }
+    if (_pricingMode == 'markup') {
+      for (var i = 0; i < 6; i++) {
+        _recalcMarkup(i);
+      }
+    }
+  }
+
+  void _setIfChanged(TextEditingController c, String t) {
+    if (c.text != t) c.text = t;
+  }
+
+  /// تُستدعى من الأحداث فقط (لا أثناء البناء): تحسب الأساسية من المرساة إن وُجدت،
+  /// ثم تملأ كلفة/مفرد كل وحدة = الأساسية × معاملها، عدا المرساة نفسها.
+  void _refreshUnitFields() {
+    // الكلفة
+    if (_costAnchor != null && _costAnchorVal != null) {
+      final f = _factorOfLine(_costAnchor!);
+      if (f != null && f > 0) _setBaseCost(_costAnchorVal! / f);
+    }
+    final bc = _baseCostValue;
+    void fillCost(Object line, TextEditingController c) {
+      if (identical(line, _costAnchor) || (line == 'base' && _costAnchor == 'base')) return;
+      final f = _factorOfLine(line);
+      _setIfChanged(c, (bc == null || bc <= 0 || f == null) ? '' : _fmt(bc * f));
+    }
+
+    fillCost('base', _baseCostU);
+    for (final u in _units) {
+      fillCost(u, u.cost);
+    }
+    // المفرد (سعر 1)
+    if (_priceAnchor != null && _priceAnchorVal != null) {
+      final f = _factorOfLine(_priceAnchor!);
+      if (f != null && f > 0) _price[0].text = _fmt(_priceAnchorVal! / f);
+    }
+    final bp = _p(_price[0]);
+    void fillPrice(Object line, TextEditingController c) {
+      if (identical(line, _priceAnchor) || (line == 'base' && _priceAnchor == 'base')) return;
+      final f = _factorOfLine(line);
+      _setIfChanged(c, (bp == null || bp <= 0 || f == null) ? '' : _fmt(bp * f));
+    }
+
+    fillPrice('base', _basePriceU);
+    for (final u in _units) {
+      fillPrice(u, u.price);
+    }
+  }
+
+  /// كُتبت كلفة أو مفرد وحدة: تصبح المرساة، ويُحسب الباقي فوراً.
+  void _onUnitValue(Object line, bool isCost, String text) {
+    final v = parseMoney(text);
+    // لا نفك المرساة أثناء الكتابة (مثل «0» أو «0.» قبل «0.5»)، وإلا
+    // أعاد التحديث كتابة الخانة نفسها ومُنعت الكسور. تُفك فقط عند تفريغ الخانة.
+    final keep = text.trim().isNotEmpty && v != null;
+    if (isCost) {
+      _costAnchor = keep ? line : null;
+      _costAnchorVal = keep ? v : null;
+    } else {
+      _priceAnchor = keep ? line : null;
+      _priceAnchorVal = keep ? v : null;
+    }
+    _touch();
+  }
+
+  /// كُتب في بطاقة الأسعار مباشرة: الأساسية هي المصدر من جديد.
+  void _releaseCostAnchor() {
+    _costAnchor = null;
+    _costAnchorVal = null;
+  }
+
+  void _releasePriceAnchor() {
+    _priceAnchor = null;
+    _priceAnchorVal = null;
+  }
+
+  /// صف «كلفة / مفرد» لوحدة داخل بطاقة الوحدات
+  Widget _unitMoneyRow(Object line, String unitName, TextEditingController costC, TextEditingController priceC) {
+    final cur = _costInUsd ? '\$' : 'د.ع';
+    Widget box(String label, TextEditingController c, bool isCost, Color color) => Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: color)),
+            const SizedBox(height: 3),
+            TextField(
+              controller: c,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.end,
+              textInputAction: TextInputAction.next,
+              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: _C.text),
+              decoration: _dec(hint: '0', suffixText: isCost ? cur : 'د.ع').copyWith(
+                fillColor: color.withValues(alpha: 0.04),
+              ),
+              onChanged: (t) => _onUnitValue(line, isCost, t),
+            ),
+          ]),
+        );
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(children: [
+        if (_showCost) ...[
+          box('كلفة الـ$unitName', costC, true, _C.orange),
+          const SizedBox(width: 10),
+        ],
+        box('مفرد الـ$unitName', priceC, false, _C.prices),
+      ]),
+    );
+  }
 
   void _recalcMarkup(int i) {
     final cost = _p(_cost) ?? 0;
@@ -572,7 +769,11 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     return notes;
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked(), message: 'جارٍ حفظ المادة…');
+  }
+  Future<void> _saveUnlocked() async {
     if (_saving || _loading) return;
     final isNew = _isNew;
     if (isNew && !requirePermission(context, AppPermissions.productEntry)) return;
@@ -691,13 +892,19 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     notes.addAll(await _flushBarcodes(id));
     _savedCount++;
     if (!mounted) return;
+    // 🧾 من فاتورة الشراء: الرجوع برقم المادة لتُضاف إلى الفاتورة
+    if (widget.quickForPurchase) {
+      Navigator.of(context).pop(id);
+      return;
+    }
     final msg = 'حُفظت «${product.name}» برقم $id${notes.isEmpty ? '' : ' — ${notes.join('، ')}'}';
     await _open(_newAfterSave ? null : id);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: notes.isEmpty ? _C.green : _C.orange,
-      duration: const Duration(seconds: 5),
+      duration: Duration(seconds: notes.isEmpty ? 3 : 6),
+      persist: false, // ⏱️ يختفي وحده رغم وجود زر «فتحها» (كان يبقى ويغطي زر الحفظ)
       action: _newAfterSave
           ? SnackBarAction(label: 'فتحها', textColor: Colors.white, onPressed: () => _open(id))
           : null,
@@ -732,6 +939,12 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       if (colKeys.contains('has_expiry') || colKeys.contains('expiry_date')) {
         m['has_expiry'] = v['has_expiry'];
         m['expiry_date'] = v['expiry_date'];
+      }
+      if (colKeys.contains('cost_price')) {
+        // أرباح ما بيع سابقاً لا تتغير بتغيير الكلفة: تُثبَّت البنود التي بلا كلفة محفوظة
+        try {
+          await UsdCostService.freezePastCosts(await erpDb(), {id});
+        } catch (_) {}
       }
       if (colKeys.contains('unit') || colKeys.contains('unit_hierarchy') || colKeys.contains('cost_price')) {
         final cost = colKeys.contains('cost_price') ? (v['cost_price'] as double) : (cur.costPrice ?? 0);
@@ -917,7 +1130,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
         _label(label),
         DropdownButtonFormField<T>(
-          value: items.any((i) => i.value == value) ? value : null,
+          initialValue: items.any((i) => i.value == value) ? value : null,
           items: items,
           isExpanded: true,
           isDense: true,
@@ -1004,10 +1217,14 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        if (await _confirmDiscard() && context.mounted) Navigator.of(context).pop(_savedCount > 0);
+        if (await _confirmDiscard() && context.mounted) {
+          Navigator.of(context).pop(widget.quickForPurchase ? null : _savedCount > 0);
+        }
       },
       child: CallbackShortcuts(
-        bindings: {
+        bindings: widget.quickForPurchase
+            ? {const SingleActivator(LogicalKeyboardKey.keyS, control: true): _save}
+            : {
           const SingleActivator(LogicalKeyboardKey.keyS, control: true): _save,
           const SingleActivator(LogicalKeyboardKey.keyN, control: true): _newCard,
           const SingleActivator(LogicalKeyboardKey.keyF, control: true): _search,
@@ -1032,7 +1249,9 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
 
   Widget _header() {
     final title = _isNew ? 'مادة جديدة' : (_orig?.name ?? '');
-    final sub = _isNew
+    final sub = widget.quickForPurchase
+        ? 'من فاتورة الشراء — الأساسيات فقط، والباقي في «المزيد». بعد الحفظ تُضاف إلى الفاتورة'
+        : _isNew
         ? 'تعريف مادة جديدة — الحقول المعلّمة * مطلوبة'
         : [
             'رقم ${_id ?? ''}',
@@ -1085,6 +1304,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
                     style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11.5)),
               ]),
             ),
+            if (!widget.quickForPurchase) ...[
             btn(Icons.search, 'بحث عن مادة (Ctrl+F)', _search),
             const SizedBox(width: 6),
             btn(Icons.chevron_left, 'المادة السابقة (Ctrl+PageUp)', () => _step(false)),
@@ -1092,6 +1312,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             btn(Icons.chevron_right, 'المادة التالية (Ctrl+PageDown)', () => _step(true)),
             const SizedBox(width: 6),
             btn(Icons.add, 'مادة جديدة (Ctrl+N)', _newCard),
+            ],
           ]),
         ),
       ),
@@ -1106,6 +1327,27 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         FocusTraversalGroup(child: _pricesCard()),
         FocusTraversalGroup(child: _stockCard()),
       ];
+      if (widget.quickForPurchase) {
+        // مختصرة: التعريف ثم الوحدات والأسعار جنباً إلى جنب (بلا بطاقة المخزون)
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            FocusTraversalGroup(child: _heroCard(wide)),
+            const SizedBox(height: 14),
+            if (box.maxWidth >= 860)
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: cards[0]),
+                const SizedBox(width: 14),
+                Expanded(child: cards[1]),
+              ])
+            else ...[
+              cards[0],
+              const SizedBox(height: 14),
+              cards[1],
+            ],
+          ]),
+        );
+      }
       return SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1150,7 +1392,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       ),
     ]);
     final idFields = [
-      _field('رقم المادة (الرمز)', _code,
+      _field('رمز المادة', _code,
           hint: 'تلقائي',
           suffix: IconButton(
             tooltip: 'رمز تلقائي جديد',
@@ -1367,6 +1609,10 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
               ],
               onSelected: (u) => setState(() => _baseUnit.text = u),
             )),
+        _unitMoneyRow('base', _baseName, _baseCostU, _basePriceU),
+        const SizedBox(height: 4),
+        const Text('اكتب سعر أي وحدة (القطعة أو الباكيت أو الكرتون) فتُحسب البقية تلقائياً بالمعامل.',
+            style: TextStyle(fontSize: 11.5, color: _C.muted)),
         const SizedBox(height: 10),
         for (var i = 0; i < _units.length; i++) _unitLineRow(i),
         Align(
@@ -1396,7 +1642,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     return Padding(
       key: ObjectKey(u),
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
         Expanded(
           flex: 5,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1475,7 +1722,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             onPressed: () => setState(() {
               if (_units.length > 1) {
                 final gone = _units.removeAt(i);
-                _disposeLater([gone.name, gone.qty]);
+                _disposeLater([gone.name, gone.qty, gone.cost, gone.price]);
               } else {
                 u.name.clear();
                 u.qty.clear();
@@ -1483,6 +1730,9 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             }),
           ),
         ),
+      ]),
+      // 💲 كلفة/مفرد هذه الوحدة (مشتقة بالمعامل — أو اكتبها هنا فتُحسب الأساسية)
+      _unitMoneyRow(u, u.name.text.trim().isEmpty ? 'الوحدة ${i + 2}' : u.name.text.trim(), u.cost, u.price),
       ]),
     );
   }
@@ -1512,11 +1762,37 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         onSelectionChanged: (s) => setState(() => _pricingMode = s.first),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (_showCost) ...[
+          _costCurrencyRow(),
+          const SizedBox(height: 8),
+        ],
         if (_showCost)
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            if (_costCur == 'USD') ...[
+              SizedBox(
+                width: 170,
+                child: _field('الكلفة بالدولار', _costUsd, number: true, hint: '0.00', suffixText: '\$', onChanged: (_) {
+                  _releaseCostAnchor();
+                  _syncUsdCost();
+                  _onCostChanged();
+                }),
+              ),
+              const SizedBox(width: 10),
+            ],
             Expanded(
-              child: _field(_isNew ? 'كلفة الوحدة الأساسية' : 'الكلفة الحالية', _cost,
-                  number: true, hint: '0', suffixText: 'د.ع', onChanged: (_) => _onCostChanged()),
+              child: _field(
+                  _costCur == 'USD'
+                      ? 'بالدينار (يتبع سعر الدولار)'
+                      : (_isNew ? 'كلفة الوحدة الأساسية' : 'الكلفة الحالية'),
+                  _cost,
+                  number: true,
+                  hint: '0',
+                  suffixText: 'د.ع',
+                  enabled: _costCur != 'USD',
+                  onChanged: (_) {
+                    _releaseCostAnchor();
+                    _onCostChanged();
+                  }),
             ),
             if (_pricingMode == 'markup') ...[
               const SizedBox(width: 10),
@@ -1534,6 +1810,64 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         _grid([for (var i = 0; i < 6; i++) _priceTile(i, cost)], cols: 2, gap: 10),
       ]),
     );
+  }
+
+  /// كلفة الدينار = الدولار × آخر سعر (تُحدَّث عند الكتابة أو تبديل العملة).
+  void _syncUsdCost() {
+    final usd = _p(_costUsd);
+    if (usd == null || _usdRate <= 1) return;
+    _cost.text = _fmt(usd * _usdRate);
+  }
+
+  Widget _costCurrencyRow() {
+    final usd = _p(_costUsd) ?? 0;
+    final iqd = _p(_cost) ?? 0;
+    final stale = _costCur == 'USD' && usd > 0 && _usdRate > 1 && (usd * _usdRate - iqd).abs() >= 1;
+    return Wrap(spacing: 10, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+      const Text('عملة الشراء:', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _C.muted)),
+      SegmentedButton<String>(
+        showSelectedIcon: false,
+        style: SegmentedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          textStyle: const TextStyle(fontSize: 12, fontFamily: 'Cairo'),
+          selectedBackgroundColor: _C.orange.withValues(alpha: 0.12),
+          selectedForegroundColor: _C.orange,
+        ),
+        segments: const [
+          ButtonSegment(value: 'IQD', label: Text('دينار')),
+          ButtonSegment(value: 'USD', label: Text('دولار \$')),
+        ],
+        selected: {_costCur},
+        onSelectionChanged: (sel) => setState(() {
+          _costCur = sel.first;
+          _releaseCostAnchor();
+          if (_costCur == 'USD') {
+            // اقتراح الكلفة بالدولار من الكلفة الحالية
+            if ((_p(_costUsd) ?? 0) <= 0 && iqd > 0 && _usdRate > 1) {
+              _costUsd.text = (iqd / _usdRate).toStringAsFixed(2);
+            }
+            _syncUsdCost();
+            _onCostChanged();
+          }
+        }),
+      ),
+      if (_costCur == 'USD')
+        Text(
+          _usdRate > 1
+              ? 'سعر الدولار ${_nf.format(_usdRate)} — إذا تغيّر تتغير الكلفة تلقائياً، وأرباح ما بيع سابقاً لا تتغير'
+              : 'لا يوجد سعر دولار مسجّل — سجّله من «العملات وأسعار الصرف»',
+          style: TextStyle(fontSize: 11.5, color: _usdRate > 1 ? _C.muted : _C.red),
+        ),
+      if (stale)
+        TextButton.icon(
+          onPressed: () => setState(() {
+            _syncUsdCost();
+            _onCostChanged();
+          }),
+          icon: const Icon(Icons.sync_rounded, size: 16),
+          label: Text('بسعر اليوم = ${_nf.format(usd * _usdRate)}'),
+        ),
+    ]);
   }
 
   Widget _priceTile(int i, double cost) {
@@ -1580,6 +1914,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _C.text),
               decoration: _dec(hint: '0').copyWith(fillColor: Colors.white),
               onChanged: (_) {
+                if (i == 0) _releasePriceAnchor();
                 if (_pricingMode == 'markup' && cost > 0) {
                   final pr = _p(_price[i]) ?? 0;
                   _markup[i].text = pr > 0 ? (((pr / cost) - 1) * 100).toStringAsFixed(1) : '';
@@ -1737,7 +2072,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       icon: _saving
           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
           : const Icon(Icons.check_circle_outline, size: 19),
-      label: Text(_isNew ? 'حفظ المادة' : 'حفظ التعديلات'),
+      label: Text(widget.quickForPurchase ? 'حفظ المادة وإضافتها للفاتورة' : (_isNew ? 'حفظ المادة' : 'حفظ التعديلات')),
       style: FilledButton.styleFrom(
         backgroundColor: _C.green,
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
@@ -1745,19 +2080,36 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
-    Widget tb(IconData icon, String label, VoidCallback? onTap) => TextButton.icon(
-          onPressed: onTap,
-          icon: Icon(icon, size: 18),
-          label: Text(label),
-          style: TextButton.styleFrom(foregroundColor: _C.navy),
+    // أزرار ثانوية بلون خفيف لكل وظيفة + تلميح يشرح ما تفعله.
+    Widget tb(IconData icon, String label, VoidCallback? onTap, {Color color = _C.navy, String? tip}) => Tooltip(
+          message: tip ?? label,
+          child: OutlinedButton.icon(
+            onPressed: onTap,
+            icon: Icon(icon, size: 18),
+            label: Text(label),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: color,
+              backgroundColor: color.withValues(alpha: 0.06),
+              side: BorderSide(color: color.withValues(alpha: 0.28)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, fontFamily: 'Cairo'),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
         );
     final left = <Widget>[
       save,
-      const SizedBox(width: 8),
-      tb(Icons.add, 'جديد', _newCard),
+      if (!widget.quickForPurchase) ...[
+      const SizedBox(width: 10),
+      tb(Icons.add_rounded, 'مادة جديدة', _newCard, tip: 'فتح بطاقة فارغة لإدخال مادة جديدة'),
+      ],
       if (!_isNew) ...[
-        tb(Icons.open_in_new, 'البطاقة الموسّعة', _openExtended),
-        tb(Icons.qr_code_2, 'ملصق باركود', () => BarcodeLabels.printForProducts(context, [_id!])),
+        const SizedBox(width: 8),
+        tb(Icons.timeline_rounded, 'حركة المادة', _openExtended,
+            color: _C.stock, tip: 'البطاقة الموسّعة: حركة المادة وفواتيرها وأرصدتها عبر الزمن'),
+        const SizedBox(width: 8),
+        tb(Icons.qr_code_2_rounded, 'ملصق باركود', () => BarcodeLabels.printForProducts(context, [_id!]),
+            color: _C.prices, tip: 'طباعة ملصق باركود لهذه المادة'),
       ],
     ];
     final right = <Widget>[
@@ -1766,7 +2118,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
           padding: const EdgeInsetsDirectional.only(end: 12),
           child: _pill('تعديلات غير محفوظة', _C.orange, icon: Icons.edit_note),
         ),
-      if (_isNew)
+      if (_isNew && !widget.quickForPurchase)
         InkWell(
           onTap: () => _setNewAfterSave(!_newAfterSave),
           borderRadius: BorderRadius.circular(8),
@@ -1780,7 +2132,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             const SizedBox(width: 6),
           ]),
         ),
-      tb(Icons.history_toggle_off, 'الواجهة القديمة', () => Navigator.pushReplacementNamed(context, '/product_entry_classic')),
+      // الواجهة القديمة تُختار من الإعدادات ← الواجهة ← إدخال البضاعة (لا زر هنا)
     ];
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -1806,7 +2158,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   static const _sections = [
     _MoreSection('التعريف الإضافي', Icons.badge_outlined, _C.prices),
     _MoreSection('الأرقام والضريبة', Icons.numbers, _C.navy),
-    _MoreSection('الحسم والهدايا', Icons.card_giftcard, _C.green),
+    _MoreSection('الخصم والهدايا', Icons.card_giftcard, _C.green),
     _MoreSection('الكلفة', Icons.calculate_outlined, _C.orange),
     _MoreSection('المخزن والطلب', Icons.inventory_outlined, _C.stock),
     _MoreSection('الصلاحية والتتبع', Icons.track_changes, _C.units),
@@ -2067,9 +2419,9 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         ]);
       case 2:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          _sectionTitle('الحسم والهدايا', 'حدود الحسم، والهدية التلقائية، والوحدة التي تظهر أولاً في الفاتورة.'),
+          _sectionTitle('الخصم والهدايا', 'حدود الخصم، والهدية التلقائية، والوحدة التي تظهر أولاً في الفاتورة.'),
           _grid([
-            _field('أعلى حسم مسموح', _dc['max_discount_percent']!, number: true, hint: 'بلا حد', suffixText: '%'),
+            _field('أعلى خصم مسموح', _dc['max_discount_percent']!, number: true, hint: 'بلا حد', suffixText: '%'),
             _drop<String?>(
               'الوحدة الافتراضية في البيع',
               _defaultUnit,

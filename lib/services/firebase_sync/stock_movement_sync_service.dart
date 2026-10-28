@@ -11,6 +11,7 @@
 //   يحتاج كل الحركات ليحسب الكمية نفسها.
 // • المستقبِل يعيد حساب كمية المنتج في نفس معاملة SQLite (مشغّلات الدفتر).
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -59,7 +60,7 @@ class StockMovementSyncService {
         _listen(col.where('uploadedAt', isGreaterThanOrEqualTo: since));
         await downloadMissing(rethrowErrors: true);
       } catch (e) {
-        print('⚠️ [حركات المخزون] الاستماع الجزئي تعذّر ($e) — مستمع كامل');
+        debugPrint('⚠️ [حركات المخزون] الاستماع الجزئي تعذّر ($e) — مستمع كامل');
         await _sub?.cancel();
         _sub = null;
       }
@@ -77,12 +78,12 @@ class StockMovementSyncService {
         try {
           await applyRemote(c.doc.id, d);
         } catch (e) {
-          print('⚠️ [حركات المخزون] تعذّر تطبيق ${c.doc.id}: $e');
+          debugPrint('⚠️ [حركات المخزون] تعذّر تطبيق ${c.doc.id}: $e');
         }
       }
     }, onError: (Object e) {
       SyncHealth.reportUploadError(collectionName, e);
-      print('⚠️ [حركات المخزون] خطأ الاستماع: $e');
+      debugPrint('⚠️ [حركات المخزون] خطأ الاستماع: $e');
     });
   }
 
@@ -113,7 +114,7 @@ class StockMovementSyncService {
       if (t is! Timestamp) return null;
       return Timestamp.fromMillisecondsSinceEpoch(t.millisecondsSinceEpoch - 3600 * 1000);
     } catch (e) {
-      print('⚠️ [حركات المخزون] تعذّر معرفة أحدث حركة: $e');
+      debugPrint('⚠️ [حركات المخزون] تعذّر معرفة أحدث حركة: $e');
       return null;
     }
   }
@@ -179,7 +180,7 @@ class StockMovementSyncService {
             n++;
           } catch (e) {
             SyncHealth.reportUploadError(collectionName, e);
-            print('⚠️ [حركات المخزون] تعذّر رفع $uuid: $e (يُعاد لاحقاً)');
+            debugPrint('⚠️ [حركات المخزون] تعذّر رفع $uuid: $e (يُعاد لاحقاً)');
           }
         }
         if (rows.length == 400) _uploadAgain = true;
@@ -207,7 +208,7 @@ class StockMovementSyncService {
           0;
       if ((agg.count ?? -1) == local) return 0;
     } catch (e) {
-      print('⚠️ [حركات المخزون] تعذّر العدّ ($e) — سحب كامل');
+      debugPrint('⚠️ [حركات المخزون] تعذّر العدّ ($e) — سحب كامل');
     }
     return downloadAll(rethrowErrors: rethrowErrors);
   }
@@ -223,14 +224,14 @@ class StockMovementSyncService {
         try {
           if (await applyRemote(d.id, d.data())) n++;
         } catch (e) {
-          print('⚠️ [حركات المخزون] تعذّر تطبيق ${d.id}: $e');
+          debugPrint('⚠️ [حركات المخزون] تعذّر تطبيق ${d.id}: $e');
         }
       }
       // القائمة كاملة من السيرفر: ما رُفع من هنا وغاب منها يُعاد
       unawaited(_recreateMissing(snap.docs.map((d) => d.id).toSet()).catchError((_) => 0));
       return n;
     } catch (e) {
-      print('❌ [حركات المخزون] فشل التنزيل: $e');
+      debugPrint('❌ [حركات المخزون] فشل التنزيل: $e');
       if (rethrowErrors) rethrow;
       return 0;
     }
@@ -283,10 +284,10 @@ class StockMovementSyncService {
         }).timeout(const Duration(seconds: 30));
         if (created) n++;
       } catch (e) {
-        print('⚠️ [حركات المخزون] إعادة إنشاء $uuid: $e');
+        debugPrint('⚠️ [حركات المخزون] إعادة إنشاء $uuid: $e');
       }
     }
-    if (n > 0) print('📦 [حركات المخزون] أُعيد إنشاء $n حركة غابت من السحابة');
+    if (n > 0) debugPrint('📦 [حركات المخزون] أُعيد إنشاء $n حركة غابت من السحابة');
     return n;
   }
 

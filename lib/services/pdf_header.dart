@@ -1,9 +1,7 @@
 // services/pdf_header.dart
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
-import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/models/app_settings.dart';
-import 'package:alnaser/utils/arabic_shaper.dart';
 
 pw.Widget buildPdfHeader(
     pw.Font font, pw.Font alnaserFont, pw.ImageProvider? logoImage,
@@ -60,7 +58,7 @@ pw.Widget buildPdfHeader(
                     child: pw.Directionality(
                       textDirection: pw.TextDirection.ltr,
                       child: pw.Text(
-                        invoiceDesign.phoneNumbers.take(2).join('  |  '),
+                        invoiceDesign.labeledPhones.take(4).join('  |  '),
                         style: pw.TextStyle(font: font, fontSize: 13, color: PdfColors.black),
                       ),
                     ),

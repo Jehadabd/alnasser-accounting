@@ -44,6 +44,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
     }
     
     // 🚀 Cache يتم إدارته تلقائياً في SuppliersService
+    if (!mounted) return;
     final suppliers = await context.read<PurchaseService>().getSuppliers();
     
     if (mounted) {
@@ -240,7 +241,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),
@@ -253,7 +254,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFF455A64).withOpacity(0.1),
+                color: const Color(0xFF455A64).withValues(alpha: 0.1),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
@@ -303,7 +304,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: debtColor.withOpacity(0.1),
+                        color: debtColor.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
@@ -430,7 +431,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: currency,
+                  initialValue: currency,
                   decoration: const InputDecoration(
                     labelText: 'العملة المفضلة',
                     border: OutlineInputBorder(),
@@ -444,7 +445,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: paymentTerms,
+                  initialValue: paymentTerms,
                   decoration: const InputDecoration(
                     labelText: 'شروط الدفع',
                     border: OutlineInputBorder(),
@@ -497,7 +498,7 @@ class _SuppliersListScreenState extends State<SuppliersListScreen> {
                   await purchaseService.addSupplier(newSupplier);
                 }
 
-                Navigator.pop(context);
+                if (context.mounted) Navigator.pop(context);
                 _loadSuppliers(forceRefresh: true); // 🚀 تحديث قسري بعد الإضافة
               },
               child: Text(isEdit ? 'حفظ التعديلات' : 'إضافة'),

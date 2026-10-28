@@ -34,7 +34,7 @@ class QuoteOrderService {
     final valid = lines.where((l) => l.quantity > 0).toList();
     if (valid.isEmpty) throw ErpException('أضف مادة واحدة على الأقل');
     final total = linesTotal(valid);
-    if (discount < 0 || discount > total) throw ErpException('الحسم غير صحيح');
+    if (discount < 0 || discount > total) throw ErpException('الخصم غير صحيح');
     final db = await erpDb();
     return db.transaction((txn) async {
       final now = DateTime.now().toIso8601String();

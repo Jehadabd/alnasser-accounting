@@ -2,6 +2,7 @@
 // 📸 خدمة لقطة الجهاز (Device Snapshot Service)
 // تقوم بحساب وإرسال "ما قام به هذا الجهاز" ليتم التحقق منه في الأجهزة الأخرى
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../database_service.dart';
 import 'firebase_sync_config.dart';
@@ -99,7 +100,7 @@ class DeviceSnapshotService {
       }
     }
 
-    print('📸 تم إنشاء لقطة الجهاز: $totalTx معاملة، $totalAmount دين، ${customerDebts.length} عميل نشط');
+    debugPrint('📸 تم إنشاء لقطة الجهاز: $totalTx معاملة، $totalAmount دين، ${customerDebts.length} عميل نشط');
 
     return DeviceSnapshot(
       deviceId: deviceId,
@@ -126,9 +127,9 @@ class DeviceSnapshotService {
           .doc(snapshot.deviceId)
           .set(snapshot.toMap());
           
-      print('☁️ ✅ تم رفع لقطة الجهاز بنجاح');
+      debugPrint('☁️ ✅ تم رفع لقطة الجهاز بنجاح');
     } catch (e) {
-      print('⚠️ فشل رفع لقطة الجهاز: $e');
+      debugPrint('⚠️ فشل رفع لقطة الجهاز: $e');
       rethrow;
     }
   }
@@ -167,7 +168,7 @@ class DeviceSnapshotService {
           })
           .toList();
     } catch (e) {
-      print('⚠️ فشل تحميل لقطات الأجهزة: $e');
+      debugPrint('⚠️ فشل تحميل لقطات الأجهزة: $e');
       return [];
     }
   }

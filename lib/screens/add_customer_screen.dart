@@ -1,7 +1,9 @@
 // screens/add_customer_screen.dart
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
+import '../services/database/business/customer_name_rule.dart';
 import '../models/customer.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart'; // Import for NumberFormat
@@ -39,18 +41,22 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
     
     // إذا بدأ بصفر محلي، استبدله برمز الدولة العراقية
     if (cleaned.startsWith('0')) {
-      cleaned = '964' + cleaned.substring(1);
+      cleaned = '964${cleaned.substring(1)}';
     }
     
     // إذا لم يبدأ برمز الدولة، أضف رمز العراق
     if (!cleaned.startsWith('964') && cleaned.length == 10) {
-      cleaned = '964' + cleaned;
+      cleaned = '964$cleaned';
     }
     
     return cleaned;
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _saveCustomer() async {
+    await SaveLock.run(() => _saveCustomerUnlocked(), message: 'جارٍ حفظ العميل…');
+  }
+  Future<void> _saveCustomerUnlocked() async {
     if (_formKey.currentState!.validate()) {
       // تنسيق رقم الهاتف تلقائياً
       String? normalizedPhone;
@@ -66,8 +72,17 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
         address: _addressController.text.isEmpty ? null : _addressController.text,
       );
 
-      // Using the AppProvider to add the customer, assuming it handles DB insertion
-      await context.read<AppProvider>().addCustomer(customer);
+      try {
+        await context.read<AppProvider>().addCustomer(customer);
+      } on DuplicateCustomerNameException catch (e) {
+        // 🛡️ سجل الديون: لا حسابان بالاسم نفسه
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.toString()), backgroundColor: Theme.of(context).colorScheme.error),
+          );
+        }
+        return;
+      }
       
       if (mounted) {
         String successMessage = 'تم إضافة العميل ${customer.name} بنجاح!';
@@ -87,7 +102,7 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
       // Show a general error message if form validation fails
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('الرجاء تصحيح الأخطاء في النموذج قبل الحفظ.'),
+          content: const Text('الرجاء تصحيح الأخطاء في النموذج قبل الحفظ.'),
           backgroundColor: Theme.of(context).colorScheme.error,
         ),
       );
@@ -102,10 +117,10 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
   @override
   Widget build(BuildContext context) {
     // Define the consistent theme colors for the screen
-    final Color primaryColor = const Color(0xFF3F51B5); // Indigo 700
-    final Color accentColor = const Color(0xFF8C9EFF); // Light Indigo Accent (Indigo A200)
-    final Color textColor = const Color(0xFF212121); // Dark grey for general text
-    final Color lightBackgroundColor = const Color(0xFFF8F8F8); // Very light grey for text field fill
+    const Color primaryColor = Color(0xFF3F51B5); // Indigo 700
+    const Color accentColor = Color(0xFF8C9EFF); // Light Indigo Accent (Indigo A200)
+    const Color textColor = Color(0xFF212121); // Dark grey for general text
+    const Color lightBackgroundColor = Color(0xFFF8F8F8); // Very light grey for text field fill
     final Color successColor = Colors.green[600]!; // Green for success messages
     final Color errorColor = Colors.red[700]!; // Red for error messages
 
@@ -119,8 +134,6 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
           onSecondary: Colors.black, // Text/icons on secondary color
           surface: Colors.white, // Card/sheet background
           onSurface: textColor, // Text/icons on surface
-          background: Colors.white, // Scaffold background
-          onBackground: textColor, // Text/icons on background
           error: errorColor,
           onError: Colors.white, // Text/icons on error color
           tertiary: successColor, // Custom color for success, used in SnackBars
@@ -128,11 +141,11 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
         // Define typography (font family and text styles)
         fontFamily: 'Roboto', // Modern, clean font
         textTheme: TextTheme(
-          titleLarge: TextStyle(fontSize: 22.0, fontWeight: FontWeight.bold, color: Colors.white), // AppBar title
-          titleMedium: TextStyle(fontSize: 18.0, fontWeight: FontWeight.w600, color: textColor), // Section titles
-          bodyLarge: TextStyle(fontSize: 16.0, color: textColor), // General body text
-          bodyMedium: TextStyle(fontSize: 14.0, color: textColor), // Smaller body text
-          labelLarge: TextStyle(fontSize: 16.0, color: Colors.white, fontWeight: FontWeight.w600), // Button text
+          titleLarge: const TextStyle(fontSize: 22.0, fontWeight: FontWeight.bold, color: Colors.white), // AppBar title
+          titleMedium: const TextStyle(fontSize: 18.0, fontWeight: FontWeight.w600, color: textColor), // Section titles
+          bodyLarge: const TextStyle(fontSize: 16.0, color: textColor), // General body text
+          bodyMedium: const TextStyle(fontSize: 14.0, color: textColor), // Smaller body text
+          labelLarge: const TextStyle(fontSize: 16.0, color: Colors.white, fontWeight: FontWeight.w600), // Button text
           labelMedium: TextStyle(fontSize: 14.0, color: Colors.grey[600]), // Input field labels
           bodySmall: TextStyle(fontSize: 12.0, color: Colors.grey[700]), // Hint text / captions
         ),
@@ -148,7 +161,7 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
           ),
           focusedBorder: OutlineInputBorder( // Border when focused
             borderRadius: BorderRadius.circular(10.0),
-            borderSide: BorderSide(color: primaryColor, width: 2.0), // Primary color, thicker
+            borderSide: const BorderSide(color: primaryColor, width: 2.0), // Primary color, thicker
           ),
           errorBorder: OutlineInputBorder( // Border when in error state
             borderRadius: BorderRadius.circular(10.0),
@@ -174,7 +187,7 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
             ),
             padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 20.0), // Inner padding
             elevation: 4, // Shadow elevation
-            textStyle: TextStyle(fontSize: 18.0, fontWeight: FontWeight.bold), // Text style
+            textStyle: const TextStyle(fontSize: 18.0, fontWeight: FontWeight.bold), // Text style
           ),
         ),
         // Define AppBar theme
@@ -183,7 +196,7 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
           foregroundColor: Colors.white, // AppBar text/icon color
           centerTitle: true, // Center title
           elevation: 4, // Shadow elevation
-          titleTextStyle: TextStyle( // Title text style (inherits from TextTheme.titleLarge)
+          titleTextStyle: const TextStyle( // Title text style (inherits from TextTheme.titleLarge)
             fontSize: 24.0,
             fontWeight: FontWeight.w600,
             color: Colors.white,

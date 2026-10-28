@@ -75,13 +75,19 @@ class LicenseService {
   /// تُضبط من main.dart: الانتقال لشاشة التفعيل إن توقف الترخيص أثناء العمل
   static void Function()? onLocked;
 
+  /// 🔄 وصل ربط مزامنة جديد أثناء العمل (تجديد في الخلفية): يلزم إعادة التشغيل.
+  /// تُضبط من main.dart لتعرض رسالة «أعد التشغيل».
+  static void Function()? onSyncLinkArrived;
+
+  /// آخر استجابة من السيرفر غيّرت ربط المزامنة على هذا الجهاز
+  bool _syncChangedByLastIssue = false;
+
   static const _kToken = 'alnaser_license_v4';
   static const _kBlock = 'alnaser_license_v4_block';
   static const _kSeen = 'alnaser_license_v4_seen';
   static const _kDaily = 'alnaser_license_v4_daily';
   static const _secure = FlutterSecureStorage();
 
-  static bool _initDone = false;
   static Future<void>? _initFuture;
   static String? _token;
   static LicensePayload? _payload;
@@ -161,7 +167,6 @@ class LicenseService {
     } catch (e) {
       debugPrint('🔐 [LICENSE] init: $e');
     }
-    _initDone = true;
     s._loadPeers();
     // 🔄 سؤال السيرفر بالخلفية بعد الإقلاع بقليل ثم كل 4 ساعات — لا ينتظره المستخدم،
     // وفك ربط الجهاز أو إيقاف الحساب يسري خلال ساعات حتى للترخيص الدائم.
@@ -197,6 +202,14 @@ class LicenseService {
     if (!fingerprintMatches(p.fingerprint, _fp)) {
       debugPrint('🔐 [LICENSE] البصمة لا تطابق هذا الترخيص');
       blockMessage = 'هذا الترخيص يخص جهازاً آخر. فعّل البرنامج على هذا الجهاز بحساب الترخيص، أو برمز من الجهاز الرئيسي.';
+      _payload = null;
+      _token = null;
+      return false;
+    }
+    if (p.isForOtherApp) {
+      debugPrint('🔐 [LICENSE] الترخيص لبرنامج آخر: ${p.app}');
+      blockMessage = 'حساب الترخيص هذا مخصص لبرنامج آخر، ولا يعمل على «${LicenseConfig.appLabel}».\n'
+          'تواصل معنا: ${LicenseConfig.supportPhone}';
       _payload = null;
       _token = null;
       return false;
@@ -521,11 +534,7 @@ class LicenseService {
       'appVersion': _appVersion,
     });
     final res = await _handleIssue(r);
-    if (res.success) {
-      activatedThisSession = true;
-      final cfg = r['cfg'];
-      if (cfg is Map && _payload?.syncAllowed == true) await _applySyncLink(Map<String, dynamic>.from(cfg));
-    }
+    if (res.success) activatedThisSession = true;
     return res;
   }
 
@@ -548,12 +557,25 @@ class LicenseService {
     return res;
   }
 
-  /// يحفظ ربط Firebase (ومفتاح المجموعة) القادم من الجهاز الرئيسي مع رمز الإضافة.
-  Future<void> _applySyncLink(Map<String, dynamic> cfg) async {
+  /// 🔄 يحفظ ربط Firebase (ومفتاح المجموعة) القادم من سيرفر الترخيص — المحفوظ في
+  /// حساب الترخيص نفسه، فيصل لكل أجهزة الحساب عبر الإنترنت مهما بعدت (فروع
+  /// ومحافظات مختلفة) بلا شبكة محلية. يُرجع true إن تغيّر شيء على هذا الجهاز.
+  Future<bool> _applySyncLink(Map<String, dynamic> cfg) async {
     try {
       final apiKey = '${cfg['apiKey'] ?? ''}', appId = '${cfg['appId'] ?? ''}';
       final projectId = '${cfg['projectId'] ?? ''}';
-      if (apiKey.isEmpty || appId.isEmpty || projectId.isEmpty) return;
+      if (apiKey.isEmpty || appId.isEmpty || projectId.isEmpty) return false;
+      final secretIn = '${cfg['secret'] ?? ''}';
+      // نفس الربط الموجود؟ لا شيء (لا إعادة تشغيل)
+      final cur = await FirebaseCustomConfig.getCustomOptions();
+      final curSecret = await SyncSecurity.readSecretKey();
+      if (cur != null &&
+          cur.apiKey == apiKey &&
+          cur.appId == appId &&
+          cur.projectId == projectId &&
+          (secretIn.isEmpty || secretIn == curSecret)) {
+        return false;
+      }
       await FirebaseCustomConfig.saveCustomConfig(
         apiKey: apiKey,
         appId: appId,
@@ -566,8 +588,29 @@ class LicenseService {
       await FirebaseSyncConfig.setEnabled(true);
       FirebaseCustomConfig.restartRequired = true;
       syncLinkApplied = true;
+      debugPrint('🔄 [LICENSE] وصل ربط المزامنة من سيرفر الترخيص: $projectId');
+      return true;
     } catch (e) {
       debugPrint('🔐 [LICENSE] ربط المزامنة: $e');
+      return false;
+    }
+  }
+
+  /// الجهاز الرئيسي: يرفع ربط المزامنة الذي يعمل عليه إلى حساب الترخيص، فتأخذه
+  /// كل الأجهزة الإضافية عبر الإنترنت. يُستدعى بعد ضبط Firebase وبعد استلام ربط.
+  Future<void> pushSyncLink() async {
+    try {
+      if (_token == null || _payload?.isMain != true || _payload?.syncAllowed != true) return;
+      final cfg = await _currentSyncLink();
+      if (cfg == null) return;
+      final r = await LicenseApi.call({'action': 'sync_put', 'token': _token, 'fp': _fp, 'cfg': cfg});
+      // الرئيسي بلا مفتاح مجموعة بعد: السيرفر يولّده مرة واحدة ويعيده
+      final back = r['cfg'];
+      if (r['ok'] == true && back is Map && cfg['secret'] == null) {
+        await _applySyncLink(Map<String, dynamic>.from(back));
+      }
+    } catch (e) {
+      debugPrint('🔐 [LICENSE] رفع ربط المزامنة: $e');
     }
   }
 
@@ -595,20 +638,26 @@ class LicenseService {
   Future<LicenseResult> refreshNow() async {
     await init();
     if (_token == null) return LicenseResult(success: false, error: 'NOT_ACTIVATED', message: 'الترخيص غير مفعّل');
+    // الجهاز الرئيسي يرسل ربط المزامنة الذي يعمل عليه (يصل لكل أجهزة الحساب)
+    final link = (_payload?.isMain == true) ? await _currentSyncLink() : null;
     final r = await LicenseApi.call({
       'action': 'refresh',
       'token': _token,
       'fp': _fp,
       'name': DeviceFingerprint.deviceName(),
       'appVersion': _appVersion,
+      if (link != null) 'cfg': link,
     });
-    return _handleIssue(r);
+    final res = await _handleIssue(r);
+    if (_syncChangedByLastIssue) onSyncLinkArrived?.call();
+    return res;
   }
 
   /// اسم قديم تستعمله شاشة الإعدادات
   Future<LicenseResult> verifyWithServer({bool silent = false}) => refreshNow();
 
   Future<LicenseResult> _handleIssue(Map<String, dynamic> r) async {
+    _syncChangedByLastIssue = false;
     final err0 = '${r['error'] ?? ''}';
     if (r['ok'] == true || (err0.isNotEmpty && err0 != 'NETWORK_ERROR' && err0 != 'UNKNOWN_ACTION')) {
       _lastContactMs = DateTime.now().millisecondsSinceEpoch;
@@ -625,11 +674,19 @@ class LicenseService {
       // وقت السيرفر هو المرجع: يصحّح «أحدث وقت» إن كانت ساعة الجهاز قد قُدّمت خطأً ثم صُحّحت
       await _storage.write(_kSeen, _payload!.issuedAtMs);
       await FirebaseSyncConfig.setEnabled(_payload!.syncAllowed);
+      // 🔄 ربط المزامنة المحفوظ في حساب الترخيص (شامل + مزامنة)
+      _syncChangedByLastIssue = false;
+      final cfg = r['cfg'];
+      if (cfg is Map && _payload!.syncAllowed) {
+        _syncChangedByLastIssue = await _applySyncLink(Map<String, dynamic>.from(cfg));
+        // الرئيسي يؤكد للسيرفر أنه صار يعمل على هذا الربط (فيصل للأجهزة الإضافية)
+        if (_syncChangedByLastIssue && _payload!.isMain) unawaited(pushSyncLink());
+      }
       return LicenseResult.fromPayload(_payload!);
     }
     final code = '${r['error'] ?? 'UNKNOWN'}';
     final message = '${r['message'] ?? 'خطأ غير معروف'}';
-    if (code == 'REVOKED' || code == 'DEVICE_MISMATCH' || code == 'BAD_TOKEN') {
+    if (code == 'REVOKED' || code == 'DEVICE_MISMATCH' || code == 'BAD_TOKEN' || code == 'WRONG_APP') {
       if (_token != null) {
         await clearLicense();
         blockMessage = message;
@@ -910,9 +967,9 @@ class LicenseData {
       appMode: p.mode,
       deviceId: p.deviceId,
       type: p.type,
-      expires: exp == null
-          ? '2099-12-31T23:59:59.000'
-          : DateTime.fromMillisecondsSinceEpoch(exp).toIso8601String(),
+      // الدائم بلا تاريخ انتهاء إطلاقاً (السيرفر لا يضع له exp، والبرنامج لا يفحص له
+      // أي تاريخ). كان يُعرض «حتى 2099-12-31» وهو تاريخ وهمي يوحي بانتهاء.
+      expires: exp == null ? '' : DateTime.fromMillisecondsSinceEpoch(exp).toIso8601String(),
       daysLeft: exp == null ? null : ((exp - DateTime.now().millisecondsSinceEpoch) / _day).floor(),
       isSyncAllowed: p.syncAllowed,
       role: p.role,

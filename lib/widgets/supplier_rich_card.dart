@@ -44,12 +44,12 @@ class SupplierRichCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.04),
+              color: Colors.black.withValues(alpha: 0.04),
               blurRadius: 20,
               offset: const Offset(0, 8),
             ),
           ],
-          border: Border.all(color: Colors.grey.withOpacity(0.1)),
+          border: Border.all(color: Colors.grey.withValues(alpha: 0.1)),
         ),
         child: Padding(
           padding: const EdgeInsets.all(20),
@@ -73,7 +73,7 @@ class SupplierRichCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF455A64).withOpacity(0.3),
+                          color: const Color(0xFF455A64).withValues(alpha: 0.3),
                           blurRadius: 8,
                           offset: const Offset(0, 4),
                         ),
@@ -195,7 +195,7 @@ class SupplierRichCard extends StatelessWidget {
                     icon: Icon(Icons.delete_outline, color: Colors.red[300], size: 20),
                     onPressed: onDelete,
                     tooltip: 'حذف المورد',
-                    hoverColor: Colors.red.withOpacity(0.1),
+                    hoverColor: Colors.red.withValues(alpha: 0.1),
                   ),
                 ],
               ),

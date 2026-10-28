@@ -15,6 +15,7 @@ import 'package:firebase_core/firebase_core.dart' show Firebase;
 import '../database_service.dart';
 import '../database/core/database_helpers.dart';
 import '../database/business/customer_visibility.dart';
+import '../database/business/customer_name_rule.dart'; // 🛡️ الحساب المدموج يتبع الباقي
 import 'firebase_sync_config.dart';
 import 'firebase_custom_config.dart';
 import 'users_sync_service.dart';
@@ -36,11 +37,11 @@ import 'match_verdict_service.dart'; // ⚖️ بثّ قرارات المطاب�
 import 'sync_diagnostics.dart'; // 🩺 تشخيص المصادقة/المزامنة
 import 'sync_health.dart'; // 🩺 تنبيهات صحة المزامنة للمستخدم
 import 'web_auth_clear.dart'; // 🧹 تنظيف مخزن جلسة الويب التالف
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb, visibleForTesting, debugPrint;
 import 'package:flutter/widgets.dart' show AppLifecycleListener; // 🌅 خطاف العودة للحياة
 import '../sync/sync_validation.dart';
 import '../sync/sync_security.dart';
-import '../../models/transaction.dart'; // Import DebtTransaction model
+import '../seat_service.dart';
 import '../../utils/uuid_helper.dart'; // للـ UUID الحتمي
 import '../license_service.dart'; // 🔐 نظام التراخيص
 import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
@@ -144,7 +145,6 @@ class FirebaseSyncService {
   
   // 🔄 Retry Queue مع Exponential Backoff
   Timer? _retryTimer;
-  static const int _maxRetries = 999999; // 🔄 إعادة محاولات لا نهائي حتى نجاح الرفع
   static const Duration _baseRetryDelay = Duration(seconds: 2);
   
   // 🧹 إعدادات التنظيف التلقائي
@@ -182,7 +182,6 @@ class FirebaseSyncService {
   //  Live Stats Cache - إحصائيات لحظية من Streams
   int _liveCustomersCount = 0;
   int _liveTransactionsCount = 0;
-  int _liveInvoicesCount = 0;
   List<Map<String, dynamic>> _liveDevices = [];
   
   // 📊 Stats Listeners - مستمعات للإحصائيات اللحظية
@@ -215,7 +214,6 @@ class FirebaseSyncService {
 
   // 🛡️ مؤقت استقرار الاتصال (للتحقق المتبادل - 15 دقيقة)
   Timer? _stabilityTimer;
-  bool _isVerificationScheduled = false;
 
   // 🔄 مؤقت إعادة محاولة التهيئة: إذا فشلت المصادقة أو اختبار الاتصال لحظة
   // فتح التطبيق (والجهاز متصل أصلاً)، لا يُطلق connectivity_plus أي حدث جديد،
@@ -319,11 +317,26 @@ class FirebaseSyncService {
       return true;
     }
     
+    // 🖥️ شاشة ثانية على نفس الحاسبة: المزامنة تعمل في الشاشة الأولى وحدها
+    //    (القاعدة واحدة؛ محرّكان يرفعان التغييرات نفسها مرتين)
+    if (!SeatService.isPrimary) {
+      debugPrint('ℹ️ [FirebaseSyncService] شاشة ${SeatService.seat}: المزامنة تعمل في الشاشة الأولى');
+      _initFailureRetryable = false;
+      _updateStatus(FirebaseSyncStatus.disabled);
+      return false;
+    }
+
+    // 🛡️ مع المزامنة السحابية لا يُفرض قيد «الاسم فريد» في القاعدة: عميل وارد
+    // بهوية أخرى يجب أن يُدرج وإلا تتيتّم معاملاته (انظر CustomerNameRule).
+    try {
+      await CustomerNameRule.dropUniqueIndex(await _db.database);
+    } catch (_) {}
+
     // 🔐 فحص حماية الترخيص: المزامنة غير مسموحة للـ debts_only و full_offline
     final license = LicenseService().getStoredLicense();
     // 🔐 بلا ترخيص صالح الآن (منتهٍ/موقوف/غير مفعّل) أو بنمط بلا مزامنة ⇒ لا مزامنة
     if (license == null || !license.isSyncAllowed) {
-      print('🔒 [FirebaseSyncService] المزامنة غير مشمولة في هذا الترخيص (${license?.appMode ?? 'غير صالح الآن'}) - تم حظر محرك المزامنة.');
+      debugPrint('🔒 [FirebaseSyncService] المزامنة غير مشمولة في هذا الترخيص (${license?.appMode ?? 'غير صالح الآن'}) - تم حظر محرك المزامنة.');
       _initFailureRetryable = false; // إعادة المحاولة بلا فائدة هنا
       _updateStatus(FirebaseSyncStatus.disabled);
       return false;
@@ -332,7 +345,7 @@ class FirebaseSyncService {
     // 🪟 الربط ضُبط للتو من المعالج: لا Firestore قبل إعادة التشغيل (انظر
     //    FirebaseCustomConfig.restartRequired).
     if (FirebaseCustomConfig.restartRequired) {
-      print('ℹ️ [FirebaseSyncService] أعد تشغيل البرنامج لتفعيل ربط Firebase الجديد.');
+      debugPrint('ℹ️ [FirebaseSyncService] أعد تشغيل البرنامج لتفعيل ربط Firebase الجديد.');
       _initFailureRetryable = false;
       _updateStatus(FirebaseSyncStatus.notConfigured);
       _errorController.add('أعد تشغيل البرنامج لتفعيل ربط Firebase الجديد');
@@ -343,7 +356,7 @@ class FirebaseSyncService {
     //    لا فائدة من بوابة المصادقة ولا من إعادة المحاولة — كانت تملأ السجل
     //    بـ [core/no-app] كل بضع ثوانٍ. تُستأنف عند ضبط الإعدادات من شاشتها.
     if (Firebase.apps.isEmpty) {
-      print('ℹ️ [FirebaseSyncService] Firebase غير مهيّأ في هذا الجهاز — المزامنة معطّلة حتى ضبط الإعدادات.');
+      debugPrint('ℹ️ [FirebaseSyncService] Firebase غير مهيّأ في هذا الجهاز — المزامنة معطّلة حتى ضبط الإعدادات.');
       _initFailureRetryable = false;
       _updateStatus(FirebaseSyncStatus.notConfigured);
       return false;
@@ -361,7 +374,7 @@ class FirebaseSyncService {
       onProgress?.call(0.05, 'بوابة المصادقة: انتظار جلسة صالحة...');
       final gateOk = await _waitForValidAuthToken();
       if (!gateOk) {
-        print('❌ [AuthGate] تعذّر تأمين جلسة مصادقة - لا مزامنة الآن');
+        debugPrint('❌ [AuthGate] تعذّر تأمين جلسة مصادقة - لا مزامنة الآن');
         SyncDiagnostics.log('auth', 'بوابة المصادقة رفضت المرور — إعادة محاولة مجدولة');
         _updateStatus(FirebaseSyncStatus.offline);
         _errorController.add('فشل المصادقة: تعذر تأمين جلسة صالحة (ستتم إعادة المحاولة)');
@@ -369,7 +382,7 @@ class FirebaseSyncService {
         _scheduleInitRetry();
         return false;
       }
-      print('✅ [AuthGate] المصادقة مؤمّنة بتوكن حي: ${fauth.FirebaseAuth.instance.currentUser?.uid}');
+      debugPrint('✅ [AuthGate] المصادقة مؤمّنة بتوكن حي: ${fauth.FirebaseAuth.instance.currentUser?.uid}');
       
       // التحقق من الإعدادات
       onProgress?.call(0.1, 'جاري التحقق من الإعدادات...');
@@ -428,10 +441,10 @@ class FirebaseSyncService {
             cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
           );
           _firestoreSettingsApplied = true;
-          print('⚙️ إعدادات Firestore: persistenceEnabled=$usePersistence '
+          debugPrint('⚙️ إعدادات Firestore: persistenceEnabled=$usePersistence '
               '(${kIsWeb ? "Web — معطّلة لتفادي تعليق IndexedDB على iOS/PWA" : isDesktop ? "Desktop — معطّلة لحل تعليق الكتابة" : "Mobile — مفعّلة لدعم offline"})');
         } catch (e) {
-          print('⚠️ تعذّر ضبط إعدادات Firestore (قد تكون مُطبّقة): $e');
+          debugPrint('⚠️ تعذّر ضبط إعدادات Firestore (قد تكون مُطبّقة): $e');
         }
       }
       
@@ -477,22 +490,22 @@ class FirebaseSyncService {
       try {
         await _verdictService.start();
       } catch (e) {
-        print('⚠️ تعذّر تشغيل مستمع قرارات المطابقة: $e');
+        debugPrint('⚠️ تعذّر تشغيل مستمع قرارات المطابقة: $e');
       }
 
       // 👥 مزامنة حسابات المستخدمين (المدير والموظفين) بين أجهزة الترخيص
       try {
         await UsersSyncService.instance.start(_firestore!);
       } catch (e) {
-        print('⚠️ تعذّر تشغيل مزامنة المستخدمين: $e');
+        debugPrint('⚠️ تعذّر تشغيل مزامنة المستخدمين: $e');
       }
       
       // 🛡️ تهيئة خدمة الحماية من الانقطاع (WAL)
       if (_crashRecovery == null) {
         _crashRecovery = SyncCrashRecoveryService.instance;
         await _crashRecovery!.initialize();
-        print('✅ تم تهيئة نظام الحماية من الانقطاع (WAL)');
-        print('✅ تم تهيئة نظام الحماية من الانقطاع (WAL)');
+        debugPrint('✅ تم تهيئة نظام الحماية من الانقطاع (WAL)');
+        debugPrint('✅ تم تهيئة نظام الحماية من الانقطاع (WAL)');
       }
       
       // 🛡️ تهيئة وتشغيل نظام المراقبة الاحتياطي (Safety Net)
@@ -503,29 +516,29 @@ class FirebaseSyncService {
           coordinator: _coordinator!,
         );
         _watchdog!.start(); // بدء المراقبة
-        print('🛡️ تم تشغيل نظام المراقبة الاحتياطي');
+        debugPrint('🛡️ تم تشغيل نظام المراقبة الاحتياطي');
       }
       
       // 🔐 تهيئة مفتاح المجموعة للتشفير والتوقيع
       _groupSecretKey = await SyncSecurity.getOrCreateSecretKey();
-      print('🔐 تم تحميل المفتاح للتشفير');
+      debugPrint('🔐 تم تحميل المفتاح للتشفير');
       
       // 🔐 تهيئة المفتاح السري للمجموعة (للتحقق في Firestore Rules)
       _groupSecret = await SyncSecurity.getOrCreateSecretKey();
-      print('🔐 تم تحميل المفتاح السري للمشروع');
+      debugPrint('🔐 تم تحميل المفتاح السري للمشروع');
       
       // 🔒 تهيئة جدول الأيتام (Orphan Transactions)
       try {
         await _createOrphanTable().timeout(const Duration(seconds: 60));
       } catch (e) {
-        print('⚠️ خطأ/تأخير في تهيئة جدول الأيتام: $e');
+        debugPrint('⚠️ خطأ/تأخير في تهيئة جدول الأيتام: $e');
       }
 
       // 🕰️ حساب فرق التوقيت مع السيرفر
       try {
         await _calculateServerTimeOffset().timeout(const Duration(seconds: 60));
       } catch (e) {
-        print('⚠️ خطأ/تأخير في حساب وقت السيرفر (تخطي): $e');
+        debugPrint('⚠️ خطأ/تأخير في حساب وقت السيرفر (تخطي): $e');
       }
 
       // بدء الاستماع للتغييرات
@@ -533,7 +546,7 @@ class FirebaseSyncService {
       try {
         await _startListening().timeout(const Duration(seconds: 60));
       } catch (e) {
-        print('⚠️ خطأ/تأخير في بدء الاستماع (تخطي): $e');
+        debugPrint('⚠️ خطأ/تأخير في بدء الاستماع (تخطي): $e');
       }
       
       // ═══ ترتيب الإقلاع (كما هو مطلوب): ═══
@@ -552,10 +565,10 @@ class FirebaseSyncService {
       try {
         await _syncPendingChanges().timeout(
           const Duration(seconds: 90),
-          onTimeout: () => print('⏳ استمرار التهيئة - رفع المعلق ما زال جارياً في الخلفية'),
+          onTimeout: () => debugPrint('⏳ استمرار التهيئة - رفع المعلق ما زال جارياً في الخلفية'),
         );
       } catch (e) {
-        print('⚠️ خطأ في المزامنة الخلفية الأولية: $e');
+        debugPrint('⚠️ خطأ في المزامنة الخلفية الأولية: $e');
       }
 
       // 🧾 محرك الفواتير: يجب أن يبدأ قبل السحب الكامل حتى تُرفع الفواتير
@@ -564,7 +577,7 @@ class FirebaseSyncService {
         SyncCrumb.mark('init: invoices.startSync');
         await InvoiceSyncService().startSync();
       } catch (e) {
-        print('⚠️ تعذّر بدء مزامنة الفواتير: $e');
+        debugPrint('⚠️ تعذّر بدء مزامنة الفواتير: $e');
       }
 
       // 📦 محرك المنتجات: رفع المعلق + تنزيل الكتالوج + الاستماع الحي —
@@ -572,9 +585,9 @@ class FirebaseSyncService {
       try {
         SyncCrumb.mark('init: products.startSync');
         await ProductSyncService().startSync();
-        print('📦 تم تشغيل محرك مزامنة المنتجات بنجاح');
+        debugPrint('📦 تم تشغيل محرك مزامنة المنتجات بنجاح');
       } catch (e) {
-        print('⚠️ تعذّر بدء مزامنة المنتجات: $e');
+        debugPrint('⚠️ تعذّر بدء مزامنة المنتجات: $e');
       }
 
       // 📦 حركات المخزون (شراء، تعديل يدوي، رصيد افتتاحي) — بعد الكتالوج
@@ -583,7 +596,7 @@ class FirebaseSyncService {
         await StockMovementSyncService().start();
         SyncCrumb.mark('init: stockMovements.started');
       } catch (e) {
-        print('⚠️ تعذّر بدء مزامنة حركات المخزون: $e');
+        debugPrint('⚠️ تعذّر بدء مزامنة حركات المخزون: $e');
       }
 
       // 🔄 سحب كامل إدمبوتنت بعد رفع كل المعلق (معاملات + فواتير + منتجات):
@@ -593,17 +606,17 @@ class FirebaseSyncService {
         SyncCrumb.mark('init: performFullCatchUp');
         await performFullCatchUp(force: false).timeout(
           const Duration(seconds: 120),
-          onTimeout: () => print('⏳ استمرار التهيئة - السحب الكامل ما زال جارياً في الخلفية'),
+          onTimeout: () => debugPrint('⏳ استمرار التهيئة - السحب الكامل ما زال جارياً في الخلفية'),
         );
       } catch (e) {
-        print('⚠️ خطأ في السحب الكامل عند التشغيل: $e');
+        debugPrint('⚠️ خطأ في السحب الكامل عند التشغيل: $e');
       }
       
       // 🔐 تحميل Retry Queue من قاعدة البيانات
       try {
         await _loadRetryQueue().timeout(const Duration(seconds: 60));
       } catch (e) {
-        print('⚠️ خطأ/تأخير في تحميل طابور إعادة المحاولة: $e');
+        debugPrint('⚠️ خطأ/تأخير في تحميل طابور إعادة المحاولة: $e');
       }
 
       // 📱 تسجيل هذا الجهاز في المجموعة
@@ -611,7 +624,7 @@ class FirebaseSyncService {
         SyncCrumb.mark('init: registerDevice');
         await registerDevice().timeout(const Duration(seconds: 60));
       } catch (e) {
-        print('⚠️ خطأ/تأخير في تسجيل الجهاز بالسحابة: $e');
+        debugPrint('⚠️ خطأ/تأخير في تسجيل الجهاز بالسحابة: $e');
       }
       // 🩺 إصدارات الأجهزة وساعة هذا الجهاز (تنبيه فقط — بلا انتظار)
       unawaited(checkGroupHealth().catchError((_) {}));
@@ -620,7 +633,7 @@ class FirebaseSyncService {
       try {
         await startBootstrapResponder();
       } catch (e) {
-        print('⚠️ تعذّر بدء الاستماع لطلبات التمهيد: $e');
+        debugPrint('⚠️ تعذّر بدء الاستماع لطلبات التمهيد: $e');
       }
 
       // 🆕 وإن كنتُ أنا الجهاز الجديد، أطلب دفتر المجموعة.
@@ -648,12 +661,12 @@ class FirebaseSyncService {
         try {
           await _syncPendingChanges();
         } catch (e) {
-          print('⚠️ رفع المعلّق بعد التهيئة: $e');
+          debugPrint('⚠️ رفع المعلّق بعد التهيئة: $e');
         }
         try {
           await performFullCatchUp(force: false);
         } catch (e) {
-          print('⚠️ السحب الكامل بعد التهيئة: $e');
+          debugPrint('⚠️ السحب الكامل بعد التهيئة: $e');
         }
       }());
 
@@ -667,16 +680,16 @@ class FirebaseSyncService {
         //    حتى يستجيب هذا الجهاز تلقائياً لطلبات المطابقة من الأجهزة الأخرى.
         ArmoredReconciliationService().startListening();
       } catch (e) {
-        print('⚠️ تعذّر بدء خدمة المطابقة: $e');
+        debugPrint('⚠️ تعذّر بدء خدمة المطابقة: $e');
       }
       
       
-      print('✅ Firebase Sync initialized for group: $_groupId');
+      debugPrint('✅ Firebase Sync initialized for group: $_groupId');
       onProgress?.call(1.0, 'تمت تهيئة المزامنة بنجاح');
       return true;
       
     } catch (e) {
-      print('❌ Firebase Sync initialization failed: $e');
+      debugPrint('❌ Firebase Sync initialization failed: $e');
       _updateStatus(FirebaseSyncStatus.error);
       _errorController.add('فشل تهيئة المزامنة: $e');
       _initFailureRetryable = true; // 🔄 قد يكون فشلاً مؤقتاً (شبكة/اتصال)
@@ -697,26 +710,26 @@ class FirebaseSyncService {
       try {
         final results = await Connectivity().checkConnectivity();
         if (results.contains(ConnectivityResult.none)) {
-          print('⏳ [InitRetry] لا يوجد اتصال - إعادة الجدولة...');
+          debugPrint('⏳ [InitRetry] لا يوجد اتصال - إعادة الجدولة...');
           _scheduleInitRetry();
           return;
         }
       } catch (e) {
-        print('⚠️ [InitRetry] تعذر فحص الاتصال: $e');
+        debugPrint('⚠️ [InitRetry] تعذر فحص الاتصال: $e');
       }
 
-      print('🔄 [InitRetry] إعادة محاولة تهيئة المزامنة...');
+      debugPrint('🔄 [InitRetry] إعادة محاولة تهيئة المزامنة...');
       try {
         final ok = await initialize();
         if (!ok) {
           _scheduleInitRetry(); // فشلت مجدداً - أعد الجدولة
         }
       } catch (e) {
-        print('❌ [InitRetry] استثناء أثناء إعادة المحاولة: $e');
+        debugPrint('❌ [InitRetry] استثناء أثناء إعادة المحاولة: $e');
         _scheduleInitRetry();
       }
     });
-    print('⏱️ [InitRetry] ستتم إعادة محاولة التهيئة خلال ${_initRetryInterval.inSeconds} ثانية');
+    debugPrint('⏱️ [InitRetry] ستتم إعادة محاولة التهيئة خلال ${_initRetryInterval.inSeconds} ثانية');
   }
   
   /// إيقاف الخدمة
@@ -760,10 +773,10 @@ class FirebaseSyncService {
       final hasConnection = results.any((r) => r != ConnectivityResult.none);
       
       if (hasConnection && (_status == FirebaseSyncStatus.offline || _status == FirebaseSyncStatus.error || !_isInitialized)) {
-        print('🌐 الاتصال عاد - جاري المزامنة...');
+        debugPrint('🌐 الاتصال عاد - جاري المزامنة...');
         _onConnectionRestored();
       } else if (!hasConnection && _status != FirebaseSyncStatus.offline) {
-        print('📴 انقطع الاتصال - العمل محلياً');
+        debugPrint('📴 انقطع الاتصال - العمل محلياً');
         _updateStatus(FirebaseSyncStatus.offline);
         markDeviceOffline(); // تعليم الجهاز كغير متصل
       }
@@ -797,11 +810,11 @@ class FirebaseSyncService {
     _backgroundSyncTimer?.cancel();
     _backgroundSyncTimer = Timer.periodic(_backgroundSyncInterval, (_) async {
       if (_status == FirebaseSyncStatus.online && !_isSyncing) {
-        print('🔄 المزامنة الخلفية الدورية...');
+        debugPrint('🔄 المزامنة الخلفية الدورية...');
         await _performBackgroundSync();
       }
     });
-    print('✅ تم تفعيل المزامنة الخلفية (كل ${_backgroundSyncInterval.inMinutes} دقائق)');
+    debugPrint('✅ تم تفعيل المزامنة الخلفية (كل ${_backgroundSyncInterval.inMinutes} دقائق)');
   }
   
   /// إيقاف المزامنة الخلفية
@@ -828,7 +841,7 @@ class FirebaseSyncService {
       if (_crashRecovery != null) {
         final pendingUploads = await _crashRecovery!.getPendingUploads();
         if (pendingUploads.isNotEmpty) {
-          print('🔄 معالجة ${pendingUploads.length} عملية معلقة من WAL...');
+          debugPrint('🔄 معالجة ${pendingUploads.length} عملية معلقة من WAL...');
           for (final op in pendingUploads) {
             try {
               bool uploadSucceeded = false;
@@ -848,7 +861,7 @@ class FirebaseSyncService {
                 await _crashRecovery!.markFailed(op.id, 'فشل رفع العملية أثناء المزامنة الخلفية');
               }
             } catch (e) {
-              print('⚠️ فشل معالجة عملية WAL: ${op.id}');
+              debugPrint('⚠️ فشل معالجة عملية WAL: ${op.id}');
               await _crashRecovery!.markFailed(op.id, e.toString());
             }
           }
@@ -884,7 +897,7 @@ class FirebaseSyncService {
       await _periodicCleanup();
       
     } catch (e) {
-      print('⚠️ خطأ في المزامنة الخلفية: $e');
+      debugPrint('⚠️ خطأ في المزامنة الخلفية: $e');
     }
   }
   
@@ -903,7 +916,7 @@ class FirebaseSyncService {
     
     if (oldOrphans.isEmpty) return;
     
-    print('🔄 إعادة محاولة ${oldOrphans.length} معاملة يتيمة قديمة...');
+    debugPrint('🔄 إعادة محاولة ${oldOrphans.length} معاملة يتيمة قديمة...');
     
     for (final orphan in oldOrphans) {
       final customerSyncUuid = orphan['customer_sync_uuid'] as String;
@@ -928,7 +941,7 @@ class FirebaseSyncService {
         final receivedAt = DateTime.parse(orphan['received_at'] as String);
         final waiting = DateTime.now().difference(receivedAt);
         if (waiting.inHours > 1) {
-          print('⚠️ معاملة تنتظر عميلها منذ ${waiting.inHours} ساعة: '
+          debugPrint('⚠️ معاملة تنتظر عميلها منذ ${waiting.inHours} ساعة: '
               '${orphan['sync_uuid']} (العميل: $customerSyncUuid)');
         }
       }
@@ -945,7 +958,7 @@ class FirebaseSyncService {
       return; // تم التنظيف اليوم
     }
     
-    print('🧹 التنظيف الدوري اليومي...');
+    debugPrint('🧹 التنظيف الدوري اليومي...');
     _lastCleanupDate = today;
     
     try {
@@ -960,9 +973,9 @@ class FirebaseSyncService {
       // تنظيف سجلات العمليات
       await _operationTracker?.cleanupOldLogs();
       
-      print('✅ اكتمل التنظيف الدوري');
+      debugPrint('✅ اكتمل التنظيف الدوري');
     } catch (e) {
-      print('⚠️ خطأ في التنظيف الدوري: $e');
+      debugPrint('⚠️ خطأ في التنظيف الدوري: $e');
     }
   }
   /// 🩺 الشفاء الذاتي من فشل المصادقة على الويب/PWA:
@@ -972,21 +985,21 @@ class FirebaseSyncService {
     if (_isRecoveringFromAuth) return;
     _isRecoveringFromAuth = true;
     try {
-      print('🩺 [AuthRecovery] خطأ مصادقة — محاولة الشفاء الذاتي...');
+      debugPrint('🩺 [AuthRecovery] خطأ مصادقة — محاولة الشفاء الذاتي...');
       SyncDiagnostics.log('auth', 'خطأ في مستمعي المزامنة — شفاء ذاتي جارٍ...');
       try {
         await fauth.FirebaseAuth.instance.signOut();
       } catch (_) {}
       final fresh = await fauth.FirebaseAuth.instance.signInAnonymously();
       SyncDiagnostics.log('auth', '✅ جلسة مجهولة جديدة بعد الشفاء: ${fresh.user?.uid}');
-      print('🩺 [AuthRecovery] جلسة مجهولة جديدة: ${fresh.user?.uid}');
+      debugPrint('🩺 [AuthRecovery] جلسة مجهولة جديدة: ${fresh.user?.uid}');
       await _stopListening();
       await _startListening().timeout(const Duration(seconds: 30));
       SyncDiagnostics.log('listener', '✅ المستمعون عادوا للعمل بعد الشفاء');
-      print('🩺 [AuthRecovery] المستمعون عادوا للعمل ✅');
+      debugPrint('🩺 [AuthRecovery] المستمعون عادوا للعمل ✅');
     } catch (e) {
       SyncDiagnostics.logAuth(e);
-      print('🩺 [AuthRecovery] فشل الشفاء: $e — ستُعاد المحاولة مع دورة المراقبة');
+      debugPrint('🩺 [AuthRecovery] فشل الشفاء: $e — ستُعاد المحاولة مع دورة المراقبة');
     } finally {
       _isRecoveringFromAuth = false;
     }
@@ -1042,16 +1055,14 @@ class FirebaseSyncService {
         }
 
         // 2) لا جلسة → تسجيل مجهول
-        if (user == null) {
-          user = (await fauth.FirebaseAuth.instance.signInAnonymously()).user;
-        }
+        user ??= (await fauth.FirebaseAuth.instance.signInAnonymously()).user;
 
         // 3) التحقيق الحقيقي: توكن قابل للتجديد
         await user!.getIdToken(true).timeout(const Duration(seconds: 20));
         return true;
       } catch (e) {
         final raw = e.toString();
-        print('🚪 [AuthGate] محاولة $attempt فشلت: $raw');
+        debugPrint('🚪 [AuthGate] محاولة $attempt فشلت: $raw');
         SyncDiagnostics.log('auth', 'بوابة المصادقة — محاولة $attempt/3: $raw');
 
         // 🧹 شفاء TypeError على الويب: جلسة تالفة في IndexedDB —
@@ -1103,7 +1114,7 @@ class FirebaseSyncService {
         _onAppResumed();
       });
     } catch (e) {
-      print('⚠️ لا بيئة واجهة لخطاف العودة للتطبيق (خيط خلفي؟): $e');
+      debugPrint('⚠️ لا بيئة واجهة لخطاف العودة للتطبيق (خيط خلفي؟): $e');
     }
   }
 
@@ -1156,19 +1167,19 @@ class FirebaseSyncService {
     _simulatedOffline = off;
     final fs = _firestore;
     if (off) {
-      print('📴 [محاكاة] قطع الإنترنت عن المزامنة');
+      debugPrint('📴 [محاكاة] قطع الإنترنت عن المزامنة');
       try {
         await fs?.disableNetwork().timeout(const Duration(seconds: 20));
       } catch (e) {
-        print('⚠️ [محاكاة] disableNetwork: $e');
+        debugPrint('⚠️ [محاكاة] disableNetwork: $e');
       }
       _updateStatus(FirebaseSyncStatus.offline);
     } else {
-      print('🌐 [محاكاة] إعادة الإنترنت للمزامنة');
+      debugPrint('🌐 [محاكاة] إعادة الإنترنت للمزامنة');
       try {
         await fs?.enableNetwork().timeout(const Duration(seconds: 20));
       } catch (e) {
-        print('⚠️ [محاكاة] enableNetwork: $e');
+        debugPrint('⚠️ [محاكاة] enableNetwork: $e');
       }
       unawaited(_onConnectionRestored());
     }
@@ -1181,13 +1192,13 @@ class FirebaseSyncService {
     try {
       // 🔄 إذا لم تكتمل التهيئة الأولى، نعيد التهيئة الكاملة
       if (!_isInitialized) {
-        print('🔄 إعادة التهيئة الكاملة بعد عودة الاتصال...');
+        debugPrint('🔄 إعادة التهيئة الكاملة بعد عودة الاتصال...');
         final success = await initialize();
         if (success) {
-          print('✅ تمت إعادة التهيئة بنجاح');
+          debugPrint('✅ تمت إعادة التهيئة بنجاح');
           _syncEventController.add('تمت إعادة التهيئة بعد عودة الاتصال');
         } else {
-          print('❌ فشلت إعادة التهيئة');
+          debugPrint('❌ فشلت إعادة التهيئة');
           _updateStatus(FirebaseSyncStatus.error);
         }
         return;
@@ -1201,7 +1212,7 @@ class FirebaseSyncService {
       try {
         await performFullCatchUp(force: false);
       } catch (e) {
-        print('⚠️ خطأ في السحب الكامل بعد عودة الاتصال: $e');
+        debugPrint('⚠️ خطأ في السحب الكامل بعد عودة الاتصال: $e');
       }
 
       // إعادة تشغيل الـ listeners
@@ -1217,7 +1228,7 @@ class FirebaseSyncService {
       
       
     } catch (e) {
-      print('❌ خطأ في المزامنة بعد عودة الاتصال: $e');
+      debugPrint('❌ خطأ في المزامنة بعد عودة الاتصال: $e');
       _updateStatus(FirebaseSyncStatus.error);
     }
   }
@@ -1232,9 +1243,9 @@ class FirebaseSyncService {
     // 🧹 دمج وتنظيف أي عملاء مكررين بنفس الاسم قبل بدء الاستماع
     await mergeDuplicateCustomersByName();
 
-    print('👂 بدء الاستماع للتغييرات من Firebase...');
-    print('   📍 المجموعة: $_groupId');
-    print('   📱 معرف الجهاز: $_deviceId');
+    debugPrint('👂 بدء الاستماع للتغييرات من Firebase...');
+    debugPrint('   📍 المجموعة: $_groupId');
+    debugPrint('   📱 معرف الجهاز: $_deviceId');
 
     // 🔒 استماع شامل بلا فلتر زمني (نفس نهج الفواتير المجرّب).
     // الفلتر السابق (lastModifiedAt > lastSyncAt) كان يتجاوز أي عميل أو
@@ -1245,7 +1256,7 @@ class FirebaseSyncService {
     final db = await _db.database;
     final syncState = await db.query('sync_state', limit: 1);
     final lastSyncAt = syncState.isNotEmpty ? syncState.first['last_sync_at'] as String? : null;
-    print('🧠 استماع شامل إدمبوتنت (آخر مزامنة مرجعية: ${lastSyncAt ?? "لا يوجد"} — للاطلاع فقط)');
+    debugPrint('🧠 استماع شامل إدمبوتنت (آخر مزامنة مرجعية: ${lastSyncAt ?? "لا يوجد"} — للاطلاع فقط)');
 
     // 👂 نافذة زمنية بساعة السيرفر (uploadedAt) بدل المجموعة كاملة: المستمع
     // الكامل كان يُرسل كل الوثائق مع كل تغيير (انهيار السرعة مع آلاف السجلات).
@@ -1256,7 +1267,7 @@ class FirebaseSyncService {
       collection: 'customers',
       onSnapshot: _onCustomersChanged,
       onError: (e) {
-        print('❌ خطأ في استماع العملاء: $e');
+        debugPrint('❌ خطأ في استماع العملاء: $e');
         SyncDiagnostics.logListener(e);
         unawaited(_recoverFromAuthFailure());
       },
@@ -1266,7 +1277,7 @@ class FirebaseSyncService {
       collection: 'transactions',
       onSnapshot: _onTransactionsChanged,
       onError: (e) {
-        print('❌ خطأ في استماع المعاملات: $e');
+        debugPrint('❌ خطأ في استماع المعاملات: $e');
         SyncDiagnostics.logListener(e);
         unawaited(_recoverFromAuthFailure());
       },
@@ -1276,7 +1287,7 @@ class FirebaseSyncService {
     
     _isListening = true;
     _startDevicesListener(); // 📊 بدء مستمع الأجهزة والإحصائيات
-    print('✅ تم بدء الاستماع للتغييرات');
+    debugPrint('✅ تم بدء الاستماع للتغييرات');
   }
   
   Future<void> _stopListening() async {
@@ -1298,13 +1309,13 @@ class FirebaseSyncService {
         .snapshots()
         .listen(
           _onDevicesChanged,
-          onError: (e) => print('❌ خطأ في استماع الأجهزة: $e'),
+          onError: (e) => debugPrint('❌ خطأ في استماع الأجهزة: $e'),
         );
   }
   
   /// 📊 معالجة تغييرات الأجهزة اللحظية
   void _onDevicesChanged(QuerySnapshot snapshot) {
-    final correctedNow = this.now;
+    final correctedNow = now;
     final devices = <Map<String, dynamic>>[];
     
     for (final doc in snapshot.docs) {
@@ -1403,18 +1414,18 @@ class FirebaseSyncService {
         try {
           await _handleOwnCustomerDoc(syncUuid, data);
         } catch (e) {
-          print('⚠️ مستند عميل ذاتي $syncUuid: $e');
+          debugPrint('⚠️ مستند عميل ذاتي $syncUuid: $e');
         }
         continue;
       }
 
-      print('📥 استلام تغيير عميل من جهاز آخر: $syncUuid (نوع: ${change.type})');
-      print('   - الجهاز المصدر: $sourceDeviceId');
+      debugPrint('📥 استلام تغيير عميل من جهاز آخر: $syncUuid (نوع: ${change.type})');
+      debugPrint('   - الجهاز المصدر: $sourceDeviceId');
 
       try {
         await _applyCustomerChange(syncUuid, data);
       } catch (e) {
-        print('❌ خطأ في تطبيق تغيير العميل $syncUuid: $e');
+        debugPrint('❌ خطأ في تطبيق تغيير العميل $syncUuid: $e');
       }
     }
     
@@ -1459,7 +1470,7 @@ class FirebaseSyncService {
           try {
             await _handleOwnTxDoc(syncUuid, data);
           } catch (e) {
-            print('⚠️ مستند معاملة ذاتي $syncUuid: $e');
+            debugPrint('⚠️ مستند معاملة ذاتي $syncUuid: $e');
           }
         }
         continue;
@@ -1477,13 +1488,13 @@ class FirebaseSyncService {
             break;
         }
       } catch (e) {
-        print('❌ خطأ في تطبيق تغيير المعاملة $syncUuid: $e');
+        debugPrint('❌ خطأ في تطبيق تغيير المعاملة $syncUuid: $e');
       }
     }
 
     // ملخص واحد بدل طباعة كل تغيير على حدة (كان يملأ السجل بالضجيج).
     if (fromOthers > 0) {
-      print('📥 استُلمت $fromOthers معاملة/تحديث من أجهزة أخرى');
+      debugPrint('📥 استُلمت $fromOthers معاملة/تحديث من أجهزة أخرى');
     }
     
     // تحديث وقت آخر مزامنة بعد معالجة أي تغييرات (للاستماع الذكي)
@@ -1507,7 +1518,7 @@ class FirebaseSyncService {
     // 🔐 التحقق من صحة البيانات الواردة (شاهد الحذف القديم قد يخلو من الاسم)
     final validation = SyncValidation.validateFirebaseCustomerData(data);
     if (!validation.isValid && !isTombstone) {
-      print('❌ رفض بيانات عميل غير صالحة: ${validation.errors.join(', ')}');
+      debugPrint('❌ رفض بيانات عميل غير صالحة: ${validation.errors.join(', ')}');
       return;
     }
 
@@ -1561,7 +1572,7 @@ class FirebaseSyncService {
 
       if (matchedCustomer != null) {
         final matchedId = matchedCustomer['id'] as int;
-        print('🔗 [FirebaseSyncService] ربط سجل قديم بلا هوية: $incomingName (ID: $matchedId) -> $syncUuid');
+        debugPrint('🔗 [FirebaseSyncService] ربط سجل قديم بلا هوية: $incomingName (ID: $matchedId) -> $syncUuid');
 
         await db.update(
           'customers',
@@ -1602,8 +1613,8 @@ class FirebaseSyncService {
       );
       await _coordinator!.markFirebaseSynced('customer', syncUuid);
 
-      print('✅ تم إضافة عميل جديد بنجاح من Firebase: ${data['name']}');
-      print('   - Sync UUID: $syncUuid');
+      debugPrint('✅ تم إضافة عميل جديد بنجاح من Firebase: ${data['name']}');
+      debugPrint('   - Sync UUID: $syncUuid');
 
       // 🧮 خزّن البصمة الحسابية الواردة ليُحاكَم عليها بعد اكتمال المزامنة
       await _rememberExpectation(syncUuid, data);
@@ -1654,8 +1665,8 @@ class FirebaseSyncService {
       // 🧮 خزّن البصمة الحسابية الواردة ليُحاكَم عليها بعد اكتمال المزامنة
       await _rememberExpectation(syncUuid, data);
 
-      print('✅ تم تحديث بيانات العميل (بدون الرصيد): ${data['name']}');
-      print('   📊 الرصيد المحلي محفوظ: $localBalance');
+      debugPrint('✅ تم تحديث بيانات العميل (بدون الرصيد): ${data['name']}');
+      debugPrint('   📊 الرصيد المحلي محفوظ: $localBalance');
       _syncEventController.add('تحديث عميل: ${data['name']}');
     }
   }
@@ -1694,7 +1705,7 @@ class FirebaseSyncService {
           columns: ['id'], where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
       if (same.isNotEmpty) return same.first['id'] as int;
       row['phone'] = await _uniquePhoneFor(db, name, data['phone']?.toString());
-      print('🛡️ عميل مستقل بنفس الاسم والهاتف ($name) — أُبقي منفصلاً بهويته $syncUuid');
+      debugPrint('🛡️ عميل مستقل بنفس الاسم والهاتف ($name) — أُبقي منفصلاً بهويته $syncUuid');
       return await db.insert('customers', row);
     }
   }
@@ -1764,7 +1775,7 @@ class FirebaseSyncService {
         );
       }
     } catch (e) {
-      print('⚠️ سياسة الحذف الصارم: $e');
+      debugPrint('⚠️ سياسة الحذف الصارم: $e');
     }
 
     await _rebuildCustomerBalances(customerId);
@@ -1798,7 +1809,7 @@ class FirebaseSyncService {
     );
     await _coordinator!.markFirebaseSynced('customer', syncUuid);
     await _processOrphans(id, syncUuid);
-    print('♻️ استُعيد عميلي المفقود محلياً من السحابة: $name');
+    debugPrint('♻️ استُعيد عميلي المفقود محلياً من السحابة: $name');
   }
 
   /// 🛡️ قاعدة الظهور الوحيدة: العميل مخفي ⇔ موسوم بالحذف ولا معاملة نشطة له.
@@ -1808,7 +1819,7 @@ class FirebaseSyncService {
       final db = await _db.database;
       await CustomerVisibility.apply(db, customerId);
     } catch (e) {
-      print('⚠️ _applyCustomerVisibility: $e');
+      debugPrint('⚠️ _applyCustomerVisibility: $e');
     }
   }
 
@@ -1819,7 +1830,7 @@ class FirebaseSyncService {
       await dbService.recalculateCustomerTransactionBalances(customerId);
       await dbService.recalculateAndApplyCustomerDebt(customerId);
     } catch (e) {
-      print('⚠️ _rebuildCustomerBalances($customerId): $e');
+      debugPrint('⚠️ _rebuildCustomerBalances($customerId): $e');
       await _verifyAndRepairCustomerBalance(customerId);
     }
   }
@@ -1886,7 +1897,7 @@ class FirebaseSyncService {
           );
           await _rebuildCustomerBalances(cid);
           await _applyCustomerVisibility(cid);
-          print('♻️ استُردّت ملكية معاملتي $syncUuid بنسخة السحابة');
+          debugPrint('♻️ استُردّت ملكية معاملتي $syncUuid بنسخة السحابة');
         }
         return;
       }
@@ -1944,8 +1955,8 @@ class FirebaseSyncService {
     // معاملتي مفقودة محلياً: استُعيدت قاعدة قديمة — تُستعاد كمعاملة أملكها
     final cs = data['customerSyncUuid'] as String?;
     if (cs == null || cs.isEmpty) return;
-    final cust = await db.query('customers',
-        columns: ['id'], where: 'sync_uuid = ?', whereArgs: [cs], limit: 1);
+    final custRow = await CustomerNameRule.byUuidResolved(db, cs, columns: ['id']);
+    final cust = custRow == null ? const <Map<String, Object?>>[] : [custRow];
     if (cust.isEmpty) {
       await _addToOrphans(syncUuid, data);
       return;
@@ -1983,7 +1994,7 @@ class FirebaseSyncService {
     await _coordinator?.markFirebaseSynced('transaction', syncUuid);
     await _rebuildCustomerBalances(cid);
     await _applyCustomerVisibility(cid);
-    print('♻️ استُعيدت معاملتي المفقودة محلياً من السحابة: $syncUuid');
+    debugPrint('♻️ استُعيدت معاملتي المفقودة محلياً من السحابة: $syncUuid');
   }
 
   /// تطبيق تغيير معاملة من Firebase على قاعدة البيانات المحلية
@@ -1996,7 +2007,7 @@ class FirebaseSyncService {
     // 🔐 التحقق من صحة البيانات الواردة
     final validation = SyncValidation.validateFirebaseTransactionData(data);
     if (!validation.isValid) {
-      print('❌ رفض بيانات معاملة غير صالحة: ${validation.errors.join(', ')}');
+      debugPrint('❌ رفض بيانات معاملة غير صالحة: ${validation.errors.join(', ')}');
       return;
     }
 
@@ -2030,24 +2041,20 @@ class FirebaseSyncService {
     // الحصول على customer_id المحلي من sync_uuid
     final customerSyncUuid = data['customerSyncUuid'] as String?;
     if (customerSyncUuid == null) {
-      print('❌ الحاسوب رفض قراءة المعاملة! ⛔');
-      print('   - السبب: معاملة بدون ربط عميل (customerSyncUuid)');
-      print('   - ID: $syncUuid');
+      debugPrint('❌ الحاسوب رفض قراءة المعاملة! ⛔');
+      debugPrint('   - السبب: معاملة بدون ربط عميل (customerSyncUuid)');
+      debugPrint('   - ID: $syncUuid');
       return;
     }
 
-    // البحث عن العميل
-    final customerResult = await db.query(
-      'customers',
-      columns: ['id', 'name', 'current_total_debt', 'is_deleted'],
-      where: 'sync_uuid = ?',
-      whereArgs: [customerSyncUuid],
-      limit: 1,
-    );
+    // البحث عن العميل (حساب مدموج ⇒ الحساب الذي دُمج فيه)
+    final customerRow = await CustomerNameRule.byUuidResolved(db, customerSyncUuid,
+        columns: ['id', 'name', 'current_total_debt', 'is_deleted']);
+    final customerResult = customerRow == null ? const <Map<String, Object?>>[] : [customerRow];
 
     if (customerResult.isEmpty) {
       // 👻 العميل غير موجود - إضافة للطابور
-      print('⏳ معاملة مؤقتة (بانتظار بيانات العميل): $syncUuid');
+      debugPrint('⏳ معاملة مؤقتة (بانتظار بيانات العميل): $syncUuid');
       await _addToOrphans(syncUuid, data);
       return;
     }
@@ -2187,8 +2194,9 @@ class FirebaseSyncService {
         limit: 1,
       );
       if (txCustomerCheck.isEmpty ||
-          txCustomerCheck.first['sync_uuid'] != customerSyncUuid) {
-        print('❌ رُفض تحديث معاملة $syncUuid: عدم تطابق العميل');
+          (txCustomerCheck.first['sync_uuid'] != customerSyncUuid &&
+              await CustomerNameRule.resolveMerged(db, existingCustomerId) != localCustomerId)) {
+        debugPrint('❌ رُفض تحديث معاملة $syncUuid: عدم تطابق العميل');
         return;
       }
 
@@ -2215,7 +2223,7 @@ class FirebaseSyncService {
       await _applyCustomerVisibility(existingCustomerId);
       await _sendAckFor(syncUuid, data);
 
-      print('📥 طُبّق تحديث معاملة $syncUuid للعميل $customerName: '
+      debugPrint('📥 طُبّق تحديث معاملة $syncUuid للعميل $customerName: '
           '$currentAmount → ${isTxDeleted ? "محذوفة" : amountChanged}');
       _syncEventController.add('تحديث معاملة: $customerName');
       _customerUpdatedController.add(customerSyncUuid);
@@ -2242,14 +2250,14 @@ class FirebaseSyncService {
           where: 'id = ?',
           whereArgs: [orphanMatch.first['id']],
         );
-        print('🔗 رُبط سجل تاريخي يتيم بالمعرّف الوارد: $syncUuid');
+        debugPrint('🔗 رُبط سجل تاريخي يتيم بالمعرّف الوارد: $syncUuid');
         return;
       }
     }
 
     // 3️⃣ التحقق من صحة المبلغ
     if (amountChanged.abs() > 1000000000) {
-      print('❌ رُفضت معاملة $syncUuid: مبلغ غير منطقي ($amountChanged)');
+      debugPrint('❌ رُفضت معاملة $syncUuid: مبلغ غير منطقي ($amountChanged)');
       return;
     }
 
@@ -2316,7 +2324,7 @@ class FirebaseSyncService {
     });
 
     if (applied == null) {
-      print('🚫 رُفضت معاملة واردة بمعرّف موجود مسبقاً: $syncUuid');
+      debugPrint('🚫 رُفضت معاملة واردة بمعرّف موجود مسبقاً: $syncUuid');
       return;
     }
 
@@ -2337,7 +2345,7 @@ class FirebaseSyncService {
     // ⚖️ لم تعد قرارات الإبطال عن بُعد تُطبَّق (انظر MatchVerdictService).
 
     final typeLabel = amountChanged >= 0 ? 'إضافة دين' : 'تسديد';
-    print('📥 معاملة واردة: $typeLabel ${amountChanged.abs()} — $customerName '
+    debugPrint('📥 معاملة واردة: $typeLabel ${amountChanged.abs()} — $customerName '
         '(الرصيد $currentBalance → $authoritativeBalance)${isTxDeleted ? " [محذوفة]" : ""}');
 
     _syncEventController.add('معاملة جديدة: $typeLabel ${amountChanged.abs()} - $customerName');
@@ -2410,7 +2418,7 @@ class FirebaseSyncService {
       }
       _expectationTableReady = true;
     } catch (e) {
-      print('⚠️ _ensureExpectationTable: $e');
+      debugPrint('⚠️ _ensureExpectationTable: $e');
     }
   }
 
@@ -2438,7 +2446,7 @@ class FirebaseSyncService {
         'fingerprint': '${total.toStringAsFixed(2)}|$cnt',
       };
     } catch (e) {
-      print('⚠️ _computeCustomerExpectation: $e');
+      debugPrint('⚠️ _computeCustomerExpectation: $e');
       return {'balance': null, 'count': null, 'fingerprint': null};
     }
   }
@@ -2465,7 +2473,7 @@ class FirebaseSyncService {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     } catch (e) {
-      print('⚠️ _rememberExpectation: $e');
+      debugPrint('⚠️ _rememberExpectation: $e');
     }
   }
 
@@ -2586,7 +2594,7 @@ class FirebaseSyncService {
             whereArgs: [uuid]);
 
         if (strikes < 2) {
-          print('🔎 فرق مبدئي للعميل ${r['name']}: $diff — '
+          debugPrint('🔎 فرق مبدئي للعميل ${r['name']}: $diff — '
               'بانتظار دورة أخرى قبل الحكم');
           continue;
         }
@@ -2607,7 +2615,7 @@ class FirebaseSyncService {
           'strikes': strikes,
         };
         divergences.add(entry);
-        print('🚨🧮 انحراف مؤكَّد بين الأجهزة — ${r['name']}: '
+        debugPrint('🚨🧮 انحراف مؤكَّد بين الأجهزة — ${r['name']}: '
             'عندي $computed، وعند ${r['by_device']} $expected '
             '(الفرق $diff، مستمر منذ ${r['diff_since']})');
         SyncDiagnostics.log('sync',
@@ -2621,10 +2629,10 @@ class FirebaseSyncService {
         _syncEventController.add(
             '🚨 ${divergences.length} عميل بأرصدة مختلفة بين الأجهزة — راجع سجل المزامنة');
       } else if (checked > 0) {
-        print('✅ 🧮 تطابق حسابي: $checked عميل فُحِصوا، صفر انحراف مؤكَّد');
+        debugPrint('✅ 🧮 تطابق حسابي: $checked عميل فُحِصوا، صفر انحراف مؤكَّد');
       }
     } catch (e) {
-      print('⚠️ verifyExpectedBalances: $e');
+      debugPrint('⚠️ verifyExpectedBalances: $e');
     }
     return {'checked': checked, 'divergences': divergences};
   }
@@ -2652,11 +2660,11 @@ class FirebaseSyncService {
           where: 'id = ?',
           whereArgs: [customerId],
         );
-        print('🚨🛡️ انحراف محاسبي اكتُشف وصُحّح للعميل $customerId: '
+        debugPrint('🚨🛡️ انحراف محاسبي اكتُشف وصُحّح للعميل $customerId: '
             'المخزن=$stored → الصحيح=$computed');
       }
     } catch (e) {
-      print('⚠️ _verifyAndRepairCustomerBalance: $e');
+      debugPrint('⚠️ _verifyAndRepairCustomerBalance: $e');
     }
   }
 
@@ -2696,7 +2704,7 @@ class FirebaseSyncService {
         ];
         if (list.length <= 1) continue; // لا يوجد تكرار
 
-        print('🧹 [FirebaseSyncService] اكتشاف ${list.length} عميل مكرر باسم: "${list.first['name']}" -> جاري الدمج والتنظيف...');
+        debugPrint('🧹 [FirebaseSyncService] اكتشاف ${list.length} عميل مكرر باسم: "${list.first['name']}" -> جاري الدمج والتنظيف...');
 
         // اختيار العميل الرئيسي: نفضل الذي أُنكئ محلياً أولاً أو أقدم ID
         list.sort((a, b) {
@@ -2745,7 +2753,7 @@ class FirebaseSyncService {
         }
 
         if (ledgersWithHistory > 1) {
-          print('🛑 [FirebaseSyncService] تخطّي دمج «${list.first['name']}»: '
+          debugPrint('🛑 [FirebaseSyncService] تخطّي دمج «${list.first['name']}»: '
               '$ledgersWithHistory سجلات تحمل معاملات — قد يكونون أشخاصاً '
               'مختلفين بنفس الاسم. يحتاج قرار المستخدم.');
           _syncEventController.add(
@@ -2786,10 +2794,10 @@ class FirebaseSyncService {
 
         // 4) تصحيح وإصلاح الرصيد الكلي للعميل الرئيسي
         await _verifyAndRepairCustomerBalance(primaryId);
-        print('✅ [FirebaseSyncService] تم دمج العملاء المكررين بنجاح في العميل ID: $primaryId');
+        debugPrint('✅ [FirebaseSyncService] تم دمج العملاء المكررين بنجاح في العميل ID: $primaryId');
       }
     } catch (e) {
-      print('⚠️ [FirebaseSyncService] خطأ أثناء دمج العملاء المكررين: $e');
+      debugPrint('⚠️ [FirebaseSyncService] خطأ أثناء دمج العملاء المكررين: $e');
     }
   }
 
@@ -2805,43 +2813,25 @@ class FirebaseSyncService {
         'deviceId': _deviceId,
         'uploadedAt': FieldValue.serverTimestamp(), // 👂 كي تلتقطه نوافذ المستمعين
       }, SetOptions(merge: true));
-      print('🗑️ [FirebaseSyncService] تم تسجيل حذف العميل في Firebase بنجاح (Tombstone): $syncUuid');
+      debugPrint('🗑️ [FirebaseSyncService] تم تسجيل حذف العميل في Firebase بنجاح (Tombstone): $syncUuid');
     } catch (e) {
-      print('❌ [FirebaseSyncService] خطأ أثناء تسجيل حذف العميل في Firebase: $e');
+      debugPrint('❌ [FirebaseSyncService] خطأ أثناء تسجيل حذف العميل في Firebase: $e');
     }
   }
 
-  /// 🗑️ حذف عميل محلياً تنفيذاً لأمر حذف قادم من جهاز آخر عبر Firebase
-  Future<void> _deleteLocalCustomer(String syncUuid) async {
-    try {
-      final db = await _db.database;
-      final existing = await db.query('customers', columns: ['id', 'name'], where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
-      if (existing.isNotEmpty) {
-        final customerId = existing.first['id'] as int;
-        final customerName = existing.first['name'] as String? ?? '';
-        
-        await _db.deleteCustomer(customerId);
-        
-        print('🗑️ [FirebaseSyncService] تم حذف العميل محلياً بنجاح تنفيذاً لأمر الحذف من جهاز آخر: $customerName (ID: $customerId)');
-        _syncEventController.add('تم حذف العميل: $customerName من جهاز آخر');
-      }
-    } catch (e) {
-      print('❌ [FirebaseSyncService] خطأ أثناء تنفيذ الحذف المحلي للعميل $syncUuid: $e');
-    }
-  }
   
   /// حذف معاملة محلياً (Soft Delete)
   /// 🔒 لا نحذف المعاملات من Firebase - فقط نسجل تحذير
   Future<void> _deleteLocalTransaction(String syncUuid) async {
     // 🔒 حديد: لا حذف محلي أبداً — والرفع الشامل يقفل أي مسار حذف إضافي.
     if (_isRepairing || DatabaseService.blockTransactionDeletes) {
-      print('🔒 رُفض حذف معاملة أثناء الرفع الشامل: $syncUuid');
+      debugPrint('🔒 رُفض حذف معاملة أثناء الرفع الشامل: $syncUuid');
       return;
     }
     // 🔒 لا نحذف المعاملات من البيانات البعيدة
     // هذا يمنع فقدان البيانات عند المزامنة
-    print('⚠️ تجاهل طلب حذف معاملة من Firebase: $syncUuid');
-    print('   🔒 المعاملات لا تُحذف عبر المزامنة للحفاظ على البيانات');
+    debugPrint('⚠️ تجاهل طلب حذف معاملة من Firebase: $syncUuid');
+    debugPrint('   🔒 المعاملات لا تُحذف عبر المزامنة للحفاظ على البيانات');
   }
   
   /// ═══════════════════════════════════════════════════════════════════════
@@ -2865,7 +2855,7 @@ class FirebaseSyncService {
 
     // 🛡️ نفس الحماية المطبّقة على المعاملات: معرّف غير صالح يُسقط التطبيق أصلياً
     if (!SyncSecurity.isValidDocumentId(syncUuid)) {
-      print('❌ تخطي رفع عميل بمعرّف غير صالح لـ Firestore: $syncUuid');
+      debugPrint('❌ تخطي رفع عميل بمعرّف غير صالح لـ Firestore: $syncUuid');
       return true;
     }
 
@@ -2884,7 +2874,7 @@ class FirebaseSyncService {
       row = Map<String, dynamic>.from(fresh.first);
 
       if (!_validateCustomerData(row)) {
-        print('❌ بيانات العميل غير صالحة - تم تخطي الرفع');
+        debugPrint('❌ بيانات العميل غير صالحة - تم تخطي الرفع');
         return true;
       }
 
@@ -2996,10 +2986,10 @@ class FirebaseSyncService {
         await _crashRecovery!.markSynced(walOperationId);
       }
 
-      print('☁️ رُفع العميل: ${row['name']} ($syncUuid)${tomb == 2 ? " [شاهد حذف]" : ""}');
+      debugPrint('☁️ رُفع العميل: ${row['name']} ($syncUuid)${tomb == 2 ? " [شاهد حذف]" : ""}');
       return true;
     } catch (e) {
-      print('❌ فشل رفع العميل $syncUuid: $e');
+      debugPrint('❌ فشل رفع العميل $syncUuid: $e');
       if (walOperationId != null && _crashRecovery != null) {
         await _crashRecovery!.markFailed(walOperationId, e.toString());
       }
@@ -3046,7 +3036,7 @@ class FirebaseSyncService {
 
     // 🛡️ معرّف غير صالح (يحتوي فاصل مسار مثلاً) يُنهي التطبيق داخل مكتبة Firestore
     if (!SyncSecurity.isValidDocumentId(syncUuid)) {
-      print('❌ تخطي رفع معاملة بمعرّف غير صالح لـ Firestore: $syncUuid');
+      debugPrint('❌ تخطي رفع معاملة بمعرّف غير صالح لـ Firestore: $syncUuid');
       return true;
     }
 
@@ -3084,7 +3074,7 @@ class FirebaseSyncService {
       }
 
       if (!_validateTransactionData(tx)) {
-        print('❌ بيانات المعاملة غير صالحة - تم تخطي الرفع');
+        debugPrint('❌ بيانات المعاملة غير صالحة - تم تخطي الرفع');
         return true;
       }
 
@@ -3166,7 +3156,7 @@ class FirebaseSyncService {
       }
       return true;
     } catch (e) {
-      print('❌ فشل رفع المعاملة $syncUuid: $e');
+      debugPrint('❌ فشل رفع المعاملة $syncUuid: $e');
       if (walOperationId != null && _crashRecovery != null) {
         await _crashRecovery!.markFailed(walOperationId, e.toString());
       }
@@ -3218,7 +3208,7 @@ class FirebaseSyncService {
       try {
         if (await uploadTransaction(Map<String, dynamic>.from(r), cs)) ok++;
       } catch (e) {
-        print('⚠️ رفع معلّق ${r['transaction_uuid']}: $e');
+        debugPrint('⚠️ رفع معلّق ${r['transaction_uuid']}: $e');
       }
     }
     return ok;
@@ -3245,7 +3235,7 @@ class FirebaseSyncService {
         await uploadTransaction(Map<String, dynamic>.from(t), cs);
       }
     } catch (e) {
-      print('⚠️ رفع حذف العميل $customerId: $e (ستتكفل به المزامنة الخلفية)');
+      debugPrint('⚠️ رفع حذف العميل $customerId: $e (ستتكفل به المزامنة الخلفية)');
     }
   }
 
@@ -3282,7 +3272,7 @@ class FirebaseSyncService {
         if (hasHwm &&
             last != null &&
             DateTime.now().millisecondsSinceEpoch - last < const Duration(hours: 24).inMilliseconds) {
-          print('⏭️ [Catch-Up] السحب الكامل جرى خلال 24 ساعة — المستمعات تكفي');
+          debugPrint('⏭️ [Catch-Up] السحب الكامل جرى خلال 24 ساعة — المستمعات تكفي');
           try {
             await StockMovementSyncService().downloadMissing();
           } catch (_) {}
@@ -3291,7 +3281,7 @@ class FirebaseSyncService {
       } catch (_) {}
     }
 
-    print('🔄 [Catch-Up] بدء السحب الكامل عند التشغيل...');
+    debugPrint('🔄 [Catch-Up] بدء السحب الكامل عند التشغيل...');
 
     // 1️⃣ العملاء أولاً (المعاملات تتيمة بدون عملائها)
     try {
@@ -3310,12 +3300,12 @@ class FirebaseSyncService {
           await _applyCustomerChange(doc.id, data);
           appliedCust++;
         } catch (e) {
-          print('⚠️ [Catch-Up] فشل تطبيق عميل ${doc.id}: $e');
+          debugPrint('⚠️ [Catch-Up] فشل تطبيق عميل ${doc.id}: $e');
         }
       }
-      print('✅ [Catch-Up] العملاء: فُحص ${custSnap.docs.length}، طُبّق/تُحقّق $appliedCust');
+      debugPrint('✅ [Catch-Up] العملاء: فُحص ${custSnap.docs.length}، طُبّق/تُحقّق $appliedCust');
     } catch (e) {
-      print('❌ [Catch-Up] فشل سحب العملاء: $e');
+      debugPrint('❌ [Catch-Up] فشل سحب العملاء: $e');
     }
 
     // 2️⃣ المعاملات (كل مستند يحمل إصداره uploadedAt، فلا تُطبَّق نسخة أقدم
@@ -3335,23 +3325,23 @@ class FirebaseSyncService {
           await _applyTransactionChange(doc.id, data);
           appliedTx++;
         } catch (e) {
-          print('⚠️ [Catch-Up] فشل تطبيق معاملة ${doc.id}: $e');
+          debugPrint('⚠️ [Catch-Up] فشل تطبيق معاملة ${doc.id}: $e');
         }
       }
-      print('✅ [Catch-Up] المعاملات: فُحص ${txSnap.docs.length}، طُبّق/تُحقّق $appliedTx');
+      debugPrint('✅ [Catch-Up] المعاملات: فُحص ${txSnap.docs.length}، طُبّق/تُحقّق $appliedTx');
     } catch (e) {
-      print('❌ [Catch-Up] فشل سحب المعاملات: $e');
+      debugPrint('❌ [Catch-Up] فشل سحب المعاملات: $e');
     }
 
     // 3️⃣ حركات المخزون (المستمع يلتقط الجديد؛ هذا لما فاته)
     try {
       final n = await StockMovementSyncService().downloadMissing();
-      if (n > 0) print('✅ [Catch-Up] حركات مخزون: طُبّق $n');
+      if (n > 0) debugPrint('✅ [Catch-Up] حركات مخزون: طُبّق $n');
     } catch (e) {
-      print('❌ [Catch-Up] فشل سحب حركات المخزون: $e');
+      debugPrint('❌ [Catch-Up] فشل سحب حركات المخزون: $e');
     }
 
-    print('✅ [Catch-Up] اكتمل السحب الكامل');
+    debugPrint('✅ [Catch-Up] اكتمل السحب الكامل');
     await WindowedListener.saveHwm(lastKey, DateTime.now().millisecondsSinceEpoch);
     // ⚖️ قرارات الإبطال عن بُعد لم تعد تُطبَّق (انظر MatchVerdictService).
   }
@@ -3391,16 +3381,16 @@ class FirebaseSyncService {
         try {
           await uploadTransaction(Map<String, dynamic>.from(tx), customerSyncUuid);
         } catch (e) {
-          print('⚠️ [رفع فوري] فشل رفع معاملة ${tx['transaction_uuid']}: $e '
+          debugPrint('⚠️ [رفع فوري] فشل رفع معاملة ${tx['transaction_uuid']}: $e '
               '(ستُعاد تلقائياً)');
         }
       }
 
       if (pendingTx.isNotEmpty) {
-        print('🚀 [رفع فوري] العميل "${customer['name']}": ${pendingTx.length} معاملة');
+        debugPrint('🚀 [رفع فوري] العميل "${customer['name']}": ${pendingTx.length} معاملة');
       }
     } catch (e) {
-      print('⚠️ [رفع فوري] فشل رفع العميل $customerId: $e (ستتكفل به المزامنة الخلفية)');
+      debugPrint('⚠️ [رفع فوري] فشل رفع العميل $customerId: $e (ستتكفل به المزامنة الخلفية)');
     }
   }
 
@@ -3410,7 +3400,7 @@ class FirebaseSyncService {
     if (!_isInitialized || _groupId == null) return;
     if (_recoveryMode) return; // وضع الاستعادة: الرفع بعد اكتمال المقارنة
 
-    print('🔄 جاري مزامنة التغييرات المعلقة...');
+    debugPrint('🔄 جاري مزامنة التغييرات المعلقة...');
 
     final db = await _db.database;
 
@@ -3435,7 +3425,7 @@ class FirebaseSyncService {
       try {
         await uploadCustomer(customer);
       } catch (e) {
-        print('⚠️ فشل رفع العميل $customerName: $e');
+        debugPrint('⚠️ فشل رفع العميل $customerName: $e');
       }
       processedCustomers++;
       if (totalCustomers > 0 && onProgress != null) {
@@ -3448,7 +3438,7 @@ class FirebaseSyncService {
     // (معاملة وصلت قبل عميلها لا تضيع: الجهاز المستقبل يحفظها يتيمة.)
     onProgress?.call(0.5, 'رفع المعاملات المعلّقة...');
     final uploaded = await _uploadAllOwnedPending();
-    if (uploaded > 0) print('✅ رُفعت $uploaded معاملة معلّقة');
+    if (uploaded > 0) debugPrint('✅ رُفعت $uploaded معاملة معلّقة');
 
     // 3️⃣ رفع الفواتير والمنتجات غير المرفوعة (85-100%).
     onProgress?.call(0.85, 'جاري رفع الفواتير والمنتجات...');
@@ -3457,12 +3447,12 @@ class FirebaseSyncService {
       await ProductSyncService().syncPendingProducts();
       await StockMovementSyncService().uploadPending();
     } catch (e) {
-      print('⚠️ فشل رفع الفواتير/المنتجات المعلقة: $e');
+      debugPrint('⚠️ فشل رفع الفواتير/المنتجات المعلقة: $e');
     }
 
     onProgress?.call(1.0, 'تم رفع البيانات!');
     await FirebaseSyncConfig.setLastSyncTime(DateTime.now());
-    print('✅ تمت مزامنة التغييرات المعلقة');
+    debugPrint('✅ تمت مزامنة التغييرات المعلقة');
   }
   /// مزامنة كاملة (تنزيل + رفع) مع دعم مؤشر التقدم
   /// مزامنة كاملة (تنزيل + رفع) مع دعم مؤشر التقدم
@@ -3470,49 +3460,49 @@ class FirebaseSyncService {
   Future<bool> performFullSync({
     void Function(double progress, String message)? onProgress,
   }) async {
-    print('🔄 [performFullSync] ════════════════════════════════════════');
+    debugPrint('🔄 [performFullSync] ════════════════════════════════════════');
     
     if (!_isInitialized || _groupId == null) {
-      print('❌ [performFullSync] المزامنة غير مُعدة');
-      print('❌ [performFullSync] _isInitialized: $_isInitialized');
-      print('❌ [performFullSync] _groupId: $_groupId');
+      debugPrint('❌ [performFullSync] المزامنة غير مُعدة');
+      debugPrint('❌ [performFullSync] _isInitialized: $_isInitialized');
+      debugPrint('❌ [performFullSync] _groupId: $_groupId');
       return false;
     }
     
     // ✅ تشخيص حالة Firebase قبل المزامنة
-    print('✅ [performFullSync] GroupId: $_groupId');
-    print('✅ [performFullSync] DeviceId: $_deviceId');
-    print('✅ [performFullSync] Firestore instance: ${_firestore != null ? "موجود" : "NULL!"}');
+    debugPrint('✅ [performFullSync] GroupId: $_groupId');
+    debugPrint('✅ [performFullSync] DeviceId: $_deviceId');
+    debugPrint('✅ [performFullSync] Firestore instance: ${_firestore != null ? "موجود" : "NULL!"}');
     
     // ✅ فحص حالة المصادقة
     try {
       final currentUser = FirebaseAuthService().currentUser;
       if (currentUser == null) {
-        print('❌ [performFullSync] المستخدم غير مسجل دخول!');
-        print('❌ [performFullSync] FirebaseAuth.currentUser = null');
-        print('❌ [performFullSync] المزامنة ستفشل - يجب تسجيل الدخول أولاً');
+        debugPrint('❌ [performFullSync] المستخدم غير مسجل دخول!');
+        debugPrint('❌ [performFullSync] FirebaseAuth.currentUser = null');
+        debugPrint('❌ [performFullSync] المزامنة ستفشل - يجب تسجيل الدخول أولاً');
         return false;
       } else {
-        print('✅ [performFullSync] المستخدم مسجل الدخول');
-        print('✅ [performFullSync] UID: ${currentUser.uid}');
-        print('✅ [performFullSync] isAnonymous: ${currentUser.isAnonymous}');
+        debugPrint('✅ [performFullSync] المستخدم مسجل الدخول');
+        debugPrint('✅ [performFullSync] UID: ${currentUser.uid}');
+        debugPrint('✅ [performFullSync] isAnonymous: ${currentUser.isAnonymous}');
         
         // ✅ فحص صلاحية Token
         try {
           final token = await currentUser.getIdToken();
-          print('✅ [performFullSync] Token موجود وصالح');
-          print('✅ [performFullSync] Token length: ${token?.length ?? 0}');
+          debugPrint('✅ [performFullSync] Token موجود وصالح');
+          debugPrint('✅ [performFullSync] Token length: ${token?.length ?? 0}');
         } catch (e) {
-          print('❌ [performFullSync] فشل الحصول على Token: $e');
+          debugPrint('❌ [performFullSync] فشل الحصول على Token: $e');
         }
       }
     } catch (e) {
-      print('❌ [performFullSync] خطأ في فحص المصادقة: $e');
+      debugPrint('❌ [performFullSync] خطأ في فحص المصادقة: $e');
     }
     
     // 🔒 منع المزامنة المتزامنة
     if (_isSyncing) {
-      print('⚠️ [performFullSync] المزامنة قيد التنفيذ بالفعل');
+      debugPrint('⚠️ [performFullSync] المزامنة قيد التنفيذ بالفعل');
       return false;
     }
     
@@ -3523,46 +3513,46 @@ class FirebaseSyncService {
     _updateStatus(FirebaseSyncStatus.syncing);
     try {
       // 🔒 التحقق من الاتصال قبل البدء (5%)
-      print('🔍 [performFullSync] فحص الاتصال بالإنترنت...');
+      debugPrint('🔍 [performFullSync] فحص الاتصال بالإنترنت...');
       onProgress?.call(0.05, 'جاري التحقق من الاتصال...');
       final connectivityResult = await Connectivity().checkConnectivity();
       final hasConnection = connectivityResult.any((r) => r != ConnectivityResult.none);
       
       if (!hasConnection) {
-        print('❌ [performFullSync] لا يوجد اتصال بالإنترنت');
-        print('📴 لا يوجد اتصال - تأجيل المزامنة');
+        debugPrint('❌ [performFullSync] لا يوجد اتصال بالإنترنت');
+        debugPrint('📴 لا يوجد اتصال - تأجيل المزامنة');
         _updateStatus(FirebaseSyncStatus.offline);
         return false;
       }
-      print('✅ [performFullSync] الاتصال بالإنترنت موجود: $connectivityResult');
+      debugPrint('✅ [performFullSync] الاتصال بالإنترنت موجود: $connectivityResult');
       
       // 1. تنزيل البيانات من Firebase (10-50%)
-      print('⬇️ [performFullSync] بدء تنزيل البيانات من Firebase...');
+      debugPrint('⬇️ [performFullSync] بدء تنزيل البيانات من Firebase...');
       onProgress?.call(0.10, 'جاري تنزيل العملاء...');
       await _downloadAllData(onProgress: (p, m) {
         // التقدم من 10% إلى 50%
         onProgress?.call(0.10 + (p * 0.40), m);
       });
-      print('✅ [performFullSync] انتهى التنزيل من Firebase');
+      debugPrint('✅ [performFullSync] انتهى التنزيل من Firebase');
       
       // 🔒 التحقق من الاتصال مرة أخرى قبل الرفع (55%)
       onProgress?.call(0.55, 'جاري التحقق من الاتصال...');
       final stillConnected = await Connectivity().checkConnectivity();
       if (!stillConnected.any((r) => r != ConnectivityResult.none)) {
-        print('❌ [performFullSync] انقطع الاتصال أثناء التنزيل');
-        print('📴 انقطع الاتصال أثناء التنزيل - إيقاف المزامنة');
+        debugPrint('❌ [performFullSync] انقطع الاتصال أثناء التنزيل');
+        debugPrint('📴 انقطع الاتصال أثناء التنزيل - إيقاف المزامنة');
         _updateStatus(FirebaseSyncStatus.offline);
         return false;
       }
       
       // 2. رفع البيانات المحلية (60-85%)
-      print('⬆️ [performFullSync] بدء رفع البيانات المحلية...');
+      debugPrint('⬆️ [performFullSync] بدء رفع البيانات المحلية...');
       onProgress?.call(0.60, 'جاري رفع البيانات المحلية...');
       await _syncPendingChanges(onProgress: (p, m) {
         // التقدم من 60% إلى 85%
         onProgress?.call(0.60 + (p * 0.25), m);
       });
-      print('✅ [performFullSync] انتهى رفع البيانات');
+      debugPrint('✅ [performFullSync] انتهى رفع البيانات');
       
       // 3. التحقق من سلامة البيانات (90%)
       onProgress?.call(0.90, 'جاري التحقق من سلامة البيانات...');
@@ -3574,13 +3564,13 @@ class FirebaseSyncService {
       final divergentList =
           expectationReport['divergences'] as List<Map<String, dynamic>>;
       if (divergentList.isNotEmpty) {
-        print('🚨 [performFullSync] ${divergentList.length} انحراف حسابي بين الأجهزة');
+        debugPrint('🚨 [performFullSync] ${divergentList.length} انحراف حسابي بين الأجهزة');
       }
 
       final integrity = await verifyDataIntegrity();
       if (integrity['valid'] != true) {
-        print('⚠️ [performFullSync] تحذير: بعض البيانات قد لا تكون متزامنة');
-        print('⚠️ [performFullSync] Issues: ${integrity['issues']}');
+        debugPrint('⚠️ [performFullSync] تحذير: بعض البيانات قد لا تكون متزامنة');
+        debugPrint('⚠️ [performFullSync] Issues: ${integrity['issues']}');
         _syncEventController.add('تحذير: ${integrity['issues']}');
       }
       
@@ -3591,21 +3581,21 @@ class FirebaseSyncService {
       _syncEventController.add('تمت المزامنة الكاملة');
       
       final duration = DateTime.now().difference(_syncStartTime!);
-      print('✅ [performFullSync] اكتملت المزامنة في ${duration.inSeconds} ثانية');
-      print('🎉 [performFullSync] ════════════════════════════════════════');
+      debugPrint('✅ [performFullSync] اكتملت المزامنة في ${duration.inSeconds} ثانية');
+      debugPrint('🎉 [performFullSync] ════════════════════════════════════════');
       
       return true;
       
     } catch (e, stackTrace) {
-      print('❌ [performFullSync] فشلت المزامنة الكاملة!');
-      print('❌ [performFullSync] Error Type: ${e.runtimeType}');
-      print('❌ [performFullSync] Error: $e');
-      print('❌ [performFullSync] StackTrace: $stackTrace');
+      debugPrint('❌ [performFullSync] فشلت المزامنة الكاملة!');
+      debugPrint('❌ [performFullSync] Error Type: ${e.runtimeType}');
+      debugPrint('❌ [performFullSync] Error: $e');
+      debugPrint('❌ [performFullSync] StackTrace: $stackTrace');
       
       if (e.toString().contains('permission-denied')) {
-        print('❌ [performFullSync] السبب: Firestore Rules ترفض الوصول');
-        print('❌ [performFullSync] تحقق من: هل المستخدم مصادق بشكل صحيح؟');
-        print('❌ [performFullSync] تحقق من: هل Firestore Rules منشورة بشكل صحيح؟');
+        debugPrint('❌ [performFullSync] السبب: Firestore Rules ترفض الوصول');
+        debugPrint('❌ [performFullSync] تحقق من: هل المستخدم مصادق بشكل صحيح؟');
+        debugPrint('❌ [performFullSync] تحقق من: هل Firestore Rules منشورة بشكل صحيح؟');
       }
       
       _updateStatus(FirebaseSyncStatus.error);
@@ -3625,15 +3615,15 @@ class FirebaseSyncService {
   }) async {
     if (_groupId == null) return;
     
-    print('⬇️ [_downloadAllData] ════════════════════════════════════════');
-    print('⬇️ جاري تنزيل البيانات من Firebase...');
+    debugPrint('⬇️ [_downloadAllData] ════════════════════════════════════════');
+    debugPrint('⬇️ جاري تنزيل البيانات من Firebase...');
     
     // تنزيل العملاء (0-50%)
     QuerySnapshot<Map<String, dynamic>>? customersSnapshot;
     int totalCustomers = 0;
     
     try {
-      print('🔍 [_downloadAllData] محاولة قراءة customers...');
+      debugPrint('🔍 [_downloadAllData] محاولة قراءة customers...');
       onProgress?.call(0.0, 'جاري تنزيل العملاء...');
       // 🛡️ من الخادم لا من ذاكرة Firestore المحلية: على الجوال (persistence
       // مفعّلة) كان get() بلا إنترنت يعيد نسخة الذاكرة «بنجاح»، فتكتمل
@@ -3643,17 +3633,17 @@ class FirebaseSyncService {
           .get(const GetOptions(source: Source.server));
       
       totalCustomers = customersSnapshot.docs.length;
-      print('✅ [_downloadAllData] تم تنزيل ${totalCustomers} عميل');
+      debugPrint('✅ [_downloadAllData] تم تنزيل $totalCustomers عميل');
     } catch (e) {
-      print('❌ [_downloadAllData] فشل تنزيل العملاء!');
-      print('❌ [_downloadAllData] Error Type: ${e.runtimeType}');
-      print('❌ [_downloadAllData] Error: $e');
+      debugPrint('❌ [_downloadAllData] فشل تنزيل العملاء!');
+      debugPrint('❌ [_downloadAllData] Error Type: ${e.runtimeType}');
+      debugPrint('❌ [_downloadAllData] Error: $e');
       rethrow; // إعادة رمي الخطأ لإيقاف المزامنة
     }
     
     var processedCustomers = 0;
     
-    for (final doc in customersSnapshot!.docs) {
+    for (final doc in customersSnapshot.docs) {
       final data = doc.data();
       if (data['deviceId'] != _deviceId) {
         await _applyCustomerChange(doc.id, data);
@@ -3704,14 +3694,14 @@ class FirebaseSyncService {
     try {
       await ProductSyncService().downloadAllProducts();
     } catch (e) {
-      print('⚠️ فشل تنزيل المنتجات أثناء المزامنة الشاملة: $e');
+      debugPrint('⚠️ فشل تنزيل المنتجات أثناء المزامنة الشاملة: $e');
     }
     // 📦 حركات المخزون: فشلها يُفشل السحب الكامل (كالفواتير) — الجهاز المستعيد
     // أو الجديد بلا حركات يحسب كمية خاطئة.
     await StockMovementSyncService().downloadAll(rethrowErrors: true);
 
     onProgress?.call(1.0, 'تم تنزيل البيانات!');
-    print('✅ تم تنزيل البيانات من Firebase');
+    debugPrint('✅ تم تنزيل البيانات من Firebase');
   }
   
   /// ═══════════════════════════════════════════════════════════════════════
@@ -3737,7 +3727,6 @@ class FirebaseSyncService {
   void _stopStabilityTimer() {
     _stabilityTimer?.cancel();
     _stabilityTimer = null;
-    _isVerificationScheduled = false;
   }
   
   /// ═══════════════════════════════════════════════════════════════════════
@@ -3761,26 +3750,26 @@ class FirebaseSyncService {
   bool _validateCustomerData(Map<String, dynamic> data) {
     // التحقق من الحقول المطلوبة
     if (data['sync_uuid'] == null || (data['sync_uuid'] as String).isEmpty) {
-      print('❌ العميل بدون sync_uuid');
+      debugPrint('❌ العميل بدون sync_uuid');
       return false;
     }
     if (data['name'] == null || (data['name'] as String).isEmpty) {
-      print('❌ العميل بدون اسم');
+      debugPrint('❌ العميل بدون اسم');
       return false;
     }
     return true;
   }
   bool _validateTransactionData(Map<String, dynamic> data) {
     if (data['sync_uuid'] == null || (data['sync_uuid'] as String).isEmpty) {
-      print('❌ المعاملة بدون sync_uuid');
+      debugPrint('❌ المعاملة بدون sync_uuid');
       return false;
     }
     if (data['customer_id'] == null) {
-      print('❌ المعاملة بدون customer_id');
+      debugPrint('❌ المعاملة بدون customer_id');
       return false;
     }
     if (data['amount_changed'] == null) {
-      print('❌ المعاملة بدون مبلغ');
+      debugPrint('❌ المعاملة بدون مبلغ');
       return false;
     }
     return true;
@@ -3905,14 +3894,14 @@ class FirebaseSyncService {
             'difference': difference,
           });
           
-          print('⚠️ فرق في رصيد العميل "$customerName": مسجل=$recordedBalance، محسوب=$calculatedBalance');
+          debugPrint('⚠️ فرق في رصيد العميل "$customerName": مسجل=$recordedBalance، محسوب=$calculatedBalance');
         }
       }
       
       if (issues.isEmpty) {
-        print('✅ جميع الأرصدة صحيحة');
+        debugPrint('✅ جميع الأرصدة صحيحة');
       } else {
-        print('⚠️ وُجدت ${issues.length} فروقات في الأرصدة');
+        debugPrint('⚠️ وُجدت ${issues.length} فروقات في الأرصدة');
       }
       
       return {
@@ -3923,7 +3912,7 @@ class FirebaseSyncService {
       };
       
     } catch (e) {
-      print('❌ فشل التحقق من الأرصدة: $e');
+      debugPrint('❌ فشل التحقق من الأرصدة: $e');
       return {
         'hasIssues': false,
         'error': e.toString(),
@@ -3950,32 +3939,32 @@ class FirebaseSyncService {
   Future<Map<String, dynamic>> getSyncStats({
     void Function(double progress, String message)? onProgress,
   }) async {
-    print('📊 [getSyncStats] ════════════════════════════════════════');
+    debugPrint('📊 [getSyncStats] ════════════════════════════════════════');
     
     if (_groupId == null) {
-      print('❌ [getSyncStats] _groupId is null - Firebase غير مهيأ!');
+      debugPrint('❌ [getSyncStats] _groupId is null - Firebase غير مهيأ!');
       return {'error': 'غير مُعد', 'valid': false};
     }
     
     // ✅ تشخيص حالة Firebase قبل البدء
-    print('✅ [getSyncStats] GroupId: $_groupId');
-    print('✅ [getSyncStats] DeviceId: $_deviceId');
-    print('✅ [getSyncStats] Firestore instance: ${_firestore != null ? "موجود" : "NULL!"}');
+    debugPrint('✅ [getSyncStats] GroupId: $_groupId');
+    debugPrint('✅ [getSyncStats] DeviceId: $_deviceId');
+    debugPrint('✅ [getSyncStats] Firestore instance: ${_firestore != null ? "موجود" : "NULL!"}');
     
     // ✅ فحص حالة المصادقة
     try {
       final currentUser = fauth.FirebaseAuth.instance.currentUser;
       if (currentUser == null) {
-        print('❌ [getSyncStats] المستخدم غير مسجل دخول! FirebaseAuth.currentUser = null');
-        print('❌ [getSyncStats] يجب تسجيل الدخول المجهول أولاً');
+        debugPrint('❌ [getSyncStats] المستخدم غير مسجل دخول! FirebaseAuth.currentUser = null');
+        debugPrint('❌ [getSyncStats] يجب تسجيل الدخول المجهول أولاً');
       } else {
-        print('✅ [getSyncStats] المستخدم مسجل الدخول');
-        print('✅ [getSyncStats] UID: ${currentUser.uid}');
-        print('✅ [getSyncStats] isAnonymous: ${currentUser.isAnonymous}');
-        print('✅ [getSyncStats] Token موجود: ${await currentUser.getIdToken() != null}');
+        debugPrint('✅ [getSyncStats] المستخدم مسجل الدخول');
+        debugPrint('✅ [getSyncStats] UID: ${currentUser.uid}');
+        debugPrint('✅ [getSyncStats] isAnonymous: ${currentUser.isAnonymous}');
+        debugPrint('✅ [getSyncStats] Token موجود: ${await currentUser.getIdToken() != null}');
       }
     } catch (e) {
-      print('❌ [getSyncStats] خطأ في فحص حالة المصادقة: $e');
+      debugPrint('❌ [getSyncStats] خطأ في فحص حالة المصادقة: $e');
     }
     
     try {
@@ -3987,45 +3976,45 @@ class FirebaseSyncService {
       int productsCountVal = 0;
 
       try {
-        print('🔍 [getSyncStats] محاولة قراءة customers.count()...');
+        debugPrint('🔍 [getSyncStats] محاولة قراءة customers.count()...');
         onProgress?.call(0.0, 'جاري تحميل بيانات العملاء...');
         final customersCount = await _firestore!.collection('customers').count().get();
         customersCountVal = customersCount.count ?? 0;
-        print('✅ [getSyncStats] نجح قراءة العملاء: $customersCountVal');
+        debugPrint('✅ [getSyncStats] نجح قراءة العملاء: $customersCountVal');
         onProgress?.call(0.2, 'تم تحميل بيانات العملاء ✓');
       } catch (e) {
-        print('❌ [getSyncStats] فشل قراءة العملاء!');
-        print('❌ [getSyncStats] Error Type: ${e.runtimeType}');
-        print('❌ [getSyncStats] Error: $e');
+        debugPrint('❌ [getSyncStats] فشل قراءة العملاء!');
+        debugPrint('❌ [getSyncStats] Error Type: ${e.runtimeType}');
+        debugPrint('❌ [getSyncStats] Error: $e');
       }
 
       try {
-        print('🔍 [getSyncStats] محاولة قراءة products.count()...');
+        debugPrint('🔍 [getSyncStats] محاولة قراءة products.count()...');
         onProgress?.call(0.25, 'جاري تحميل بيانات المنتجات...');
         final productsCount = await _firestore!.collection('products').count().get();
         productsCountVal = productsCount.count ?? 0;
-        print('✅ [getSyncStats] نجح قراءة المنتجات: $productsCountVal');
+        debugPrint('✅ [getSyncStats] نجح قراءة المنتجات: $productsCountVal');
       } catch (e) {
-        print('❌ [getSyncStats] فشل قراءة المنتجات: $e');
+        debugPrint('❌ [getSyncStats] فشل قراءة المنتجات: $e');
       }
 
       try {
-        print('🔍 [getSyncStats] محاولة قراءة transactions.count()...');
+        debugPrint('🔍 [getSyncStats] محاولة قراءة transactions.count()...');
         onProgress?.call(0.4, 'جاري تحميل بيانات المعاملات...');
         final transactionsCount = await _firestore!.collection('transactions').count().get();
         transactionsCountVal = transactionsCount.count ?? 0;
-        print('✅ [getSyncStats] نجح قراءة المعاملات: $transactionsCountVal');
+        debugPrint('✅ [getSyncStats] نجح قراءة المعاملات: $transactionsCountVal');
         
-        print('🔍 [getSyncStats] محاولة قراءة invoices.count()...');
+        debugPrint('🔍 [getSyncStats] محاولة قراءة invoices.count()...');
         onProgress?.call(0.55, 'جاري تحميل بيانات الفواتير...');
         final invoicesCount = await _firestore!.collection('invoices').count().get();
         invoicesCountVal = invoicesCount.count ?? 0;
-        print('✅ [getSyncStats] نجح قراءة الفواتير: $invoicesCountVal');
+        debugPrint('✅ [getSyncStats] نجح قراءة الفواتير: $invoicesCountVal');
         onProgress?.call(0.65, 'تم تحميل بيانات المعاملات والفواتير والمنتجات ✓');
       } catch (e) {
-        print('❌ [getSyncStats] فشل قراءة المعاملات/الفواتير!');
-        print('❌ [getSyncStats] Error Type: ${e.runtimeType}');
-        print('❌ [getSyncStats] Error: $e');
+        debugPrint('❌ [getSyncStats] فشل قراءة المعاملات/الفواتير!');
+        debugPrint('❌ [getSyncStats] Error Type: ${e.runtimeType}');
+        debugPrint('❌ [getSyncStats] Error: $e');
       }
       
       // المرحلة 3: تحميل وقت آخر مزامنة (65% -> 80%)
@@ -4092,12 +4081,12 @@ class FirebaseSyncService {
       if (_recoveryMode) {
         // القاعدة أقدم مما عالجته المستمعات: نوافذها تبدأ من جديد (مستمع كامل مرة)
         await WindowedListener.resetAll(); // (يشمل وقت آخر سحب كامل)
-        print('🛡️ وضع الاستعادة: القاعدة من نسخة احتياطية — الرفع موقوف حتى المقارنة');
+        debugPrint('🛡️ وضع الاستعادة: القاعدة من نسخة احتياطية — الرفع موقوف حتى المقارنة');
         _syncEventController.add('استعادة نسخة احتياطية: جاري طلب ما فاتها من الأجهزة الأخرى...');
       }
       SyncHealth.setRecovering(_recoveryMode);
     } catch (e) {
-      print('⚠️ _loadRecoveryState: $e');
+      debugPrint('⚠️ _loadRecoveryState: $e');
     }
   }
 
@@ -4115,11 +4104,11 @@ class FirebaseSyncService {
       await prefs.remove(DatabaseService.restoredFlagKey);
       await prefs.remove(DatabaseService.restoredRowsMarkedKey);
     } catch (e) {
-      print('⚠️ _finishRecovery: $e');
+      debugPrint('⚠️ _finishRecovery: $e');
     }
     _recoveryMode = false;
     SyncHealth.setRecovering(false);
-    print('✅ اكتمل وضع الاستعادة — استُؤنف الرفع');
+    debugPrint('✅ اكتمل وضع الاستعادة — استُؤنف الرفع');
     _syncEventController.add('اكتملت استعادة البيانات من الأجهزة الأخرى');
     unawaited(_syncPendingChanges().catchError((_) {}));
     unawaited(StockMovementSyncService().uploadPending().catchError((_) => 0));
@@ -4136,7 +4125,7 @@ class FirebaseSyncService {
   Future<bool> _downloadForBootstrap() async {
     final ok = await performFullSync();
     if (!ok) {
-      print('⚠️ [Bootstrap] التنزيل الكامل لم يكتمل — لا إنهاء للتمهيد الآن');
+      debugPrint('⚠️ [Bootstrap] التنزيل الكامل لم يكتمل — لا إنهاء للتمهيد الآن');
     }
     return ok;
   }
@@ -4183,11 +4172,11 @@ class FirebaseSyncService {
         // 🛡️ لا ننهي الاستعادة على تنزيل فاشل (انظر _downloadForBootstrap)
         if (_recoveryMode && !await _downloadForBootstrap()) return;
         await _markBootstrapComplete(selfRef);
-        print('🆕 [Bootstrap] أول جهاز في المجموعة — لا حاجة للتمهيد');
+        debugPrint('🆕 [Bootstrap] أول جهاز في المجموعة — لا حاجة للتمهيد');
         return;
       }
 
-      print('🆕 [Bootstrap] طلب إعادة بثّ من $others جهاز '
+      debugPrint('🆕 [Bootstrap] طلب إعادة بثّ من $others جهاز '
           '(${_recoveryMode ? "استعادة نسخة احتياطية" : "جهاز جديد"})');
       _syncEventController.add('جاري استلام بيانات المجموعة من جهاز آخر...');
 
@@ -4236,7 +4225,7 @@ class FirebaseSyncService {
       }
 
       if (status != 'ready') {
-        print('⚠️ [Bootstrap] لم يستجب أي جهاز خلال المهلة');
+        debugPrint('⚠️ [Bootstrap] لم يستجب أي جهاز خلال المهلة');
         if (_recoveryMode) {
           // نكمل الاستعادة من السحابة وحدها ثم نفك حظر الرفع
           if (!await _downloadForBootstrap()) return;
@@ -4252,7 +4241,7 @@ class FirebaseSyncService {
 
       // نزّل ما أُعيد بثّه بالمسار المعتاد (إدمبوتنت، ولا يكتب رصيداً)
       if (!await _downloadForBootstrap()) {
-        print('⚠️ [Bootstrap] تعذّر تنزيل ما أُعيد بثّه — يُعاد لاحقاً');
+        debugPrint('⚠️ [Bootstrap] تعذّر تنزيل ما أُعيد بثّه — يُعاد لاحقاً');
         return;
       }
       await _markBootstrapComplete(selfRef);
@@ -4265,11 +4254,11 @@ class FirebaseSyncService {
               'SELECT COUNT(*) FROM transactions '
               'WHERE (is_deleted IS NULL OR is_deleted = 0)')) ??
           0;
-      print('✅ [Bootstrap] اكتمل التمهيد: $after معاملة');
+      debugPrint('✅ [Bootstrap] اكتمل التمهيد: $after معاملة');
       SyncDiagnostics.log('sync', 'اكتمل تمهيد الجهاز: $after معاملة');
       _syncEventController.add('تم استلام بيانات المجموعة ($after معاملة)');
     } catch (e) {
-      print('⚠️ [Bootstrap] فشل التمهيد: $e (يُعاد في الدورة الخلفية)');
+      debugPrint('⚠️ [Bootstrap] فشل التمهيد: $e (يُعاد في الدورة الخلفية)');
     } finally {
       _bootstrapping = false;
     }
@@ -4291,7 +4280,7 @@ class FirebaseSyncService {
         await _serveBootstrapRequest(doc.reference, requester);
       }
     }, onError: (e) {
-      print('⚠️ [Bootstrap] خطأ في الاستماع للطلبات: $e');
+      debugPrint('⚠️ [Bootstrap] خطأ في الاستماع للطلبات: $e');
     });
   }
 
@@ -4316,13 +4305,13 @@ class FirebaseSyncService {
       }).timeout(const Duration(seconds: 30));
       if (!claimed) return;
     } catch (e) {
-      print('⚠️ [Bootstrap] تعذّر حجز الطلب: $e');
+      debugPrint('⚠️ [Bootstrap] تعذّر حجز الطلب: $e');
       return;
     }
 
     _bootstrapResponding = true;
     try {
-      print('📩 [Bootstrap] إعادة بثّ الدفتر كاملاً للجهاز الجديد: $requester');
+      debugPrint('📩 [Bootstrap] إعادة بثّ الدفتر كاملاً للجهاز الجديد: $requester');
       _syncEventController.add('جهاز جديد انضم — جاري إرسال البيانات إليه...');
       // نبضة كل 30 ثانية: الطالب يعرف أن المستجيب ما زال حياً (دفتر كبير
       // قد يستغرق دقائق)، ولا يعيد الطلب لغيره إلا إن انقطعت النبضات.
@@ -4340,10 +4329,10 @@ class FirebaseSyncService {
         'readyAt': FieldValue.serverTimestamp(),
         'stats': stats,
       });
-      print('✅ [Bootstrap] تمّ البثّ: $stats');
+      debugPrint('✅ [Bootstrap] تمّ البثّ: $stats');
       SyncDiagnostics.log('sync', 'أُعيد بثّ الدفتر لجهاز جديد ($requester): $stats');
     } catch (e) {
-      print('❌ [Bootstrap] فشل البثّ: $e');
+      debugPrint('❌ [Bootstrap] فشل البثّ: $e');
       // نُعيده معلَّقاً ليحاول جهاز آخر — لا نُسقط الطلب
       await reqRef.update({'status': 'pending', 'lastError': e.toString()})
           .catchError((_) {});
@@ -4447,7 +4436,7 @@ class FirebaseSyncService {
     try {
       invOk = await InvoiceSyncService().rebroadcastMissingInvoices();
     } catch (e) {
-      print('⚠️ [Bootstrap] تعذّر إعادة بثّ الفواتير: $e');
+      debugPrint('⚠️ [Bootstrap] تعذّر إعادة بثّ الفواتير: $e');
     }
 
     // 📦 الأصناف وحركات المخزون: لا ينظّفها SmartPipe فهي في السحابة عادةً،
@@ -4463,7 +4452,7 @@ class FirebaseSyncService {
       onProgress?.call(0.95, 'إرسال حركات المخزون...');
       mvOk = await StockMovementSyncService().rebroadcastMissing();
     } catch (e) {
-      print('⚠️ [Bootstrap] تعذّر إعادة بثّ الأصناف/حركات المخزون: $e');
+      debugPrint('⚠️ [Bootstrap] تعذّر إعادة بثّ الأصناف/حركات المخزون: $e');
     }
 
     onProgress?.call(1.0, 'اكتمل الإرسال');
@@ -4507,12 +4496,12 @@ class FirebaseSyncService {
             // إسقاطه من الحساب وحذف مستندات لم يرها قط.
             'isNewDevice': false,
           }, SetOptions(merge: true)).catchError((e) {
-            print('⚠️ خطأ في تسجيل الجهاز بالسحابة: $e');
+            debugPrint('⚠️ خطأ في تسجيل الجهاز بالسحابة: $e');
           });
       
-      print('📱 تم تسجيل الجهاز: $name ($_deviceId)');
+      debugPrint('📱 تم تسجيل الجهاز: $name ($_deviceId)');
     } catch (e) {
-      print('❌ فشل تسجيل الجهاز: $e');
+      debugPrint('❌ فشل تسجيل الجهاز: $e');
     }
   }
   
@@ -4548,7 +4537,7 @@ class FirebaseSyncService {
       }
       SyncHealth.setDeviceVersions(older: older, newer: newer);
     } catch (e) {
-      print('⚠️ [صحة المزامنة] تعذّر فحص إصدارات الأجهزة: $e');
+      debugPrint('⚠️ [صحة المزامنة] تعذّر فحص إصدارات الأجهزة: $e');
     }
     try {
       final ref = _firestore!.collection('devices').doc(_deviceId);
@@ -4566,7 +4555,7 @@ class FirebaseSyncService {
         SyncHealth.setClockSkew(server.toDate().difference(deviceTime));
       }
     } catch (e) {
-      print('⚠️ [صحة المزامنة] تعذّر فحص الساعة: $e');
+      debugPrint('⚠️ [صحة المزامنة] تعذّر فحص الساعة: $e');
     }
   }
 
@@ -4629,7 +4618,7 @@ class FirebaseSyncService {
       
       final devices = <Map<String, dynamic>>[];
       // 🕰️ استخدام التوقيت المصحح بالسيرفر لتجنب مشاكل الساعة المحلية الخاطئة
-      final correctedNow = this.now;
+      final correctedNow = now;
       
       for (final doc in snapshot.docs) {
         final data = doc.data();
@@ -4685,7 +4674,7 @@ class FirebaseSyncService {
       
       return devices;
     } catch (e) {
-      print('❌ فشل جلب قائمة الأجهزة: $e');
+      debugPrint('❌ فشل جلب قائمة الأجهزة: $e');
       return [];
     }
   }
@@ -4696,7 +4685,7 @@ class FirebaseSyncService {
     
     // لا يمكن حذف الجهاز الحالي
     if (deviceId == _deviceId) {
-      print('⚠️ لا يمكن حذف الجهاز الحالي');
+      debugPrint('⚠️ لا يمكن حذف الجهاز الحالي');
       return false;
     }
     
@@ -4706,10 +4695,10 @@ class FirebaseSyncService {
           .doc(deviceId)
           .delete();
       
-      print('🗑️ تم حذف الجهاز: $deviceId');
+      debugPrint('🗑️ تم حذف الجهاز: $deviceId');
       return true;
     } catch (e) {
-      print('❌ فشل حذف الجهاز: $e');
+      debugPrint('❌ فشل حذف الجهاز: $e');
       return false;
     }
   }
@@ -4717,7 +4706,7 @@ class FirebaseSyncService {
   Future<String> _getDeviceName() async {
     try {
       // محاولة الحصول على اسم الكمبيوتر من متغيرات البيئة
-      final computerName = const String.fromEnvironment('COMPUTERNAME', defaultValue: '');
+      const computerName = String.fromEnvironment('COMPUTERNAME', defaultValue: '');
       if (computerName.isNotEmpty) return computerName;
       
       // استخدام معرف الجهاز المختصر كاسم افتراضي
@@ -4750,7 +4739,7 @@ class FirebaseSyncService {
     if (lastSeen == null) return 'غير معروف';
     
     // 🕰️ استخدام التوقيت المصحح بالسيرفر
-    final correctedNow = this.now;
+    final correctedNow = now;
     final diff = correctedNow.difference(lastSeen);
     
     if (diff.inSeconds < 60) {
@@ -4941,7 +4930,7 @@ class FirebaseSyncService {
           whereArgs: [syncUuid],
         );
         if (retryCount > 0) {
-          print('✅ نجحت المحاولة رقم ${retryCount + 1} للعملية $syncUuid');
+          debugPrint('✅ نجحت المحاولة رقم ${retryCount + 1} للعملية $syncUuid');
         }
         continue;
       }
@@ -4969,7 +4958,7 @@ class FirebaseSyncService {
       );
 
       if (retryCount <= 5 || retryCount % 50 == 0) {
-        print('🔄 سيتم إعادة المحاولة ${retryCount + 1} بعد '
+        debugPrint('🔄 سيتم إعادة المحاولة ${retryCount + 1} بعد '
             '${backoffDelay.inSeconds}ث للعملية $syncUuid');
       }
     }
@@ -4989,7 +4978,7 @@ class FirebaseSyncService {
     ) ?? 0;
 
     if (count > 0) {
-      print('📋 تم تحميل $count عملية من Retry Queue');
+      debugPrint('📋 تم تحميل $count عملية من Retry Queue');
       _scheduleRetry();
     }
   }
@@ -5099,7 +5088,7 @@ class FirebaseSyncService {
     // 🔒 تحويل آمن: هذا المسار كان يحذف المعاملات الأقدم من 7 أيام ثابتة
     // (متتجاهلاً إعدادات المستخدم وفحص قراءة الأجهزة). الحذف الآن يمر حصرياً
     // عبر SmartPipeCleanupService بشرطين: مدة المستخدم + قراءة الجميع (ACKs).
-    print('🧹 cleanupOldFirebaseData: تحويل إلى الحذف الذكي الآمن (SmartPipe)...');
+    debugPrint('🧹 cleanupOldFirebaseData: تحويل إلى الحذف الذكي الآمن (SmartPipe)...');
     final result = await SmartPipeCleanupService().runManualCleanup();
     return {
       'success': true,
@@ -5122,7 +5111,7 @@ class FirebaseSyncService {
       return {'error': 'غير مُعد'};
     }
     
-    print('🧹 جاري حذف قاعدة البيانات السحابية بالكامل...');
+    debugPrint('🧹 جاري حذف قاعدة البيانات السحابية بالكامل...');
     
     int totalDeleted = 0;
     
@@ -5157,13 +5146,13 @@ class FirebaseSyncService {
           await batch.commit();
         }
       }
-      print('✅ تم حذف $totalDeleted مستند بنجاح من جميع المجموعات');
+      debugPrint('✅ تم حذف $totalDeleted مستند بنجاح من جميع المجموعات');
       return {
         'success': true,
         'deletedCount': totalDeleted,
       };
     } catch (e) {
-      print('❌ خطأ في حذف قاعدة البيانات: $e');
+      debugPrint('❌ خطأ في حذف قاعدة البيانات: $e');
       return {'error': e.toString()};
     }
   }
@@ -5229,7 +5218,7 @@ class FirebaseSyncService {
   /// نكتفي بتسجيل التحذير حتى لا يظل التطبيق معطّلاً بسبب خطأ مؤقت.
   Future<bool> _testFirebaseConnectivity() async {
     if (_firestore == null) {
-      print('❌ اختبار الاتصال: Firestore غير مهيأ');
+      debugPrint('❌ اختبار الاتصال: Firestore غير مهيأ');
       return false;
     }
 
@@ -5242,10 +5231,10 @@ class FirebaseSyncService {
           .get()
           .timeout(const Duration(seconds: 20));
 
-      print('✅ اختبار الاتصال بـ Firestore ناجح');
+      debugPrint('✅ اختبار الاتصال بـ Firestore ناجح');
       return true;
     } catch (e) {
-      print('❌ اختبار الاتصال بـ Firestore فشل: $e');
+      debugPrint('❌ اختبار الاتصال بـ Firestore فشل: $e');
       // لا نوقف التهيئة: قد يكون فشلًا مؤقتًا، والمزامنة ستعيد المحاولة.
       return true;
     }
@@ -5308,7 +5297,7 @@ class FirebaseSyncService {
     ) ?? 0;
 
     if (orphanCount > 0 && orphanCount % 500 == 0) {
-      print('👻 $orphanCount معاملة تنتظر وصول عملائها');
+      debugPrint('👻 $orphanCount معاملة تنتظر وصول عملائها');
     }
     
     // 🔧 إصلاح: تحويل Timestamp إلى String قبل jsonEncode
@@ -5325,7 +5314,7 @@ class FirebaseSyncService {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     
-    print('👻 تم إضافة معاملة يتيمة للطابور: $syncUuid (العميل: $customerSyncUuid)');
+    debugPrint('👻 تم إضافة معاملة يتيمة للطابور: $syncUuid (العميل: $customerSyncUuid)');
   }
   
   /// 🔧 تحويل Timestamp من Firebase إلى String
@@ -5375,7 +5364,7 @@ class FirebaseSyncService {
     
     if (orphans.isEmpty) return;
     
-    print('👻 تم العثور على ${orphans.length} معاملة يتيمة للعميل $customerSyncUuid');
+    debugPrint('👻 تم العثور على ${orphans.length} معاملة يتيمة للعميل $customerSyncUuid');
     
     for (final orphan in orphans) {
       try {
@@ -5406,7 +5395,7 @@ class FirebaseSyncService {
         );
         
       } catch (e) {
-        print('❌ فشل معالجة المعاملة اليتيمة: $e');
+        debugPrint('❌ فشل معالجة المعاملة اليتيمة: $e');
       }
     }
   }
@@ -5427,7 +5416,7 @@ class FirebaseSyncService {
     Function(int current, int total, String message)? onProgress,
   }) async {
     if (_isRepairing) {
-      print('⚠️ عملية الإصلاح قيد التنفيذ بالفعل، يرجى الانتظار');
+      debugPrint('⚠️ عملية الإصلاح قيد التنفيذ بالفعل، يرجى الانتظار');
       return {'success': false, 'error': 'عملية إصلاح أخرى قيد التنفيذ'};
     }
 
@@ -5459,8 +5448,8 @@ class FirebaseSyncService {
     int uploadedTransactions = 0;
     int errorCount = 0;
 
-    print('🔧 بدء إصلاح ومزامنة جميع البيانات (الرفع الشامل البسيط)...');
-    print('🔒 الرفع الشامل ممنوع من حذف أي معاملة');
+    debugPrint('🔧 بدء إصلاح ومزامنة جميع البيانات (الرفع الشامل البسيط)...');
+    debugPrint('🔒 الرفع الشامل ممنوع من حذف أي معاملة');
     onProgress?.call(0, 100, 'جاري البدء...');
     
     if (_watchdog != null) {
@@ -5534,7 +5523,7 @@ class FirebaseSyncService {
       }
 
       if (fixedCount > 0) {
-        print('✅ تم إصلاح $fixedCount معاملة بدون sync_uuid');
+        debugPrint('✅ تم إصلاح $fixedCount معاملة بدون sync_uuid');
       }
 
       // 2️⃣ إصلاح العملاء الذين ليس لهم sync_uuid
@@ -5569,7 +5558,7 @@ class FirebaseSyncService {
       }
 
       if (customersWithoutUuid.isNotEmpty) {
-        print('✅ تم إصلاح ${customersWithoutUuid.length} عميل بدون sync_uuid');
+        debugPrint('✅ تم إصلاح ${customersWithoutUuid.length} عميل بدون sync_uuid');
       }
 
       // 3️⃣ رفع جميع العملاء
@@ -5578,7 +5567,7 @@ class FirebaseSyncService {
         where: 'sync_uuid IS NOT NULL AND (is_deleted IS NULL OR is_deleted = 0) AND (is_created_by_me = 1 OR is_created_by_me IS NULL)',
       );
       final totalCustomers = allCustomers.length;
-      print('📤 جاري رفع $totalCustomers عميل...');
+      debugPrint('📤 جاري رفع $totalCustomers عميل...');
       onProgress?.call(0, totalCustomers, 'جاري رفع العملاء...');
 
       const chunkSize = 1;
@@ -5594,22 +5583,22 @@ class FirebaseSyncService {
             final name = customer['name'] as String? ?? 'غير معروف';
             try {
               if (!isOnline) {
-                print('❌ فشل رفع عميل $name: لا يوجد اتصال بالإنترنت');
+                debugPrint('❌ فشل رفع عميل $name: لا يوجد اتصال بالإنترنت');
                 return 0; // Failure
               }
               await _forceUploadCustomer(customer)
                   .timeout(const Duration(seconds: 60));
               return 1; // Success
             } catch (e) {
-              print('❌ فشل رفع عميل $name: $e');
+              debugPrint('❌ فشل رفع عميل $name: $e');
               return 0; // Failure
             }
           }),
           eagerError: false, // لا تتوقف عند أول خطأ — ارفع الباقي.
         );
 
-        uploadedCustomers += results.fold<int>(0, (sum, val) => sum + val);
-        final failedInChunk = chunk.length - results.fold<int>(0, (sum, val) => sum + val);
+        uploadedCustomers += results.fold<int>(0, (acc, val) => acc + val);
+        final failedInChunk = chunk.length - results.fold<int>(0, (acc, val) => acc + val);
         errorCount += failedInChunk;
 
         final currentProgress = (i + chunkSize > totalCustomers) ? totalCustomers : i + chunkSize;
@@ -5624,7 +5613,7 @@ class FirebaseSyncService {
             'AND (is_created_by_me IS NULL OR is_created_by_me = 1)',
       );
       final totalTx = allTransactions.length;
-      print('📤 جاري رفع $totalTx معاملة مملوكة لهذا الجهاز...');
+      debugPrint('📤 جاري رفع $totalTx معاملة مملوكة لهذا الجهاز...');
       onProgress?.call(0, totalTx, 'جاري رفع المعاملات...');
 
       for (var i = 0; i < allTransactions.length; i += chunkSize) {
@@ -5634,7 +5623,7 @@ class FirebaseSyncService {
           chunk.map((tx) async {
             try {
               if (!isOnline) {
-                print('❌ فشل رفع معاملة: لا يوجد اتصال بالإنترنت');
+                debugPrint('❌ فشل رفع معاملة: لا يوجد اتصال بالإنترنت');
                 return 0; // Failure
               }
               final customerId = tx['customer_id'] as int;
@@ -5658,15 +5647,15 @@ class FirebaseSyncService {
                   .timeout(const Duration(seconds: 60));
               return 1; // Success
             } catch (e) {
-              print('❌ فشل رفع معاملة: $e');
+              debugPrint('❌ فشل رفع معاملة: $e');
               return 0; // Failure
             }
           }),
           eagerError: false,
         );
 
-        uploadedTransactions += results.fold<int>(0, (sum, val) => sum + val);
-        final failedInChunk = chunk.length - results.fold<int>(0, (sum, val) => sum + val);
+        uploadedTransactions += results.fold<int>(0, (acc, val) => acc + val);
+        final failedInChunk = chunk.length - results.fold<int>(0, (acc, val) => acc + val);
         errorCount += failedInChunk;
 
         final currentProgress = (i + chunkSize > totalTx) ? totalTx : i + chunkSize;
@@ -5688,14 +5677,14 @@ class FirebaseSyncService {
         };
       }
 
-      print('═══════════════════════════════════════════════════════════════════');
-      print('✅ اكتمل الإصلاح والمزامنة (الرفع الشامل البسيط)');
-      print('   - معاملات تم إصلاح معرّفها: $fixedCount');
-      print('   - عملاء تم رفعهم: $uploadedCustomers / $totalCustomers');
-      print('   - معاملات تم رفعها: $uploadedTransactions / $totalTx');
-      print('   - أخطاء: $errorCount');
-      print('   - عدد المعاملات قبل/بعد: $txCountBefore → $txCountAfter');
-      print('═══════════════════════════════════════════════════════════════════');
+      debugPrint('═══════════════════════════════════════════════════════════════════');
+      debugPrint('✅ اكتمل الإصلاح والمزامنة (الرفع الشامل البسيط)');
+      debugPrint('   - معاملات تم إصلاح معرّفها: $fixedCount');
+      debugPrint('   - عملاء تم رفعهم: $uploadedCustomers / $totalCustomers');
+      debugPrint('   - معاملات تم رفعها: $uploadedTransactions / $totalTx');
+      debugPrint('   - أخطاء: $errorCount');
+      debugPrint('   - عدد المعاملات قبل/بعد: $txCountBefore → $txCountAfter');
+      debugPrint('═══════════════════════════════════════════════════════════════════');
 
       // 🕒 تحديث وقت آخر مزامنة
       await FirebaseSyncConfig.setLastSyncTime(DateTime.now());
@@ -5714,7 +5703,7 @@ class FirebaseSyncService {
         'txCountAfter': txCountAfter,
       };
     } catch (e) {
-      print('❌ فشل الإصلاح والمزامنة: $e');
+      debugPrint('❌ فشل الإصلاح والمزامنة: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -5731,7 +5720,7 @@ class FirebaseSyncService {
     final syncUuid = customerData['sync_uuid'] as String?;
     if (syncUuid == null || syncUuid.isEmpty) return;
     if (!SyncSecurity.isValidDocumentId(syncUuid)) {
-      print('❌ تخطي رفع عميل بمعرّف غير صالح: $syncUuid');
+      debugPrint('❌ تخطي رفع عميل بمعرّف غير صالح: $syncUuid');
       return;
     }
 
@@ -5804,7 +5793,7 @@ class FirebaseSyncService {
     final syncUuid = txData['transaction_uuid'] as String?;
     if (syncUuid == null || syncUuid.isEmpty) return;
     if (!SyncSecurity.isValidDocumentId(syncUuid)) {
-      print('❌ تخطي رفع معاملة بمعرّف غير صالح: $syncUuid');
+      debugPrint('❌ تخطي رفع معاملة بمعرّف غير صالح: $syncUuid');
       return;
     }
 
@@ -5816,7 +5805,7 @@ class FirebaseSyncService {
 
     final owned = tx['is_created_by_me'];
     if (owned != null && owned == 0) {
-      print('🚫 رُفض رفع معاملة من المزامنة: $syncUuid');
+      debugPrint('🚫 رُفض رفع معاملة من المزامنة: $syncUuid');
       return;
     }
     final isTxDeleted = ((tx['is_deleted'] as int?) ?? 0) == 1;
@@ -5955,37 +5944,14 @@ class FirebaseSyncService {
     final ok = sig != null &&
         SyncSecurity.verifySignature(_canonicalFor(uuid, data, isCustomer: isCustomer), sig, key);
     if (!ok) {
-      print('🛑 رُفض مستند غير موقّع بسرّ المجموعة: $uuid (من ${data['deviceId']})');
+      debugPrint('🛑 رُفض مستند غير موقّع بسرّ المجموعة: $uuid (من ${data['deviceId']})');
       SyncDiagnostics.log('security',
           'رُفض مستند غير موقّع: $uuid من ${data['deviceId']} — تحقق من تطابق سرّ المجموعة على كل الأجهزة');
     }
     return ok;
   }
 
-  /// توافق مع الشاشات التي تنتظر bool.
-  Future<bool> _forceUploadCustomerWithResult(
-      Map<String, dynamic> customerData) async {
-    try {
-      await _forceUploadCustomer(customerData);
-      return true;
-    } catch (e) {
-      print('❌ فشل رفع العميل: $e');
-      return false;
-    }
-  }
 
-  Future<bool> _forceUploadTransactionWithResult(
-    Map<String, dynamic> txData,
-    String customerSyncUuid,
-  ) async {
-    try {
-      await _forceUploadTransaction(txData, customerSyncUuid);
-      return true;
-    } catch (e) {
-      print('❌ فشل رفع المعاملة: $e');
-      return false;
-    }
-  }
 
   /// إعادة رفع قسرية لمعاملة يملكها هذا الجهاز فقط — لشاشة المطابقة.
   Future<bool> forceReuploadOwnedTransaction(String syncUuid) async {
@@ -6002,7 +5968,7 @@ class FirebaseSyncService {
     final tx = Map<String, dynamic>.from(rows.first);
     final owned = tx['is_created_by_me'];
     if (owned != null && owned == 0) {
-      print('🚫 رُفضت إعادة الرفع: المعاملة $syncUuid ليست من إنشاء هذا الجهاز');
+      debugPrint('🚫 رُفضت إعادة الرفع: المعاملة $syncUuid ليست من إنشاء هذا الجهاز');
       return false;
     }
 
@@ -6013,7 +5979,7 @@ class FirebaseSyncService {
       await _forceUploadTransaction(tx, customerUuid);
       return true;
     } catch (e) {
-      print('❌ فشل إعادة رفع المعاملة: $e');
+      debugPrint('❌ فشل إعادة رفع المعاملة: $e');
       return false;
     }
   }

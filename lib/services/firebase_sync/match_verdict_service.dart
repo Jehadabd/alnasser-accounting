@@ -29,6 +29,7 @@
 //   (شواهد الحذف + المطابقة المحصّنة التي لا تُبطل إلا ما لا أثر له).
 //   تبقى الجداول المحلية للأرشيف، وتُهمل القرارات المعلّقة القديمة.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:convert';
 
@@ -74,7 +75,7 @@ class MatchVerdictService {
     try {
       final db = await _db.database;
       final n = await db.delete('pending_void_verdicts');
-      if (n > 0) print('⚖️ [Verdict] أُهمل $n قرار إبطال معلّق من نسخة سابقة');
+      if (n > 0) debugPrint('⚖️ [Verdict] أُهمل $n قرار إبطال معلّق من نسخة سابقة');
     } catch (_) {}
 
     _isListening = true;
@@ -132,9 +133,7 @@ class MatchVerdictService {
     // ⛔ معطّل: لا بثّ لقرارات الإبطال (انظر رأس الملف)
     if (!_publishingEnabled) return;
     if (voidedRows.isEmpty) return;
-    if (_myDeviceId == null) {
-      _myDeviceId = await FirebaseSyncConfig.getDeviceId();
-    }
+    _myDeviceId ??= await FirebaseSyncConfig.getDeviceId();
     _groupSecretKey ??= await SyncSecurity.getOrCreateSecretKey();
 
     final batch = _fs.batch();
@@ -171,7 +170,7 @@ class MatchVerdictService {
 
     if (n > 0) {
       await batch.commit().timeout(const Duration(seconds: 30));
-      print('⚖️ [Verdict] بُثّ $n قرار إبطال للعميل $customerSyncUuid');
+      debugPrint('⚖️ [Verdict] بُثّ $n قرار إبطال للعميل $customerSyncUuid');
     }
   }
 
@@ -256,12 +255,12 @@ class MatchVerdictService {
       });
 
       if (alreadyVoided) {
-        print('⚖️ [Verdict] القرار $docId: المعاملة مبطلة سابقاً (لا شيء)');
+        debugPrint('⚖️ [Verdict] القرار $docId: المعاملة مبطلة سابقاً (لا شيء)');
       } else {
-        print('⚖️ [Verdict] طُبّق قرار الإبطال $docId للمعاملة $txUuid');
+        debugPrint('⚖️ [Verdict] طُبّق قرار الإبطال $docId للمعاملة $txUuid');
       }
     } catch (e) {
-      print('⚖️ [Verdict] فشل تطبيق القرار $docId: $e');
+      debugPrint('⚖️ [Verdict] فشل تطبيق القرار $docId: $e');
     }
   }
 
@@ -285,7 +284,7 @@ class MatchVerdictService {
       // إن نجح التطبيق (المعاملة الآن موجودة) — احذف المعلّق
       await db.delete('pending_void_verdicts',
           where: 'id = ?', whereArgs: [row['id']]);
-      print('⚖️ [Verdict] نُفّذ قرار معلّق للمعاملة $transactionUuid');
+      debugPrint('⚖️ [Verdict] نُفّذ قرار معلّق للمعاملة $transactionUuid');
     } catch (_) {
       // ليست حرجة — تُعاد المحاولة في المسح الدوري
     }
@@ -300,7 +299,7 @@ class MatchVerdictService {
       final pending = await db.query('pending_void_verdicts', limit: 200);
       if (pending.isEmpty) return;
 
-      print('⚖️ [Verdict] مسح ${pending.length} قرار معلّق...');
+      debugPrint('⚖️ [Verdict] مسح ${pending.length} قرار معلّق...');
       for (final row in pending) {
         final txUuid = row['transaction_uuid'] as String;
         final exists = await db.query('transactions',
@@ -313,7 +312,7 @@ class MatchVerdictService {
         }
       }
     } catch (e) {
-      print('⚖️ [Verdict] خطأ في مسح القرارات المعلّقة: $e');
+      debugPrint('⚖️ [Verdict] خطأ في مسح القرارات المعلّقة: $e');
     }
   }
 }

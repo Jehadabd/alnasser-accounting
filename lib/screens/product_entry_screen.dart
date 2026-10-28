@@ -10,6 +10,7 @@
 // DatabaseService.insertProduct ثم addProductBarcode للباركودات الإضافية،
 // وبالحقول نفسها. التحسينات هنا في الواجهة والتحقق فقط.
 
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'dart:async';
 import 'dart:convert';
 
@@ -20,6 +21,8 @@ import 'package:intl/intl.dart';
 import '../models/category.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
+import '../services/internal_barcode.dart';
+import '../erp/inventory/barcode_labels.dart' show BarcodeLabels;
 import '../widgets/camera_barcode_scanner_dialog.dart';
 import '../widgets/formatters.dart';
 import '../widgets/product/category_management_dialog.dart';
@@ -741,6 +744,32 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
 
   // --- الباركود المستعمل لمادة أخرى (findProductByBarcode) ---
 
+  /// 🏷️ باركود داخلي جديد (9900000001…) للمادة التي لا باركود لها.
+  Future<void> _generateBarcode() async {
+    if (_barcodeController.text.trim().isNotEmpty) {
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('للمادة باركود'),
+          content: const Text('استبدال الباركود المكتوب بباركود جديد يولّده البرنامج؟'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('استبدال')),
+          ],
+        ),
+      );
+      if (replace != true) return;
+    }
+    try {
+      final code = await InternalBarcode.next();
+      if (!mounted) return;
+      _setText(_barcodeController, code);
+      _onBarcodeChanged(code);
+    } catch (e) {
+      if (mounted) _showSnack('تعذّر توليد الباركود: $e', color: PeColors.danger);
+    }
+  }
+
   void _onBarcodeChanged(String v) {
     _barcodeCheckTimer?.cancel();
     final code = v.trim();
@@ -833,7 +862,11 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
   // الحفظ
   // ═══════════════════════════════════════════════════════════════════════
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _saveProduct() async {
+    await SaveLock.run(() => _saveProductUnlocked(), message: 'جارٍ حفظ المادة…');
+  }
+  Future<void> _saveProductUnlocked() async {
     if (_saving) return;
     setState(() => _submitted = true);
 
@@ -970,12 +1003,12 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
     String? unitCostsJson = unitCosts.isNotEmpty ? json.encode(unitCosts) : null;
 
     // 🔍 تشخيص تحويل الوحدات — ماذا يُحفظ فعلاً للمنتج الموزون؟
-    print('🔍 [تشخيص-حفظ-منتج] "${_nameController.text.trim()}"');
-    print('    unit="$baseKey" | isWeighable=$_isWeighable | baseWeight=${_isWeighable ? _parse(_baseWeightController.text) : null}');
-    print('    unitHierarchy=$unitHierarchyJson');
-    print('    unitCosts=$unitCostsJson');
+    debugPrint('🔍 [تشخيص-حفظ-منتج] "${_nameController.text.trim()}"');
+    debugPrint('    unit="$baseKey" | isWeighable=$_isWeighable | baseWeight=${_isWeighable ? _parse(_baseWeightController.text) : null}');
+    debugPrint('    unitHierarchy=$unitHierarchyJson');
+    debugPrint('    unitCosts=$unitCostsJson');
     if (finalHierarchy.isEmpty) {
-      print('    ⚠️ الهرمية فارغة! لن تظهر وحدات كبرى في الفاتورة — تحقق من "تعبئة وحدات كبرى"');
+      debugPrint('    ⚠️ الهرمية فارغة! لن تظهر وحدات كبرى في الفاتورة — تحقق من "تعبئة وحدات كبرى"');
     }
 
     // وحدة التنبيه: إن حُذفت/تغيّرت وحدتها الأكبر تعود للوحدة الأساسية
@@ -1065,7 +1098,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
           seconds: 6,
         );
       }
-      await _showSaveSuccess(product, finalHierarchy);
+      await _showSaveSuccess(product, finalHierarchy, productId);
     } on DuplicateProductNameException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1083,7 +1116,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
     }
   }
 
-  Future<void> _showSaveSuccess(Product product, List<Map<String, dynamic>> hierarchy) async {
+  Future<void> _showSaveSuccess(Product product, List<Map<String, dynamic>> hierarchy, int productId) async {
     final unitsText = [
       _baseUnitDisplay,
       for (final h in hierarchy)
@@ -1122,6 +1155,11 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
             onPressed: () => Navigator.pop(ctx, false),
             icon: const Icon(Icons.arrow_forward_rounded),
             label: const Text('رجوع'),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => BarcodeLabels.printForProducts(ctx, [productId]),
+            icon: const Icon(Icons.print_rounded),
+            label: const Text('طباعة ملصق باركود'),
           ),
           FilledButton.icon(
             autofocus: true,
@@ -1437,7 +1475,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: kPrimaryColor,
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: kPrimaryColor.withOpacity(0.6),
+                      disabledBackgroundColor: kPrimaryColor.withValues(alpha: 0.6),
                       disabledForegroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(horizontal: 28),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1526,7 +1564,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
                   return InkWell(
                     onTap: () => onSelectedOption(option),
                     child: Container(
-                      color: i == highlighted ? kPrimaryColor.withOpacity(0.08) : null,
+                      color: i == highlighted ? kPrimaryColor.withValues(alpha: 0.08) : null,
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                       child: Text(option, style: const TextStyle(fontSize: 13.5)),
                     ),
@@ -1620,11 +1658,18 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
             decoration: peInputDecoration(
               hint: 'امسح بالقارئ أو اكتب الباركود (اختياري)',
               suffixIcon: ExcludeFocus(
-                child: IconButton(
-                  icon: const Icon(Icons.camera_alt_rounded, color: _kPricesColor, size: 20),
-                  tooltip: 'مسح الباركود بالكاميرا',
-                  onPressed: () => _scanInto(_barcodeController, isMain: true),
-                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(
+                    icon: const Icon(Icons.auto_awesome_rounded, color: _kPricesColor, size: 20),
+                    tooltip: 'توليد باركود للمادة (لمادة بلا باركود من المصنع)',
+                    onPressed: _generateBarcode,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.camera_alt_rounded, color: _kPricesColor, size: 20),
+                    tooltip: 'مسح الباركود بالكاميرا',
+                    onPressed: () => _scanInto(_barcodeController, isMain: true),
+                  ),
+                ]),
               ),
               helperText: _barcodeUsedBy != null ? 'تنبيه: هذا الباركود مستعمل للمادة «$_barcodeUsedBy»' : null,
               helperColor: PeColors.warning,
@@ -1718,7 +1763,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFFFFFAF5),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBarcodeColor.withOpacity(0.2)),
+        border: Border.all(color: _kBarcodeColor.withValues(alpha: 0.2)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1872,7 +1917,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: _kUnitsColor.withOpacity(0.06),
+              color: _kUnitsColor.withValues(alpha: 0.06),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
@@ -1923,7 +1968,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
                 label: const Text('إضافة وحدة أكبر'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _kUnitsColor,
-                  side: BorderSide(color: _kUnitsColor.withOpacity(0.5)),
+                  side: BorderSide(color: _kUnitsColor.withValues(alpha: 0.5)),
                 ),
               ),
               if (suggestions.isNotEmpty) ...[
@@ -1950,7 +1995,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
               ),
               Switch(
                 value: _isWeighable,
-                activeColor: kPrimaryColor,
+                activeThumbColor: kPrimaryColor,
                 onChanged: (v) => setState(() => _isWeighable = v),
               ),
             ],
@@ -2004,7 +2049,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFFF6FBF8),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kUnitsColor.withOpacity(0.25)),
+        border: Border.all(color: _kUnitsColor.withValues(alpha: 0.25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2370,7 +2415,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
               ),
               Switch(
                 value: _hasExpiry,
-                activeColor: kPrimaryColor,
+                activeThumbColor: kPrimaryColor,
                 onChanged: (v) => setState(() {
                   _hasExpiry = v;
                   if (!v) _expiryDate = null;
@@ -2389,7 +2434,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.orange.withOpacity(0.35)),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
                   ),
                   child: Row(
                     children: [
@@ -2449,7 +2494,7 @@ class ModernSectionCard extends StatelessWidget {
         color: kCardColor,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
-           BoxShadow(color: const Color(0xff121212).withOpacity(0.05), blurRadius: 15, offset: const Offset(0, 4)),
+           BoxShadow(color: const Color(0xff121212).withValues(alpha: 0.05), blurRadius: 15, offset: const Offset(0, 4)),
         ],
       ),
       child: Column(

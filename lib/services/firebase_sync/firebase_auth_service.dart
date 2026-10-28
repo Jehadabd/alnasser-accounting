@@ -2,6 +2,7 @@
 // خدمة المصادقة لـ Firebase - تستخدم REST API + Firebase Auth SDK
 // يتم إنشاء حساب تلقائي فريد لكل جهاز
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -59,20 +60,20 @@ class FirebaseAuthService {
           // 🔒 استخدام compute لتجنب مشاكل الـ threading
           final tokenResult = await _getIdTokenSafely(_auth.currentUser!);
           if (tokenResult != null) {
-            print('✅ المستخدم مصادق عليه مسبقاً (توكن صالح): ${_auth.currentUser!.uid}');
+            debugPrint('✅ المستخدم مصادق عليه مسبقاً (توكن صالح): ${_auth.currentUser!.uid}');
             _cachedUid = _auth.currentUser!.uid;
             _lastAuthCheck = DateTime.now();
             return _cachedUid;
           }
         } catch (e) {
-          print('⚠️ التوكن الحالي غير صالح أو منتهي، سيتم تسجيل الخروج وإعادة الدخول... $e');
+          debugPrint('⚠️ التوكن الحالي غير صالح أو منتهي، سيتم تسجيل الخروج وإعادة الدخول... $e');
           try {
             await _auth.signOut();
           } catch (_) {}
         }
       }
 
-      print('🔐 جاري تسجيل الدخول المجهول...');
+      debugPrint('🔐 جاري تسجيل الدخول المجهول...');
       final userCredential = await _auth.signInAnonymously().timeout(
         const Duration(seconds: 15),
         onTimeout: () {
@@ -81,16 +82,16 @@ class FirebaseAuthService {
       );
       
       if (userCredential.user != null) {
-        print('✅ تم تسجيل الدخول بنجاح: ${userCredential.user!.uid}');
+        debugPrint('✅ تم تسجيل الدخول بنجاح: ${userCredential.user!.uid}');
         
         // --- بدء الاختبار التشخيصي بناء على طلب المستخدم ---
         final user = userCredential.user;
-        print('UID: ${user?.uid}');
-        print('Anonymous: ${user?.isAnonymous}');
+        debugPrint('UID: ${user?.uid}');
+        debugPrint('Anonymous: ${user?.isAnonymous}');
         
         final token = await user?.getIdToken(true);
-        print('TOKEN: ${token != null}');
-        print('TOKEN LENGTH: ${token?.length}');
+        debugPrint('TOKEN: ${token != null}');
+        debugPrint('TOKEN LENGTH: ${token?.length}');
         
         try {
           // جلب FirebaseFirestore.instance لمعرفة إذا كان يملك صلاحية أو لا
@@ -103,9 +104,9 @@ class FirebaseAuthService {
                 'createdAt': FieldValue.serverTimestamp(),
               });
         
-          print('✅ FIRESTORE WRITE SUCCESS (Test Diagnostic)');
+          debugPrint('✅ FIRESTORE WRITE SUCCESS (Test Diagnostic)');
         } catch (e) {
-          print('❌ FIRESTORE WRITE ERROR (Test Diagnostic): $e');
+          debugPrint('❌ FIRESTORE WRITE ERROR (Test Diagnostic): $e');
         }
         // --- نهاية الاختبار التشخيصي ---
 
@@ -114,10 +115,10 @@ class FirebaseAuthService {
         return _cachedUid;
       }
       
-      print('⚠️ signInAnonymously نجح ولكنه أعاد null للمستخدم');
+      debugPrint('⚠️ signInAnonymously نجح ولكنه أعاد null للمستخدم');
       throw Exception('signInAnonymously returned null user');
     } catch (e) {
-      print('❌ خطأ في تسجيل الدخول المجهول: $e');
+      debugPrint('❌ خطأ في تسجيل الدخول المجهول: $e');
       throw Exception('AuthError: $e');
     } finally {
       _isAuthenticating = false;
@@ -140,9 +141,9 @@ class FirebaseAuthService {
     try {
       await _auth.signOut();
       _cachedUid = null;
-      print('✅ تم تسجيل الخروج');
+      debugPrint('✅ تم تسجيل الخروج');
     } catch (e) {
-      print('❌ خطأ في تسجيل الخروج: $e');
+      debugPrint('❌ خطأ في تسجيل الخروج: $e');
     }
   }
 

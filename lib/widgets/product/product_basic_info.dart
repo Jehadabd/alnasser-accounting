@@ -52,7 +52,7 @@ class ProductBasicInfoWidget extends StatelessWidget {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<int>(
-                    value: selectedCategoryId,
+                    initialValue: selectedCategoryId,
                     decoration: const InputDecoration(
                       labelText: 'القسم / الفئة',
                       prefixIcon: Icon(Icons.category_outlined),

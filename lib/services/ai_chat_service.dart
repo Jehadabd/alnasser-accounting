@@ -1,10 +1,9 @@
-﻿import 'package:sqflite/sqflite.dart';
-import 'database_service.dart';
+﻿import 'database_service.dart';
+import 'reports_service.dart';
 import 'settings_manager.dart';
 import 'gemini_service.dart';
 import '../utils/money_calculator.dart';
 import 'dart:convert';
-import 'dart:io';
 
 /// خدمة الدردشة مع الذكاء الاصطناعي - تدقيق شامل للنظام
 /// هذه الخدمة تستطيع الوصول لكامل قاعدة البيانات والتحقق من صحة البيانات
@@ -123,7 +122,7 @@ class AIChatService {
             followups: defaultSuggestions.take(4).toList(),
           );
       }
-    } catch (e, stackTrace) {
+    } catch (e) {
       return ChatResponse(
         text: "حدث خطأ أثناء معالجة طلبك: ${e.toString()}",
         followups: ["إعادة المحاولة", "العودة للقائمة الرئيسية"],
@@ -376,7 +375,7 @@ class AIChatService {
           data: {'errors': errors},
         );
       }
-    } catch (e, stackTrace) {
+    } catch (e) {
       rethrow;
     }
   }
@@ -460,7 +459,7 @@ class AIChatService {
           data: {'errors': errors},
         );
       }
-    } catch (e, stackTrace) {
+    } catch (e) {
       rethrow;
     }
   }
@@ -562,10 +561,6 @@ class AIChatService {
     try {
       final db = await _dbService.database;
       
-      // جلب إعدادات التطبيق لنسبة الربح
-      final settings = await SettingsManager.getAppSettings();
-      final adHocProfit = settings.defaultAdHocProfitPercentage / 100.0;
-      
       // تحديد الفترة الزمنية
       final now = DateTime.now();
       final startDate = params['start_date'] ?? DateTime(now.year, now.month, 1);
@@ -597,7 +592,6 @@ class AIChatService {
         for (var item in items) {
           final qty = (item['quantity_individual'] as num?)?.toDouble() ?? 0.0;
           final qtyLarge = (item['quantity_large_unit'] as num?)?.toDouble() ?? 0.0;
-          final unitsInLarge = (item['units_in_large_unit'] as num?)?.toDouble() ?? 1.0;
           final appliedPrice = (item['applied_price'] as num?)?.toDouble() ?? 0.0;
           double costPrice = (item['cost_price'] as num?)?.toDouble() ?? 0.0;
           final actualCostPrice = (item['actual_cost_price'] as num?)?.toDouble();
@@ -647,7 +641,7 @@ class AIChatService {
         },
       );
       
-    } catch (e, stackTrace) {
+    } catch (e) {
       return ChatResponse(
         text: '❌ حدث خطأ أثناء إنشاء ملخص المبيعات:\n\n$e',
         followups: ["المحاولة مرة أخرى", "تقرير الأرباح"],
@@ -872,7 +866,7 @@ class AIChatService {
         },
       );
       
-    } catch (e, stackTrace) {
+    } catch (e) {
       return ChatResponse(
         text: '❌ حدث خطأ أثناء إنشاء تقرير الأرباح:\n\n$e',
         followups: ["المحاولة مرة أخرى", "ملخص المبيعات"],
@@ -982,7 +976,7 @@ class AIChatService {
         status: fixedCount > 0 ? 'success' : 'info',
       );
       
-    } catch (e, stackTrace) {
+    } catch (e) {
       return ChatResponse(
         text: '❌ حدث خطأ أثناء التصحيح التلقائي:\n\n$e',
         followups: ["المحاولة مرة أخرى", "تدقيق الديون"],
@@ -991,50 +985,6 @@ class AIChatService {
     }
   }
 
-  /// تصحيح مجاميع الفواتير (إعادة حساب من البنود + أجور التحميل - الخصم)
-  Future<ChatResponse> _fixInvoiceTotals() async {
-    try {
-      final result = await _dbService.recalculateAllInvoiceTotals();
-      
-      if (result['success']) {
-        final fixed = result['fixed'] as int;
-        final total = result['total_invoices'] as int;
-        final details = result['details'] as List<String>;
-        
-        String message = '✅ تم إعادة حساب $total فاتورة\n\n';
-        
-        if (fixed > 0) {
-          message += '🔧 تم تصحيح $fixed فاتورة:\n\n';
-          for (var detail in details.take(10)) {
-            message += '• $detail\n';
-          }
-          if (details.length > 10) {
-            message += '\n... و ${details.length - 10} فاتورة أخرى';
-          }
-        } else {
-          message += '✅ جميع الفواتير صحيحة!';
-        }
-        
-        return ChatResponse(
-          text: message,
-          followups: ['تدقيق الفواتير', 'كشف الأخطاء'],
-          status: fixed > 0 ? 'success' : 'info',
-        );
-      } else {
-        return ChatResponse(
-          text: '❌ حدث خطأ: ${result['error']}',
-          followups: ['إعادة المحاولة'],
-          status: 'error',
-        );
-      }
-    } catch (e) {
-      return ChatResponse(
-        text: '❌ حدث خطأ أثناء التصحيح: $e',
-        followups: ['إعادة المحاولة'],
-        status: 'error',
-      );
-    }
-  }
 
   /// تصحيح تلقائي لأخطاء الفواتير
   Future<ChatResponse> autoFixInvoiceErrors() async {
@@ -1133,30 +1083,23 @@ class AIChatService {
   Future<ChatResponse> analyzeFinancialPerformance() async {
     final db = await _dbService.database;
     
-    // المبيعات الشهرية
-    final thisMonth = DateTime.now();
-    final lastMonth = DateTime(thisMonth.year, thisMonth.month - 1);
-    
-    final thisMonthSales = await db.rawQuery('''
-      SELECT SUM(total_amount) as total, SUM(total_amount - discount) as profit
-      FROM invoices
-      WHERE strftime('%Y-%m', invoice_date) = ?
-    ''', ['${thisMonth.year}-${thisMonth.month.toString().padLeft(2, '0')}']);
-    
-    final lastMonthSales = await db.rawQuery('''
-      SELECT SUM(total_amount) as total, SUM(total_amount - discount) as profit
-      FROM invoices
-      WHERE strftime('%Y-%m', invoice_date) = ?
-    ''', ['${lastMonth.year}-${lastMonth.month.toString().padLeft(2, '0')}']);
-    
-    final thisTotal = (thisMonthSales.first['total'] as num?)?.toDouble() ?? 0.0;
-    final lastTotal = (lastMonthSales.first['total'] as num?)?.toDouble() ?? 0.0;
-    final thisProfit = (thisMonthSales.first['profit'] as num?)?.toDouble() ?? 0.0;
-    
+    // المبيعات من المحرك الموحّد (كانت: كل الفواتير حتى المحذوفة والمعلّقة،
+    // و«الربح» = المجموع − الخصم وهو ليس ربحاً). الشهر الماضي حتى اليوم نفسه.
+    final rs = ReportsService(db: _dbService);
+    final now = DateTime.now();
+    final thisSum = await rs.getPeriodSummary(startDate: DateTime(now.year, now.month, 1), endDate: now);
+    final lastMonthEnd = DateTime(now.year, now.month, 0);
+    final lastSum = await rs.getPeriodSummary(
+        startDate: DateTime(now.year, now.month - 1, 1),
+        endDate: now.day < lastMonthEnd.day ? DateTime(now.year, now.month - 1, now.day) : lastMonthEnd);
+    final thisTotal = (thisSum['netSales'] as num?)?.toDouble() ?? 0.0;
+    final lastTotal = (lastSum['netSales'] as num?)?.toDouble() ?? 0.0;
+    final thisProfit = (thisSum['netProfit'] as num?)?.toDouble() ?? 0.0;
+
     final growth = lastTotal > 0 ? ((thisTotal - lastTotal) / lastTotal * 100) : 0.0;
     
     // إجمالي الديون
-    final debts = await db.rawQuery('SELECT SUM(current_total_debt) as total FROM customers');
+    final debts = await db.rawQuery('SELECT SUM(current_total_debt) as total FROM customers WHERE COALESCE(is_deleted, 0) = 0');
     final totalDebts = (debts.first['total'] as num?)?.toDouble() ?? 0.0;
     
     // قيمة المخزون
@@ -1169,9 +1112,9 @@ class AIChatService {
     
     return ChatResponse(
       text: "📊 تحليل الأداء المالي\n\n"
-            "🔹 مبيعات هذا الشهر: ${thisTotal.toStringAsFixed(0)} دينار\n"
-            "🔹 الأرباح: ${thisProfit.toStringAsFixed(0)} دينار\n"
-            "🔹 النمو: ${growth >= 0 ? '+' : ''}${growth.toStringAsFixed(1)}%\n\n"
+            "🔹 صافي مبيعات هذا الشهر: ${thisTotal.toStringAsFixed(0)} دينار\n"
+            "🔹 الربح: ${thisProfit.toStringAsFixed(0)} دينار\n"
+            "🔹 النمو عن الشهر الماضي (حتى اليوم نفسه): ${growth >= 0 ? '+' : ''}${growth.toStringAsFixed(1)}%\n\n"
             "💰 إجمالي الديون: ${totalDebts.toStringAsFixed(0)} دينار\n"
             "📦 قيمة المخزون: ${inventoryValue.toStringAsFixed(0)} دينار\n\n"
             "${_getPerformanceInsight(growth, thisProfit, totalDebts)}",
@@ -1420,9 +1363,7 @@ class AIChatService {
           final double productCost = (row['product_cost_price'] as num?)?.toDouble() ?? 0.0;
           final double? lengthPerUnit = (row['length_per_unit'] as num?)?.toDouble();
           final double? actualCostPerUnit = (row['actual_cost_per_unit'] as num?)?.toDouble();
-          final double sellingPrice = (row['selling_price'] as num?)?.toDouble() ?? 0.0;
           final String? unitCostsJson = row['unit_costs'] as String?;
-          final String productName = (row['product_name'] as String?) ?? '';
           
           Map<String, dynamic> unitCosts = const {};
           if (unitCostsJson != null && unitCostsJson.trim().isNotEmpty) {
@@ -1449,7 +1390,7 @@ class AIChatService {
               // حساب من النظام الهرمي
               final bool isMeterRoll = productUnit == 'meter' && lengthPerUnit != null && (saleType == 'لفة');
               costPerSoldUnit = isMeterRoll
-                  ? productCost * (lengthPerUnit ?? 1.0)
+                  ? productCost * lengthPerUnit
                   : productCost * uilu;
             }
           } else {
@@ -1541,7 +1482,7 @@ class AIChatService {
         followups: ['تدقيق الفواتير', 'تقرير الأرباح', 'كشف الأخطاء'],
         status: errors.isNotEmpty ? 'error' : (warnings.isNotEmpty ? 'warning' : 'success'),
       );
-    } catch (e, stackTrace) {
+    } catch (e) {
       return ChatResponse(
         text: 'حدث خطأ أثناء تحليل دقة الأرباح: $e',
         followups: ['إعادة المحاولة'],
@@ -1653,7 +1594,7 @@ class AIChatService {
             } else {
               final bool isMeterRoll = productUnit == 'meter' && lengthPerUnit != null && (saleType == 'لفة');
               if (isMeterRoll) {
-                costPerSoldUnit = productCost * (lengthPerUnit ?? 1.0);
+                costPerSoldUnit = productCost * lengthPerUnit;
               } else if (uilu > 0) {
                 costPerSoldUnit = productCost * uilu;
               } else {
@@ -1745,7 +1686,7 @@ class AIChatService {
         'manualDebtCount': manualDebtTransactions.length + openingBalanceTransactions.length,
         'manualPaymentCount': manualPaymentTransactions.length,
       };
-    } catch (e, stackTrace) {
+    } catch (e) {
       rethrow;
     }
   }
@@ -1851,7 +1792,7 @@ class AIChatService {
             } else {
               final bool isMeterRoll = productUnit == 'meter' && lengthPerUnit != null && (saleType == 'لفة');
               if (isMeterRoll) {
-                costPerSoldUnit = productCost * (lengthPerUnit ?? 1.0);
+                costPerSoldUnit = productCost * lengthPerUnit;
               } else if (uilu > 0) {
                 costPerSoldUnit = productCost * uilu;
               } else {
@@ -1943,7 +1884,7 @@ class AIChatService {
         'manualDebtCount': manualDebtTransactions.length + openingBalanceTransactions.length,
         'manualPaymentCount': manualPaymentTransactions.length,
       };
-    } catch (e, stackTrace) {
+    } catch (e) {
       rethrow;
     }
   }
@@ -2067,7 +2008,7 @@ class AIChatService {
         data: analysisData,
       );
       
-    } catch (e, stackTrace) {
+    } catch (e) {
       return ChatResponse(
         text: '❌ حدث خطأ أثناء التدقيق الذكي:\n\n$e',
         followups: ["إعادة المحاولة", "التدقيق العادي"],
@@ -2297,7 +2238,7 @@ $dataJson
         status: 'success',
       );
       
-    } catch (e, stackTrace) {
+    } catch (e) {
       return ChatResponse(
         text: '❌ حدث خطأ أثناء البحث:\n\n$e',
         followups: ["إعادة المحاولة"],
@@ -2434,7 +2375,6 @@ $dbContext
     );
     
     double monthSales = 0.0;
-    double monthProfit = 0.0; // تقديري
     
     for (var inv in monthlyInvoices) {
       monthSales += (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
@@ -2567,7 +2507,11 @@ $dbContext
         double invReturn = (inv['return_amount'] as num?)?.toDouble() ?? 0.0;
 
         totalSales += total;
-        if (type == 'نقد') cashSales += total; else creditSales += total;
+        if (type == 'نقد') {
+          cashSales += total;
+        } else {
+          creditSales += total;
+        }
         
         if (inv['items_json'] != null) {
            final items = jsonDecode(inv['items_json'] as String) as List;
@@ -2625,7 +2569,11 @@ $dbContext
         double invReturn = (inv['return_amount'] as num?)?.toDouble() ?? 0.0;
 
         totalSales += total;
-        if (type == 'نقد') cashSales += total; else creditSales += total;
+        if (type == 'نقد') {
+          cashSales += total;
+        } else {
+          creditSales += total;
+        }
         
         if (inv['items_json'] != null) {
            final items = jsonDecode(inv['items_json'] as String) as List;

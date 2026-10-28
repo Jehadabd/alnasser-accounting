@@ -1,8 +1,8 @@
 // lib/services/database/sync/sync_operations.dart
 // عمليات المزامنة
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
-import 'dart:convert';
 
 /// خدمة عمليات المزامنة
 class SyncOperations {
@@ -59,7 +59,7 @@ class SyncOperations {
         await db.insert('sync_state', data);
       }
     } catch (e) {
-      print('Error updating sync state: $e');
+      debugPrint('Error updating sync state: $e');
     }
   }
 
@@ -73,7 +73,7 @@ class SyncOperations {
     try {
       return await db.insert('sync_operations', operation);
     } catch (e) {
-      print('Error inserting sync operation: $e');
+      debugPrint('Error inserting sync operation: $e');
       return 0;
     }
   }
@@ -106,7 +106,7 @@ class SyncOperations {
         whereArgs: [operationId],
       );
     } catch (e) {
-      print('Error updating operation status: $e');
+      debugPrint('Error updating operation status: $e');
     }
   }
 
@@ -198,7 +198,7 @@ class SyncOperations {
         'backup_path': backupPath,
       });
     } catch (e) {
-      print('Error inserting sync audit log: $e');
+      debugPrint('Error inserting sync audit log: $e');
       return 0;
     }
   }

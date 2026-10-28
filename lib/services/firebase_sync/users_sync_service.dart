@@ -46,6 +46,8 @@ class UsersSyncService {
     if (!cols.contains('updated_ms')) await db.execute('ALTER TABLE users ADD COLUMN updated_ms INTEGER DEFAULT 0');
     if (!cols.contains('sync_dirty')) await db.execute('ALTER TABLE users ADD COLUMN sync_dirty INTEGER DEFAULT 1');
     if (!cols.contains('display_name')) await db.execute('ALTER TABLE users ADD COLUMN display_name TEXT');
+    if (!cols.contains('job_title')) await db.execute('ALTER TABLE users ADD COLUMN job_title TEXT');
+    if (!cols.contains('monthly_salary')) await db.execute('ALTER TABLE users ADD COLUMN monthly_salary REAL');
     await db.execute('CREATE TABLE IF NOT EXISTS user_sync_tombstones ('
         'sync_uuid TEXT PRIMARY KEY, deleted_ms INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0)');
     _columnsReady = true;
@@ -154,6 +156,8 @@ class UsersSyncService {
           'password_hash': row['password_hash'],
           'role': row['role'],
           'display_name': row['display_name'],
+          'job_title': row['job_title'],
+          'monthly_salary': row['monthly_salary'],
           'permissions': perms,
           'updated_ms': ms,
           'deleted': false,
@@ -226,6 +230,9 @@ class UsersSyncService {
       'password_hash': hash,
       'role': '${d['role'] ?? 'accountant'}',
       'display_name': d['display_name'],
+      // نسخة أقدم من البرنامج لا ترسل المسمى: لا يُمسح المحلي
+      if (d.containsKey('job_title')) 'job_title': d['job_title'],
+      if (d.containsKey('monthly_salary')) 'monthly_salary': (d['monthly_salary'] as num?)?.toDouble(),
       'sync_uuid': uuid,
       'updated_ms': remoteMs,
       'sync_dirty': 0,

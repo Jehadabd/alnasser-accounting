@@ -22,13 +22,13 @@ class ValidationResult {
 
 class FinancialValidationService {
   // الحد الأقصى للمبالغ (مليار دينار)
-  static const double MAX_AMOUNT = 1000000000.0;
+  static const double maxAmount = 1000000000.0;
   
   // الحد الأقصى للكميات
-  static const double MAX_QUANTITY = 1000000.0;
+  static const double maxQuantity = 1000000.0;
   
   // نسبة الخصم القصوى (50%)
-  static const double MAX_DISCOUNT_PERCENTAGE = 0.5;
+  static const double maxDiscountPercentage = 0.5;
 
   /// التحقق من صحة المبلغ
   static ValidationResult validateAmount(double amount, {String fieldName = 'المبلغ'}) {
@@ -38,8 +38,8 @@ class FinancialValidationService {
     if (amount == 0) {
       return ValidationResult.error('$fieldName يجب أن يكون أكبر من صفر');
     }
-    if (amount > MAX_AMOUNT) {
-      return ValidationResult.error('$fieldName أكبر من الحد المسموح به (${_formatNumber(MAX_AMOUNT)} دينار)');
+    if (amount > maxAmount) {
+      return ValidationResult.error('$fieldName أكبر من الحد المسموح به (${_formatNumber(maxAmount)} دينار)');
     }
     return ValidationResult.success();
   }
@@ -52,8 +52,8 @@ class FinancialValidationService {
     if (quantity == 0) {
       return ValidationResult.error('$fieldName يجب أن تكون أكبر من صفر');
     }
-    if (quantity > MAX_QUANTITY) {
-      return ValidationResult.error('$fieldName أكبر من الحد المسموح به (${_formatNumber(MAX_QUANTITY)})');
+    if (quantity > maxQuantity) {
+      return ValidationResult.error('$fieldName أكبر من الحد المسموح به (${_formatNumber(maxQuantity)})');
     }
     return ValidationResult.success();
   }
@@ -70,9 +70,9 @@ class FinancialValidationService {
     }
     
     final discountPercentage = totalAmount > 0 ? (discount / totalAmount) : 0;
-    if (discountPercentage > MAX_DISCOUNT_PERCENTAGE) {
+    if (discountPercentage > maxDiscountPercentage) {
       return ValidationResult.error(
-        'الخصم (${(discountPercentage * 100).toStringAsFixed(1)}%) يتجاوز الحد الأقصى المسموح به (${(MAX_DISCOUNT_PERCENTAGE * 100).toStringAsFixed(0)}%)'
+        'الخصم (${(discountPercentage * 100).toStringAsFixed(1)}%) يتجاوز الحد الأقصى المسموح به (${(maxDiscountPercentage * 100).toStringAsFixed(0)}%)'
       );
     }
     
@@ -120,7 +120,7 @@ class FinancialValidationService {
     if (loadingFee < 0) {
       return ValidationResult.error('أجور التحميل لا يمكن أن تكون سالبة');
     }
-    if (loadingFee > MAX_AMOUNT) {
+    if (loadingFee > maxAmount) {
       return ValidationResult.error('أجور التحميل أكبر من الحد المسموح به');
     }
     return ValidationResult.success();
@@ -134,7 +134,7 @@ class FinancialValidationService {
     if (price == 0) {
       return ValidationResult.warning('$fieldName يساوي صفر - تأكد من صحة البيانات');
     }
-    if (price > MAX_AMOUNT) {
+    if (price > maxAmount) {
       return ValidationResult.error('$fieldName أكبر من الحد المسموح به');
     }
     return ValidationResult.success();

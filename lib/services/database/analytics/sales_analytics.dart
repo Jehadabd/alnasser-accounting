@@ -1,4 +1,5 @@
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import '../../../models/monthly_overview.dart'; 
 // Assuming path to MonthlyOverview
@@ -324,7 +325,7 @@ class SalesAnalytics {
             );
         }
     } catch (e) {
-        print('Error getting monthly summary: $e');
+        debugPrint('Error getting monthly summary: $e');
     }
     
     return summary;

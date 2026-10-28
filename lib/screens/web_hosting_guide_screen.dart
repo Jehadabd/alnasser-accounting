@@ -200,9 +200,9 @@ pause
           targetDir ??= await getApplicationDocumentsDirectory();
         }
 
-        final outDir = targetDir?.path ?? (Platform.isWindows ? 'C:\\' : '/sdcard/Download');
+        final outDir = targetDir.path;
         final zipFilePath = '$outDir${separator}web_app.zip';
-        final batFilePath = '$outDir${separator}تجهيز_ورفع_الويب_تلقائياً.bat';
+        final batFilePath = '$outDir$separatorتجهيز_ورفع_الويب_تلقائياً.bat';
 
         final buildWebDir = Directory(p.join('build', 'web'));
         bool usedLiveBuild = false;
@@ -397,7 +397,7 @@ pause
     }
 
     // توليد ملف firebase.json الصحيح لـ Flutter Web
-    final hostingConfig = '''{
+    const hostingConfig = '''{
   "hosting": {
     "public": ".",
     "ignore": [
@@ -760,7 +760,7 @@ pause
         duration: const Duration(milliseconds: 250),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.white : Colors.white.withOpacity(0.88),
+          color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.88),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isSelected ? const Color(0xFF0D47A1) : Colors.grey.shade300,
@@ -768,7 +768,7 @@ pause
           ),
           boxShadow: [
             BoxShadow(
-              color: isSelected ? const Color(0xFF0D47A1).withOpacity(0.12) : Colors.black.withOpacity(0.03),
+              color: isSelected ? const Color(0xFF0D47A1).withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.03),
               blurRadius: isSelected ? 12 : 6,
               offset: const Offset(0, 4),
             ),
@@ -780,7 +780,7 @@ pause
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.15),
+                color: iconColor.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(icon, color: iconColor, size: 28),
@@ -805,7 +805,7 @@ pause
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: badgeColor.withOpacity(0.12),
+                          color: badgeColor.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
@@ -1332,7 +1332,7 @@ pause
                         boxShadow: isCurrent
                             ? [
                                 BoxShadow(
-                                  color: Colors.orange.withOpacity(0.4),
+                                  color: Colors.orange.withValues(alpha: 0.4),
                                   blurRadius: 8,
                                   spreadRadius: 2,
                                 )
@@ -1487,7 +1487,7 @@ pause
         border: Border.all(color: const Color(0xFF334155)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.15),
+            color: Colors.black.withValues(alpha: 0.15),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1787,7 +1787,7 @@ pause
         border: Border.all(color: Colors.grey.shade300),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1945,7 +1945,7 @@ pause
       color: Colors.blue.shade50,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: const Padding(
-        padding: const EdgeInsets.all(14),
+        padding: EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -2023,7 +2023,7 @@ pause
                       width: 28,
                       height: 28,
                       decoration: BoxDecoration(
-                        color: stepColor.withOpacity(0.12),
+                        color: stepColor.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(step.icon, color: stepColor, size: 16),
@@ -2063,7 +2063,7 @@ pause
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withValues(alpha: 0.08),
             blurRadius: 10,
             offset: const Offset(0, -3),
           ),

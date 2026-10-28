@@ -2,6 +2,7 @@
 // 🔒 نظام مراقبة المزامنة الاحتياطي (Safety Net)
 // يعمل بالتوازي مع النظام الرئيسي لضمان عدم فقدان أي عملية
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import '../database_service.dart';
 import 'firebase_sync_helper.dart';
@@ -50,7 +51,7 @@ class SyncWatchdog {
   }) async {
     _syncHelper = syncHelper;
     _coordinator = coordinator;
-    print('🛡️ SyncWatchdog: تم التهيئة');
+    debugPrint('🛡️ SyncWatchdog: تم التهيئة');
   }
   
   /// 🛡️ التحقق مما إذا كانت عملية الإصلاح جارية
@@ -62,12 +63,12 @@ class SyncWatchdog {
   /// بدء المراقبة الدورية
   void start({Duration interval = const Duration(seconds: 30)}) {
     if (_isRunning) {
-      print('🛡️ SyncWatchdog: المراقبة تعمل بالفعل');
+      debugPrint('🛡️ SyncWatchdog: المراقبة تعمل بالفعل');
       return;
     }
     
     _isRunning = true;
-    print('🛡️ SyncWatchdog: بدء المراقبة (كل ${interval.inSeconds} ثانية)');
+    debugPrint('🛡️ SyncWatchdog: بدء المراقبة (كل ${interval.inSeconds} ثانية)');
     
     // تشغيل فوري عند البدء
     _runWatchdogCycle();
@@ -83,7 +84,7 @@ class SyncWatchdog {
     _watchdogTimer?.cancel();
     _watchdogTimer = null;
     _isRunning = false;
-    print('🛡️ SyncWatchdog: تم إيقاف المراقبة');
+    debugPrint('🛡️ SyncWatchdog: تم إيقاف المراقبة');
   }
   
   /// ═══════════════════════════════════════════════════════════════════════
@@ -93,13 +94,13 @@ class SyncWatchdog {
   /// 🔒 إيقاف مؤقت (يُستخدم أثناء الرفع الشامل)
   void pause() {
     _isPaused = true;
-    print('🛡️ SyncWatchdog: ⏸️ تم الإيقاف المؤقت');
+    debugPrint('🛡️ SyncWatchdog: ⏸️ تم الإيقاف المؤقت');
   }
   
   /// 🔒 استئناف بعد الإيقاف المؤقت
   void resume() {
     _isPaused = false;
-    print('🛡️ SyncWatchdog: ▶️ تم الاستئناف');
+    debugPrint('🛡️ SyncWatchdog: ▶️ تم الاستئناف');
   }
   
   Future<void> _runWatchdogCycle() async {
@@ -126,7 +127,7 @@ class SyncWatchdog {
     _lastRunErrors = 0;
     
     try {
-      print('🛡️ SyncWatchdog: بدء دورة المراقبة...');
+      debugPrint('🛡️ SyncWatchdog: بدء دورة المراقبة...');
       
       // 1. مزامنة العملاء غير المرفوعين
       await _syncPendingCustomers();
@@ -140,11 +141,11 @@ class SyncWatchdog {
       _lastRunTime = DateTime.now();
       
       if (_customersSynced > 0 || _transactionsSynced > 0) {
-        print('🛡️ SyncWatchdog: ✅ تم رفع $_customersSynced عميل و $_transactionsSynced معاملة');
+        debugPrint('🛡️ SyncWatchdog: ✅ تم رفع $_customersSynced عميل و $_transactionsSynced معاملة');
       }
       
     } catch (e) {
-      print('🛡️ SyncWatchdog: ❌ خطأ في دورة المراقبة: $e');
+      debugPrint('🛡️ SyncWatchdog: ❌ خطأ في دورة المراقبة: $e');
       _lastRunErrors++;
     } finally {
       _isProcessing = false;
@@ -177,7 +178,7 @@ class SyncWatchdog {
       
       if (pendingCustomers.isEmpty) return;
       
-      print('🛡️ SyncWatchdog: وجد ${pendingCustomers.length} عميل غير مرفوع');
+      debugPrint('🛡️ SyncWatchdog: وجد ${pendingCustomers.length} عميل غير مرفوع');
       
       for (final customerData in pendingCustomers) {
         // 🛡️ فحص إذا كانت عملية إصلاح أو رفع شامل جارية
@@ -194,7 +195,7 @@ class SyncWatchdog {
         }
       }
     } catch (e) {
-      print('🛡️ SyncWatchdog: خطأ في جلب العملاء: $e');
+      debugPrint('🛡️ SyncWatchdog: خطأ في جلب العملاء: $e');
     }
   }
   
@@ -212,7 +213,7 @@ class SyncWatchdog {
       final n = await FirebaseSyncService().uploadAllOwnedPending(limit: 200);
       _transactionsSynced += n;
     } catch (e) {
-      print('🛡️ SyncWatchdog: خطأ في رفع المعاملات المعلّقة: $e');
+      debugPrint('🛡️ SyncWatchdog: خطأ في رفع المعاملات المعلّقة: $e');
     }
   }
 
@@ -243,11 +244,10 @@ class SyncWatchdog {
       
       if (pendingTransactions.isEmpty) return;
       
-      print('🛡️ SyncWatchdog: وجد ${pendingTransactions.length} معاملة غير مرفوعة');
+      debugPrint('🛡️ SyncWatchdog: وجد ${pendingTransactions.length} معاملة غير مرفوعة');
       
       for (final txData in pendingTransactions) {
         try {
-          final syncUuid = txData['transaction_uuid'] as String;
           final customerSyncUuid = txData['customer_sync_uuid'] as String?;
 
           if (customerSyncUuid == null || customerSyncUuid.isEmpty) {
@@ -268,7 +268,7 @@ class SyncWatchdog {
         }
       }
     } catch (e) {
-      print('🛡️ SyncWatchdog: خطأ في جلب المعاملات: $e');
+      debugPrint('🛡️ SyncWatchdog: خطأ في جلب المعاملات: $e');
     }
   }
   
@@ -340,7 +340,7 @@ class SyncWatchdog {
         'pending_transactions': (transactionCount.first['count'] as int?) ?? 0,
       };
     } catch (e) {
-      print('🛡️ SyncWatchdog: خطأ في جلب العدد: $e');
+      debugPrint('🛡️ SyncWatchdog: خطأ في جلب العدد: $e');
       return {'pending_customers': -1, 'pending_transactions': -1};
     }
   }

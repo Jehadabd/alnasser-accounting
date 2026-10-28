@@ -1,6 +1,7 @@
 // lib/services/smart_search/smart_search_trainer.dart
 // خدمة التدريب على الفواتير السابقة
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../database_service.dart';
 import 'smart_search_db.dart';
 import 'smart_search_models.dart';
@@ -25,7 +26,7 @@ class SmartSearchTrainer {
   Future<void> _buildProductCache() async {
     if (_productNameToIdCache != null) return;
     
-    print('📦 بناء كاش المنتجات...');
+    debugPrint('📦 بناء كاش المنتجات...');
     final products = await _mainDb.getAllProducts();
     _productNameToIdCache = {};
     for (final product in products) {
@@ -33,7 +34,7 @@ class SmartSearchTrainer {
         _productNameToIdCache![product.name.toLowerCase().trim()] = product.id!;
       }
     }
-    print('✅ تم بناء كاش ${_productNameToIdCache!.length} منتج');
+    debugPrint('✅ تم بناء كاش ${_productNameToIdCache!.length} منتج');
   }
 
   /// الحصول على productId من الاسم (مع كاش)
@@ -47,7 +48,7 @@ class SmartSearchTrainer {
     Function(int current, int total, String message)? onProgress,
   }) async {
     final startTime = DateTime.now();
-    print('🚀 بدء التدريب على جميع الفواتير...');
+    debugPrint('🚀 بدء التدريب على جميع الفواتير...');
 
     // مسح البيانات القديمة
     await _smartDb.clearAllData();
@@ -63,7 +64,7 @@ class SmartSearchTrainer {
     onProgress?.call(0, 0, 'جاري جلب الفواتير...');
     final invoices = await _mainDb.getAllInvoices();
     final totalInvoices = invoices.length;
-    print('📊 عدد الفواتير: $totalInvoices');
+    debugPrint('📊 عدد الفواتير: $totalInvoices');
 
     int processedInvoices = 0;
     int totalItems = 0;
@@ -77,7 +78,7 @@ class SmartSearchTrainer {
       if (processedInvoices % 50 == 0) {
         onProgress?.call(processedInvoices, totalInvoices, 
           'معالجة الفاتورة $processedInvoices من $totalInvoices...');
-        print('📝 معالجة الفاتورة $processedInvoices من $totalInvoices');
+        debugPrint('📝 معالجة الفاتورة $processedInvoices من $totalInvoices');
       }
 
       // جلب أصناف الفاتورة
@@ -166,13 +167,13 @@ class SmartSearchTrainer {
 
     // تحديث القوة والنسب
     onProgress?.call(totalInvoices, totalInvoices, 'جاري حساب القوة والنسب...');
-    print('📊 تحديث قوة العلاقات...');
+    debugPrint('📊 تحديث قوة العلاقات...');
     await _smartDb.updateAssociationStrengths();
     
-    print('📊 تحديث نسب تفضيلات العملاء...');
+    debugPrint('📊 تحديث نسب تفضيلات العملاء...');
     await _smartDb.updateCustomerPreferencePercentages();
     
-    print('📊 تحديث نسب تفضيلات المُركّبين...');
+    debugPrint('📊 تحديث نسب تفضيلات المُركّبين...');
     await _smartDb.updateInstallerPreferencePercentages();
 
     // حساب الإحصائيات
@@ -213,16 +214,16 @@ class SmartSearchTrainer {
     // مسح الكاش
     _productNameToIdCache = null;
 
-    print('✅ اكتمل التدريب!');
-    print('📊 علاقات تم بناؤها: $totalAssociationsBuilt');
-    print(stats.toString());
+    debugPrint('✅ اكتمل التدريب!');
+    debugPrint('📊 علاقات تم بناؤها: $totalAssociationsBuilt');
+    debugPrint(stats.toString());
 
     return stats;
   }
   
   /// 🆕 اكتشاف الماركات تلقائياً من أسماء المنتجات
   Future<void> _discoverBrandsFromProducts() async {
-    print('🔍 اكتشاف الماركات تلقائياً من المنتجات...');
+    debugPrint('🔍 اكتشاف الماركات تلقائياً من المنتجات...');
     
     final products = await _mainDb.getAllProducts();
     
@@ -246,12 +247,12 @@ class SmartSearchTrainer {
       }
     }
     
-    print('🏷️ تم اكتشاف ${discoveredBrands.length} ماركة تلقائياً:');
+    debugPrint('🏷️ تم اكتشاف ${discoveredBrands.length} ماركة تلقائياً:');
     for (final brand in discoveredBrands.take(20)) {
-      print('   - $brand (${lastWordCounts[brand]} منتج)');
+      debugPrint('   - $brand (${lastWordCounts[brand]} منتج)');
     }
     if (discoveredBrands.length > 20) {
-      print('   ... و ${discoveredBrands.length - 20} ماركة أخرى');
+      debugPrint('   ... و ${discoveredBrands.length - 20} ماركة أخرى');
     }
     
     // تحديث SessionContext
@@ -260,17 +261,17 @@ class SmartSearchTrainer {
 
   /// التدريب على فاتورة واحدة جديدة (تعلم تدريجي)
   Future<void> trainOnSingleInvoice(int invoiceId) async {
-    print('📝 تدريب على الفاتورة: $invoiceId');
+    debugPrint('📝 تدريب على الفاتورة: $invoiceId');
 
     final invoice = await _mainDb.getInvoiceById(invoiceId);
     if (invoice == null) {
-      print('⚠️ الفاتورة غير موجودة: $invoiceId');
+      debugPrint('⚠️ الفاتورة غير موجودة: $invoiceId');
       return;
     }
 
     final items = await _mainDb.getInvoiceItems(invoiceId);
     if (items.isEmpty) {
-      print('⚠️ الفاتورة فارغة: $invoiceId');
+      debugPrint('⚠️ الفاتورة فارغة: $invoiceId');
       return;
     }
 
@@ -341,9 +342,9 @@ class SmartSearchTrainer {
     }
     
     // 🆕 تنفيذ صيانة دورية خفيفة جداً لحذف العلاقات الميتة منذ سنة
-    _smartDb.cleanUpOldData().catchError((e) => print('⚠️ Error in cleanup: $e'));
+    _smartDb.cleanUpOldData().catchError((e) => debugPrint('⚠️ Error in cleanup: $e'));
 
-    print('✅ تم التدريب على الفاتورة: $invoiceId');
+    debugPrint('✅ تم التدريب على الفاتورة: $invoiceId');
   }
 
   /// جلب إحصائيات آخر تدريب

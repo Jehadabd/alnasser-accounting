@@ -39,6 +39,7 @@
 //     دفعة أخرى بالطلب الحالي.
 //   • وثائق الكشف لا تُحذف عند أول رد: أجهزة أخرى قد لم تقرأه بعد. تُحذف بعد 24 ساعة.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -49,6 +50,7 @@ import 'firebase_sync_config.dart';
 import 'firebase_sync_service.dart';
 import '../database_service.dart';
 import '../database/business/customer_visibility.dart';
+import '../database/business/customer_name_rule.dart'; // 🛡️ الحساب المدموج يتبع الباقي
 import '../database/core/database_helpers.dart';
 import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 
@@ -144,7 +146,7 @@ class ArmoredReconciliationService {
   final _statusController = StreamController<String>.broadcast();
   Stream<String> get statusStream => _statusController.stream;
   void _emit(String msg) {
-    print('🛡️ مطابقة: $msg');
+    debugPrint('🛡️ مطابقة: $msg');
     _statusController.add(msg);
   }
 
@@ -193,17 +195,17 @@ class ArmoredReconciliationService {
           try {
             await _handleRequestAsPeer(change.doc.id, data, myId);
           } catch (e) {
-            print('❌ فشل معالجة طلب مطابقة وارد ${change.doc.id}: $e');
+            debugPrint('❌ فشل معالجة طلب مطابقة وارد ${change.doc.id}: $e');
           }
         }
       },
-      onError: (e) => print('❌ خطأ استماع طلبات المطابقة: $e'),
+      onError: (e) => debugPrint('❌ خطأ استماع طلبات المطابقة: $e'),
     );
 
     _cleanupTimer ??=
         Timer.periodic(const Duration(minutes: 30), (_) => _cleanupStaleDocs());
 
-    print('🛡️ الاستماع لطلبات المطابقة المحصّنة فعّال');
+    debugPrint('🛡️ الاستماع لطلبات المطابقة المحصّنة فعّال');
   }
 
   Future<void> stopListening() async {
@@ -342,7 +344,7 @@ class ArmoredReconciliationService {
         }
       },
       onError: (e) {
-        print('❌ خطأ استماع طلب truth_pull: $e');
+        debugPrint('❌ خطأ استماع طلب truth_pull: $e');
       },
     );
 
@@ -444,7 +446,7 @@ class ArmoredReconciliationService {
     final custRows = await db.query('customers',
         where: 'sync_uuid = ?', whereArgs: [customerSyncUuid], limit: 1);
     if (custRows.isEmpty) {
-      print('🛡️🔍 [بناء الكشف] العميل $customerSyncUuid غير موجود محلياً!');
+      debugPrint('🛡️🔍 [بناء الكشف] العميل $customerSyncUuid غير موجود محلياً!');
       return null;
     }
     final cust = custRows.first;
@@ -462,7 +464,7 @@ class ArmoredReconciliationService {
     }
     final storedBalance = (cust['current_total_debt'] as num?)?.toDouble() ?? 0.0;
     if ((txSum - storedBalance).abs() > _balanceTolerance) {
-      print('🛡️⚠️ [بناء الكشف] مجموع المعاملات ($txSum) ≠ الرصيد المخزّن '
+      debugPrint('🛡️⚠️ [بناء الكشف] مجموع المعاملات ($txSum) ≠ الرصيد المخزّن '
           '($storedBalance) — المرجع هو المجموع');
     }
 
@@ -490,7 +492,7 @@ class ArmoredReconciliationService {
       outTxs.add(m);
     }
     if (backfilled > 0) {
-      print('🛡️🔍 [بناء الكشف] عُبّئ UUID لـ $backfilled معاملة قديمة كانت بلا هوية');
+      debugPrint('🛡️🔍 [بناء الكشف] عُبّئ UUID لـ $backfilled معاملة قديمة كانت بلا هوية');
     }
 
     return {
@@ -541,7 +543,7 @@ class ArmoredReconciliationService {
     header['chunks'] = chunks.length;
     header['builtAt'] = FieldValue.serverTimestamp();
     await _firestore.collection(_dataCol).doc(customerSyncUuid).set(header);
-    print('🛡️📤 [الكشف] كُتب ${txs.length} معاملة في ${chunks.length} جزء');
+    debugPrint('🛡️📤 [الكشف] كُتب ${txs.length} معاملة في ${chunks.length} جزء');
   }
 
   /// يقرأ الكشف كاملاً ويتحقق أن كل أجزائه من نفس الطلب. null إن لم يكتمل.
@@ -590,7 +592,7 @@ class ArmoredReconciliationService {
     _lastKeptCount = 0;
     final db = await _db.database;
     final txs = (ledger['transactions'] as List?) ?? const [];
-    print('🛡️📥 [تطبيق كشف] العميل ${ledger['customerName']} | واردة=${txs.length}');
+    debugPrint('🛡️📥 [تطبيق كشف] العميل ${ledger['customerName']} | واردة=${txs.length}');
 
     final customerId = await _resolveCustomer(db, ledger);
     if (customerId == null) return 0;
@@ -726,7 +728,7 @@ class ArmoredReconciliationService {
       _archiveDeletedTransactions(voided, ledger['customerName']?.toString());
     }
 
-    print('🛡️📥 [تطبيق كشف] أُضيف=$applied | أُبطل=${voided.length} | '
+    debugPrint('🛡️📥 [تطبيق كشف] أُضيف=$applied | أُبطل=${voided.length} | '
         'أُبقي بدليل=$_lastKeptCount | صِين من إنشائي=$_lastPreservedCount');
     return applied;
   }
@@ -761,7 +763,7 @@ class ArmoredReconciliationService {
       return acks.docs.isNotEmpty;
     } catch (e) {
       // تعذّر التحقق = لا إبطال
-      print('🛡️ [تطبيق كشف] تعذّر التحقق من $tu ($e) — أُبقيت');
+      debugPrint('🛡️ [تطبيق كشف] تعذّر التحقق من $tu ($e) — أُبقيت');
       return true;
     }
   }
@@ -770,9 +772,8 @@ class ArmoredReconciliationService {
   /// كان يسرق هوية عميل آخر يحمل نفس الاسم فتختلط ديونهما.
   Future<int?> _resolveCustomer(Database db, Map<String, dynamic> ledger) async {
     final customerSyncUuid = ledger['customerSyncUuid'] as String;
-    final rows = await db.query('customers',
-        columns: ['id'], where: 'sync_uuid = ?', whereArgs: [customerSyncUuid], limit: 1);
-    if (rows.isNotEmpty) return rows.first['id'] as int;
+    final found = await CustomerNameRule.byUuidResolved(db, customerSyncUuid, columns: ['id']);
+    if (found != null) return found['id'] as int;
 
     final name = (ledger['customerName'] as String?) ?? 'عميل مطابقة';
     final normName = DatabaseHelpers.normalizeArabic(name);
@@ -851,9 +852,9 @@ class ArmoredReconciliationService {
     }
 
     batch.commit().then((_) {
-      print('🛡️📤 [أرشفة] تمت أرشفة ${rows.length} معاملة مُبطلة في فايربيز');
+      debugPrint('🛡️📤 [أرشفة] تمت أرشفة ${rows.length} معاملة مُبطلة في فايربيز');
     }).catchError((e) {
-      print('🛡️⚠️ [أرشفة] خطأ أثناء أرشفة المعاملات المُبطلة: $e');
+      debugPrint('🛡️⚠️ [أرشفة] خطأ أثناء أرشفة المعاملات المُبطلة: $e');
     });
   }
 
@@ -910,7 +911,7 @@ class ArmoredReconciliationService {
         return;
       }
     }, onError: (e) {
-      print('🛡️❌ [انتظار] خطأ استماع نتائج المطابقة: $e');
+      debugPrint('🛡️❌ [انتظار] خطأ استماع نتائج المطابقة: $e');
     });
 
     timeout = Timer(_responseTimeout, () async {

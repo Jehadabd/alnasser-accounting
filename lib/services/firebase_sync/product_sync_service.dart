@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:convert';
 
@@ -9,7 +10,6 @@ import '../database/business/stock_ledger.dart';
 import 'firebase_sync_config.dart';
 import 'sync_health.dart';
 import 'uuid_helper.dart';
-import '../../models/product.dart';
 import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
 
 class ProductSyncService {
@@ -68,7 +68,7 @@ class ProductSyncService {
         await uploadProductNow(uuid, productData: Map<String, dynamic>.from(p)..['sync_uuid'] = uuid);
       }
     } catch (e) {
-      print('ProductSyncService - Error syncing pending products: $e');
+      debugPrint('ProductSyncService - Error syncing pending products: $e');
     }
     await uploadPendingCopies();
   }
@@ -105,17 +105,17 @@ class ProductSyncService {
           await db.update('product_uuid_alias', {'pending_doc': null},
               where: 'old_uuid = ?', whereArgs: [uuid]);
         } catch (e) {
-          print('⚠️ [ProductSyncService] تعذّر رفع النسخة المدموجة $uuid: $e (يُعاد لاحقاً)');
+          debugPrint('⚠️ [ProductSyncService] تعذّر رفع النسخة المدموجة $uuid: $e (يُعاد لاحقاً)');
         }
       }
     } catch (e) {
-      print('⚠️ [ProductSyncService] النسخ المدموجة: $e');
+      debugPrint('⚠️ [ProductSyncService] النسخ المدموجة: $e');
     }
   }
 
   Future<void> downloadAllProducts() async {
     try {
-      print('📦 [ProductSyncService] جاري تنزيل المنتجات من السحابة...');
+      debugPrint('📦 [ProductSyncService] جاري تنزيل المنتجات من السحابة...');
       final snapshot = await _firestore.collection('products').get();
       for (var doc in snapshot.docs) {
         final data = doc.data();
@@ -123,7 +123,7 @@ class ProductSyncService {
           await _processIncomingProduct(data);
         }
       }
-      print('✅ [ProductSyncService] اكتمل جلب المنتجات: ${snapshot.docs.length} منتج');
+      debugPrint('✅ [ProductSyncService] اكتمل جلب المنتجات: ${snapshot.docs.length} منتج');
       // القائمة كاملة من السيرفر: ما عندي وغاب منها يُعاد (بلا قراءة إضافية)
       if (!snapshot.metadata.isFromCache) {
         unawaited(rebroadcastMissingProducts(
@@ -131,7 +131,7 @@ class ProductSyncService {
             .catchError((_) => 0));
       }
     } catch (e) {
-      print('❌ [ProductSyncService] خطأ أثناء تنزيل المنتجات: $e');
+      debugPrint('❌ [ProductSyncService] خطأ أثناء تنزيل المنتجات: $e');
     }
   }
 
@@ -170,11 +170,11 @@ class ProductSyncService {
         }).timeout(const Duration(seconds: 30));
         if (created) n++;
       } catch (e) {
-        print('⚠️ [ProductSyncService] إعادة إنشاء الصنف $uuid: $e');
+        debugPrint('⚠️ [ProductSyncService] إعادة إنشاء الصنف $uuid: $e');
       }
       onTick?.call();
     }
-    if (n > 0) print('📦 [ProductSyncService] أُعيد إنشاء $n مستند صنف غاب من السحابة');
+    if (n > 0) debugPrint('📦 [ProductSyncService] أُعيد إنشاء $n مستند صنف غاب من السحابة');
     return n;
   }
 
@@ -241,7 +241,7 @@ class ProductSyncService {
         productData = res.first;
       }
 
-      final payload = await _productPayload(syncUuid, productData!);
+      final payload = await _productPayload(syncUuid, productData);
 
       await _firestore
           .collection('products')
@@ -251,10 +251,10 @@ class ProductSyncService {
       SyncHealth.reportUploadOk('products');
 
       await db.update('products', {'last_synced_at': DateTime.now().toIso8601String()}, where: 'sync_uuid = ?', whereArgs: [syncUuid]);
-      print('📦 [ProductSyncService] تم رفع المنتج بنجاح: ${payload['name']} ($syncUuid)');
+      debugPrint('📦 [ProductSyncService] تم رفع المنتج بنجاح: ${payload['name']} ($syncUuid)');
     } catch (e) {
       SyncHealth.reportUploadError('products', e);
-      print('ProductSyncService - Error uploading product $syncUuid: $e');
+      debugPrint('ProductSyncService - Error uploading product $syncUuid: $e');
     }
   }
 
@@ -334,7 +334,7 @@ class ProductSyncService {
         HAVING COUNT(*) > 1''');
       SyncHealth.setLocalDuplicates([for (final r in rows) (r['n'] ?? '').toString()]);
     } catch (e) {
-      print('⚠️ [ProductSyncService] فحص الأسماء المكررة: $e');
+      debugPrint('⚠️ [ProductSyncService] فحص الأسماء المكررة: $e');
     }
   }
 
@@ -444,7 +444,7 @@ class ProductSyncService {
             'description': categoryDescription,
           });
           localData['category_id'] = newCatId;
-          print('📁 [ProductSyncService] تم إنشاء قسم جديد تلقائياً للجهاز الآخر: $trimmedCatName (ID: $newCatId)');
+          debugPrint('📁 [ProductSyncService] تم إنشاء قسم جديد تلقائياً للجهاز الآخر: $trimmedCatName (ID: $newCatId)');
         }
       }
 
@@ -481,7 +481,7 @@ class ProductSyncService {
         });
         if (unsentCopy) unawaited(uploadPendingCopies());
         if (merged) await _noticeMerge(oldUuid, existing.first, data);
-        print('📦 [ProductSyncService] تم تحديث منتج محلي بالاسم/UUID: ${localData['name']} (ID: $localProductId)');
+        debugPrint('📦 [ProductSyncService] تم تحديث منتج محلي بالاسم/UUID: ${localData['name']} (ID: $localProductId)');
       } else {
         localProductId = await db.transaction((txn) async {
           final id = await txn.insert('products', localData);
@@ -493,7 +493,7 @@ class ProductSyncService {
           await StockLedger.ensureOpenings(txn, onlyUuid: syncUuid, upload: false);
           return id;
         });
-        print('📦 [ProductSyncService] تم إضافة منتج جديد من السحابة: ${localData['name']} (سعر: ${localData['unit_price'] ?? localData['price1']}, كمية: ${localData['stock_quantity']})');
+        debugPrint('📦 [ProductSyncService] تم إضافة منتج جديد من السحابة: ${localData['name']} (سعر: ${localData['unit_price'] ?? localData['price1']}, كمية: ${localData['stock_quantity']})');
       }
       
       // 🗂️ بطاقة المادة الموسّعة: دمج مع الحقول المحلية (لا تمس الكمية ولا الأسعار)
@@ -516,13 +516,13 @@ class ProductSyncService {
                 'is_default': b['is_default'] ?? 0,
               });
             } catch (e) {
-              print('Error inserting synced barcode: $e');
+              debugPrint('Error inserting synced barcode: $e');
             }
           }
         }
       }
     } catch (e) {
-      print('ProductSyncService - Error processing incoming product: $e');
+      debugPrint('ProductSyncService - Error processing incoming product: $e');
     }
   }
 
@@ -552,7 +552,7 @@ class ProductSyncService {
       }
       await db.insert('product_details', row, conflictAlgorithm: ConflictAlgorithm.replace);
     } catch (e) {
-      print('ProductSyncService - item details merge skipped: $e');
+      debugPrint('ProductSyncService - item details merge skipped: $e');
     }
   }
 }

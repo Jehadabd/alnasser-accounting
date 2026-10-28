@@ -29,6 +29,7 @@ import '../org/org_service.dart';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
 import 'item_card_editor_screen.dart';
+import 'product_delete.dart';
 
 const Map<String, String> itemTypeLabels = {
   'trade': 'للمتاجرة',
@@ -72,10 +73,14 @@ class ItemCardService {
       case 'nocode':
         where.add("(d.item_code IS NULL OR d.item_code = '')");
         break;
+      case 'noprice':
+        where.add('COALESCE(p.price1, 0) <= 0');
+        break;
     }
     if (!AuthService().isAdmin) where.add("COALESCE(d.min_role, '') != 'admin'");
     return db.rawQuery('''
-      SELECT p.id, p.name, p.unit, p.stock_quantity, p.unit_price, p.cost_price, p.category_id,
+      SELECT p.id, p.name, p.unit, p.stock_quantity,
+             CASE WHEN p.price1 > 0 THEN p.price1 ELSE p.unit_price END AS unit_price, p.price4, p.cost_price, p.category_id,
              d.item_code, d.brand, d.item_type, d.min_qty, d.is_active, c.name AS category_name
       FROM products p LEFT JOIN product_details d ON d.product_id = p.id
       LEFT JOIN categories c ON c.id = p.category_id
@@ -246,6 +251,9 @@ class ItemCardsListScreen extends StatefulWidget {
   State<ItemCardsListScreen> createState() => _ItemCardsListScreenState();
 }
 
+/// 📋 قائمة المواد الموحّدة (كانت «بطاقات المواد» و«تعديل المواد وحذفها»):
+/// بحث، فلاتر سريعة، أقسام، ترتيب، جدول على الشاشة العريضة وبطاقات على الصغيرة،
+/// وفتح المادة بنفس شاشة الإدخال أو حذفها.
 class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
   final _svc = ItemCardService();
   List<Map<String, Object?>> _rows = const [];
@@ -253,7 +261,25 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
   String _q = '';
   int? _cat;
   String? _filter;
+  String _sort = 'name';
+  bool _loading = true;
   int _seq = 0;
+
+  static const _filters = <String?, String>{
+    null: 'الكل',
+    'noprice': 'بلا سعر',
+    'zero': 'نفدت',
+    'low': 'تحت الحد الأدنى',
+    'inactive': 'موقوفة',
+    'service': 'خدمات',
+    'nocode': 'بلا رمز',
+  };
+  static const _sorts = <String, String>{
+    'name': 'الاسم',
+    'price_desc': 'الأغلى',
+    'price_asc': 'الأرخص',
+    'stock_asc': 'الأقل مخزوناً',
+  };
 
   @override
   void initState() {
@@ -267,27 +293,65 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
   Future<void> _load() async {
     final my = ++_seq;
     final r = await _svc.search(_q, categoryId: _cat, filter: _filter);
-    if (mounted && my == _seq) setState(() => _rows = r);
+    if (!mounted || my != _seq) return;
+    final rows = [...r];
+    switch (_sort) {
+      case 'price_desc':
+        rows.sort((a, b) => d0(b['unit_price']).compareTo(d0(a['unit_price'])));
+      case 'price_asc':
+        rows.sort((a, b) => d0(a['unit_price']).compareTo(d0(b['unit_price'])));
+      case 'stock_asc':
+        rows.sort((a, b) => d0(a['stock_quantity']).compareTo(d0(b['stock_quantity'])));
+    }
+    setState(() {
+      _rows = rows;
+      _loading = false;
+    });
+  }
+
+  Future<void> _open(int id) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => ItemCardEditorScreen(productId: id)));
+    if (mounted) _load();
+  }
+
+  Future<void> _openExtended(int id) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => ItemCardScreen(productId: id)));
+    if (mounted) _load();
+  }
+
+  Future<void> _delete(Map<String, Object?> r) async {
+    if (!requirePermission(context, AppPermissions.editProducts)) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await confirmAndDeleteProduct(
+      context,
+      id: r['id'] as int,
+      name: '${r['name']}',
+      stock: d0(r['stock_quantity']),
+      unit: '${r['unit'] ?? ''}' == 'piece' ? 'قطعة' : '${r['unit'] ?? ''}',
+    );
+    if (!ok) return;
+    messenger.showSnackBar(SnackBar(content: Text('حُذفت «${r['name']}»')));
+    _load();
   }
 
   @override
   Widget build(BuildContext context) {
     final showCost = AuthService().hasPermission(AppPermissions.viewCostProfit);
     return ErpPage(
-      title: 'بطاقات المواد',
-      subtitle: '${fmtQty(_rows.length)} مادة',
-      icon: Icons.inventory,
+      title: 'المواد',
+      subtitle: _loading ? 'جارٍ التحميل…' : '${fmtQty(_rows.length)} مادة معروضة • اضغط مادة لتعديلها',
+      icon: Icons.inventory_2_rounded,
       floatingActionButton: AuthService().hasPermission(AppPermissions.productEntry)
           ? FloatingActionButton.extended(
               onPressed: () => Navigator.push(
                       context, MaterialPageRoute(builder: (_) => const ItemCardEditorScreen()))
                   .then((_) => _load()),
-              icon: const Icon(Icons.add),
+              icon: const Icon(Icons.add_rounded),
               label: const Text('مادة جديدة'),
             )
           : null,
       actions: exportActions(context,
-          title: 'بطاقات المواد',
+          title: 'المواد',
           headers: () => ['الرقم', 'الرمز', 'المادة', 'القسم', 'النوع', 'المخزون', 'سعر البيع', if (showCost) 'الكلفة'],
           rows: () => [
                 for (final r in _rows)
@@ -303,11 +367,33 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
                   ],
               ]),
       body: Column(children: [
-        Container(
-          color: Colors.white,
-          padding: const EdgeInsets.all(10),
-          child: Column(children: [
-            SearchBox(
+        _toolbar(),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator(strokeWidth: 2.5))
+              : _rows.isEmpty
+                  ? EmptyState(
+                      _q.isEmpty && _filter == null && _cat == null ? 'لا توجد مواد بعد — أضف مادة جديدة' : 'لا توجد مواد مطابقة',
+                      icon: Icons.inventory_2_outlined)
+                  : LayoutBuilder(
+                      builder: (context, box) => box.maxWidth >= 900 ? _table(showCost) : _cards(),
+                    ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _toolbar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: ErpColors.border)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Expanded(
+            child: SearchBox(
               hint: 'بحث بالاسم، الرقم، الرمز، الماركة أو الباركود',
               autofocus: true,
               onChanged: (v) {
@@ -315,112 +401,307 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
                 _load();
               },
             ),
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-              DropBox<int>(
-                label: 'القسم',
-                width: 200,
-                value: _cats.any((c) => c['id'] == _cat) ? _cat : null,
-                items: [
-                  const DropdownMenuItem<int>(value: null, child: Text('كل الأقسام')),
-                  for (final c in _cats) DropdownMenuItem(value: c['id'] as int, child: Text('${c['name']}')),
-                ],
-                onChanged: (v) {
-                  _cat = v;
+          ),
+          const SizedBox(width: 10),
+          PopupMenuButton<String>(
+            tooltip: 'الترتيب',
+            initialValue: _sort,
+            onSelected: (v) {
+              _sort = v;
+              _load();
+            },
+            itemBuilder: (_) => [for (final e in _sorts.entries) PopupMenuItem(value: e.key, child: Text(e.value))],
+            child: Container(
+              height: 46,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: ErpColors.border),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.sort_rounded, size: 19, color: ErpColors.muted),
+                const SizedBox(width: 6),
+                Text(_sorts[_sort]!, style: const TextStyle(fontSize: 13, color: ErpColors.text)),
+              ]),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 36,
+          child: ListView(scrollDirection: Axis.horizontal, children: [
+            for (final e in _filters.entries)
+              _pill(
+                e.value,
+                selected: _filter == e.key,
+                color: e.key == 'noprice' || e.key == 'zero'
+                    ? ErpColors.red
+                    : (e.key == 'low' ? ErpColors.orange : ErpColors.navy),
+                onTap: () {
+                  _filter = e.key;
                   _load();
                 },
               ),
-              for (final e in const {
-                null: 'الكل',
-                'low': 'تحت الحد الأدنى',
-                'zero': 'نفدت',
-                'inactive': 'موقوفة',
-                'service': 'خدمات',
-                'nocode': 'بلا رمز',
-              }.entries)
-                ChoiceChip(
-                  label: Text(e.value),
-                  selected: _filter == e.key,
-                  onSelected: (_) {
-                    _filter = e.key;
-                    _load();
-                  },
-                ),
-            ]),
           ]),
         ),
-        Expanded(
-          child: _rows.isEmpty
-              ? const EmptyState('لا توجد مواد')
-              : ListView.builder(
-                  padding: const EdgeInsets.all(8),
-                  itemCount: _rows.length,
-                  itemBuilder: (_, i) {
-                    final r = _rows[i];
-                    final q = d0(r['stock_quantity']);
-                    final min = (r['min_qty'] as num?)?.toDouble();
-                    final low = min != null && min > 0 && q <= min;
-                    final inactive = (r['is_active'] as int? ?? 1) == 0;
-                    final type = (r['item_type'] as String?) ?? 'trade';
-                    return Card(
-                      elevation: 0,
-                      margin: const EdgeInsets.symmetric(vertical: 3),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: low ? ErpColors.orange.withOpacity(0.5) : ErpColors.border),
-                      ),
-                      child: ListTile(
-                        leading: Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [
-                              inactive ? ErpColors.muted : ErpColors.navy,
-                              inactive ? ErpColors.muted.withOpacity(0.6) : ErpColors.cyan,
-                            ]),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(type == 'service' ? Icons.miscellaneous_services : Icons.inventory_2,
-                              color: Colors.white),
-                        ),
-                        title: Row(children: [
-                          Flexible(
-                            child: Text('${r['name']}',
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(decoration: inactive ? TextDecoration.lineThrough : null)),
-                          ),
-                          if (r['item_code'] != null) ...[
-                            const SizedBox(width: 6),
-                            StatusBadge('${r['item_code']}', color: ErpColors.cyan),
-                          ],
-                        ]),
-                        subtitle: Text([
-                          'رقم ${r['id']}',
-                          if (r['category_name'] != null) '${r['category_name']}',
-                          if (r['brand'] != null) '${r['brand']}',
-                          if (type != 'trade') itemTypeLabels[type] ?? type,
-                        ].join(' • ')),
-                        trailing: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(type == 'service' ? '—' : fmtQty(q),
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    color: low ? ErpColors.orange : (q <= 0 ? ErpColors.red : ErpColors.navy))),
-                            Text(fmtMoney(d0(r['unit_price'])), style: const TextStyle(fontSize: 12, color: ErpColors.muted)),
-                          ],
-                        ),
-                        onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => ItemCardEditorScreen(productId: r['id'] as int)))
-                            .then((_) => _load()),
-                      ),
-                    );
-                  },
-                ),
-        ),
+        if (_cats.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 34,
+            child: ListView(scrollDirection: Axis.horizontal, children: [
+              _pill('كل الأقسام', selected: _cat == null, outlined: true, onTap: () {
+                _cat = null;
+                _load();
+              }),
+              for (final c in _cats)
+                _pill('${c['name']}', selected: _cat == c['id'], outlined: true, onTap: () {
+                  _cat = c['id'] as int;
+                  _load();
+                }),
+            ]),
+          ),
+        ],
       ]),
+    );
+  }
+
+  Widget _pill(String label, {required bool selected, required VoidCallback onTap, Color color = ErpColors.navy, bool outlined = false}) {
+    final fg = selected ? (outlined ? color : Colors.white) : ErpColors.text;
+    final bg = selected ? (outlined ? color.withValues(alpha: 0.10) : color) : Colors.white;
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 8),
+      child: Material(
+        color: bg,
+        shape: StadiumBorder(side: BorderSide(color: selected ? color : ErpColors.border)),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Center(
+              child: Text(label,
+                  style: TextStyle(fontSize: 12.5, fontWeight: selected ? FontWeight.w800 : FontWeight.w500, color: fg)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ───── أجزاء مشتركة
+
+  Widget _avatar(Map<String, Object?> r, {double size = 34}) {
+    final inactive = (r['is_active'] as int? ?? 1) == 0;
+    final service = (r['item_type'] as String?) == 'service';
+    final color = inactive ? ErpColors.muted : (service ? ErpColors.purple : ErpColors.navy);
+    final name = '${r['name']}'.trim();
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(size * 0.3)),
+      child: service
+          ? Icon(Icons.miscellaneous_services_rounded, size: size * 0.55, color: color)
+          : Text(name.isEmpty ? '؟' : name.characters.first,
+              style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: size * 0.42)),
+    );
+  }
+
+  Widget _stock(Map<String, Object?> r) {
+    if ((r['item_type'] as String?) == 'service') return const Text('—', style: TextStyle(color: ErpColors.muted));
+    final q = d0(r['stock_quantity']);
+    final min = (r['min_qty'] as num?)?.toDouble();
+    final low = min != null && min > 0 && q <= min;
+    final unit = '${r['unit'] ?? ''}' == 'piece' ? 'قطعة' : '${r['unit'] ?? ''}';
+    final color = q <= 0 ? ErpColors.red : (low ? ErpColors.orange : ErpColors.text);
+    final chip = q <= 0 || low;
+    return Container(
+      padding: chip ? const EdgeInsets.symmetric(horizontal: 9, vertical: 3) : EdgeInsets.zero,
+      decoration: chip ? BoxDecoration(color: color.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(20)) : null,
+      child: Text('${fmtQty(q)} $unit',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 13, fontWeight: chip ? FontWeight.w800 : FontWeight.w600, color: color)),
+    );
+  }
+
+  Widget _money(Object? v, {bool strong = false}) {
+    final x = d0(v);
+    if (x <= 0) {
+      return strong
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+              decoration: BoxDecoration(color: ErpColors.red.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(20)),
+              child: const Text('بلا سعر', style: TextStyle(fontSize: 12, color: ErpColors.red, fontWeight: FontWeight.w800)),
+            )
+          : const Text('—', style: TextStyle(color: ErpColors.muted));
+    }
+    return Text(fmtMoney(x),
+        style: TextStyle(
+          fontSize: strong ? 14 : 13,
+          fontWeight: strong ? FontWeight.w800 : FontWeight.w500,
+          color: strong ? ErpColors.navy : ErpColors.text,
+        ));
+  }
+
+  Widget _more(Map<String, Object?> r) => PopupMenuButton<String>(
+        tooltip: 'المزيد',
+        icon: const Icon(Icons.more_vert_rounded, size: 20, color: ErpColors.muted),
+        onSelected: (v) {
+          final id = r['id'] as int;
+          if (v == 'edit') _open(id);
+          if (v == 'card') _openExtended(id);
+          if (v == 'delete') _delete(r);
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'edit', child: ListTile(dense: true, leading: Icon(Icons.edit_outlined), title: Text('تعديل'))),
+          PopupMenuItem(
+              value: 'card',
+              child: ListTile(dense: true, leading: Icon(Icons.timeline_rounded), title: Text('البطاقة الموسّعة والحركة'))),
+          PopupMenuItem(
+              value: 'delete',
+              child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.delete_outline_rounded, color: ErpColors.red),
+                  title: Text('حذف', style: TextStyle(color: ErpColors.red)))),
+        ],
+      );
+
+  // ───── جدول (شاشة عريضة)
+
+  Widget _table(bool showCost) {
+    final flex = [5, 2, 2, 2, if (showCost) 2, 2];
+    final heads = ['المادة', 'القسم', 'مفرد', 'جملة', if (showCost) 'الكلفة', 'المخزون'];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 80),
+      child: Material(
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: ErpColors.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(children: [
+          Container(
+            color: const Color(0xFFF1F4F9),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            child: Row(children: [
+              const SizedBox(width: 46),
+              for (var i = 0; i < heads.length; i++)
+                Expanded(
+                  flex: flex[i],
+                  child: Text(heads[i],
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: ErpColors.navy)),
+                ),
+              const SizedBox(width: 48),
+            ]),
+          ),
+          Expanded(
+            child: ListView.separated(
+              itemCount: _rows.length,
+              separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFEEF2F6)),
+              itemBuilder: (context, i) {
+                final r = _rows[i];
+                final inactive = (r['is_active'] as int? ?? 1) == 0;
+                final sub = [
+                  if (r['item_code'] != null && '${r['item_code']}'.isNotEmpty) '${r['item_code']}',
+                  '#${r['id']}',
+                  if (r['brand'] != null && '${r['brand']}'.isNotEmpty) '${r['brand']}',
+                  if (inactive) 'موقوفة',
+                ].join('  ·  ');
+                final cells = <Widget>[
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                    Text('${r['name']}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          color: inactive ? ErpColors.muted : ErpColors.text,
+                          decoration: inactive ? TextDecoration.lineThrough : null,
+                        )),
+                    Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: ErpColors.muted)),
+                  ]),
+                  Text('${r['category_name'] ?? '—'}',
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, color: ErpColors.muted)),
+                  Align(alignment: AlignmentDirectional.centerStart, child: _money(r['unit_price'], strong: true)),
+                  _money(r['price4']),
+                  if (showCost) _money(r['cost_price']),
+                  Align(alignment: AlignmentDirectional.centerStart, child: _stock(r)),
+                ];
+                return InkWell(
+                  onTap: () => _open(r['id'] as int),
+                  hoverColor: ErpColors.blue.withValues(alpha: 0.04),
+                  child: Padding(
+                    padding: const EdgeInsetsDirectional.fromSTEB(14, 8, 4, 8),
+                    child: Row(children: [
+                      _avatar(r),
+                      const SizedBox(width: 12),
+                      for (var c = 0; c < cells.length; c++) Expanded(flex: flex[c], child: cells[c]),
+                      _more(r),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // ───── بطاقات (شاشة صغيرة)
+
+  Widget _cards() {
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
+      itemCount: _rows.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, i) {
+        final r = _rows[i];
+        final inactive = (r['is_active'] as int? ?? 1) == 0;
+        return Material(
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: const BorderSide(color: ErpColors.border),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () => _open(r['id'] as int),
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 0, 10),
+              child: Row(children: [
+                _avatar(r, size: 40),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${r['name']}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: inactive ? ErpColors.muted : ErpColors.text,
+                          decoration: inactive ? TextDecoration.lineThrough : null,
+                        )),
+                    const SizedBox(height: 4),
+                    Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      if (r['category_name'] != null)
+                        Text('${r['category_name']}', style: const TextStyle(fontSize: 12, color: ErpColors.muted)),
+                      _stock(r),
+                    ]),
+                  ]),
+                ),
+                const SizedBox(width: 8),
+                _money(r['unit_price'], strong: true),
+                _more(r),
+              ]),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -437,9 +718,10 @@ class ItemCardScreen extends StatefulWidget {
 
 class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProviderStateMixin {
   final _svc = ItemCardService();
-  late final TabController _tabs = TabController(length: 7, vsync: this);
+  // يُنشأ في initState: الإنشاء الكسول كان يحدث أول مرة داخل dispose (حين لا تُستعمل
+  // التبويبات في التخطيط العريض) ⇒ «Looking up a deactivated widget's ancestor is unsafe»
+  late final TabController _tabs;
   Map<String, Object?>? _p;
-  Map<String, Object?> _d = const {};
   List<Map<String, Object?>> _barcodes = const [];
   List<Map<String, Object?>> _suppliers = const [];
   List<Map<String, Object?>> _cats = const [];
@@ -476,6 +758,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
   @override
   void initState() {
     super.initState();
+    _tabs = TabController(length: 7, vsync: this);
     _load();
   }
 
@@ -498,7 +781,6 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
     if (!mounted) return;
     setState(() {
       _p = p;
-      _d = d;
       _barcodes = b;
       _suppliers = s;
       _cats = cats;
@@ -697,9 +979,9 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
               width: 64,
               height: 64,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.15),
+                color: Colors.white.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(16),
-                image: hasImg ? DecorationImage(image: FileImage(File(img!)), fit: BoxFit.cover) : null,
+                image: hasImg ? DecorationImage(image: FileImage(File(img)), fit: BoxFit.cover) : null,
               ),
               child: hasImg ? null : const Icon(Icons.inventory_2, color: Colors.white, size: 34),
             ),
@@ -763,11 +1045,11 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
 
   Widget _heroStat(String label, String value, Color color, {String? sub}) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.10), borderRadius: BorderRadius.circular(12)),
+        decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(12)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(label, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 11.5)),
+          Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11.5)),
           Text(value, textDirection: TextDirection.ltr, style: TextStyle(color: color, fontSize: 17, fontWeight: FontWeight.bold)),
-          if (sub != null) Text(sub, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 11)),
+          if (sub != null) Text(sub, style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11)),
         ]),
       );
 
@@ -922,11 +1204,11 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
         ]),
       ),
       ErpSection(
-        title: 'الحسم والهدايا والكلفة',
+        title: 'الخصم والهدايا والكلفة',
         icon: Icons.card_giftcard,
         color: ErpColors.orange,
         child: FieldGrid(children: [
-          _tf('max_discount_percent', 'أعلى حسم مسموح %', width: 170, number: true),
+          _tf('max_discount_percent', 'أعلى خصم مسموح %', width: 170, number: true),
           _tf('bonus_buy', 'هدية: كل (كمية)', width: 150, number: true),
           _tf('bonus_free', 'عليها مجاناً', width: 130, number: true),
           if (showCost) _tf('fixed_cost', 'سعر كلفة ثابت (للأرباح)', width: 200, number: true),

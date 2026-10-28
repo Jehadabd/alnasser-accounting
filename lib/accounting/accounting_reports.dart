@@ -328,9 +328,23 @@ class AccountingReports {
     final cust = await db.rawQuery(
         'SELECT COALESCE(SUM(current_total_debt), 0) AS b FROM customers WHERE COALESCE(is_deleted, 0) = 0');
     final diff = (arBal.first['b'] as num).toDouble() - (cust.first['b'] as num).toDouble();
-    if (diff.abs() > 1) {
-      problems.add('ذمم العملاء في الدفتر تختلف عن سجل الديون بمقدار ${NumberFormat('#,##0', 'en').format(diff)} '
-          '— شغّل «ترحيل الآن» ثم أعد الفحص');
+    // معاملات عملاء لم يعودوا في سجل الديون (حُذفوا): الدفتر يحسبها والسجل لا
+    // يعرضها. «ترحيل الآن» لا يغيّرها، فتُذكر وحدها بمبلغها وعدد أصحابها.
+    final orphan = await db.rawQuery('''
+      SELECT COUNT(DISTINCT t.customer_id) AS n, COALESCE(SUM(t.amount_changed), 0) AS b
+      FROM transactions t LEFT JOIN customers c ON c.id = t.customer_id
+      WHERE COALESCE(t.is_deleted, 0) = 0 AND (c.id IS NULL OR COALESCE(c.is_deleted, 0) = 1)''');
+    final orphanSum = (orphan.first['b'] as num).toDouble();
+    final orphanCount = (orphan.first['n'] as num).toInt();
+    final fmt = NumberFormat('#,##0', 'en');
+    if (orphanSum.abs() > 1) {
+      problems.add('${fmt.format(orphanSum)} دينار في الدفتر هي معاملات $orphanCount عميلاً حُذفوا من سجل الديون، '
+          'فلا تظهر فيه. «ترحيل الآن» لا يغيّرها؛ تصحيحها قرار يدوي');
+    }
+    final rest = diff - orphanSum;
+    if (rest.abs() > 1) {
+      problems.add('ذمم العملاء في الدفتر تختلف عن سجل الديون بمقدار ${fmt.format(rest)} '
+          '— اضغط زر 🔄 «ترحيل الآن» أعلى شاشة المحاسبة ثم أعد الفحص');
     }
     // ذمم الموردين بالدينار = مجموع أرصدة الموردين بالدينار
     try {
@@ -341,7 +355,7 @@ class AccountingReports {
       final apDiff = (apBal.first['b'] as num).toDouble() - (sup.first['b'] as num).toDouble();
       if (apDiff.abs() > 1) {
         problems.add('ذمم الموردين (دينار) في الدفتر تختلف عن أرصدة الموردين بمقدار ${NumberFormat('#,##0', 'en').format(apDiff)} '
-            '— شغّل «ترحيل الآن» ثم أعد الفحص');
+            '— اضغط زر 🔄 «ترحيل الآن» أعلى شاشة المحاسبة ثم أعد الفحص');
       }
     } catch (_) {}
     return problems;

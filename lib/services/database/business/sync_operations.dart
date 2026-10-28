@@ -1,9 +1,6 @@
 // lib/services/database/business/sync_operations.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
-import '../../database_service.dart';
-import '../../../models/transaction.dart';
-import '../../../models/customer.dart';
-import '../../../models/customer_receipt_voucher.dart'; // Ensure this model exists
 
 class SyncOperations {
   final Future<Database> Function() getDatabase;
@@ -20,7 +17,7 @@ class SyncOperations {
   
   Future<void> performSync() async {
     // Basic stub
-    print("Sync performed");
+    debugPrint("Sync performed");
   }
 
   // Add other methods that called `syncOperations`

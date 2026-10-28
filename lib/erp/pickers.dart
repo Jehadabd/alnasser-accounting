@@ -11,6 +11,7 @@ import '../org/org_service.dart';
 import 'erp_common.dart';
 import 'erp_ui.dart';
 import 'stock_helpers.dart';
+import '../services/name_search.dart'; // 🔤 الأسماء بلا مسافات
 
 class PartyLite {
   PartyLite(this.id, this.name, this.phone, this.balance, {this.balanceUsd = 0});
@@ -29,11 +30,13 @@ class Pickers {
   static Future<List<PartyLite>> searchCustomers(String q, {int limit = 80}) async {
     final db = await erpDb();
     final t = q.trim();
+    final w = NameSearch.where('name', t, phoneCol: 'phone');
+    final o = NameSearch.order('name', t);
     final rows = await db.rawQuery('''
       SELECT id, name, phone, current_total_debt FROM customers
-      WHERE COALESCE(is_deleted, 0) = 0 ${t.isEmpty ? '' : 'AND (name LIKE ? OR phone LIKE ?)'}
-      ORDER BY name LIMIT $limit
-    ''', t.isEmpty ? null : ['%$t%', '%$t%']);
+      WHERE COALESCE(is_deleted, 0) = 0 ${w == null ? '' : 'AND ${w.sql}'}
+      ORDER BY ${w == null ? 'name' : o.sql} LIMIT $limit
+    ''', w == null ? null : [...w.args, ...o.args]);
     return rows
         .map((r) => PartyLite(r['id'] as int, (r['name'] as String?) ?? '', r['phone'] as String?,
             d0(r['current_total_debt'])))
@@ -44,11 +47,13 @@ class Pickers {
     final db = await erpDb();
     final t = q.trim();
     try {
+      final w = NameSearch.where('name', t, phoneCol: 'phone');
+      final o = NameSearch.order('name', t);
       final rows = await db.rawQuery('''
         SELECT id, name, phone, total_debt_iqd, total_debt_usd FROM suppliers
-        ${t.isEmpty ? '' : 'WHERE name LIKE ? OR phone LIKE ?'}
-        ORDER BY name LIMIT $limit
-      ''', t.isEmpty ? null : ['%$t%', '%$t%']);
+        ${w == null ? '' : 'WHERE ${w.sql}'}
+        ORDER BY ${w == null ? 'name' : o.sql} LIMIT $limit
+      ''', w == null ? null : [...w.args, ...o.args]);
       return rows
           .map((r) => PartyLite(r['id'] as int, (r['name'] as String?) ?? '', r['phone'] as String?,
               d0(r['total_debt_iqd']),

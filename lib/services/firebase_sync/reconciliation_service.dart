@@ -15,7 +15,7 @@ import 'dart:io' show Platform;
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 
 import '../database_service.dart';
 import 'firebase_sync_service.dart';
@@ -286,8 +286,8 @@ class ReconciliationService {
         ])
         .snapshots()
         .listen(_onSessionsChanged,
-            onError: (e) => print('❌ خطأ في استماع جلسات المطابقة: $e'));
-    print('🧮 بدأ الاستماع لطلبات المطابقة');
+            onError: (e) => debugPrint('❌ خطأ في استماع جلسات المطابقة: $e'));
+    debugPrint('🧮 بدأ الاستماع لطلبات المطابقة');
   }
 
   Future<void> stopListening() async {
@@ -380,7 +380,7 @@ class ReconciliationService {
 
     _activeSessionId = sessionId;
     _handledSessions.add('req_$sessionId');
-    print('🧮 طُلبت جلسة مطابقة $sessionId ودُعي ${invited.length} جهاز');
+    debugPrint('🧮 طُلبت جلسة مطابقة $sessionId ودُعي ${invited.length} جهاز');
     return sessionId;
   }
 
@@ -506,7 +506,7 @@ class ReconciliationService {
           .doc(sessionId)
           .update({'results.$myId': result.toMap()});
     } catch (e) {
-      print('⚠️ تعذّر نشر نتيجة المطابقة: $e');
+      debugPrint('⚠️ تعذّر نشر نتيجة المطابقة: $e');
     }
   }
 
@@ -620,11 +620,11 @@ class ReconciliationService {
           cloudSum = localSums[uuid] ?? 0.0; // غير متاح هنا — العدد وحده يحكم
         }
       } catch (e) {
-        print('⚠️ تعذّر تجميع بيانات العميل $name: $e');
+        debugPrint('⚠️ تعذّر تجميع بيانات العميل $name: $e');
         // نفدت الحصة اليومية أو انقطع الاتصال: لا فائدة من بقية العملاء الآن
         final es = e.toString();
         if (es.contains('resource-exhausted') || es.contains('Quota') || es.contains('unavailable')) {
-          print('⏸️ إيقاف التدقيق: ${es.contains('unavailable') ? 'لا اتصال' : 'نفدت الحصة اليومية'}');
+          debugPrint('⏸️ إيقاف التدقيق: ${es.contains('unavailable') ? 'لا اتصال' : 'نفدت الحصة اليومية'}');
           break;
         }
         continue;
@@ -697,7 +697,7 @@ class ReconciliationService {
             missingInCloud.remove(u);
             fetched++;
           } catch (e) {
-            print('⚠️ تعذّر تطبيق شاهد حذف $u: $e');
+            debugPrint('⚠️ تعذّر تطبيق شاهد حذف $u: $e');
           }
         }
 
@@ -706,7 +706,7 @@ class ReconciliationService {
             await _sync.applyRemoteTransaction(missing, cloudUuids[missing]!);
             fetched++;
           } catch (e) {
-            print('⚠️ تعذّر جلب المعاملة $missing: $e');
+            debugPrint('⚠️ تعذّر جلب المعاملة $missing: $e');
           }
         }
 
@@ -720,7 +720,7 @@ class ReconciliationService {
               reuploaded++;
             }
           } catch (e) {
-            print('⚠️ تعذّر رفع المعاملة $notUp: $e');
+            debugPrint('⚠️ تعذّر رفع المعاملة $notUp: $e');
           }
         }
 
@@ -750,7 +750,7 @@ class ReconciliationService {
               await _sync.applyRemoteTransaction(entry.key, entry.value);
               fetched++;
             } catch (e) {
-              print('⚠️ تعذّر تحديث المعاملة ${entry.key}: $e');
+              debugPrint('⚠️ تعذّر تحديث المعاملة ${entry.key}: $e');
             }
           }
         }
@@ -784,7 +784,7 @@ class ReconciliationService {
         if (!localSet.contains(doc.id)) customersMissingLocally++;
       }
     } catch (e) {
-      print('⚠️ تعذّر عدّ عملاء السحابة: $e');
+      debugPrint('⚠️ تعذّر عدّ عملاء السحابة: $e');
     }
 
     final totalsRow = await db.rawQuery('''
@@ -808,7 +808,7 @@ class ReconciliationService {
     );
 
     final elapsed = DateTime.now().difference(startedAt);
-    print('🧮 اكتمل التدقيق في ${elapsed.inSeconds} ثانية: '
+    debugPrint('🧮 اكتمل التدقيق في ${elapsed.inSeconds} ثانية: '
         '${diffs.length} فرق، جُلبت $fetched وسُحِب $customersFetched عميل '
         'ورُفعت $reuploaded');
 
@@ -842,11 +842,11 @@ class ReconciliationService {
         await _sync.applyRemoteCustomer(doc.id, data);
         fetched++;
       } catch (e) {
-        print('⚠️ تعذّر جلب العميل ${doc.id}: $e');
+        debugPrint('⚠️ تعذّر جلب العميل ${doc.id}: $e');
       }
     }
     if (fetched > 0) {
-      print('🧮 جُلب $fetched عميل ناقص من السحابة');
+      debugPrint('🧮 جُلب $fetched عميل ناقص من السحابة');
     }
     return fetched;
   }
@@ -897,10 +897,10 @@ class ReconciliationService {
       try {
         final result = await runSelfAudit(repair: true);
         if (!result.isClean) {
-          print('🧮 التدقيق التلقائي وجد ${result.realProblems.length} فرقاً');
+          debugPrint('🧮 التدقيق التلقائي وجد ${result.realProblems.length} فرقاً');
         }
       } catch (e) {
-        print('⚠️ فشل التدقيق التلقائي: $e');
+        debugPrint('⚠️ فشل التدقيق التلقائي: $e');
       }
     });
   }

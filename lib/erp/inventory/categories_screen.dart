@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 
 import '../../accounting/screens/acc_ui.dart';
+import '../../inventory/item_card_editor_screen.dart';
 import '../../inventory/item_card_screen.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
@@ -34,7 +35,9 @@ class _Cat {
 }
 
 class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+  // يُنشأ في initState: الإنشاء الكسول كان يحدث أول مرة داخل dispose (حين لا تُستعمل
+  // التبويبات في التخطيط العريض) ⇒ «Looking up a deactivated widget's ancestor is unsafe»
+  late final TabController _tabs;
   List<_Cat> _roots = const [];
   int _uncategorized = 0;
   int? _selectedCat;
@@ -51,6 +54,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
   @override
   void initState() {
     super.initState();
+    _tabs = TabController(length: 2, vsync: this);
     _load();
   }
 
@@ -154,26 +158,26 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
       showError(context, 'لا تملك صلاحية تعديل البضاعة');
       return;
     }
-    final options = <_Cat>[];
-    void walk(List<_Cat> l) {
+    final options = <(_Cat?, int)>[(null, 0)];
+    void walk(List<_Cat> l, int depth) {
       for (final x in l) {
-        if (x.id != c.id && !_isDescendant(c, x.id)) options.add(x);
-        walk(x.children);
+        if (x.id != c.id && !_isDescendant(c, x.id)) options.add((x, depth));
+        walk(x.children, depth + 1);
       }
     }
 
-    walk(_roots);
-    final picked = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text('نقل «${c.name}» تحت'),
-        children: [
-          SimpleDialogOption(onPressed: () => Navigator.pop(ctx, -1), child: const Text('— قسم رئيسي —')),
-          for (final o in options) SimpleDialogOption(onPressed: () => Navigator.pop(ctx, o.id), child: Text(o.name)),
-        ],
-      ),
+    walk(_roots, 0);
+    final choice = await pickFromList<(_Cat?, int)>(
+      context,
+      title: 'نقل «${c.name}»',
+      subtitle: 'اختر القسم الذي يصبح هذا القسم تحته',
+      icon: Icons.drive_file_move_rounded,
+      items: options,
+      labelOf: (o) => o.$1?.name ?? 'قسم رئيسي (بلا أب)',
+      depthOf: (o) => o.$2,
     );
-    if (picked == null) return;
+    if (choice == null) return;
+    final picked = choice.$1?.id ?? -1;
     final db = await erpDb();
     await db.update('categories', {'parent_id': picked == -1 ? null : picked}, where: 'id = ?', whereArgs: [c.id]);
     await _load();
@@ -231,26 +235,26 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
   }
 
   Future<void> _assignCategory() async {
-    final cats = <_Cat>[];
+    final cats = <(_Cat?, int)>[(null, 0)];
     void walk(List<_Cat> l, int depth) {
       for (final x in l) {
-        cats.add(x);
+        cats.add((x, depth));
         walk(x.children, depth + 1);
       }
     }
 
     walk(_roots, 0);
-    final picked = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text('نقل ${fmtQty(_sel.length)} مادة إلى قسم'),
-        children: [
-          SimpleDialogOption(onPressed: () => Navigator.pop(ctx, -1), child: const Text('— بلا قسم —')),
-          for (final c in cats) SimpleDialogOption(onPressed: () => Navigator.pop(ctx, c.id), child: Text(c.name)),
-        ],
-      ),
+    final choice = await pickFromList<(_Cat?, int)>(
+      context,
+      title: 'نقل ${fmtQty(_sel.length)} مادة إلى قسم',
+      icon: Icons.drive_file_move_rounded,
+      items: cats,
+      labelOf: (o) => o.$1?.name ?? 'بلا قسم',
+      detailOf: (o) => o.$1 == null ? '' : '${fmtQty(o.$1!.count)} مادة',
+      depthOf: (o) => o.$2,
     );
-    if (picked == null) return;
+    if (choice == null) return;
+    final picked = choice.$1?.id ?? -1;
     final dbs = DatabaseService();
     await _bulk((id) async {
       final p = await dbs.getProductById(id);
@@ -322,11 +326,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
       final tile = Container(
         margin: EdgeInsetsDirectional.only(start: depth * 16.0, bottom: 4),
         decoration: BoxDecoration(
-          color: sel ? ErpColors.navy.withOpacity(.08) : Colors.white,
+          color: sel ? ErpColors.navy.withValues(alpha: .08) : Colors.white,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: sel ? ErpColors.navy : ErpColors.border),
         ),
-        child: ListTile(
+        child: Material(type: MaterialType.transparency, child: ListTile(
           dense: true,
           leading: Icon(c.children.isEmpty ? Icons.folder_outlined : Icons.folder_copy_rounded,
               color: depth == 0 ? ErpColors.navy : ErpColors.blue),
@@ -367,7 +371,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
               PopupMenuItem(value: 'delete', child: Text('حذف', style: TextStyle(color: ErpColors.red))),
             ],
           ),
-        ),
+        )),
       );
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         tile,
@@ -402,7 +406,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
         padding: const EdgeInsets.only(bottom: 4),
         child: ListTile(
           dense: true,
-          tileColor: selected ? ErpColors.navy.withOpacity(.08) : Colors.white,
+          tileColor: selected ? ErpColors.navy.withValues(alpha: .08) : Colors.white,
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
               side: BorderSide(color: selected ? ErpColors.navy : ErpColors.border)),
@@ -425,72 +429,103 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
                     _loadProducts();
                   })),
           const SizedBox(width: 8),
-          Text('${fmtQty(_sel.length)} / ${fmtQty(_products.length)}', style: const TextStyle(fontWeight: FontWeight.bold)),
-          IconButton(
-            tooltip: 'تحديد الكل',
-            icon: const Icon(Icons.select_all_rounded),
-            onPressed: () => setState(() => _sel.addAll(_products.map((p) => p.id))),
-          ),
-          IconButton(
-            tooltip: 'إلغاء التحديد',
-            icon: const Icon(Icons.deselect_rounded),
-            onPressed: () => setState(_sel.clear),
+          OutlinedButton.icon(
+            onPressed: _products.isEmpty ? null : () => setState(() => _sel.addAll(_products.map((p) => p.id))),
+            icon: const Icon(Icons.select_all_rounded, size: 19),
+            label: Text('تحديد الكل (${fmtQty(_products.length)})'),
           ),
         ]),
       ),
-      AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        height: _sel.isEmpty ? 0 : 56,
-        child: _sel.isEmpty
-            ? const SizedBox()
-            : ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), children: [
-                _action('نقل إلى قسم', Icons.drive_file_move_rounded, ErpColors.navy, _assignCategory),
-                _action('تفعيل', Icons.check_circle_outline, ErpColors.green, () => _setActive(true)),
-                _action('إيقاف', Icons.pause_circle_outline, ErpColors.orange, () => _setActive(false)),
-                _action('إخفاء عن الموظفين', Icons.visibility_off_outlined, ErpColors.purple, () => _setHidden(true)),
-                _action('إظهار للجميع', Icons.visibility_outlined, ErpColors.blue, () => _setHidden(false)),
-                _action('ترميز تلقائي', Icons.tag_rounded, ErpColors.gold, _autoCodes),
-              ]),
+      SelectionBar(
+        count: _sel.length,
+        busy: _busy,
+        onClear: () => setState(_sel.clear),
+        actions: [
+          SelectionAction('نقل إلى قسم', Icons.drive_file_move_rounded, _assignCategory),
+          SelectionAction('تفعيل', Icons.check_circle_outline_rounded, () => _setActive(true), color: const Color(0xFF86EFAC)),
+          SelectionAction('إيقاف', Icons.pause_circle_outline_rounded, () => _setActive(false), color: const Color(0xFFFDBA74)),
+          SelectionAction('إخفاء عن الموظفين', Icons.visibility_off_outlined, () => _setHidden(true),
+              color: const Color(0xFFD8B4FE)),
+          SelectionAction('إظهار للجميع', Icons.visibility_outlined, () => _setHidden(false), color: const Color(0xFF93C5FD)),
+          SelectionAction('ترميز تلقائي', Icons.tag_rounded, _autoCodes, color: const Color(0xFFFDE68A)),
+        ],
       ),
-      if (_busy) const LinearProgressIndicator(),
+      if (_sel.isEmpty)
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 6),
+          child: Row(children: [
+            Icon(Icons.touch_app_outlined, size: 16, color: ErpColors.muted),
+            SizedBox(width: 6),
+            Expanded(
+              child: Text('حدّد مادة أو أكثر لتظهر العمليات: نقل، تفعيل، إيقاف، إخفاء، ترميز',
+                  style: TextStyle(fontSize: 12, color: ErpColors.muted)),
+            ),
+          ]),
+        ),
       Expanded(
         child: _products.isEmpty
             ? const EmptyState('لا توجد مواد')
-            : ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                itemCount: _products.length,
-                itemBuilder: (_, i) {
-                  final p = _products[i];
-                  return CheckboxListTile(
-                    dense: true,
-                    value: _sel.contains(p.id),
-                    onChanged: (v) => setState(() => v == true ? _sel.add(p.id) : _sel.remove(p.id)),
-                    title: Text(p.name),
-                    subtitle: Text(
-                        '${p.itemCode?.isNotEmpty == true ? '${p.itemCode} • ' : ''}الرصيد ${fmtQty(p.stock)} • ${fmtMoney(p.prices[0])}',
-                        style: const TextStyle(fontSize: 11)),
-                    secondary: IconButton(
-                      tooltip: 'بطاقة المادة',
-                      icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                      onPressed: () async {
-                        await Navigator.push(
-                            context, MaterialPageRoute(builder: (_) => ItemCardScreen(productId: p.id)));
-                        _load();
-                      },
-                    ),
-                  );
-                },
+            : Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: Material(
+                  color: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: const BorderSide(color: ErpColors.border),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: ListView.separated(
+                    itemCount: _products.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFEEF2F6)),
+                    itemBuilder: (_, i) {
+                      final p = _products[i];
+                      final sel = _sel.contains(p.id);
+                      return InkWell(
+                        onTap: () => setState(() => sel ? _sel.remove(p.id) : _sel.add(p.id)),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 140),
+                          color: sel ? ErpColors.navy.withValues(alpha: 0.06) : Colors.transparent,
+                          padding: const EdgeInsetsDirectional.fromSTEB(6, 6, 4, 6),
+                          child: Row(children: [
+                            Checkbox(
+                              value: sel,
+                              onChanged: (v) => setState(() => v == true ? _sel.add(p.id) : _sel.remove(p.id)),
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(p.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ErpColors.text)),
+                                Text(
+                                  [
+                                    if (p.itemCode?.isNotEmpty == true) p.itemCode!,
+                                    'الرصيد ${fmtQty(p.stock)}',
+                                  ].join('  ·  '),
+                                  style: const TextStyle(fontSize: 11.5, color: ErpColors.muted),
+                                ),
+                              ]),
+                            ),
+                            Text(fmtMoney(p.prices[0]),
+                                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: ErpColors.navy)),
+                            IconButton(
+                              tooltip: 'فتح المادة',
+                              icon: const Icon(Icons.open_in_new_rounded, size: 18, color: ErpColors.muted),
+                              onPressed: () async {
+                                await Navigator.push(
+                                    context, MaterialPageRoute(builder: (_) => ItemCardEditorScreen(productId: p.id)));
+                                _load();
+                              },
+                            ),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
       ),
     ]);
   }
-
-  Widget _action(String label, IconData icon, Color color, VoidCallback onTap) => Padding(
-        padding: const EdgeInsetsDirectional.only(end: 8),
-        child: ActionChip(
-          avatar: Icon(icon, size: 18, color: color),
-          label: Text(label),
-          onPressed: _busy ? null : onTap,
-        ),
-      );
 }

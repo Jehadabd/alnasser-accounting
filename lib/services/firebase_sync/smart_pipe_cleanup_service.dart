@@ -16,6 +16,7 @@
 //     يصله الحذف من أي طريق آخر: إعادة البثّ للجهاز الجديد لا تحمل إلا
 //     النشط (اختبار الكود الحقيقي: test/sync_harness).
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_sync_config.dart';
@@ -138,15 +139,15 @@ class SmartPipeCleanupService {
         );
       }
 
-      print('🧹 [SmartPipe] بدء الحذف الذكي...');
+      debugPrint('🧹 [SmartPipe] بدء الحذف الذكي...');
 
       // 1. جلب قائمة الأجهزة المؤهلة (نشطة ولم تُعلَّم كجهاز جديد)
       final eligibleDevices = await _getEligibleDevices(groupId);
-      print('📱 [SmartPipe] أجهزة مؤهلة للحساب: ${eligibleDevices.length}');
+      debugPrint('📱 [SmartPipe] أجهزة مؤهلة للحساب: ${eligibleDevices.length}');
 
       if (eligibleDevices.isEmpty) {
         // لا أجهزة مسجلة → لا حذف آمن
-        print('⚠️ [SmartPipe] لا توجد أجهزة مسجلة، تخطي الحذف');
+        debugPrint('⚠️ [SmartPipe] لا توجد أجهزة مسجلة، تخطي الحذف');
         _isRunning = false;
         return PipeCleanupResult(
           deletedTransactions: 0,
@@ -161,7 +162,7 @@ class SmartPipeCleanupService {
       // 🔒 الحذف يتبع المدة التي ضبطها المستخدم في الإعدادات
       final userDays = await FirebaseSyncSecuritySettings.getAutoDeleteDays();
       final cutoff = DateTime.now().subtract(Duration(days: userDays));
-      print('🧹 [SmartPipe] عمر الحذف الأدنى: $userDays يوم (قبل ${cutoff.toString().split(' ')[0]})');
+      debugPrint('🧹 [SmartPipe] عمر الحذف الأدنى: $userDays يوم (قبل ${cutoff.toString().split(' ')[0]})');
 
       // 2. حذف المعاملات (بعد قراءة الجميع فقط)
       //    الحقول متوافقة مع TransactionAckService.sendAck:
@@ -203,10 +204,10 @@ class SmartPipeCleanupService {
       // 🔒 تم إلغاء الحذف النهائي الأعمى (_runHardTTLCleanup):
       // لا يُمحى أي مستند مهما تقادم إلا إذا قرأته كل الأجهزة المؤهلة أعلاه.
 
-      print(
+      debugPrint(
           '✅ [SmartPipe] اكتمل: معاملات=$deletedTx، فواتير=$deletedInv، عملاء=$deletedCust، ACKs=$deletedAcks، تخطي=$skipped');
     } catch (e) {
-      print('❌ [SmartPipe] خطأ في الحذف الذكي: $e');
+      debugPrint('❌ [SmartPipe] خطأ في الحذف الذكي: $e');
     } finally {
       _isRunning = false;
     }
@@ -355,7 +356,7 @@ class SmartPipeCleanupService {
           });
           if (removed) {
             deleted++;
-            print('🗑️ [SmartPipe] حُذف من $collection: ${doc.id}');
+            debugPrint('🗑️ [SmartPipe] حُذف من $collection: ${doc.id}');
           } else {
             skipped++;
           }
@@ -403,9 +404,9 @@ class SmartPipeCleanupService {
       if (retired) 'retiredAt': DateTime.now().toIso8601String(),
       if (!retired) 'reactivatedAt': DateTime.now().toIso8601String(),
     }, SetOptions(merge: true));
-    print(retired
+    debugPrint((retired
         ? '🚫 [SmartPipe] الجهاز $deviceId اعتُبر خارج الخدمة (قرار يدوي)'
-        : '✅ [SmartPipe] الجهاز $deviceId أعيد للخدمة');
+        : '✅ [SmartPipe] الجهاز $deviceId أعيد للخدمة').toString());
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -433,7 +434,7 @@ class SmartPipeCleanupService {
       }, SetOptions(merge: true));
     } catch (e) {
       // ACK غير حرج — تجاهل الخطأ
-      print('⚠️ [SmartPipe] فشل إرسال transaction ACK: $e');
+      debugPrint('⚠️ [SmartPipe] فشل إرسال transaction ACK: $e');
     }
   }
 
@@ -456,7 +457,7 @@ class SmartPipeCleanupService {
         'readAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
-      print('⚠️ [SmartPipe] فشل إرسال invoice ACK: $e');
+      debugPrint('⚠️ [SmartPipe] فشل إرسال invoice ACK: $e');
     }
   }
 

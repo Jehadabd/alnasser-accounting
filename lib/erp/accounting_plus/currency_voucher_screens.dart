@@ -12,6 +12,7 @@ import '../currency_service.dart';
 import '../erp_common.dart';
 import '../../widgets/formatters.dart';
 import '../erp_ui.dart';
+import '../inventory/usd_reprice_dialog.dart';
 import '../pickers.dart';
 import 'accounting_plus_service.dart';
 import 'voucher_pdf.dart';
@@ -102,6 +103,8 @@ class _CurrenciesScreenState extends State<CurrenciesScreen> {
         isNew: c == null,
       );
       await _load();
+      // 💱 تغيّر سعر الدولار ⇒ كلفة مواد الدولار تتبعه، ثم سؤال عن الأسعار
+      if (mounted && code.text.trim().toUpperCase() == 'USD') await repriceUsdProductsAndAsk(context);
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -136,6 +139,7 @@ class _CurrenciesScreenState extends State<CurrenciesScreen> {
       await _svc.setRate(c.code, parseMoney(rate.text) ?? 0, date);
       await _load();
       if (mounted) showOk(context, 'سُجِّل السعر');
+      if (mounted && c.code == 'USD') await repriceUsdProductsAndAsk(context);
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -221,7 +225,7 @@ class _CurrenciesScreenState extends State<CurrenciesScreen> {
                       dense: true,
                       leading: CircleAvatar(
                           radius: 16,
-                          backgroundColor: ErpColors.green.withOpacity(.1),
+                          backgroundColor: ErpColors.green.withValues(alpha: .1),
                           child: Text('${h['code']}'.substring(0, 1), style: const TextStyle(color: ErpColors.green))),
                       title: Text('${h['code']} = ${fmtMoney(d0(h['rate']))} دينار'),
                       subtitle: Text('نافذ من ${fmtDate(parseDate(h['rate_date']))}'),
@@ -234,6 +238,7 @@ class _CurrenciesScreenState extends State<CurrenciesScreen> {
                           try {
                             await _svc.deleteRate(h['id'] as int);
                             await _load();
+                            if (context.mounted && h['code'] == 'USD') await repriceUsdProductsAndAsk(context);
                           } catch (e) {
                             if (context.mounted) showError(context, e);
                           }
@@ -317,7 +322,7 @@ class _CompoundVouchersScreenState extends State<CompoundVouchersScreen> {
                           borderRadius: BorderRadius.circular(14), side: const BorderSide(color: ErpColors.border)),
                       child: ExpansionTile(
                         leading: CircleAvatar(
-                          backgroundColor: ErpColors.navy.withOpacity(.1),
+                          backgroundColor: ErpColors.navy.withValues(alpha: .1),
                           child: Text('${v['voucher_number']}',
                               style: const TextStyle(color: ErpColors.navy, fontWeight: FontWeight.bold)),
                         ),
@@ -510,7 +515,7 @@ class _CompoundVoucherEditorScreenState extends State<CompoundVoucherEditorScree
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: l.debit > 0 ? ErpColors.green.withOpacity(.04) : (l.credit > 0 ? ErpColors.red.withOpacity(.04) : Colors.white),
+        color: l.debit > 0 ? ErpColors.green.withValues(alpha: .04) : (l.credit > 0 ? ErpColors.red.withValues(alpha: .04) : Colors.white),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: ErpColors.border),
       ),
@@ -522,7 +527,7 @@ class _CompoundVoucherEditorScreenState extends State<CompoundVoucherEditorScree
         SizedBox(
           width: 110,
           child: DropdownButtonFormField<String>(
-            value: _currencies.any((c) => c.code == l.currency) ? l.currency : CurrencyService.base,
+            initialValue: _currencies.any((c) => c.code == l.currency) ? l.currency : CurrencyService.base,
             decoration: deco('العملة'),
             items: [
               if (_currencies.isEmpty) const DropdownMenuItem(value: CurrencyService.base, child: Text('IQD')),

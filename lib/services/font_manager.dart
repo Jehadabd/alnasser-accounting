@@ -1,10 +1,8 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:pdf/widgets.dart' as pw;
-import 'package:pdf/pdf.dart';
 
 class FontManager {
   static const String _windowsFontsPath = r'C:\Windows\Fonts';
@@ -67,7 +65,7 @@ class FontManager {
     try {
       final directory = Directory(_windowsFontsPath);
       if (!await directory.exists()) {
-        print('مجلد الخطوط غير موجود: $_windowsFontsPath');
+        debugPrint('مجلد الخطوط غير موجود: $_windowsFontsPath');
         return fonts;
       }
 
@@ -92,7 +90,7 @@ class FontManager {
         }
       }
     } catch (e) {
-      print('خطأ في قراءة الخطوط: $e');
+      debugPrint('خطأ في قراءة الخطوط: $e');
     }
 
     // ترتيب الخطوط حسب الاسم
@@ -172,21 +170,20 @@ class FontManager {
     try {
       final sourceFile = File(fontPath);
       if (!await sourceFile.exists()) {
-        print('ملف الخط غير موجود: $fontPath');
+        debugPrint('ملف الخط غير موجود: $fontPath');
         return false;
       }
 
       final fileName = path.basename(fontPath);
       final destinationPath = path.join(_windowsFontsPath, fileName);
-      final destinationFile = File(destinationPath);
 
       // نسخ الملف إلى مجلد الخطوط
       await sourceFile.copy(destinationPath);
       
-      print('تم تثبيت الخط بنجاح: $fileName');
+      debugPrint('تم تثبيت الخط بنجاح: $fileName');
       return true;
     } catch (e) {
-      print('خطأ في تثبيت الخط: $e');
+      debugPrint('خطأ في تثبيت الخط: $e');
       return false;
     }
   }
@@ -196,7 +193,7 @@ class FontManager {
     try {
       final sourceFile = File(fontPath);
       if (!await sourceFile.exists()) {
-        print('ملف الخط غير موجود: $fontPath');
+        debugPrint('ملف الخط غير موجود: $fontPath');
         return false;
       }
 
@@ -205,7 +202,7 @@ class FontManager {
       
       // التحقق من نوع الملف
       if (!['.ttf', '.otf', '.ttc'].contains(extension)) {
-        print('نوع الملف غير مدعوم: $extension');
+        debugPrint('نوع الملف غير مدعوم: $extension');
         return false;
       }
 
@@ -220,10 +217,10 @@ class FontManager {
         _customFonts[fontName] = customFont;
       }
       
-      print('تم إضافة الخط بنجاح: $fileName');
+      debugPrint('تم إضافة الخط بنجاح: $fileName');
       return true;
     } catch (e) {
-      print('خطأ في إضافة الخط: $e');
+      debugPrint('خطأ في إضافة الخط: $e');
       return false;
     }
   }
@@ -259,7 +256,7 @@ class FontManager {
       final algerData = await rootBundle.load('assets/fonts/ALGER.TTF');
       _algerFont = pw.Font.ttf(algerData);
     } catch (e) {
-      print('خطأ في تحميل الخطوط العربية: $e');
+      debugPrint('خطأ في تحميل الخطوط العربية: $e');
     }
   }
 
@@ -303,14 +300,14 @@ class FontManager {
     try {
       final file = File(fontPath);
       if (!await file.exists()) {
-        print('ملف الخط غير موجود: $fontPath');
+        debugPrint('ملف الخط غير موجود: $fontPath');
         return null;
       }
 
       final fontBytes = await file.readAsBytes();
       return pw.Font.ttf(ByteData.view(fontBytes.buffer));
     } catch (e) {
-      print('خطأ في تحميل الخط المخصص: $e');
+      debugPrint('خطأ في تحميل الخط المخصص: $e');
       return null;
     }
   }

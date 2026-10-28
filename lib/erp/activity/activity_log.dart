@@ -19,7 +19,10 @@ import '../report_export.dart';
 class ActivityLog {
   ActivityLog._();
 
-  static bool _ready = false;
+  // مرتبط بالقاعدة المفتوحة: قاعدة مستعادة تُجهَّز جداولها من جديد
+  static int _readyGen = -1;
+  static bool get _ready => _readyGen == DatabaseService.openGeneration;
+  static set _ready(bool v) => _readyGen = v ? DatabaseService.openGeneration : -1;
   static final Map<String, DateTime> _lastView = {};
 
   static Future<void> _ensure(DatabaseExecutor db) async {
@@ -271,11 +274,11 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                             borderRadius: BorderRadius.circular(12),
                             border: Border(right: BorderSide(color: c, width: 4)),
                           ),
-                          child: ListTile(
+                          child: Material(type: MaterialType.transparency, child: ListTile(
                             dense: true,
                             leading: CircleAvatar(
                               radius: 16,
-                              backgroundColor: c.withOpacity(.12),
+                              backgroundColor: c.withValues(alpha: .12),
                               child: Icon(r['financial'] == 1 ? Icons.account_balance_outlined : Icons.person_outline,
                                   size: 18, color: c),
                             ),
@@ -283,7 +286,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                             subtitle: Text(
                                 '${_time(r['at'])} • ${r['user_name'] ?? 'تدقيق مالي'} • ${r['screen'] ?? ''}'),
                             trailing: StatusBadge(a, color: c),
-                          ),
+                          )),
                         );
                       },
                     ),

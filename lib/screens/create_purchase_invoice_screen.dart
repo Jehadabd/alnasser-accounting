@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -16,17 +17,21 @@ import '../erp/erp_common.dart' show PeriodLock, parseMoney, fmtQty, confirmDial
 import '../widgets/formatters.dart' show ThousandSeparatorDecimalInputFormatter;
 import '../services/database_service.dart';
 import '../widgets/quick_product_creation_dialog.dart';
-import '../services/ocr_service_factory.dart';
 import '../services/ensemble_ai_service_factory.dart';
-import '../models/ocr_invoice_item.dart';
-import 'product_entry_screen.dart';
+import '../accounting/screens/acc_ui.dart' show accAppBar;
+import '../erp/erp_kit.dart' show ErpTheme;
+import '../owner/ai_invoice/ai_alias_store.dart';
+import '../owner/ai_invoice/ai_purchase_prefill.dart';
+import '../owner/owner_access.dart';
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
   final Supplier? preselectedSupplier;
   final PurchaseInvoice? existingInvoice;
+  /// 👑🤖 تعبئة مسبقة من شاشة «فاتورة بالذكاء الاصطناعي» (حساب المالك)
+  final AiPurchasePrefill? aiPrefill;
 
-  const CreatePurchaseInvoiceScreen({super.key, this.preselectedSupplier, this.existingInvoice});
+  const CreatePurchaseInvoiceScreen({super.key, this.preselectedSupplier, this.existingInvoice, this.aiPrefill});
 
   @override
   State<CreatePurchaseInvoiceScreen> createState() => _CreatePurchaseInvoiceScreenState();
@@ -94,6 +99,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     } else if (_selectedSupplier != null) {
       _currency = _normCurrency(_selectedSupplier!.currency);
     }
+    final ai = widget.aiPrefill;
+    if (ai != null && widget.existingInvoice == null) {
+      if (ai.invoiceNumber.isNotEmpty) _invoiceNumberController.text = ai.invoiceNumber;
+      if (ai.date != null) _invoiceDate = ai.date!;
+      _currency = _normCurrency(ai.currency);
+      _attachmentPath = ai.attachmentPath;
+      _items = List.of(ai.items);
+      _paymentType = ai.isCash ? 'نقد' : 'دين';
+      if (!ai.isCash && ai.paidAmount > 0) _paidAmountController.text = _moneyFmt.format(ai.paidAmount);
+      _syncCashPaid();
+    }
     _loadData();
   }
 
@@ -140,7 +156,8 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             // 🛡️ قيمة ليست ضمن عناصر القائمة المنسدلة تُسقط الشاشة
             _suppliers = [..._suppliers, pre];
           }
-          _currency = _normCurrency(_selectedSupplier!.currency);
+          // عملة الفاتورة المقروءة بالذكاء الاصطناعي تبقى كما هي
+          if (widget.aiPrefill == null) _currency = _normCurrency(_selectedSupplier!.currency);
           delegatesFor = _selectedSupplier!.id;
         }
         _isLoading = false;
@@ -214,17 +231,40 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
 
   @override
   Widget build(BuildContext context) {
+    // نفس رأس وشكل أزرار شاشات المحاسبة والموردين
+    return Theme(
+      data: ErpTheme.apply(Theme.of(context)),
+      child: _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        title: Text(widget.existingInvoice != null ? 'تعديل فاتورة مشتريات' : 'فاتورة شراء جديدة'),
-        backgroundColor: const Color(0xFF455A64),
-        foregroundColor: Colors.white,
-        elevation: 0,
+      backgroundColor: const Color(0xFFF3F6FB),
+      appBar: accAppBar(
+        widget.existingInvoice != null ? 'تعديل فاتورة مشتريات' : 'فاتورة شراء جديدة',
+        icon: Icons.receipt_long_rounded,
+        subtitle: _selectedSupplier == null ? 'اختر المورد ثم أضف المواد' : 'المورد: ${_selectedSupplier!.name}',
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : Form(
+          : Theme(
+              // 🎨 حقول موحّدة الشكل (الشكل فقط — الحقول والتحقق كما هي)
+              data: Theme.of(context).copyWith(
+                inputDecorationTheme: InputDecorationTheme(
+                  filled: true,
+                  fillColor: const Color(0xFFFBFCFE),
+                  isDense: true,
+                  labelStyle: const TextStyle(color: Color(0xFF667085)),
+                  prefixIconColor: const Color(0xFF0F3460),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _pLine)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _pLine)),
+                  disabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFEEF1F6))),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF0F3460), width: 1.6)),
+                ),
+              ),
+              child: Form(
               key: _formKey,
               child: Column(
                 children: [
@@ -270,12 +310,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                             : SliverList(
                                 delegate: SliverChildBuilderDelegate(
                                   (context, index) {
-                                    return Column(
-                                      children: [
-                                        _buildItemRow(_items[index], index),
-                                        const Divider(height: 1),
-                                      ],
-                                    );
+                                    return _buildItemRow(_items[index], index);
                                   },
                                   childCount: _items.length,
                                 ),
@@ -289,8 +324,22 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                 ],
               ),
             ),
+            ),
     );
   }
+
+  static const _pLine = Color(0xFFE4E9F1);
+  static const _pNavy = Color(0xFF0F3460);
+  static const _pMuted = Color(0xFF667085);
+
+  Widget _sectionLabel(IconData icon, String t) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(children: [
+          Icon(icon, size: 18, color: _pNavy),
+          const SizedBox(width: 6),
+          Text(t, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Color(0xFF1B2433))),
+        ]),
+      );
 
   Future<void> _pickAttachment() async {
     final result = await FilePicker.platform.pickFiles(
@@ -317,8 +366,8 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         _attachmentPath = savedFile.path;
       });
       
-      // 🚀 Trigger OCR automatically
-      _processInvoiceFile(savedFile);
+      // 👑 القراءة الآلية للفاتورة المرفقة لحساب المالك فقط؛ لغيره يبقى الملف مرفقاً فقط
+      if (OwnerAccess.enabled) _processInvoiceFile(savedFile);
     }
   }
 
@@ -355,11 +404,11 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       }
 
       // 📊 Debug: Log all extracted items
-      print('📊 AI Extracted ${extractedItems.length} items:');
+      debugPrint('📊 AI Extracted ${extractedItems.length} items:');
       for (int i = 0; i < extractedItems.length; i++) {
-        print('  [$i] name="${extractedItems[i]['name']}" qty=${extractedItems[i]['qty']} price=${extractedItems[i]['price']} total=${extractedItems[i]['line_total']} unit="${extractedItems[i]['unit'] ?? ''}"');
+        debugPrint('  [$i] name="${extractedItems[i]['name']}" qty=${extractedItems[i]['qty']} price=${extractedItems[i]['price']} total=${extractedItems[i]['line_total']} unit="${extractedItems[i]['unit'] ?? ''}"');
       }
-      print('📊 Detection method: ${result['detection_method'] ?? 'unknown'}');
+      debugPrint('📊 Detection method: ${result['detection_method'] ?? 'unknown'}');
 
       int addedCount = 0;
       for (var item in extractedItems) {
@@ -443,29 +492,26 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
 
   Widget _buildHeaderSection() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: const BoxDecoration(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+      decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 4,
-            offset: Offset(0, 2),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _pLine),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          _sectionLabel(Icons.storefront_rounded, 'المورد والفاتورة'),
           // Row 1: Supplier + Invoice Number
           Row(
             children: [
               Expanded(
                 flex: 2,
                 child: DropdownButtonFormField<Supplier>(
-                  value: _selectedSupplier,
+                  initialValue: _selectedSupplier,
                   decoration: const InputDecoration(
                     labelText: 'المورد *',
-                    border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.store),
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
@@ -494,7 +540,6 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                   controller: _invoiceNumberController,
                   decoration: const InputDecoration(
                     labelText: 'رقم الفاتورة',
-                    border: OutlineInputBorder(),
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                 ),
@@ -520,8 +565,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                   child: InputDecorator(
                     decoration: const InputDecoration(
                       labelText: 'التاريخ',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.calendar_today),
+                        prefixIcon: Icon(Icons.calendar_today),
                       contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     ),
                     child: Text(intl.DateFormat('yyyy-MM-dd').format(_invoiceDate)),
@@ -531,10 +575,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               const SizedBox(width: 12),
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _currency,
+                  initialValue: _currency,
                   decoration: const InputDecoration(
                     labelText: 'العملة',
-                    border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.attach_money),
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
@@ -549,15 +592,16 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
           ),
           const SizedBox(height: 12),
 
+          const Divider(height: 26, color: _pLine),
+          _sectionLabel(Icons.payments_outlined, 'الدفع والاستلام'),
           // 🆕 Row 3: Payment Type + Paid Amount
           Row(
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _paymentType,
+                  initialValue: _paymentType,
                   decoration: const InputDecoration(
                     labelText: 'نوع الدفع',
-                    border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.payment),
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
@@ -580,12 +624,12 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                   enabled: _paymentType == 'دين',
                   decoration: const InputDecoration(
                     labelText: 'المبلغ المسدد',
-                    border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.money),
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+                  onChanged: (_) => setState(() {}), // يحدّث «المسدد/الباقي» في الأسفل (عرض فقط)
                   validator: (v) {
                     final paid = parseMoney(v) ?? 0.0;
                     if (paid < 0) return 'مبلغ غير صالح';
@@ -642,7 +686,6 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                 onSubmitted: (val) => onFieldSubmitted(),
                 decoration: const InputDecoration(
                   labelText: 'اسم المندوب',
-                  border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.person_outline),
                   contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 ),
@@ -658,12 +701,13 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey),
-                    borderRadius: BorderRadius.circular(4),
+                    color: const Color(0xFFFBFCFE),
+                    border: Border.all(color: _pLine),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.attach_file, color: Colors.grey),
+                      const Icon(Icons.attach_file, color: _pMuted),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -700,21 +744,31 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   // 🆕 Extracted: Items Header Actions
   Widget _buildItemsHeaderActions() {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(20, 18, 16, 10),
       child: Row(
         children: [
+          const Icon(Icons.inventory_2_outlined, color: _pNavy, size: 20),
+          const SizedBox(width: 8),
           const Text(
-            'المنتجات',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            'المواد',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF1B2433)),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(color: _pNavy.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(20)),
+            child: Text('${_items.length}', style: const TextStyle(fontWeight: FontWeight.w800, color: _pNavy)),
           ),
           const Spacer(),
-          ElevatedButton.icon(
+          FilledButton.icon(
             onPressed: _showAddProductDialog,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF455A64),
+            style: FilledButton.styleFrom(
+              backgroundColor: _pNavy,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            icon: const Icon(Icons.add),
-            label: const Text('إضافة منتج'),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('إضافة منتج', style: TextStyle(fontWeight: FontWeight.w800)),
           ),
         ],
       ),
@@ -727,12 +781,20 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     bool isNew = item.productId == -1;
 
     return Container(
-      color: isNew ? Colors.blue.withOpacity(0.05) : Colors.white,
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      decoration: BoxDecoration(
+        color: isNew ? const Color(0xFFF2F6FF) : (index.isOdd ? const Color(0xFFFAFBFD) : Colors.white),
+        border: const Border(
+          left: BorderSide(color: _pLine),
+          right: BorderSide(color: _pLine),
+          bottom: BorderSide(color: _pLine),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
       child: Row(
         children: [
           // #
-          SizedBox(width: 30, child: Text('${index + 1}')),
+          SizedBox(width: 30, child: Text('${index + 1}', style: const TextStyle(color: _pMuted))),
           
           // Product Name
           Expanded(
@@ -748,18 +810,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                 ),
                 if (isNew) ...[
                   const SizedBox(width: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.blue,
-                      borderRadius: BorderRadius.circular(4),
+                  TextButton.icon(
+                    onPressed: () => _defineNewProduct(item, index),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF1D4ED8),
+                      backgroundColor: const Color(0xFF1D4ED8).withValues(alpha: 0.08),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      minimumSize: const Size(0, 30),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                     ),
-                    child: const Text('جديد', style: TextStyle(color: Colors.white, fontSize: 10)),
-                  ),
-                  const SizedBox(width: 4),
-                  InkWell(
-                    onTap: () => _defineNewProduct(item, index),
-                    child: const Icon(Icons.add_circle, color: Colors.blue, size: 20),
+                    icon: const Icon(Icons.add_circle_outline, size: 16),
+                    label: const Text('مادة جديدة — عرّفها', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
                   ),
                 ],
               ],
@@ -791,7 +852,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(item.unitName ?? '', textAlign: TextAlign.center),
+                Text(item.unitName, textAlign: TextAlign.center),
                 if (item.conversionFactor > 1)
                   Text(
                     '(x${item.conversionFactor.toInt()})',
@@ -808,7 +869,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             child: Text(
               _formatNumber(item.totalPrice),
               textAlign: TextAlign.center,
-              style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF455A64)),
+              style: const TextStyle(fontWeight: FontWeight.w800, color: _pNavy),
             ),
           ),
           
@@ -816,7 +877,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
           SizedBox(
             width: 40,
             child: IconButton(
-              icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+              icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFB42318), size: 20),
               tooltip: 'حذف المادة',
               onPressed: () {
                 setState(() {
@@ -832,36 +893,41 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   }
 
   Widget _buildFooterSection() {
+    // عرض فقط: المسدد والباقي من الحقول نفسها
+    final paidShown = _paymentType == 'نقد' ? _totalAmount : (parseMoney(_paidAmountController.text) ?? 0.0);
+    final rest = _totalAmount - paidShown;
+    Widget fig(String label, String value, Color c, {bool big = false}) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 12, color: _pMuted)),
+            Text(value,
+                textDirection: TextDirection.ltr,
+                style: TextStyle(fontSize: big ? 24 : 16, fontWeight: FontWeight.w900, color: c)),
+          ],
+        );
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
       decoration: const BoxDecoration(
         color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 4,
-            offset: Offset(0, -2),
-          ),
-        ],
+        border: Border(top: BorderSide(color: _pLine)),
       ),
       child: Column(
         children: [
           // Total
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              const Text('الإجمالي:', style: TextStyle(fontSize: 18)),
-              Text(
-                '${_formatNumber(_totalAmount)} $_currency',
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF455A64),
-                ),
-              ),
+              fig('الإجمالي ($_currency)', _formatNumber(_totalAmount), _pNavy, big: true),
+              const SizedBox(width: 28),
+              fig('المسدد', _formatNumber(paidShown), const Color(0xFF067647)),
+              const SizedBox(width: 28),
+              fig('الباقي للمورد', _formatNumber(rest < 0 ? 0 : rest), rest > 0.004 ? const Color(0xFFB42318) : _pMuted),
+              const Spacer(),
+              Text('${_items.length} مادة', style: const TextStyle(color: _pMuted)),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           
           // Buttons
           Row(
@@ -872,7 +938,10 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                   icon: const Icon(Icons.save_outlined),
                   label: const Text('حفظ كمسودة'),
                   style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    foregroundColor: _pNavy,
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ),
@@ -887,10 +956,12 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                         )
                       : const Icon(Icons.check_circle),
-                  label: const Text('تأكيد واستلام'),
+                  label: const Text('تأكيد واستلام', style: TextStyle(fontWeight: FontWeight.w800)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    backgroundColor: const Color(0xFF067647),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ),
@@ -926,6 +997,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               // 2. Update the invoice item
               //    🛡️ معامل التحويل من هرم وحدات المادة (كان ثابتاً 1.0 ⇒ شراء
               //    «كرتون» يُدخل للمخزون قطعة واحدة بكلفة الكرتون كاملة)
+              // 🧠 مادة جديدة من فاتورة مورد مقروءة بالذكاء الاصطناعي: نتعلّم اسمها الأصلي
+              final aiOriginal = widget.aiPrefill?.originalNames[item.productName ?? ''];
+              final newId = product.id;
+              if (aiOriginal != null && newId != null && newId > 0) {
+                AiAliasStore.learn(
+                  supplierId: _selectedSupplier?.id,
+                  alias: aiOriginal,
+                  productId: newId,
+                  productName: product.name,
+                ).catchError((_) {});
+              }
               if (index < _items.length) {
                 _items[index] = PurchaseInvoiceItem(
                   productId: product.id ?? -1,
@@ -978,13 +1060,13 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
           
           setState(() {
             // DEBUG: Print conversion factor and base values
-            print('📦 PURCHASE_DEBUG: Adding item ${product.name}');
-            print('📦 PURCHASE_DEBUG: Unit selected: $unit');
-            print('📦 PURCHASE_DEBUG: Quantity: $quantity');
-            print('📦 PURCHASE_DEBUG: Unit Price: $price');
-            print('📦 PURCHASE_DEBUG: Conversion Factor: $factor');
-            print('📦 PURCHASE_DEBUG: Base Quantity: ${quantity * factor}');
-            print('📦 PURCHASE_DEBUG: Base Unit Cost: ${price / factor}');
+            debugPrint('📦 PURCHASE_DEBUG: Adding item ${product.name}');
+            debugPrint('📦 PURCHASE_DEBUG: Unit selected: $unit');
+            debugPrint('📦 PURCHASE_DEBUG: Quantity: $quantity');
+            debugPrint('📦 PURCHASE_DEBUG: Unit Price: $price');
+            debugPrint('📦 PURCHASE_DEBUG: Conversion Factor: $factor');
+            debugPrint('📦 PURCHASE_DEBUG: Base Quantity: ${quantity * factor}');
+            debugPrint('📦 PURCHASE_DEBUG: Base Unit Cost: ${price / factor}');
             
             _items.add(PurchaseInvoiceItem(
               productId: product.id!,
@@ -1033,7 +1115,11 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     return factor > 0 ? factor : 1.0;
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _saveInvoice({required bool confirm}) async {
+    await SaveLock.run(() => _saveInvoiceUnlocked(confirm: confirm), message: 'جارٍ حفظ فاتورة الشراء…');
+  }
+  Future<void> _saveInvoiceUnlocked({required bool confirm}) async {
     // 🛡️ منع الحفظ المزدوج: الضغط مرتين قبل إعادة البناء كان يُنشئ فاتورتين
     if (_isSaving) return;
     if (!_formKey.currentState!.validate()) return;
@@ -1201,13 +1287,16 @@ class _TableHeadersDelegate extends SliverPersistentHeaderDelegate {
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
     return Container(
       height: 56, // Force height to match extent
+      color: const Color(0xFFF3F6FB),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Container(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-      decoration: BoxDecoration(
-        color: Colors.grey[200],
-        boxShadow: overlapsContent
-            ? [const BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))]
-            : [],
+      decoration: const BoxDecoration(
+        color: Color(0xFF0F3460),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
       ),
+      child: DefaultTextStyle.merge(
+      style: const TextStyle(color: Colors.white),
       child: const Row(
         children: [
           SizedBox(width: 30, child: Text('#', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -1218,6 +1307,8 @@ class _TableHeadersDelegate extends SliverPersistentHeaderDelegate {
           Expanded(flex: 1, child: Text('الإجمالي', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold))),
           SizedBox(width: 40), // Actions
         ],
+      ),
+      ),
       ),
     );
   }

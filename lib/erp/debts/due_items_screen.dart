@@ -3,6 +3,7 @@
 // 📅 شاشة الاستحقاقات: شيكات وأوراق القبض والدفع والأقساط — إدخال، تحصيل،
 // ارتداد، إلغاء، مع مؤشرات المتأخر والمستحق هذا الأسبوع.
 
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 
 import '../../accounting/ledger.dart';
@@ -24,7 +25,9 @@ class DueItemsScreen extends StatefulWidget {
 }
 
 class _DueItemsScreenState extends State<DueItemsScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 4, vsync: this);
+  // يُنشأ في initState: الإنشاء الكسول كان يحدث أول مرة داخل dispose (حين لا تُستعمل
+  // التبويبات في التخطيط العريض) ⇒ «Looking up a deactivated widget's ancestor is unsafe»
+  late final TabController _tabs;
   final _svc = DueItemsService();
   List<Map<String, Object?>> _rows = const [];
   Map<String, double> _kpi = const {};
@@ -33,6 +36,7 @@ class _DueItemsScreenState extends State<DueItemsScreen> with SingleTickerProvid
   @override
   void initState() {
     super.initState();
+    _tabs = TabController(length: 4, vsync: this);
     _tabs.addListener(() {
       if (!_tabs.indexIsChanging) _load();
     });
@@ -95,7 +99,11 @@ class _DueItemsScreenState extends State<DueItemsScreen> with SingleTickerProvid
     return ErpColors.blue;
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _settle(Map<String, Object?> r) async {
+    await SaveLock.run(() => _settleUnlocked(r), message: 'جارٍ التنفيذ…');
+  }
+  Future<void> _settleUnlocked(Map<String, Object?> r) async {
     final remaining = d0(r['amount']) - d0(r['paid_amount']);
     final amount = TextEditingController(text: fmtMoney(remaining));
     final note = TextEditingController();
@@ -264,7 +272,7 @@ class _DueItemsScreenState extends State<DueItemsScreen> with SingleTickerProvid
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border(right: BorderSide(color: color, width: 5)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8)],
       ),
       padding: const EdgeInsets.all(12),
       child: Row(children: [
@@ -445,7 +453,7 @@ class _DueItemFormScreenState extends State<DueItemFormScreen> {
               ChoiceChip(
                 label: Text(e.value),
                 selected: _kind == e.key,
-                selectedColor: ErpColors.navy.withOpacity(0.15),
+                selectedColor: ErpColors.navy.withValues(alpha: 0.15),
                 onSelected: (_) => setState(() {
                   final wasReceivable = _receivable;
                   _kind = e.key;

@@ -1,560 +1,386 @@
 // screens/person_month_details_screen.dart
+//
+// 👤 شهر واحد لعميل: مؤشرات الشهر، فواتيره (برقمها التجاري وربحها الصحيح)،
+// حركات حسابه، وما اشتراه من مواد. الضغط على فاتورة يفتح تفصيلها.
+// (كان ربح الفاتورة هنا = مبلغها كله لأن الكلفة كانت تُقرأ بمفاتيح خاطئة.)
+
 import 'package:flutter/material.dart';
+
+import '../accounting/screens/acc_ui.dart' show accRoute;
 import '../models/customer.dart';
-import '../models/invoice.dart';
-import '../models/person_data.dart'; // Correct import
 import '../models/transaction.dart';
 import '../services/database_service.dart';
+import '../services/reports_service.dart';
+import '../widgets/report_kit.dart';
 import 'invoice_details_screen.dart';
-import 'package:intl/intl.dart';
-import 'customer_products_dialog.dart';
 
 class PersonMonthDetailsScreen extends StatefulWidget {
-  final Customer customer;
-  final int year;
-  final int month;
+  /// التوافق مع الاستدعاء القديم.
+  PersonMonthDetailsScreen({super.key, required Customer customer, required this.year, required this.month})
+      : customerId = customer.id,
+        name = customer.name;
 
-  const PersonMonthDetailsScreen({
+  const PersonMonthDetailsScreen.fromReport({
     super.key,
-    required this.customer,
+    required this.customerId,
+    required this.name,
     required this.year,
     required this.month,
   });
 
+  final int? customerId;
+  final String name;
+  final int year;
+  final int month;
+
   @override
-  State<PersonMonthDetailsScreen> createState() =>
-      _PersonMonthDetailsScreenState();
+  State<PersonMonthDetailsScreen> createState() => _PersonMonthDetailsScreenState();
 }
 
-class _PersonMonthDetailsScreenState extends State<PersonMonthDetailsScreen> {
-  final DatabaseService _databaseService = DatabaseService();
-  List<InvoiceWithProductData> _invoices = [];
-  List<DebtTransaction> _transactions = [];
-  double _monthProfit = 0.0;
-  double _monthSales = 0.0;
-  bool _isLoading = true;
- late final NumberFormat _nf = NumberFormat('#,##0', 'en_US');
-  String _fmt(num v) => _nf.format(v);
+class _PersonMonthDetailsScreenState extends State<PersonMonthDetailsScreen> with SingleTickerProviderStateMixin {
+  // يُنشأ في initState: الإنشاء الكسول كان يحدث أول مرة داخل dispose (حين لا تُستعمل
+  // التبويبات في التخطيط العريض) ⇒ «Looking up a deactivated widget's ancestor is unsafe»
+  late final TabController _tabs;
+  bool _loading = true;
+  SalesFacts? _facts;
+  List<DebtTransaction> _tx = const [];
+
   @override
   void initState() {
     super.initState();
-    _loadMonthDetails();
+    _tabs = TabController(length: 3, vsync: this);
+    _load();
   }
 
-  Future<void> _loadMonthDetails() async {
-    setState(() {
-      _isLoading = true;
-    });
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
 
+  Future<void> _load() async {
+    setState(() => _loading = true);
     try {
-      final invoices =
-          await _databaseService.getCustomerInvoicesWithProfitForMonth(
-        widget.customer.id!,
-        widget.year,
-        widget.month,
+      final facts = await ReportsService().loadFacts(
+        customerId: widget.customerId,
+        customerName: widget.customerId == null ? widget.name : null,
+        from: DateTime(widget.year, widget.month, 1),
+        to: DateTime(widget.year, widget.month + 1, 0),
       );
-      final transactions =
-          await _databaseService.getCustomerTransactionsForMonth(
-        widget.customer.id!,
-        widget.year,
-        widget.month,
-      );
-      double totalProfit = 0.0;
-      double totalSales = 0.0;
-      for (final inv in invoices) {
-        totalProfit += inv.profit;
-        totalSales += inv.totalAmount;
-      }
+      final tx = widget.customerId == null
+          ? const <DebtTransaction>[]
+          : await DatabaseService().getCustomerTransactionsForMonth(widget.customerId!, widget.year, widget.month);
+      if (!mounted) return;
       setState(() {
-        _invoices = invoices;
-        _transactions = transactions;
-        _monthProfit = totalProfit;
-        _monthSales = totalSales;
-        _isLoading = false;
+        _facts = facts;
+        _tx = tx;
+        _loading = false;
       });
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('حدث خطأ في تحميل البيانات: $e'),
-          ),
-        );
-      }
+      if (!mounted) return;
+      setState(() => _loading = false);
+      setToast(context, 'تعذّر تحميل بيانات الشهر: $e', error: true);
     }
-  }
-
-  String _numericMonth(int year, int month) => '${year}-${month.toString().padLeft(2, '0')}';
-
-  void _showCumulativeSales() {
-    showDialog(
-      context: context,
-      builder: (context) => CustomerProductsDialog(
-        customerId: widget.customer.id!,
-        customerName: widget.customer.name,
-        year: widget.year,
-        month: widget.month,
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final monthName = _numericMonth(widget.year, widget.month);
+    final profit = repCanSeeProfit();
+    final f = _facts;
+    return ReportScaffold(
+      title: widget.name,
+      subtitle: repMonth(widget.year, widget.month),
+      icon: Icons.event_note_rounded,
+      actions: [IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
+      loading: _loading,
+      body: _loading
+          ? null
+          : f == null
+              ? const EmptyReport(title: 'تعذّر تحميل بيانات الشهر', text: 'اضغط «تحديث» للمحاولة مجدداً.', icon: Icons.error_outline_rounded)
+              : NestedScrollView(
+              headerSliverBuilder: (context, _) => [
+                SliverToBoxAdapter(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1180),
+                      child: Padding(padding: const EdgeInsets.fromLTRB(16, 14, 16, 4), child: _kpis(f, profit)),
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1180),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: kSetBorder),
+                          ),
+                          child: TabBar(
+                            controller: _tabs,
+                            labelColor: kSetNavy,
+                            unselectedLabelColor: kSetMuted,
+                            indicatorColor: kSetNavy,
+                            indicatorSize: TabBarIndicatorSize.label,
+                            dividerColor: Colors.transparent,
+                            labelStyle: const TextStyle(fontWeight: FontWeight.w800),
+                            tabs: [
+                              Tab(text: 'الفواتير (${f.invoices.length})'),
+                              Tab(text: 'حركات الحساب (${_tx.length})'),
+                              const Tab(text: 'المواد'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              body: TabBarView(controller: _tabs, children: [
+                _invoicesTab(f, profit),
+                _txTab(),
+                _productsTab(f, profit),
+              ]),
+            ),
+    );
+  }
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FB),
-      appBar: AppBar(
-        title: Text(
-          '${widget.customer.name} - ${monthName}',
-          style: const TextStyle(fontSize: 16),
-        ),
-        centerTitle: true,
-        backgroundColor: const Color(0xFF2196F3),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadMonthDetails,
+  Widget _kpis(SalesFacts f, bool profit) {
+    final t = f.totals();
+    final remaining = t.sales - t.paid;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: KpiGrid(minTileWidth: 170, children: [
+        KpiTile(label: 'المشتريات', value: t.netSales, icon: Icons.shopping_cart_rounded, color: kSetBlue, emphasis: true),
+        if (profit)
+          KpiTile(
+            label: 'الربح',
+            value: t.profit,
+            icon: Icons.trending_up_rounded,
+            color: kSetGreen,
+            hint: t.netSales.abs() > 0 ? 'هامش ${repPercent(t.margin)}' : null,
           ),
+        KpiTile(label: 'الفواتير', value: t.invoiceCount.toDouble(), money: false, icon: Icons.receipt_long_rounded, color: kRepPurple),
+        KpiTile(label: 'المدفوع منها', value: t.paid, icon: Icons.payments_rounded, color: kRepTeal),
+        KpiTile(label: 'بقي على الحساب', value: remaining, icon: Icons.schedule_rounded, color: kSetOrange),
+        if (t.totalReturns > 0)
+          KpiTile(label: 'المرتجعات', value: t.totalReturns, icon: Icons.assignment_return_rounded, color: kSetRed),
+      ]),
+    );
+  }
+
+  Widget _wrap(List<Widget> children) => ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
+        children: [
+          for (final c in children)
+            Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1180), child: c)),
         ],
-      ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(
-                color: Color(0xFF2196F3),
-              ),
-            )
-          : _invoices.isEmpty && _transactions.isEmpty
-              ? const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.receipt_long,
-                        size: 80,
-                        color: Color(0xFFCCCCCC),
-                      ),
-                      SizedBox(height: 16),
-                      Text(
-                        'لا توجد تعاملات في هذا الشهر',
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: Color(0xFF666666),
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _loadMonthDetails,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        // ملخص الشهر
-                        Card(
-                          elevation: 4,
-                          margin: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            side: BorderSide(
-                                color: Colors.green.withOpacity(0.3), width: 1),
-                          ),
-                          child: Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(16),
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  Colors.green.withOpacity(0.1),
-                                  Colors.green.withOpacity(0.05),
-                                ],
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green.withOpacity(0.1),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(
-                                        Icons.calendar_month,
-                                        color: Colors.green,
-                                        size: 24,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            'ملخص الشهر',
-                                            style: const TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.green,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'إجمالي المبيعات: ${_fmt(_monthSales)} د.ع',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.grey[600],
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'إجمالي الربح: ${_fmt(_monthProfit)} د.ع',
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              color: Color(0xFF4CAF50),
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        // زر المبيعات التراكمية للشهر
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: _showCumulativeSales,
-                            icon: const Icon(Icons.analytics),
-                            label: const Text('تفصيل المنتجات المشتراة'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF2196F3),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        if (_invoices.isNotEmpty) ...[
-                          _buildSectionHeader('الفواتير', Icons.receipt_long),
-                          const SizedBox(height: 12),
-                          ..._invoices.map(
-                              (invoiceData) => _buildInvoiceCard(invoiceData)),
-                          const SizedBox(height: 20),
-                        ],
-                        if (_transactions.isNotEmpty) ...[
-                          _buildSectionHeader('المعاملات المالية',
-                              Icons.account_balance_wallet),
-                          const SizedBox(height: 12),
-                          ..._transactions.map((transaction) =>
-                              _buildTransactionCard(transaction)),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-    );
-  }
+      );
 
-  Widget _buildSectionHeader(String title, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, color: const Color(0xFF2196F3), size: 24),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF2C3E50),
-          ),
+  Widget _invoicesTab(SalesFacts f, bool profit) {
+    if (f.invoices.isEmpty && f.returns.isEmpty) {
+      return _wrap(const [EmptyReport(title: 'لا فواتير في هذا الشهر', icon: Icons.receipt_long_outlined)]);
+    }
+    return _wrap([
+      for (final i in f.invoices.reversed)
+        _InvoiceCard(
+          inv: i,
+          showProfit: profit,
+          onTap: () => Navigator.push(context, accRoute(InvoiceDetailsScreen(invoiceId: i.id))),
         ),
-      ],
-    );
-  }
-
-  Widget _buildInvoiceCard(InvoiceWithProductData invoiceData) {
-    final invoiceId = invoiceData.invoiceId;
-    return Card(
-      elevation: 4,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: InkWell(
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => InvoiceDetailsScreen(
-                invoiceId: invoiceId,
-              ),
+      for (final r in f.returns)
+        Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF2F2),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: kSetRed.withValues(alpha: 0.25)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.assignment_return_rounded, color: kSetRed),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('مرتجع مبيعات رقم ${r.number}',
+                    style: const TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
+                Text(
+                  '${repDate(r.date)} • ${r.refundModeArabic}${r.originalInvoiceId == null ? '' : ' • من فاتورة #${r.originalInvoiceId}'}',
+                  style: const TextStyle(fontSize: 12, color: kSetMuted),
+                ),
+              ]),
             ),
-          );
-        },
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'فاتورة رقم ${invoiceId}',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2C3E50),
-                      ),
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2196F3).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${invoiceData.invoiceDate.day}/${invoiceData.invoiceDate.month}/${invoiceData.invoiceDate.year}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF2196F3),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInvoiceInfo(
-                      icon: Icons.trending_up,
-                      title: 'الربح',
-                      value: '${_fmt(invoiceData.profit)} د.ع',
-                      color: const Color(0xFF4CAF50),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildInvoiceInfo(
-                      icon: Icons.shopping_cart,
-                      title: 'الخصم',
-                      value: '${_fmt(invoiceData.discount)}',
-                      color: const Color(0xFF2196F3),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInvoiceInfo(
-                      icon: Icons.attach_money,
-                      title: 'المجموع',
-                      value: '${_fmt(invoiceData.totalAmount)} د.ع',
-                      color: const Color(0xFF4CAF50),
-                    ),
-                  ),
-// removed 'paid' and 'remaining' as they are not available directly in simplified view
-// unless we fetch full invoice. For now, showing totalAmount is safe.
-                ],
-              ),
-            ],
-          ),
+            MoneyLabel(-r.total),
+          ]),
         ),
-      ),
-    );
+    ]);
   }
 
-  Widget _buildTransactionCard(DebtTransaction transaction) {
-    final isPositive = transaction.amountChanged > 0;
+  Widget _txTab() {
+    if (_tx.isEmpty) {
+      return _wrap([
+        EmptyReport(
+          title: 'لا حركات حساب في هذا الشهر',
+          text: widget.customerId == null ? 'هذا زبون بلا بطاقة، فلا حساب دين له.' : null,
+          icon: Icons.account_balance_wallet_outlined,
+        ),
+      ]);
+    }
+    return _wrap([for (final t in _tx) _TxRow(t: t)]);
+  }
 
-    return Card(
-      elevation: 4,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+  Widget _productsTab(SalesFacts f, bool profit) {
+    final list = f.byProduct()..sort((a, b) => b.netRevenue.compareTo(a.netRevenue));
+    if (list.isEmpty) return _wrap(const [EmptyReport(title: 'لا مواد في هذا الشهر', icon: Icons.inventory_2_outlined)]);
+    final max = list.first.netRevenue;
+    return _wrap([
+      SetCard(
+        title: 'ما اشتراه في ${repMonth(widget.year, widget.month)}',
+        subtitle: '${list.length} مادة — الكمية بالوحدة الأساسية',
+        icon: Icons.inventory_2_rounded,
+        color: kSetGreen,
+        child: Column(children: [
+          for (var i = 0; i < list.length; i++)
+            RankRow(
+              rank: i + 1,
+              title: list[i].name,
+              subtitle:
+                  '${repQty(list[i].netQty)} ${list[i].baseUnit}${profit ? ' • ربح ${repMoney(list[i].profit)}' : ''}',
+              value: list[i].netRevenue,
+              fraction: max <= 0 ? 0 : list[i].netRevenue / max,
+              color: kSetGreen,
+            ),
+        ]),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    transaction.transactionType,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2C3E50),
-                    ),
-                  ),
-                ),
+    ]);
+  }
+}
+
+class _InvoiceCard extends StatelessWidget {
+  const _InvoiceCard({required this.inv, required this.showProfit, required this.onTap});
+  final SalesInvoiceFact inv;
+  final bool showProfit;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = inv.total - inv.paid;
+    Widget pill(String t, Color c) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(color: c.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10)),
+          child: Text(t, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: c)),
+        );
+    Widget cell(String label, Widget v) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: kSetMuted)),
+          v,
+        ]);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kSetBorder),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
+                  width: 40,
+                  height: 40,
                   decoration: BoxDecoration(
-                    color: isPositive
-                        ? const Color(0xFF4CAF50).withOpacity(0.1)
-                        : const Color(0xFFF44336).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                    color: inv.isCash ? const Color(0xFFECFDF5) : const Color(0xFFFFF7ED),
+                    borderRadius: BorderRadius.circular(11),
                   ),
-                  child: Text(
-                    '${transaction.transactionDate.day}/${transaction.transactionDate.month}/${transaction.transactionDate.year}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isPositive
-                          ? const Color(0xFF4CAF50)
-                          : const Color(0xFFF44336),
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  child: Icon(Icons.receipt_long_rounded, color: inv.isCash ? kSetGreen : kSetOrange),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
+                const SizedBox(width: 10),
                 Expanded(
-                  child: _buildTransactionInfo(
-                    icon: isPositive ? Icons.add : Icons.remove,
-                    title: 'المبلغ',
-                    value:
-                        '${_fmt(transaction.amountChanged.abs())} د.ع',
-                    color: isPositive
-                        ? const Color(0xFF4CAF50)
-                        : const Color(0xFFF44336),
-                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      Text('فاتورة ${inv.displayNumber}',
+                          textDirection: TextDirection.rtl,
+                          style: const TextStyle(fontWeight: FontWeight.w900, color: kSetText)),
+                      pill(inv.paymentType.isEmpty ? '—' : inv.paymentType, inv.isCash ? kSetGreen : kSetOrange),
+                    ]),
+                    Text('${repDate(inv.date)} • ${inv.items.where((i) => i.kind == SalesItemKind.sale).length} صنف',
+                        style: const TextStyle(fontSize: 12, color: kSetMuted)),
+                  ]),
                 ),
-                if (transaction.newBalanceAfterTransaction != null) ...[
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildTransactionInfo(
-                      icon: Icons.account_balance,
-                      title: 'الرصيد الجديد',
-                      value:
-                          '${_fmt(transaction.newBalanceAfterTransaction!)} د.ع',
-                      color: const Color(0xFF2196F3),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            if (transaction.transactionNote != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'ملاحظة: ${transaction.transactionNote}',
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF666666),
-                ),
-              ),
-            ],
-          ],
+                const Icon(Icons.chevron_right_rounded, color: kSetMuted),
+              ]),
+              const SizedBox(height: 10),
+              Wrap(spacing: 22, runSpacing: 8, children: [
+                cell('المجموع', MoneyLabel(inv.total)),
+                if (inv.discount > 0) cell('الخصم', MoneyLabel(-inv.discount, bold: false)),
+                if (inv.loadingFee > 0) cell('أجور التحميل', MoneyLabel(inv.loadingFee, bold: false)),
+                if (inv.returnAmount > 0) cell('الراجع', MoneyLabel(-inv.returnAmount, bold: false)),
+                if (!inv.isCash) cell('المدفوع', MoneyLabel(inv.paid, bold: false)),
+                if (!inv.isCash) cell('المتبقي', MoneyLabel(remaining, color: remaining > 0 ? kSetOrange : kSetGreen)),
+                if (showProfit) cell('الربح', MoneyLabel(inv.profit, color: kSetGreen)),
+              ]),
+            ]),
+          ),
         ),
       ),
     );
   }
+}
 
-  Widget _buildInvoiceInfo({
-    required IconData icon,
-    required String title,
-    required String value,
-    required Color color,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 4),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF666666),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-      ],
-    );
-  }
+class _TxRow extends StatelessWidget {
+  const _TxRow({required this.t});
+  final DebtTransaction t;
 
-  Widget _buildTransactionInfo({
-    required IconData icon,
-    required String title,
-    required String value,
-    required Color color,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 4),
+  String get _label => switch (t.transactionType) {
+        'manual_debt' || 'debt_addition' => 'إضافة دين',
+        'opening_balance' => 'رصيد افتتاحي',
+        'manual_payment' || 'payment' || 'debt_payment' => 'تسديد',
+        'invoice_debt' || 'invoice_debt_sync' => 'دين فاتورة',
+        _ => t.amountChanged >= 0 ? 'إضافة على الحساب' : 'تنزيل من الحساب',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final up = t.amountChanged > 0;
+    final c = up ? kSetOrange : kSetGreen;
+    final note = [t.description, t.transactionNote].whereType<String>().where((s) => s.trim().isNotEmpty).join(' — ');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: kSetBorder)),
+      child: Row(children: [
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(11)),
+          child: Icon(up ? Icons.north_east_rounded : Icons.south_west_rounded, color: c, size: 19),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_label, style: const TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
             Text(
-              title,
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF666666),
-              ),
+              [repDate(t.transactionDate), if (note.isNotEmpty) note].join(' • '),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: kSetMuted),
             ),
-          ],
+          ]),
         ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-      ],
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          MoneyLabel(t.amountChanged.abs(), color: c),
+          if (t.newBalanceAfterTransaction != null)
+            Text('الرصيد ${repMoney(t.newBalanceAfterTransaction!)}', style: const TextStyle(fontSize: 11.5, color: kSetMuted)),
+        ]),
+      ]),
     );
   }
 }

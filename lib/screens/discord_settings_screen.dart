@@ -1,20 +1,39 @@
+// lib/screens/discord_settings_screen.dart
+//
+// 💬 ربط Discord (Webhook) لاستقبال التقارير والنسخ — بالشكل الموحّد للإعدادات.
+// المنطق كما كان (حفظ الرابط في SharedPreferences ثم رسالة تجريبية)، مع إضافات:
+//   • نتيجة آخر اختبار تظهر داخل الشاشة (لا تختفي مع رسالة سريعة).
+//   • التحقق من أن الرابط رابط Webhook فعلاً قبل الحفظ.
+//   • زر «إلغاء الربط» (الخدمة تعتبر الرابط الفارغ = غير مُعدّ).
+
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
+
 import '../services/settings_manager.dart';
+import '../widgets/settings_kit.dart';
 
 class DiscordSettingsScreen extends StatefulWidget {
-  const DiscordSettingsScreen({Key? key}) : super(key: key);
+  const DiscordSettingsScreen({super.key});
 
   @override
   State<DiscordSettingsScreen> createState() => _DiscordSettingsScreenState();
 }
 
 class _DiscordSettingsScreenState extends State<DiscordSettingsScreen> {
+  static const _discord = Color(0xFF5865F2);
+
   final _webhookUrlController = TextEditingController();
-  
+
+  bool _loaded = false;
   bool _isLoading = false;
-  bool _showInstructions = false;
+  bool _testing = false;
+  bool _obscure = true;
+  String _savedUrl = '';
+
+  /// نتيجة آخر اختبار: null = لم يُختبر بعد.
+  (bool ok, String msg)? _lastTest;
 
   @override
   void initState() {
@@ -24,8 +43,11 @@ class _DiscordSettingsScreenState extends State<DiscordSettingsScreen> {
 
   Future<void> _loadSavedSettings() async {
     final url = await SettingsManager.getDiscordWebhookUrl();
+    if (!mounted) return;
     setState(() {
-      _webhookUrlController.text = url ?? '';
+      _savedUrl = url ?? '';
+      _webhookUrlController.text = _savedUrl;
+      _loaded = true;
     });
   }
 
@@ -35,214 +57,211 @@ class _DiscordSettingsScreenState extends State<DiscordSettingsScreen> {
     super.dispose();
   }
 
-  void _showSnackBar(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red : Colors.green,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
+  bool get _configured => _savedUrl.isNotEmpty && _savedUrl.startsWith('http');
+
+  /// رابط Webhook صالح: https://discord.com/api/webhooks/<id>/<token> (أو discordapp.com).
+  bool _looksLikeWebhook(String url) {
+    final u = Uri.tryParse(url);
+    if (u == null || !u.hasScheme || !u.scheme.startsWith('http')) return false;
+    final hostOk = u.host.endsWith('discord.com') || u.host.endsWith('discordapp.com');
+    return hostOk && u.path.contains('/api/webhooks/');
   }
 
   Future<void> _saveSettings() async {
     final url = _webhookUrlController.text.trim();
-
     if (url.isEmpty || !url.startsWith('http')) {
-      _showSnackBar('الرجاء إدخال رابط Webhook صحيح', isError: true);
+      setToast(context, 'الرجاء إدخال رابط Webhook صحيح', error: true);
       return;
     }
-    
+    if (!_looksLikeWebhook(url)) {
+      final go = await _confirm(
+        'الرابط لا يشبه رابط Webhook',
+        'رابط Discord الصحيح يبدأ بـ https://discord.com/api/webhooks/ — هل تريد حفظه رغم ذلك؟',
+      );
+      if (go != true) return;
+    }
+
     setState(() => _isLoading = true);
-    
     try {
       await SettingsManager.setDiscordWebhookUrl(url);
-      _showSnackBar('✅ تم حفظ الإعدادات بنجاح!');
-      await _sendTestMessage(silentSuccess: true); 
+      if (!mounted) return;
+      setState(() => _savedUrl = url);
+      setToast(context, 'تم حفظ الرابط — جارٍ اختبار الاتصال…');
+      await _sendTestMessage(silentSuccess: true);
     } catch (e) {
-      _showSnackBar('خطأ في الحفظ: $e', isError: true);
+      if (mounted) setToast(context, 'خطأ في الحفظ: $e', error: true);
     } finally {
-        if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _unlink() async {
+    final go = await _confirm('إلغاء ربط Discord', 'لن تُرسل التقارير إلى Discord بعد الآن. متابعة؟');
+    if (go != true) return;
+    await SettingsManager.setDiscordWebhookUrl('');
+    if (!mounted) return;
+    setState(() {
+      _savedUrl = '';
+      _webhookUrlController.clear();
+      _lastTest = null;
+    });
+    setToast(context, 'تم إلغاء الربط');
   }
 
   Future<void> _sendTestMessage({bool silentSuccess = false}) async {
     final url = _webhookUrlController.text.trim();
-    if (url.isEmpty) return;
-
+    if (url.isEmpty) {
+      setToast(context, 'أدخل رابط Webhook أولاً', error: true);
+      return;
+    }
+    setState(() => _testing = true);
     try {
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'content': '✅ اختبار الاتصال من تطبيق إدارة المتجر.\n\nالإعدادات صحيحة وتعمل بنجاح!'
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse(url),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'content': '✅ اختبار الاتصال من تطبيق إدارة المتجر.\n\nالإعدادات صحيحة وتعمل بنجاح!'}),
+          )
+          .timeout(const Duration(seconds: 10));
 
+      if (!mounted) return;
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        if (!silentSuccess) _showSnackBar('✅ تم إرسال رسالة تجريبية بنجاح!');
+        setState(() => _lastTest = (true, 'وصلت الرسالة التجريبية إلى القناة بنجاح.'));
+        if (!silentSuccess) setToast(context, 'تم إرسال رسالة تجريبية بنجاح');
       } else {
-        _showSnackBar('فشل الاتصال: ${response.statusCode} - ${response.body}', isError: true);
+        final hint = switch (response.statusCode) {
+          401 || 403 => 'الرابط مرفوض — ربما حُذف الـ Webhook أو نُسخ ناقصاً.',
+          404 => 'الـ Webhook غير موجود — أنشئ واحداً جديداً وانسخ رابطه.',
+          429 => 'طلبات كثيرة — انتظر قليلاً ثم أعد المحاولة.',
+          _ => 'رمز الاستجابة ${response.statusCode}.',
+        };
+        setState(() => _lastTest = (false, 'فشل الاتصال: $hint'));
+        setToast(context, 'فشل الاتصال (${response.statusCode})', error: true);
       }
     } catch (e) {
-      _showSnackBar('خطأ في الإرسال: $e', isError: true);
+      if (!mounted) return;
+      setState(() => _lastTest = (false, 'خطأ في الإرسال: تحقّق من الإنترنت والرابط.\n$e'));
+      setToast(context, 'خطأ في الإرسال', error: true);
+    } finally {
+      if (mounted) setState(() => _testing = false);
     }
   }
 
-  Widget _buildSectionCard({required String title, required Widget child}) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1E1E2E), // kPrimaryColor
-            ),
-          ),
-          const SizedBox(height: 16),
-          child,
-        ],
-      ),
-    );
-  }
+  Future<bool?> _confirm(String title, String body) => showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+          content: Text(body, style: const TextStyle(height: 1.6)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('متابعة')),
+          ],
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F7), // kBackgroundColor
-      appBar: AppBar(
-        title: const Text('إعدادات Discord'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 0,
-        centerTitle: true,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 600),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Header Icon
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.indigo.withOpacity(0.1),
-                    shape: BoxShape.circle,
+    final busy = _isLoading || _testing;
+    return SettingsScaffold(
+      title: 'إعدادات Discord',
+      subtitle: 'استقبال التقارير والفواتير في قناة Discord',
+      icon: Icons.discord,
+      loading: !_loaded,
+      children: !_loaded
+          ? null
+          : [
+              SetHero(
+                icon: Icons.discord,
+                color: _discord,
+                title: 'النسخ والتقارير عبر Discord',
+                text: 'أنشئ Webhook في قناة على سيرفرك والصق رابطه هنا؛ يرسل التطبيق التقارير '
+                    'والملخصات إلى تلك القناة بجانب تيليجرام.',
+                status: SetStatusPill(_configured ? 'مرتبط' : 'غير مرتبط', ok: _configured),
+              ),
+              SetCard(
+                title: 'رابط Webhook',
+                subtitle: 'يُحفظ على هذا الجهاز فقط',
+                icon: Icons.link_rounded,
+                color: _discord,
+                trailing: _configured
+                    ? TextButton.icon(
+                        style: TextButton.styleFrom(foregroundColor: kSetRed),
+                        onPressed: busy ? null : _unlink,
+                        icon: const Icon(Icons.link_off_rounded, size: 18),
+                        label: const Text('إلغاء الربط'),
+                      )
+                    : null,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _webhookUrlController,
+                    obscureText: _obscure,
+                    textDirection: TextDirection.ltr,
+                    decoration: InputDecoration(
+                      labelText: 'رابط الـ Webhook',
+                      hintText: 'https://discord.com/api/webhooks/...',
+                      prefixIcon: const Icon(Icons.webhook_rounded),
+                      suffixIcon: IconButton(
+                        tooltip: _obscure ? 'إظهار' : 'إخفاء',
+                        icon: Icon(_obscure ? Icons.visibility_rounded : Icons.visibility_off_rounded),
+                        onPressed: () => setState(() => _obscure = !_obscure),
+                      ),
+                    ),
                   ),
-                  child: const Icon(Icons.discord, size: 80, color: Colors.indigo),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'تكوين النسخ الاحتياطي عبر Discord',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  'قم بإعداد Webhook في سيرفرك على Discord لتلقي التقارير والفواتير.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey, fontSize: 16),
-                ),
-                const SizedBox(height: 40),
-
-                // Webhook URL Section
-                _buildSectionCard(
-                  title: 'رابط Webhook',
-                  child: Column(
-                    children: [
-                      TextField(
-                        controller: _webhookUrlController,
-                        decoration: InputDecoration(
-                          hintText: 'https://discord.com/api/webhooks/...',
-                          prefixIcon: const Icon(Icons.link),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          filled: true,
-                          fillColor: Colors.white,
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: () => setState(() => _showInstructions = !_showInstructions),
-                        icon: Icon(_showInstructions ? Icons.keyboard_arrow_up : Icons.help_outline),
-                        label: const Text('كيف أحصل على رابط Webhook؟'),
-                      ),
-                      if (_showInstructions)
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(color: Colors.indigo[50], borderRadius: BorderRadius.circular(8)),
-                          child: const Text(
-                            '1. افتح إعدادات سيرفر Discord (Server Settings).\n'
-                            '2. اذهب إلى Integrations ثم Webhooks.\n'
-                            '3. اضغط على New Webhook.\n'
-                            '4. قم بتسميته واختيار القناة (Channel) المناسبة.\n'
-                            '5. اضغط على زر Copy Webhook URL والصقه هنا.',
-                            style: TextStyle(height: 1.5),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    child: _lastTest == null
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            key: ValueKey(_lastTest),
+                            padding: const EdgeInsets.only(top: 12),
+                            child: SetBanner(
+                              _lastTest!.$2,
+                              kind: _lastTest!.$1 ? SetBannerKind.ok : SetBannerKind.error,
+                            ),
                           ),
-                        ),
-                    ],
                   ),
-                ),
-
-                const SizedBox(height: 30),
-
-                // Save Button
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: _isLoading ? null : _saveSettings,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.indigo,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 5,
+                  const SizedBox(height: 14),
+                  Row(children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 50), foregroundColor: _discord),
+                        onPressed: busy ? null : () => _sendTestMessage(silentSuccess: false),
+                        icon: _testing
+                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.send_rounded),
+                        label: const Text('رسالة تجريبية'),
+                      ),
                     ),
-                    child: _isLoading 
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text('حفظ واختبار الاتصال', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                
-                const SizedBox(height: 20),
-                
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: OutlinedButton.icon(
-                    onPressed: _isLoading ? null : () => _sendTestMessage(silentSuccess: false),
-                    icon: const Icon(Icons.send),
-                    label: const Text('إرسال رسالة تجريبية الآن', style: TextStyle(fontSize: 16)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.indigo,
-                      side: const BorderSide(color: Colors.indigo),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SetPrimaryButton(
+                        label: 'حفظ واختبار',
+                        icon: Icons.save_rounded,
+                        color: _discord,
+                        busy: _isLoading,
+                        onPressed: busy ? null : _saveSettings,
+                      ),
                     ),
-                  ),
+                  ]),
+                ]),
+              ),
+              const SetCard(
+                title: 'كيف أحصل على رابط Webhook؟',
+                icon: Icons.help_outline_rounded,
+                color: _discord,
+                child: Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: SetSteps([
+                    'افتح إعدادات سيرفر Discord (Server Settings).',
+                    'اذهب إلى Integrations ثم Webhooks.',
+                    'اضغط New Webhook.',
+                    'سمّه واختر القناة (Channel) التي ستصلها التقارير.',
+                    'اضغط Copy Webhook URL والصقه في الحقل أعلاه ثم «حفظ واختبار».',
+                  ], color: _discord),
                 ),
-              ],
-            ),
-          ),
-        ),
-      ),
+              ),
+            ],
     );
   }
 }

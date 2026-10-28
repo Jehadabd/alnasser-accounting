@@ -1,7 +1,7 @@
 // lib/screens/invoice_actions.dart
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,10 +24,10 @@ import '../models/printer_device.dart';
 import '../models/product.dart';
 import '../models/invoice_input_data.dart'; // ✅ Added import
 import '../services/database_service.dart';
+import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
+import '../services/database/business/customer_name_rule.dart'; // 🔤 الاسم بلا مسافات
 // import '../services/drive_service.dart'; // Removed
-import 'package:uuid/uuid.dart';
 import '../services/pdf_header.dart';
-import '../services/pdf_service.dart';
 import '../services/invoice_pdf_service.dart'; // لدوال PDF الفاتورة
 import '../erp/sales/roll_invoice_pdf.dart'; // 🧾 طباعة 80mm
 import '../invoice_designer/designed_rows.dart'; // 🎨 مصمم الفاتورة
@@ -36,13 +36,19 @@ import '../invoice_designer/invoice_print_data.dart';
 import '../invoice_designer/layout_pdf_renderer.dart';
 import '../services/printing_service.dart';
 import '../services/settings_manager.dart';
-import '../services/smart_search/smart_search.dart'; // 🧠 البحث الذكي
 import '../services/auth_service.dart'; // 👤 User authentication
+import '../services/debt_reminders.dart'; // 📅
+import '../services/product_codes.dart'; // 🏷️ رمز المادة
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import 'create_invoice_screen.dart';
 import '../controllers/invoice_controller.dart';
+import '../services/voucher_print.dart'; // 🧾 سندات التعديل بالقلم ومصمم السندات
+import '../services/invoice_edit_voucher.dart'; // 🧾 سند مرتجع/إضافة للفاتورة النقدية
+import '../services/invoice_staff_service.dart'; // 👷 المجهز والمحاسب
 import '../services/firebase_sync/invoice_sync_service.dart'; // ⚡ رفع فوري بعد الحفظ
 import '../services/firebase_sync/firebase_sync_helper.dart';
+import '../owner/owner_access.dart';
+import '../owner/founder_service.dart';
 
 /// واجهة تحدد المتغيرات المطلوبة للتعامل مع الفواتير
 abstract class InvoiceActionsInterface {
@@ -61,6 +67,13 @@ abstract class InvoiceActionsInterface {
   TextEditingController get customerPhoneController;
   TextEditingController get customerAddressController;
   TextEditingController get installerNameController;
+
+  /// 👷 المجهز والمحاسب (من «المزيد»)
+  TextEditingController get preparerController;
+  TextEditingController get accountantController;
+
+  /// 👷 نقاط المؤسس لكل 100,000 لهذه الفاتورة
+  double get founderPointsRate;
   TextEditingController get paidAmountController;
   TextEditingController get loadingFeeController;
   
@@ -104,19 +117,6 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     return formatter.format(value);
   }
 
-  String _normalizePhoneNumber(String phone) {
-    String cleaned = phone.replaceAll(RegExp(r'[^0-9+]'), '');
-    if (cleaned.startsWith('+')) {
-      cleaned = cleaned.substring(1);
-    }
-    if (cleaned.startsWith('0')) {
-      cleaned = '964' + cleaned.substring(1);
-    }
-    if (!cleaned.startsWith('964')) {
-      cleaned = '964' + cleaned;
-    }
-    return cleaned;
-  }
 
   bool _isInvoiceItemComplete(InvoiceItem item) {
     // التحقق من أن الكمية موجودة وأكبر من صفر
@@ -153,7 +153,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       await file.writeAsBytes(await pdf.save());
       return filePath;
     } catch (e) {
-      print('Error saving PDF: $e');
+      debugPrint('Error saving PDF: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('حدث خطأ أثناء حفظ ملف PDF: $e')),
@@ -241,7 +241,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     // دالة تقليص النصوص
     String truncate(String text, int maxLen) {
       if (text.length <= maxLen) return text;
-      return text.substring(0, maxLen - 2) + '..';
+      return '${text.substring(0, maxLen - 2)}..';
     }
     
     final dateTime = createdAt ?? DateTime.now();
@@ -394,6 +394,8 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       case 'serial':
         return _headerCell(label, font, color: PdfColor.fromInt(appSettings.itemSerialColor));
       case 'productId':
+      case 'itemCode':
+      case 'barcode':
         return _headerCell(label, font, color: PdfColor.fromInt(appSettings.itemSerialColor));
       case 'details':
         return _headerCell(label, font, color: PdfColor.fromInt(appSettings.itemDetailsColor));
@@ -426,6 +428,10 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         return _dataCell('${index + 1}', font, color: PdfColor.fromInt(appSettings.itemSerialColor));
       case 'productId':
         return _dataCell(formatProductId5(product?.id), font, color: PdfColor.fromInt(appSettings.itemSerialColor));
+      case 'itemCode':
+        return _dataCell(ProductCodes.codeOf(product?.id) ?? '', font, color: PdfColor.fromInt(appSettings.itemSerialColor));
+      case 'barcode':
+        return _dataCell((product?.barcode ?? '').trim(), font, color: PdfColor.fromInt(appSettings.itemSerialColor));
       case 'details':
         return _dataCell(item.productName, font, align: pw.TextAlign.right, color: PdfColor.fromInt(appSettings.itemDetailsColor));
       case 'quantity':
@@ -491,6 +497,10 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         return _dataCell('${index + 1}', font, color: PdfColor.fromInt(appSettings.itemSerialColor));
       case 'productId':
         return _dataCell(formatProductId5(product?.id), font, color: PdfColor.fromInt(appSettings.itemSerialColor));
+      case 'itemCode':
+        return _dataCell(ProductCodes.codeOf(product?.id) ?? '', font, color: PdfColor.fromInt(appSettings.itemSerialColor));
+      case 'barcode':
+        return _dataCell((product?.barcode ?? '').trim(), font, color: PdfColor.fromInt(appSettings.itemSerialColor));
       case 'details':
         return _dataCell(a.productName ?? '-', font, align: pw.TextAlign.right, color: PdfColor.fromInt(appSettings.itemDetailsColor));
       case 'quantity':
@@ -525,7 +535,10 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
   // ============================================
   // 1. دالة حفظ الفاتورة (saveInvoice) - Refactored to use InvoiceController
   // ============================================
-  Future<Invoice?> saveInvoice({bool printAfterSave = false}) async {
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
+  Future<Invoice?> saveInvoice({bool printAfterSave = false}) async =>
+      await SaveLock.run<Invoice?>(() => _saveInvoiceUnlocked(printAfterSave: printAfterSave), message: 'جارٍ حفظ الفاتورة…');
+  Future<Invoice?> _saveInvoiceUnlocked({bool printAfterSave = false}) async {
     if (isSaving) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('جاري الحفظ بالفعل...'),
@@ -543,7 +556,9 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       customerName: customerNameController.text,
       customerPhone: customerPhoneController.text,
       customerAddress: customerAddressController.text,
-      installerName: installerNameController.text,
+      installerName: installerNameController.text.trim(),
+      // غير المالك لا يرى حقل المؤسس: يبقى ما في الفاتورة كما هو
+      pointsRate: OwnerAccess.enabled ? founderPointsRate : (invoiceToManage?.pointsRate ?? 0.0),
       paidAmount: double.tryParse(paidAmountController.text.replaceAll(',', '')) ?? 0.0,
       loadingFee: double.tryParse(loadingFeeController.text.replaceAll(',', '')) ?? 0.0,
       discount: discount,
@@ -583,6 +598,43 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       return null;
     }
 
+    // 🚫 سقف الدين: فاتورة آجلة جديدة، أو زيادة دين فاتورة عند تعديلها (الفرق فقط)
+    {
+      final dbx = await db.database;
+      final old = inputData.invoiceToManage;
+      final sameName = old != null &&
+          old.customerName.trim().replaceAll(' ', '') == inputData.customerName.trim().replaceAll(' ', '');
+      final int? cid = (sameName && old!.customerId != null)
+          ? old!.customerId
+          : await CreditLimitGuard.customerIdByName(dbx, inputData.customerName);
+      if (cid != null) {
+        final complete = inputData.invoiceItems.where((it) =>
+            it.productName.isNotEmpty &&
+            ((it.quantityIndividual ?? 0) > 0 || (it.quantityLargeUnit ?? 0) > 0) &&
+            (it.appliedPrice > 0 || it.isGift) &&
+            (it.itemTotal > 0 || it.isGift) &&
+            (it.saleType ?? '').isNotEmpty);
+        final total =
+            complete.fold<double>(0, (s, it) => s + it.itemTotal) + inputData.loadingFee - inputData.discount;
+        final increase = await CreditLimitGuard.invoiceIncrease(
+          dbx,
+          customerId: cid,
+          credit: inputData.paymentType != 'نقد',
+          total: total,
+          paid: inputData.paidAmount,
+          editInvoiceId: sameName ? old!.id : null,
+        );
+        if (!mounted) return null;
+        final go = await CreditLimitGuard.enforce(
+          context,
+          customerId: cid,
+          increase: increase,
+          what: '${old == null ? 'فاتورة جديدة' : 'تعديل فاتورة'} — ${inputData.customerName.trim()}',
+        );
+        if (!go) return null;
+      }
+    }
+
     setState(() {
       isSaving = true;
     });
@@ -607,7 +659,12 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     // 🔒 إلغاء أي تزامن حي معلّق لمنع race condition مع الحفظ
     (this as dynamic).liveDebtTimer?.cancel();
 
+    // 🧾 مجموع الفاتورة المحفوظة ونوع دفعها قبل التعديل (لسند المرتجع/الإضافة)
+    final editId = inputData.isNewInvoice ? null : inputData.invoiceToManage?.id;
+    final beforeEdit = editId == null ? null : await InvoiceEditVoucher.snapshot(editId);
+
     try {
+      final saveStartedAt = DateTime.now(); // ↩️ لمستند مرتجع هذا الحفظ
       final result = await controller.saveInvoice(inputData);
 
       if (!result.success) {
@@ -615,6 +672,21 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
 
       final savedInvoice = result.invoice;
+
+      // 👷 مؤسس جديد كُتب اسمه في الفاتورة ⇒ يُسجَّل في قائمة المؤسسين
+      final founderName = savedInvoice?.installerName?.trim() ?? '';
+      if (OwnerAccess.enabled && founderName.isNotEmpty) {
+        FounderService.ensureFounder(founderName).catchError((_) => null);
+      }
+      // 📥 فاتورة مستوردة عُدّلت: نقاطها من الفاتورة نفسها من الآن (لا من السجل القديم)
+      final savedId = savedInvoice?.id;
+      // 👷 المجهز والمحاسب
+      if (savedId != null) {
+        InvoiceStaff.save(savedId,
+                preparer: preparerController.text, accountant: accountantController.text)
+            .catchError((_) {});
+      }
+      if (savedId != null) FounderService.refreshInvoicePoints(savedId).catchError((_) => null);
 
       savedOrSuspended = true;
       hasUnsavedChanges = false;
@@ -629,7 +701,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
             if (invoiceUuid != null && invoiceUuid.isNotEmpty) {
               final ok = await InvoiceSyncService().syncInvoiceBundleNow(invoiceUuid);
               if (!ok) {
-                print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت الدوري لاحقاً)');
+                debugPrint('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت الدوري لاحقاً)');
               }
             }
             if (customerId != null && customerId != 0) {
@@ -641,7 +713,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
               }
             }
           } catch (e) {
-            print('⚠️ الرفع الفوري تأجّل: $e');
+            debugPrint('⚠️ الرفع الفوري تأجّل: $e');
           }
         }();
       }
@@ -681,6 +753,36 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
             });
         }
 
+        // 🧾 فاتورة نقدية عُدّلت: يُحفظ سجل السند النقدي (يقرؤه تقرير المال الفعلي)
+        int? legacyCashVoucherId;
+        if (editId != null && beforeEdit != null && savedInvoice != null) {
+          try {
+            legacyCashVoucherId = await InvoiceEditVoucher.recordIfCash(
+              invoiceId: editId,
+              before: beforeEdit,
+              totalAfter: savedInvoice.totalAmount,
+              paymentAfter: savedInvoice.paymentType,
+              user: AuthService().currentUser?.username,
+            );
+          } catch (e) {
+            debugPrint('⚠️ سند تعديل الفاتورة: $e');
+          }
+        }
+
+        // 🧾 التعديل بالقلم عملية بتاريخ اليوم: سنده حسب نوعه — نقدية: سند قبض (إضافة) أو
+        //    سند صرف (مرتجع)؛ آجلة: إشعار مدين أو دائن. الطباعة حسب إعداد كل نوع.
+        final editEventId = result.editEventId;
+        if (editEventId != null && mounted) {
+          try {
+            await VoucherPrint.offerEditEvent(context, editEventId, legacyCashVoucherId: legacyCashVoucherId);
+          } catch (e) {
+            debugPrint('⚠️ سند التعديل: $e');
+          }
+        }
+
+        // 📅 موعد مطالبة حُدد من «المزيد» قبل الحفظ: يُربط بالفاتورة الآن
+        if (savedInvoice != null) await DebtReminders.commitPending(savedInvoice);
+
         // 🖨️ طباعة تلقائية بعد الحفظ (من «المزيد» في شاشة الفاتورة) — مثل الإداري
         var autoPrint = printAfterSave;
         if (!autoPrint) {
@@ -693,7 +795,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
           try {
             await printInvoice();
           } catch (e) {
-            print('⚠️ الطباعة بعد الحفظ: $e');
+            debugPrint('⚠️ الطباعة بعد الحفظ: $e');
           }
         }
 
@@ -727,6 +829,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       final pdf = pw.Document();
 
       final appSettings = await SettingsManager.getAppSettings();
+      await ProductCodes.refresh(); // 🏷️ رموز المواد للطباعة (أحدث نسخة)
 
       // تحميل اللوجو باستخدام خدمة اللوجو (مخصص أو افتراضي)
       final logoImage = await LogoService.getLogoImage(appSettings: appSettings);
@@ -750,42 +853,6 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         }
       }
 
-      String buildUnitConversionStringForPdf(InvoiceItem item, Product? product) {
-        if (item.unit == 'meter') {
-          if (item.saleType == 'لفة' && item.unitsInLargeUnit != null) {
-            return item.unitsInLargeUnit!.toString();
-          } else {
-            return '';
-          }
-        }
-        if (item.saleType == 'قطعة' || item.saleType == 'متر') {
-          return '';
-        }
-        if (product == null ||
-            product.unitHierarchy == null ||
-            product.unitHierarchy!.isEmpty) {
-          return item.unitsInLargeUnit?.toString() ?? '';
-        }
-        try {
-          final List<dynamic> hierarchy =
-              json.decode(product.unitHierarchy!.replaceAll("'", '"'));
-          List<String> factors = [];
-          for (int i = 0; i < hierarchy.length; i++) {
-            final unitName = hierarchy[i]['unit_name'] ?? hierarchy[i]['name'];
-            final quantity = hierarchy[i]['quantity'];
-            factors.add(quantity.toString());
-            if (unitName == item.saleType) {
-              break;
-            }
-          }
-          if (factors.isEmpty) {
-            return item.unitsInLargeUnit?.toString() ?? '';
-          }
-          return factors.join(' × ');
-        } catch (e) {
-          return item.unitsInLargeUnit?.toString() ?? '';
-        }
-      }
 
       final allProducts = await db.getAllProducts();
       final filteredItems =
@@ -806,7 +873,6 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
           settlementsTotal = adjs.fold(0.0, (sum, a) => sum + a.amountDelta);
         } catch (_) {}
       }
-      final bool hasAdjustments = adjs.isNotEmpty;
       final DateTime invoiceDateOnly = DateTime(
           selectedDate.year, selectedDate.month, selectedDate.day);
       final List<InvoiceAdjustment> sameDayAddedItemAdjs = adjs.where((a) {
@@ -891,39 +957,17 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       double previousDebt = 0.0;
       double currentDebt = 0.0;
         final customerName = customerNameController.text.trim();
-        final customerPhone = customerPhoneController.text.trim();
         if (customerName.isNotEmpty) {
+          // 🔤 نفس قاعدة الحفظ: الاسم بلا مسافات يحدد الحساب، والهاتف لا يفرّق
+          final nameKey = CustomerNameRule.key(customerName);
           final customers = await db.searchCustomers(customerName);
-        Customer? matchedCustomer;
-        if (customerPhone.isNotEmpty) {
-          matchedCustomer = customers.firstWhere(
-            (c) =>
-                c.name.trim() == customerName &&
-                (c.phone ?? '').trim() == customerPhone,
-            orElse: () => Customer(
-                id: null,
-                name: '',
-                phone: null,
-                address: null,
-                createdAt: DateTime.now(),
-                lastModifiedAt: DateTime.now(),
-                currentTotalDebt: 0.0), // Dummy to avoid exception
-          );
-          if (matchedCustomer?.name == '' || matchedCustomer == null) matchedCustomer = null;
-        } else {
-          matchedCustomer = customers.firstWhere(
-            (c) => c.name.trim() == customerName,
-            orElse: () => Customer(
-                id: null,
-                name: '',
-                phone: null,
-                address: null,
-                createdAt: DateTime.now(),
-                lastModifiedAt: DateTime.now(),
-                currentTotalDebt: 0.0), // Dummy
-          );
-          if (matchedCustomer?.name == '' || matchedCustomer == null) matchedCustomer = null;
-        }
+          Customer? matchedCustomer;
+          for (final c in customers) {
+            if (CustomerNameRule.key(c.name.trim()) == nameKey) {
+              matchedCustomer = c;
+              break;
+            }
+          }
         if (matchedCustomer != null) {
           previousDebt = matchedCustomer.currentTotalDebt;
         }
@@ -1010,6 +1054,13 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
               'address': customerAddressController.text.trim(),
               'paymentType': paymentType,
               'user': AuthService().currentUser?.username ?? '',
+              'preparer': preparerController.text.trim(),
+              // 👤 المحاسب = من سجّل الفاتورة (لا من يطبعها الآن)؛ من يطبع في «طُبع بواسطة»
+              'accountant': accountantController.text.trim().isNotEmpty
+                  ? accountantController.text.trim()
+                  : ((invoiceToManage?.createdByUsername ?? '').trim().isNotEmpty
+                      ? await VoucherPrint.displayNameOf(await db.database, invoiceToManage!.createdByUsername)
+                      : (AuthService().currentUser?.shownName ?? '')),
               'copy': '',
             },
             rows: rows,
@@ -1048,7 +1099,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         pdf.addPage(
           pw.Page(
             pageFormat: PdfPageFormat.a4,
-            margin: pw.EdgeInsets.only(top: 0, bottom: 2, left: 10, right: 10),
+            margin: const pw.EdgeInsets.only(top: 0, bottom: 2, left: 10, right: 10),
             build: (pw.Context context) {
               return pw.Directionality(
                 textDirection: pw.TextDirection.rtl,
@@ -1184,7 +1235,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       if (!printedSummaryInLastPage) {
         pdf.addPage(pw.Page(
           pageFormat: PdfPageFormat.a4,
-          margin: pw.EdgeInsets.only(top: 10, bottom: 10, left: 10, right: 10),
+          margin: const pw.EdgeInsets.only(top: 10, bottom: 10, left: 10, right: 10),
           build: (pw.Context context) {
             // Logic for the deferred summary page
             return pw.Column(
@@ -1232,7 +1283,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
       return pdf;
     } catch (e) {
-      print('Error generating PDF: $e');
+      debugPrint('Error generating PDF: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('حدث خطأ أثناء إنشاء ملف PDF: $e')),
@@ -1304,6 +1355,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
             }
             return;
           }
+          if (!mounted) return;
           final selected = await showDialog<PrinterDevice>(
             context: context,
             builder: (context) {
@@ -1347,7 +1399,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
               );
             }
           } catch (e) {
-            print('Error during print: $e');
+            debugPrint('Error during print: $e');
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -1359,7 +1411,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         return;
       }
     } catch (e) {
-      print('Error printing invoice: $e');
+      debugPrint('Error printing invoice: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('حدث خطأ أثناء الطباعة: $e')),
@@ -1405,12 +1457,3 @@ String formatProductId5(int? id) {
   return id.toString().padLeft(5, '0');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 🔒 نتيجة التحقق الداخلية
-// ═══════════════════════════════════════════════════════════════════════════
-class _ValidationResult {
-  final bool isValid;
-  final String? errorMessage;
-  
-  _ValidationResult({required this.isValid, this.errorMessage});
-}

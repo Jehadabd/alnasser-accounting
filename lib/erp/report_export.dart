@@ -119,7 +119,7 @@ class ReportExport {
       header: (ctx) => pw.Column(children: [
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
           pw.Text(shop, style: pw.TextStyle(font: f, fontSize: 14)),
-          pw.Text(title, style: pw.TextStyle(font: f, fontSize: 14, color: PdfColor.fromInt(0xFF0F3460))),
+          pw.Text(title, style: pw.TextStyle(font: f, fontSize: 14, color: const PdfColor.fromInt(0xFF0F3460))),
           pw.Text(fmtDate(DateTime.now()), style: pw.TextStyle(font: f, fontSize: 10)),
         ]),
         if (subtitle != null && subtitle.isNotEmpty)

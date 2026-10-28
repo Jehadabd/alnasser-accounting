@@ -176,6 +176,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       return;
     }
     if (next.isClient && (next.host.isEmpty || (next.secret.isEmpty && !hasLic))) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('أدخل عنوان السيرفر ورمز الربط'), backgroundColor: Colors.red));
       return;

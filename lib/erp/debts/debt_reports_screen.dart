@@ -330,7 +330,7 @@ class _CollectionReportScreenState extends State<CollectionReportScreen> {
                     LinearProgressIndicator(
                       value: (r.ratio / 100).clamp(0.0, 1.0).toDouble(),
                       color: c,
-                      backgroundColor: c.withOpacity(0.12),
+                      backgroundColor: c.withValues(alpha: 0.12),
                       minHeight: 6,
                       borderRadius: BorderRadius.circular(4),
                     ),

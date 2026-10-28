@@ -1,8 +1,10 @@
 // screens/customer_details_screen.dart
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
+import '../services/database/business/customer_name_rule.dart';
 import '../models/customer.dart';
 import '../models/transaction.dart';
 import '../models/grouped_transaction.dart'; // ✅ Added
@@ -11,19 +13,16 @@ import '../models/customer_receipt_voucher.dart'; // ✅ Added
 import 'add_transaction_screen.dart';
 import 'create_invoice_screen.dart';
 import '../services/database_service.dart';
-import '../services/pdf_service.dart'; // Assume PdfService exists
+import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../services/receipt_voucher_pdf_service.dart';
-import '../models/account_statement_item.dart'; // Assume AccountStatementItem exists
 import 'package:printing/printing.dart'; // Assume this is for PDF preview on non-Windows
 import 'dart:io';
 // import 'package:path_provider/path_provider.dart'; // Not directly used in final snippet, but for file operations
 // import 'package:share_plus/share_plus.dart'; // Not directly used here
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection; // TextDirection من Flutter
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/services.dart';
 import 'audit_log_screen.dart';
-import 'commercial_statement_screen.dart';
-import '../services/commercial_statement_service.dart';
 import '../services/password_service.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
@@ -31,7 +30,11 @@ import '../services/settings_manager.dart'; // 📋 For company info in WhatsApp
 import '../erp/debts/customer_card_screen.dart';
 import '../erp/debts/receipt_screen.dart';
 import '../erp/pickers.dart' show PartyLite;
-import '../widgets/formatters.dart';
+import '../widgets/edit_transaction_dialog.dart'; // ✏️
+import 'debt_reminders_screen.dart'; // 📅
+import '../accounting/screens/acc_ui.dart' show accAppBar;
+import 'statements/customer_statements_screen.dart';
+import '../widgets/loading_dialog.dart';
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
@@ -47,7 +50,6 @@ class CustomerDetailsScreen extends StatefulWidget {
 
 class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
-  bool _isLoading = false;
   
   // 📊 المعاملات المجمعة (فواتير مجمعة + معاملات يدوية)
   List<GroupedTransactionItem> _groupedTransactions = [];
@@ -59,6 +61,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     super.initState();
     // This is good practice for initial data loading from a provider
     Future.microtask(() async {
+      if (!mounted) return;
       await context.read<AppProvider>().selectCustomer(widget.customer);
       await _loadTransactions();
       // 🔒 التحقق التلقائي من الرصيد عند فتح الصفحة
@@ -70,7 +73,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     if (!mounted) return;
     if (widget.customer.id != null) {
       final fresh = await DatabaseService().getCustomerById(widget.customer.id!);
-      if (fresh != null && mounted) {
+      if (!mounted) return;
+      if (fresh != null) {
         await context.read<AppProvider>().selectCustomer(fresh);
       } else {
         await context.read<AppProvider>().loadCustomerTransactions(widget.customer.id!);
@@ -151,12 +155,12 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     
     // إذا بدأ بصفر محلي، استبدله برمز الدولة العراقية
     if (cleaned.startsWith('0')) {
-      cleaned = '964' + cleaned.substring(1);
+      cleaned = '964${cleaned.substring(1)}';
     }
     
     // إذا لم يبدأ برمز الدولة، أضف رمز العراق
     if (!cleaned.startsWith('964')) {
-      cleaned = '964' + cleaned;
+      cleaned = '964$cleaned';
     }
     
     return cleaned;
@@ -182,10 +186,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     final transactions = provider.customerTransactions;
     DateTime? lastTransactionDate;
     for (final t in transactions) {
-      if (t.transactionDate != null) {
-        if (lastTransactionDate == null || t.transactionDate!.isAfter(lastTransactionDate)) {
-          lastTransactionDate = t.transactionDate;
-        }
+      if (lastTransactionDate == null || t.transactionDate.isAfter(lastTransactionDate)) {
+        lastTransactionDate = t.transactionDate;
       }
     }
     final DateTime lastUpdate = lastTransactionDate ?? customer.lastModifiedAt;
@@ -241,18 +243,17 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
     // إظهار مؤشر تحميل
     if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
+      LoadingDialog.show(
+        context,
+        builder: (context) => const AlertDialog(
           content: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const CircularProgressIndicator(
+              CircularProgressIndicator(
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
               ),
-              const SizedBox(width: 16),
-              const Text('جاري فتح واتساب...'),
+              SizedBox(width: 16),
+              Text('جاري فتح واتساب...'),
             ],
           ),
         ),
@@ -327,9 +328,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       }
       
       // إغلاق مؤشر التحميل
-      if (mounted) {
-        Navigator.pop(context);
-      }
+      LoadingDialog.hide();
       
       if (success) {
         if (mounted) {
@@ -362,9 +361,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       
     } catch (e) {
       // إغلاق مؤشر التحميل في حالة الخطأ
-      if (mounted) {
-        Navigator.pop(context);
-      }
+      LoadingDialog.hide();
 
       // الرسالة منسوخة أصلاً للحافظة
       if (mounted) {
@@ -433,7 +430,17 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         currentTotalDebt: currentCustomer.currentTotalDebt,
         lastModifiedAt: DateTime.now(),
       );
-      await provider.updateCustomer(updated);
+      try {
+        await provider.updateCustomer(updated);
+      } on DuplicateCustomerNameException catch (e) {
+        // 🛡️ سجل الديون: لا حسابان بالاسم نفسه
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
       
       try {
         final db = DatabaseService();
@@ -459,7 +466,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   Future<void> _handleDeleteCustomer() async {
     final provider = context.read<AppProvider>();
     final customer = provider.selectedCustomer ?? widget.customer;
-    final hasDebt = (customer.currentTotalDebt ?? 0) > 0.01;
+    final hasDebt = customer.currentTotalDebt > 0.01;
     
     if (hasDebt) {
       final warningConfirmed = await showDialog<bool>(
@@ -494,7 +501,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     Icon(Icons.monetization_on, color: Colors.red[700]),
                     const SizedBox(width: 8),
                     Text(
-                      '${NumberFormat('#,##0', 'en_US').format(customer.currentTotalDebt ?? 0)} د.ع',
+                      '${NumberFormat('#,##0', 'en_US').format(customer.currentTotalDebt)} د.ع',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
@@ -546,6 +553,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             ),
             onSubmitted: (value) async {
               final isCorrect = await passwordService.verifyPassword(value);
+              if (!context.mounted) return;
               Navigator.of(context).pop(isCorrect);
             },
           ),
@@ -557,6 +565,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             ElevatedButton(
               onPressed: () async {
                 final isCorrect = await passwordService.verifyPassword(passwordController.text);
+                if (!context.mounted) return;
                 Navigator.of(context).pop(isCorrect);
               },
               child: const Text('تأكيد'),
@@ -639,11 +648,11 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   @override
   Widget build(BuildContext context) {
     // Define the consistent theme colors for the screen
-    final Color primaryColor = const Color(0xFF3F51B5); // Indigo 700
-    final Color accentColor =
-        const Color(0xFF8C9EFF); // Light Indigo Accent (Indigo A200)
-    final Color textColor =
-        const Color(0xFF212121); // Dark grey for general text
+    const Color primaryColor = Color(0xFF0F3460); // كحلي البرنامج
+    const Color accentColor =
+        Color(0xFF8C9EFF); // Light Indigo Accent (Indigo A200)
+    const Color textColor =
+        Color(0xFF212121); // Dark grey for general text
     final Color successColor =
         Colors.green[600]!; // Green for success messages/positive debt
     final Color errorColor =
@@ -659,27 +668,26 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
           onSecondary: Colors.black,
           surface: Colors.white,
           onSurface: textColor,
-          background: Colors.white,
-          onBackground: textColor,
           error: errorColor,
           onError: Colors.white,
           tertiary: successColor,
         ),
-        fontFamily: 'Roboto',
+        fontFamily: 'Cairo', // خط البرنامج (كان Roboto فتظهر العربية بخط النظام)
+        scaffoldBackgroundColor: const Color(0xFFF3F6FB),
         textTheme: TextTheme(
-          titleLarge: TextStyle(
+          titleLarge: const TextStyle(
               fontSize: 22.0,
               fontWeight: FontWeight.bold,
               color: Colors.white),
-          titleMedium: TextStyle(
+          titleMedium: const TextStyle(
               fontSize: 18.0,
               fontWeight: FontWeight.w600,
               color: textColor),
           bodyLarge:
-              TextStyle(fontSize: 16.0, color: textColor),
+              const TextStyle(fontSize: 16.0, color: textColor),
           bodyMedium:
-              TextStyle(fontSize: 14.0, color: textColor),
-          labelLarge: TextStyle(
+              const TextStyle(fontSize: 14.0, color: textColor),
+          labelLarge: const TextStyle(
               fontSize: 16.0,
               color: Colors.white,
               fontWeight: FontWeight.w600),
@@ -700,9 +708,12 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
           ),
         ),
         cardTheme: CardThemeData(
-          elevation: 3,
+          elevation: 0,
+          color: Colors.white,
+          surfaceTintColor: Colors.white,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.0),
+            borderRadius: BorderRadius.circular(14.0),
+            side: const BorderSide(color: Color(0xFFE3E9F1)),
           ),
           margin: EdgeInsets.zero,
         ),
@@ -722,12 +733,10 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         iconTheme: IconThemeData(color: Colors.grey[700], size: 24.0),
       ),
       child: Scaffold(
-        appBar: AppBar(
-          title: Text(
-            widget.customer.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+        appBar: accAppBar(
+          widget.customer.name,
+          icon: Icons.person_rounded,
+          subtitle: 'حساب العميل',
           actions: [
             // 🗂️ بطاقة العميل الموسّعة (سقف، مجموعة، أعمار ديون، مستندات)
             if (widget.customer.id != null)
@@ -754,8 +763,9 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       ),
                     ),
                   );
-                  if (!mounted) return;
+                  if (!context.mounted) return;
                   await context.read<AppProvider>().selectCustomer(widget.customer);
+                  if (!context.mounted) return;
                   await context.read<AppProvider>().loadCustomerTransactions(widget.customer.id!);
                 },
               ),
@@ -775,7 +785,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             IconButton(
               icon: const Icon(Icons.receipt_long, color: Colors.white),
               tooltip: 'كشف الحساب',
-              onPressed: () => _generateAccountStatement(),
+              onPressed: () => _openStatements(),
             ),
             // ⋯ المزيد من الخيارات
             PopupMenuButton<String>(
@@ -784,7 +794,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
               onSelected: (value) {
                 switch (value) {
                   case 'commercial_statement':
-                    _showCommercialStatement();
+                    _openStatements(tab: StatementTab.commercial);
                     break;
                   case 'receipt_archive':
                     _showReceiptVouchersArchive();
@@ -898,7 +908,12 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             final customer = provider.selectedCustomer ?? widget.customer;
             final transactions = provider.customerTransactions;
 
-            return SingleChildScrollView(
+            // 🖥️ الشاشات العريضة: عمود مقروء في الوسط بدل أسطر ممتدة على الشاشة كلها
+            return Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1080),
+              child: SingleChildScrollView(
               padding: const EdgeInsets.only(bottom: 24.0),
               child: Column(
               children: [
@@ -909,7 +924,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     for (var t in transactions) {
                       calculatedBalance += t.amountChanged;
                     }
-                    final diff = (calculatedBalance - (customer.currentTotalDebt ?? 0.0)).abs();
+                    final diff = (calculatedBalance - customer.currentTotalDebt).abs();
                     
                     if (diff > 0.01) {
                       return Container(
@@ -928,7 +943,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Text(
-                                    'تنبيه: يوجد اختلاف بين رصيد العميل ومجموع المعاملات.\nالرصيد المسجل: ${formatCurrency(customer.currentTotalDebt ?? 0)}\nالمجموع الفعلي: ${formatCurrency(calculatedBalance)}',
+                                    'تنبيه: يوجد اختلاف بين رصيد العميل ومجموع المعاملات.\nالرصيد المسجل: ${formatCurrency(customer.currentTotalDebt)}\nالمجموع الفعلي: ${formatCurrency(calculatedBalance)}',
                                     style: const TextStyle(color: Colors.black87, fontSize: 13),
                                   ),
                                 ),
@@ -945,7 +960,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                     builder: (context) => AlertDialog(
                                       title: const Text('تحقق من الحسابات'),
                                       content: Text(
-                                        'يوجد اختلاف بين الرصيد المسجل (${formatCurrency(customer.currentTotalDebt ?? 0)}) ومجموع المعاملات (${formatCurrency(calculatedBalance)}).\n\nهل أنت متأكد من أن الرصيد المسجل هو الصحيح؟'
+                                        'يوجد اختلاف بين الرصيد المسجل (${formatCurrency(customer.currentTotalDebt)}) ومجموع المعاملات (${formatCurrency(calculatedBalance)}).\n\nهل أنت متأكد من أن الرصيد المسجل هو الصحيح؟'
                                       ),
                                       actions: [
                                         TextButton(
@@ -960,7 +975,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                     ),
                                   );
 
-                                  if (!mounted) return;
+                                  if (!context.mounted) return;
 
                                   if (result == 'yes') {
                                     // User says Recorded Balance is correct -> Add correction transaction
@@ -969,7 +984,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                       builder: (context) => AlertDialog(
                                         title: const Text('إضافة معاملة تصحيحية'),
                                         content: Text(
-                                          'سيتم إضافة معاملة بقيمة الفرق (${formatCurrency(customer.currentTotalDebt! - calculatedBalance)}) ليصبح مجموع المعاملات مطابقاً للرصيد المسجل.\n\nهل أنت متأكد؟'
+                                          'سيتم إضافة معاملة بقيمة الفرق (${formatCurrency(customer.currentTotalDebt - calculatedBalance)}) ليصبح مجموع المعاملات مطابقاً للرصيد المسجل.\n\nهل أنت متأكد؟'
                                         ),
                                         actions: [
                                           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
@@ -979,10 +994,11 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                     );
 
                                     if (confirmed == true && mounted) {
+                                      await SaveLock.run(() async {
                                       try {
                                         final db = DatabaseService();
-                                        final diffAmount = (customer.currentTotalDebt ?? 0.0) - calculatedBalance;
-                                        final targetBalance = customer.currentTotalDebt ?? 0.0;
+                                        final diffAmount = customer.currentTotalDebt - calculatedBalance;
+                                        final targetBalance = customer.currentTotalDebt;
                                         
                                         // 🔧 استخدام دالة التصحيح الخاصة التي تتجاوز التحقق الأمني
                                         await db.insertCorrectionTransaction(
@@ -996,23 +1012,25 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                         await db.recalculateCustomerTransactionBalances(customer.id!);
                                         
                                         // Reload customer and transactions to update UI with correct final values
+                                        if (!context.mounted) return;
                                         final provider = context.read<AppProvider>();
                                         await provider.selectCustomer(customer);
                                         await _loadTransactions();
                                         
-                                        if (mounted) {
+                                        if (context.mounted) {
                                           ScaffoldMessenger.of(context).showSnackBar(
                                             const SnackBar(content: Text('تم تصحيح الرصيد بنجاح')),
                                           );
                                         }
                                       } catch (e) {
-                                        if (mounted) {
+                                        if (context.mounted) {
                                           ScaffoldMessenger.of(context).showSnackBar(
                                             SnackBar(content: Text('خطأ: $e')),
                                           );
                                         }
                                       }
-                                    }
+                                    }, message: 'جارٍ التصحيح…');
+                                  }
                                   } else if (result == 'no') {
                                     // User says Recorded Balance is WRONG -> Ask to update it to match transactions
                                     final confirmed = await showDialog<bool>(
@@ -1020,7 +1038,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                       builder: (context) => AlertDialog(
                                         title: const Text('تحديث الرصيد المسجل'),
                                         content: Text(
-                                          'مجموع المعاملات لهذا العميل هو ${formatCurrency(calculatedBalance)}.\n\nهل تريد اعتماد هذا المجموع كرصيد نهائي (بدلاً من ${formatCurrency(customer.currentTotalDebt ?? 0)})؟'
+                                          'مجموع المعاملات لهذا العميل هو ${formatCurrency(calculatedBalance)}.\n\nهل تريد اعتماد هذا المجموع كرصيد نهائي (بدلاً من ${formatCurrency(customer.currentTotalDebt)})؟'
                                         ),
                                         actions: [
                                           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
@@ -1030,6 +1048,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                     );
 
                                     if (confirmed == true && mounted) {
+                                      await SaveLock.run(() async {
                                       try {
                                         final provider = context.read<AppProvider>();
                                         final updatedCustomer = customer.copyWith(
@@ -1041,19 +1060,20 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                         // Force reload to refresh UI
                                         await _loadTransactions();
 
-                                        if (mounted) {
+                                        if (context.mounted) {
                                           ScaffoldMessenger.of(context).showSnackBar(
                                             const SnackBar(content: Text('تم تحديث الرصيد المسجل بنجاح')),
                                           );
                                         }
                                       } catch (e) {
-                                        if (mounted) {
+                                        if (context.mounted) {
                                           ScaffoldMessenger.of(context).showSnackBar(
                                             SnackBar(content: Text('خطأ: $e')),
                                           );
                                         }
                                       }
-                                    }
+                                    }, message: 'جارٍ الحفظ…');
+                                  }
                                   }
                                 },
                                 icon: const Icon(Icons.build, size: 16),
@@ -1134,6 +1154,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                   );
                                   
                                   if (confirmed == true && mounted) {
+                                    await SaveLock.run(() async {
                                     try {
                                       final db = DatabaseService();
                                       // إعادة حساب تسلسل الأرصدة فقط
@@ -1142,19 +1163,20 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                       // تحديث الواجهة
                                       await _loadTransactions();
                                       
-                                      if (mounted) {
+                                      if (context.mounted) {
                                         ScaffoldMessenger.of(context).showSnackBar(
                                           const SnackBar(content: Text('تم تحديث سجل المعاملات بنجاح')),
                                         );
                                       }
                                     } catch (e) {
-                                      if (mounted) {
+                                      if (context.mounted) {
                                         ScaffoldMessenger.of(context).showSnackBar(
                                           SnackBar(content: Text('خطأ: $e')),
                                         );
                                       }
                                     }
-                                  }
+                                  }, message: 'جارٍ الحفظ…');
+                                }
                                 },
                                 icon: const Icon(Icons.refresh, size: 16),
                                 label: const Text('تحديث تسلسل الأرصدة'),
@@ -1173,117 +1195,26 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     return const SizedBox.shrink();
                   },
                 ),
+                _buildCustomerHeader(customer, transactions),
                 Padding(
-                  padding: const EdgeInsets.all(
-                      24.0), // Increased padding for more spacious look
-                  child: Card(
-                    // Card theme applied from ThemeData
-                    child: Padding(
-                      padding: const EdgeInsets.all(
-                          20.0), // Increased internal padding
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'معلومات العميل',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primary, // Primary color for heading
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                          const SizedBox(height: 20.0), // Increased spacing
-                          _buildInfoRow('رقم الهاتف',
-                              customer.phone ?? 'غير متوفر', context),
-                          const SizedBox(height: 12.0),
-                          _buildInfoRow(
-                              'العنوان',
-                              (customer.address != null && customer.address!.isNotEmpty)
-                                  ? customer.address!
-                                  : 'غير متوفر',
-                              context),
-                          const SizedBox(height: 12.0), // Increased spacing
-                          _buildInfoRow(
-                            'إجمالي الدين',
-                            '${formatCurrency(customer.currentTotalDebt ?? 0.0)} دينار',
-                            context,
-                            valueColor: (customer.currentTotalDebt ?? 0.0) > 0
-                                ? Theme.of(context)
-                                    .colorScheme
-                                    .error // Red for debt
-                                : Theme.of(context)
-                                    .colorScheme
-                                    .tertiary, // Green for no debt
-                          ),
-                          if (customer.generalNote != null &&
-                              customer.generalNote!.isNotEmpty) ...[
-                            const SizedBox(height: 12.0), // Increased spacing
-                            _buildInfoRow(
-                                'ملاحظات', customer.generalNote!, context),
-                          ],
-                        ],
-                      ),
+                  padding: const EdgeInsets.fromLTRB(20, 12, 16, 0),
+                  child: Row(children: [
+                    const Icon(Icons.history_rounded, color: _navy, size: 21),
+                    const SizedBox(width: 8),
+                    const Text('سجل المعاملات',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: _text)),
+                    const Spacer(),
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment(value: true, label: Text('مجمّع'), icon: Icon(Icons.view_agenda_outlined, size: 16)),
+                        ButtonSegment(value: false, label: Text('تفصيلي'), icon: Icon(Icons.view_list_rounded, size: 16)),
+                      ],
+                      selected: {_useGroupedView},
+                      showSelectedIcon: false,
+                      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                      onSelectionChanged: (sel) => setState(() => _useGroupedView = sel.first),
                     ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24.0), // Consistent horizontal padding
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'سجل المعاملات',
-                            style:
-                                Theme.of(context).textTheme.titleMedium?.copyWith(
-                                      color: Theme.of(context).colorScheme.primary,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                          ),
-                          const SizedBox(width: 8),
-                          // زر التبديل بين العرض المجمع والتفصيلي
-                          IconButton(
-                            icon: Icon(
-                              _useGroupedView ? Icons.view_agenda : Icons.view_list,
-                              color: Theme.of(context).colorScheme.primary,
-                              size: 20,
-                            ),
-                            tooltip: _useGroupedView ? 'عرض تفصيلي' : 'عرض مجمع',
-                            onPressed: () {
-                              setState(() {
-                                _useGroupedView = !_useGroupedView;
-                              });
-                            },
-                          ),
-                        ],
-                      ),
-                      // ➕ زرّان واضحان بدل «إضافة معاملة»: دين، وتسديد (التسديد = وصل قبض)
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          FilledButton.icon(
-                            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade600),
-                            onPressed: () => _openTransaction(customer, isDebt: true),
-                            icon: const Icon(Icons.add_circle_outline),
-                            label: const Text('إضافة دين'),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton.icon(
-                            style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
-                            onPressed: () => _openTransaction(customer, isDebt: false),
-                            icon: const Icon(Icons.payments_outlined),
-                            label: const Text('تسديد'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                  ]),
                 ),
                 _useGroupedView
                     // 📊 العرض المجمع الجديد
@@ -1302,7 +1233,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 24.0,
+                                horizontal: 16.0,
                                 vertical: 12.0),
                               itemCount: _groupedTransactions.length,
                               itemBuilder: (context, index) {
@@ -1314,7 +1245,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                     // 🔄 جلب بيانات العميل المحدّثة من قاعدة البيانات
                                     final db = DatabaseService();
                                     final updatedCustomer = await db.getCustomerById(widget.customer.id!);
-                                    if (updatedCustomer != null && mounted) {
+                                    if (updatedCustomer != null && context.mounted) {
                                       await context.read<AppProvider>().selectCustomer(updatedCustomer);
                                     }
                                     await _loadTransactions();
@@ -1346,31 +1277,35 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                 return TransactionListTile(
                                   transaction: transaction,
                                   invoiceNumber: _invoiceNumberMap[transaction.invoiceId],
-                                  onEdit: (updated) async {
+                                  onEdit: (updated) => SaveLock.run(() async {
+                                    // 🚫 سقف الدين: تعديل يرفع الرصيد (زيادة دين أو إنقاص تسديد)
+                                    final rise = updated.amountChanged - transaction.amountChanged;
+                                    if (rise > 0.5) {
+                                      final go = await CreditLimitGuard.enforce(
+                                        context,
+                                        customerId: transaction.customerId,
+                                        increase: rise,
+                                        what: 'تعديل معاملة — ${widget.customer.name}',
+                                      );
+                                      if (!go) return;
+                                    }
                                     try {
                                       final db = DatabaseService();
                                       final updatedCustomer = await db.updateTransaction(updated);
                                       
                                       // تحديث البيانات بعد التعديل
-                                      setState(() {
-                                        _isLoading = true;
-                                      });
                                       await _loadTransactions();
-                                      setState(() {
-                                        _isLoading = false;
-                                      });
                                       
                                       // تحديث المزود والواجهة بالبيانات المحدثة
-                                      if (updatedCustomer != null) {
-                                        await context.read<AppProvider>().selectCustomer(updatedCustomer);
-                                        if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('تم تحديث المعاملة. الدين الحالي: ${formatCurrency(updatedCustomer.currentTotalDebt ?? 0.0)}')),
-                                          );
-                                        }
+                                      if (!context.mounted) return;
+                                      await context.read<AppProvider>().selectCustomer(updatedCustomer);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text('تم تحديث المعاملة. الدين الحالي: ${formatCurrency(updatedCustomer.currentTotalDebt)}')),
+                                        );
                                       }
                                     } catch (e) {
-                                      if (mounted) {
+                                      if (context.mounted) {
                                         ScaffoldMessenger.of(context).showSnackBar(
                                           SnackBar(
                                             content: Text('حدث خطأ: ${e.toString()}'),
@@ -1379,40 +1314,33 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                         );
                                       }
                                     }
-                                  },
+                                  }, message: 'جارٍ تعديل المعاملة…'),
                                   onConvertType: (transactionId) async {
                                 try {
                                   final db = DatabaseService();
                                   final updatedCustomer = await db.convertTransactionType(transactionId);
                                   // تحديث البيانات بعد التحويل
-                                  setState(() {
-                                    _isLoading = true;
-                                  });
                                   await _loadTransactions();
-                                  setState(() {
-                                    _isLoading = false;
-                                  });
                                   
-                                  if (mounted) {
+                                  if (context.mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
-                                        content: Text('تم تحويل نوع المعاملة بنجاح'),
+                                        content: const Text('تم تحويل نوع المعاملة بنجاح'),
                                         backgroundColor: Theme.of(context).colorScheme.tertiary,
                                       ),
                                     );
                                   }
                                   
                                   // حدث المزود والواجهة بالبيانات المحدثة
-                                  if (updatedCustomer != null) {
-                                    await context.read<AppProvider>().selectCustomer(updatedCustomer);
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('تم تحديث المعاملة. الدين الحالي: ${formatCurrency(updatedCustomer.currentTotalDebt ?? 0.0)}')),
-                                      );
-                                    }
+                                  if (!context.mounted) return;
+                                  await context.read<AppProvider>().selectCustomer(updatedCustomer);
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('تم تحديث المعاملة. الدين الحالي: ${formatCurrency(updatedCustomer.currentTotalDebt)}')),
+                                    );
                                   }
                                 } catch (e) {
-                                  if (mounted) {
+                                  if (context.mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
                                         content: Text('حدث خطأ: ${e.toString()}'),
@@ -1426,7 +1354,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                     // 🔄 جلب بيانات العميل المحدّثة من قاعدة البيانات
                                     final db = DatabaseService();
                                     final updatedCustomer = await db.getCustomerById(widget.customer.id!);
-                                    if (updatedCustomer != null && mounted) {
+                                    if (updatedCustomer != null && context.mounted) {
                                       await context.read<AppProvider>().selectCustomer(updatedCustomer);
                                     }
                                     await _loadTransactions();
@@ -1436,33 +1364,221 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                         ),
               ],
             ),
-          );
+          )));
           },
         ),
       ),
     );
   }
 
-  // Modified to take BuildContext for theme access and ensure consistent text styles
-  Widget _buildInfoRow(String label, String value, BuildContext context,
-      {Color? valueColor}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                fontWeight: FontWeight.bold,
+  // ═══════════════════════════ رأس العميل ═══════════════════════════
+
+  static const _navy = Color(0xFF0F3460);
+  static const _border = Color(0xFFE3E9F1);
+  static const _text = Color(0xFF1E293B);
+  static const _muted = Color(0xFF64748B);
+  static const _red = Color(0xFFB91C1C);
+  static const _green = Color(0xFF047857);
+
+  /// بطاقة العميل أعلى الشاشة: الاسم والتواصل، الرصيد بحالته، آخر حركة دين
+  /// وتسديد، والملاحظة بسطور كاملة (كانت في صف واحد فتفيض خارج الشاشة).
+  Widget _buildCustomerHeader(Customer customer, List<DebtTransaction> txs) {
+    final debt = customer.currentTotalDebt;
+    final owes = debt > 0.5;
+    final credit = debt < -0.5;
+    final color = owes ? _red : (credit ? _green : _muted);
+    final status = owes ? 'عليه' : (credit ? 'له (رصيد دائن)' : 'مسدَّد');
+    DebtTransaction? lastDebt, lastPay;
+    var totalDebt = 0.0, totalPaid = 0.0;
+    for (final t in txs) {
+      if (t.amountChanged > 0) {
+        totalDebt += t.amountChanged;
+        if (lastDebt == null || t.transactionDate.isAfter(lastDebt.transactionDate)) lastDebt = t;
+      } else if (t.amountChanged < 0) {
+        totalPaid += -t.amountChanged;
+        if (lastPay == null || t.transactionDate.isAfter(lastPay.transactionDate)) lastPay = t;
+      }
+    }
+    final df = DateFormat('yyyy/MM/dd', 'en');
+    final name = customer.name.trim();
+    final initial = name.isEmpty ? '؟' : name.substring(0, 1);
+    final contact = [
+      if ((customer.phone ?? '').trim().isNotEmpty) customer.phone!.trim(),
+      if ((customer.address ?? '').trim().isNotEmpty) customer.address!.trim(),
+    ];
+    Widget fact(IconData icon, String label, String value, {Color? c}) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _border),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 17, color: c ?? _muted),
+            const SizedBox(width: 8),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(label, style: const TextStyle(fontSize: 11.5, color: _muted)),
+              Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: c ?? _text)),
+            ]),
+          ]),
+        );
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _border),
+        boxShadow: const [BoxShadow(color: Color(0x0A0F172A), blurRadius: 12, offset: Offset(0, 4))],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(height: 5, color: color),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              CircleAvatar(
+                radius: 28,
+                backgroundColor: color.withValues(alpha: 0.10),
+                child: Text(initial, style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: color)),
               ),
-        ),
-        Text(
-          value,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: valueColor,
-                fontWeight: FontWeight.bold,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(customer.name,
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: _text)),
+                  const SizedBox(height: 4),
+                  if (contact.isEmpty)
+                    const Text('لا هاتف ولا عنوان — أضفهما من «تعديل»', style: TextStyle(color: _muted))
+                  else
+                    Wrap(spacing: 14, runSpacing: 4, children: [
+                      if ((customer.phone ?? '').trim().isNotEmpty)
+                        InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: customer.phone!.trim()));
+                            ScaffoldMessenger.of(context)
+                                .showSnackBar(const SnackBar(content: Text('نُسخ رقم الهاتف'), duration: Duration(seconds: 1)));
+                          },
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Icon(Icons.phone_rounded, size: 16, color: _muted),
+                            const SizedBox(width: 4),
+                            Text(customer.phone!.trim(),
+                                textDirection: TextDirection.ltr, style: const TextStyle(color: _text)),
+                          ]),
+                        ),
+                      if ((customer.address ?? '').trim().isNotEmpty)
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.location_on_rounded, size: 16, color: _muted),
+                          const SizedBox(width: 4),
+                          Flexible(child: Text(customer.address!.trim(), style: const TextStyle(color: _text))),
+                        ]),
+                    ]),
+                ]),
               ),
+              const SizedBox(width: 12),
+              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(color: color.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(20)),
+                  child: Text(status, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: color)),
+                ),
+                const SizedBox(height: 4),
+                Text(formatCurrency(debt.abs()),
+                    textDirection: TextDirection.ltr,
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: color)),
+                const Text('دينار', style: TextStyle(fontSize: 11.5, color: _muted)),
+              ]),
+            ]),
+            const SizedBox(height: 14),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              if (lastDebt != null)
+                fact(Icons.add_circle_outline_rounded, 'آخر دين',
+                    '${df.format(lastDebt.transactionDate)} — ${formatCurrency(lastDebt.amountChanged)}',
+                    c: _red),
+              if (lastPay != null)
+                fact(Icons.payments_outlined, 'آخر تسديد',
+                    '${df.format(lastPay.transactionDate)} — ${formatCurrency(-lastPay.amountChanged)}',
+                    c: _green),
+              fact(Icons.trending_up_rounded, 'مجموع ما استدانه', formatCurrency(totalDebt)),
+              fact(Icons.price_check_rounded, 'مجموع ما سدّده', formatCurrency(totalPaid)),
+              fact(Icons.receipt_long_outlined, 'الحركات', '${txs.length}'),
+            ]),
+            if ((customer.generalNote ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: _editCustomerDetails,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBEB),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFFDE68A)),
+                  ),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Icon(Icons.sticky_note_2_outlined, size: 19, color: Color(0xFFB45309)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const Text('ملاحظات', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFFB45309))),
+                        const SizedBox(height: 2),
+                        Text(customer.generalNote!.trim(), style: const TextStyle(height: 1.6, color: _text)),
+                      ]),
+                    ),
+                    const Icon(Icons.edit_outlined, size: 16, color: _muted),
+                  ]),
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: _red, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
+                onPressed: () => _openTransaction(customer, isDebt: true),
+                icon: const Icon(Icons.add_circle_outline_rounded),
+                label: const Text('إضافة دين', style: TextStyle(fontWeight: FontWeight.w800)),
+              ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: _green, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
+                onPressed: () => _openTransaction(customer, isDebt: false),
+                icon: const Icon(Icons.payments_outlined),
+                label: const Text('تسديد', style: TextStyle(fontWeight: FontWeight.w800)),
+              ),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
+                onPressed: () => _openStatements(),
+                icon: const Icon(Icons.receipt_long_rounded),
+                label: const Text('كشف الحساب'),
+              ),
+              // 📅 مواعيد المطالبة بهذا الدين
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF4F46E5),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                ),
+                onPressed: customer.id == null
+                    ? null
+                    : () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => DebtRemindersScreen(customerId: customer.id, customerName: customer.name),
+                          ),
+                        ),
+                icon: const Icon(Icons.event_repeat_rounded),
+                label: const Text('مواعيد المطالبة'),
+              ),
+              if ((customer.phone ?? '').trim().isNotEmpty)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
+                  onPressed: _sendWhatsAppMessage,
+                  icon: const Icon(Icons.chat_rounded),
+                  label: const Text('واتساب'),
+                ),
+            ]),
+          ]),
         ),
-      ],
+      ]),
     );
   }
 
@@ -1470,9 +1586,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   Future<void> _showFinancialIntegrityReport() async {
     try {
       // إظهار مؤشر التحميل
-      showDialog(
-        context: context,
-        barrierDismissible: false,
+      LoadingDialog.show(
+        context,
         builder: (context) => const Center(
           child: CircularProgressIndicator(),
         ),
@@ -1481,9 +1596,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       final db = DatabaseService();
       final report = await db.verifyCustomerFinancialIntegrity(widget.customer.id!);
 
-      if (mounted) {
-        Navigator.pop(context); // إغلاق مؤشر التحميل
-      }
+      LoadingDialog.hide(); // إغلاق مؤشر التحميل
 
       if (!mounted) return;
 
@@ -1665,7 +1778,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                               ),
                               if (issue.details.isNotEmpty) ...[
                                 const SizedBox(height: 8),
-                                ExpansionTile(
+                                Material(type: MaterialType.transparency, child: ExpansionTile(
                                   tilePadding: EdgeInsets.zero,
                                   childrenPadding: const EdgeInsets.only(right: 8),
                                   title: const Text('عرض التفاصيل', style: TextStyle(fontSize: 11, color: Colors.blue)),
@@ -1673,7 +1786,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                     padding: const EdgeInsets.only(top: 2),
                                     child: Text(d, style: TextStyle(fontSize: 10, color: Colors.grey[700])),
                                   )).toList(),
-                                ),
+                                )),
                               ],
                             ],
                           ),
@@ -1719,8 +1832,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         ),
       );
     } catch (e) {
+      LoadingDialog.hide(); // إغلاق مؤشر التحميل إن كان مفتوحاً
       if (mounted) {
-        Navigator.pop(context); // إغلاق مؤشر التحميل إن كان مفتوحاً
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('خطأ في فحص السلامة: $e'),
@@ -1833,7 +1946,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       ),
     );
 
-    if (confirmed == true && mounted) {
+    if (confirmed == true && parentContext.mounted) {
       // عرض التحدي الرياضي
       await _showMathChallengeDialog(parentContext, issue);
     }
@@ -1940,9 +2053,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   Future<void> _executeInvoiceRepair(InvoiceIssue issue) async {
     try {
       // إظهار مؤشر التحميل
-      showDialog(
-        context: context,
-        barrierDismissible: false,
+      LoadingDialog.show(
+        context,
         builder: (context) => const Center(
           child: CircularProgressIndicator(),
         ),
@@ -1957,16 +2069,16 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         expectedDifference: issue.difference,
       );
 
-      if (mounted) {
-        Navigator.pop(context); // إغلاق مؤشر التحميل
-      }
+      LoadingDialog.hide(); // إغلاق مؤشر التحميل
 
       if (!mounted) return;
 
       if (result['success'] == true) {
         // إعادة تحميل البيانات
         await _loadTransactions();
+        if (!mounted) return;
         await context.read<AppProvider>().selectCustomer(widget.customer);
+        if (!mounted) return;
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1977,7 +2089,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         );
 
         // إغلاق نافذة التقرير وإعادة فتحها لعرض النتائج المحدثة
-        Navigator.pop(context);
+        Navigator.of(context, rootNavigator: true).pop();
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted) {
           await _showFinancialIntegrityReport();
@@ -1992,8 +2104,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         );
       }
     } catch (e) {
+      LoadingDialog.hide(); // إغلاق مؤشر التحميل إن كان مفتوحاً
       if (mounted) {
-        Navigator.pop(context); // إغلاق مؤشر التحميل إن كان مفتوحاً
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('خطأ في الإصلاح: $e'),
@@ -2008,9 +2120,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   Future<void> _showReceiptVouchersArchive() async {
     try {
       // إظهار مؤشر التحميل
-      showDialog(
-        context: context,
-        barrierDismissible: false,
+      LoadingDialog.show(
+        context,
         builder: (context) => const Center(
           child: CircularProgressIndicator(),
         ),
@@ -2019,9 +2130,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       final db = DatabaseService();
       final receipts = await db.getCustomerReceiptVouchers(widget.customer.id!);
 
-      if (mounted) {
-        Navigator.pop(context); // إغلاق مؤشر التحميل
-      }
+      LoadingDialog.hide(); // إغلاق مؤشر التحميل
 
       if (!mounted) return;
 
@@ -2109,8 +2218,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         ),
       );
     } catch (e) {
+      LoadingDialog.hide(); // إغلاق مؤشر التحميل إن كان مفتوحاً
       if (mounted) {
-        Navigator.pop(context); // إغلاق مؤشر التحميل إن كان مفتوحاً
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('خطأ في تحميل سندات القبض: $e'),
@@ -2132,7 +2241,17 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       // تحميل اللوجو باستخدام خدمة اللوجو
       final logoImage = await LogoService.getLogoImage();
       
+      // 👤 المحاسب = من سجّل التسديد (من حركته)، لا من يطبع الآن
+      String? recordedBy;
+      if (receipt.transactionId != null) {
+        try {
+          final tr = await (await DatabaseService().database).query('transactions',
+              columns: ['created_by_username'], where: 'id = ?', whereArgs: [receipt.transactionId], limit: 1);
+          recordedBy = tr.isEmpty ? null : tr.first['created_by_username'] as String?;
+        } catch (_) {}
+      }
       final pdf = await ReceiptVoucherPdfService.generateReceiptVoucherPdf(
+        recordedBy: recordedBy,
         customerName: receipt.customerName,
         beforePayment: receipt.beforePayment,
         paidAmount: receipt.paidAmount,
@@ -2189,225 +2308,24 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   }
 
   /// 📊 عرض كشف الحساب التجاري
-  Future<void> _showCommercialStatement() async {
-    try {
-      // جلب السنوات المتاحة
-      final service = CommercialStatementService();
-      final years = await service.getAvailableYears(widget.customer.id!);
-      
-      if (!mounted) return;
-      
-      // عرض حوار اختيار الفترة
-      final result = await showDialog<Map<String, dynamic>>(
-        context: context,
-        builder: (context) => PeriodSelectionDialog(availableYears: years),
-      );
-      
-      if (result == null || !mounted) return;
-      
-      // تحديد الفترة
-      DateTime? startDate;
-      DateTime? endDate;
-      String periodDescription;
-      
-      switch (result['type']) {
-        case 'all':
-          periodDescription = 'كشف حساب شامل';
-          break;
-        case 'year':
-          final year = result['year'] as int;
-          startDate = DateTime(year, 1, 1);
-          endDate = DateTime(year, 12, 31);
-          periodDescription = 'سنة $year';
-          break;
-        case 'month':
-          final year = result['year'] as int;
-          final month = result['month'] as int;
-          startDate = DateTime(year, month, 1);
-          endDate = DateTime(year, month + 1, 0);
-          periodDescription = 'شهر $month - $year';
-          break;
-        default:
-          return;
-      }
-      
-      // الانتقال لشاشة كشف الحساب التجاري
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => CommercialStatementScreen(
-            customer: widget.customer,
-            startDate: startDate,
-            endDate: endDate,
-            periodDescription: periodDescription,
-          ),
+  /// 📄 كشوفات الحساب: شامل / من آخر رصيد صفر / فترة × تفصيلي أو ملخص، والكشف التجاري
+  void _openStatements({StatementTab tab = StatementTab.account}) {
+    final id = widget.customer.id;
+    if (id == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerStatementsScreen(
+          customerId: id,
+          customerName: widget.customer.name,
+          initialTab: tab,
         ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطأ: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+      ),
+    );
   }
 
-  Future<void> _generateAccountStatement() async {
-    try {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
 
-      final db = DatabaseService();
-      // 🔧 جلب المعاملات مرتبة بنفس طريقة recalculateCustomerTransactionBalances
-      final transactions = await db.getCustomerTransactions(
-        widget.customer.id!,
-        orderBy: 'transaction_date ASC, id ASC', // ترتيب من الأقدم للأحدث
-      );
 
-      final allTransactions = <AccountStatementItem>[];
-
-      for (var transaction in transactions) {
-        if (transaction.transactionDate != null) {
-          final item = AccountStatementItem(
-            date: transaction.transactionDate!,
-            description: _getTransactionDescription(transaction),
-            amount: transaction.amountChanged,
-            type: 'transaction',
-            transaction: transaction,
-          );
-          // 🔧 استخدام القيم المحفوظة في قاعدة البيانات
-          item.balanceBefore = transaction.balanceBeforeTransaction ?? 0.0;
-          item.balanceAfter = transaction.newBalanceAfterTransaction ?? 0.0;
-          allTransactions.add(item);
-        }
-      }
-
-      // 🔧 لا نحتاج للترتيب لأن المعاملات مرتبة مسبقاً من قاعدة البيانات
-      // allTransactions.sort((a, b) => a.date.compareTo(b.date));
-
-      // استخدام جميع المعاملات بدلاً من آخر 15 فقط - كشف حساب تفصيلي كامل
-      final allTransactionsToShow = allTransactions;
-
-      // 🔧 حساب الرصيد النهائي من آخر معاملة (أو صفر إذا لم توجد معاملات)
-      double currentBalance = allTransactionsToShow.isNotEmpty 
-          ? allTransactionsToShow.last.balanceAfter 
-          : 0.0;
-
-      final actualCustomerBalance = widget.customer.currentTotalDebt;
-      
-      // ملاحظة: نستخدم الرصيد المحسوب (currentBalance) وليس الرصيد المعروض
-      // لأن الرصيد المحسوب هو الصحيح بناءً على المعاملات الفعلية
-      
-      // تحديد عدد المعاملات (حد أقصى 500 معاملة لتجنب مشاكل الذاكرة)
-      final transactionsForPdf = allTransactionsToShow.length > 500
-          ? allTransactionsToShow.sublist(allTransactionsToShow.length - 500)
-          : allTransactionsToShow;
-      
-
-      
-      final pdfService = PdfService();
-      final pdf = await pdfService.generateAccountStatement(
-        customer: widget.customer,
-        transactions: transactionsForPdf,
-        finalBalance: currentBalance, // ✅ دائماً نستخدم الرصيد المحسوب من المعاملات
-      );
-
-      if (mounted) {
-        Navigator.pop(context); // Dismiss loading indicator
-      }
-
-      // 🌐 الويب: مشاركة وتنزيل كشف الحساب مباشرة وتجنب Platform
-      if (kIsWeb) {
-        final safeCustomerName = widget.customer.name
-            .replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');
-        final formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
-        final fileName = 'كشف_حساب_${safeCustomerName}_$formattedDate.pdf';
-        await Printing.sharePdf(
-          bytes: pdf,
-          filename: fileName,
-        );
-        return;
-      }
-
-      if (Platform.isWindows) {
-        final safeCustomerName = widget.customer.name
-            .replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');
-        final formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
-        final fileName = 'كشف_حساب_${safeCustomerName}_$formattedDate.pdf';
-        final directory = Directory(
-            '${Platform.environment['USERPROFILE']}/Documents/account_statements');
-        if (!await directory.exists()) {
-          await directory.create(recursive: true);
-        }
-        final filePath = '${directory.path}/$fileName';
-        final file = File(filePath);
-        await file.writeAsBytes(pdf);
-
-        await Process.start('cmd', ['/c', 'start', '/min', '', filePath]);
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('تم إنشاء كشف الحساب وفتحه في المتصفح!'),
-              backgroundColor: Theme.of(context).colorScheme.tertiary,
-            ),
-          );
-        }
-      } else {
-        if (mounted) {
-          await Printing.layoutPdf(
-            onLayout: (format) async => pdf,
-          );
-        }
-      }
-    } catch (e, stackTrace) {
-      if (mounted) {
-        Navigator.pop(context); // Dismiss loading indicator
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('حدث خطأ أثناء إنشاء كشف الحساب: ${e.toString()}'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
-    }
-  }
-
-  String _getTransactionDescription(DebtTransaction transaction) {
-    final hasInvoice = transaction.invoiceId != null;
-    final invLabel = (hasInvoice && _invoiceNumberMap.containsKey(transaction.invoiceId))
-        ? _invoiceNumberMap[transaction.invoiceId]!
-        : (transaction.invoiceId?.toString() ?? '');
-    final invoicePart = hasInvoice ? ' (فاتورة #$invLabel)' : '';
-    if (transaction.transactionType == 'invoice_debt') {
-      return 'معاملة مالية - إضافة دين$invoicePart';
-    } else if (transaction.transactionType == 'manual_payment') {
-      return 'دفعة نقدية (تسديد)';
-    } else if (transaction.transactionType == 'manual_debt') {
-      return 'معاملة يدوية (إضافة دين)';
-    } else if (transaction.transactionType == 'Invoice_Debt_Adjustment') {
-      return 'تعديل فاتورة رقم: $invLabel';
-    } else if (transaction.transactionType == 'Invoice_Debt_Reversal') {
-      return 'حذف فاتورة رقم: $invLabel';
-    } else if (hasInvoice) {
-      // أي معاملة أخرى مرتبطة بفاتورة
-      return 'معاملة مالية$invoicePart';
-    } else {
-      return transaction.transactionNote ?? 'معاملة مالية';
-    }
-  }
 }
 
 class TransactionListTile extends StatelessWidget {
@@ -2446,7 +2364,7 @@ class TransactionListTile extends StatelessWidget {
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12.0), // Spacing between cards
-      elevation: 2, // Consistent card elevation
+      elevation: 0,
       child: ListTile(
         onTap: isInvoiceRelated
             ? () => _navigateToInvoiceDetails(
@@ -2454,7 +2372,7 @@ class TransactionListTile extends StatelessWidget {
             : null,
         leading: CircleAvatar(
           backgroundColor:
-              color.withOpacity(0.1), // Lighter background for avatar
+              color.withValues(alpha: 0.1), // Lighter background for avatar
           child: Icon(icon, color: color, size: 28), // Larger, themed icon
         ),
         title: Text(
@@ -2484,6 +2402,8 @@ class TransactionListTile extends StatelessWidget {
                   style: Theme.of(context)
                       .textTheme
                       .bodySmall), // Themed text style
+            if ((transaction.createdByUsername ?? '').isNotEmpty)
+              Text('👤 ${transaction.createdByUsername}', style: Theme.of(context).textTheme.bodySmall),
             if (isInvoiceRelated)
               Text(
                 'مرتبطة بالفاتورة #${invoiceNumber ?? transaction.invoiceId}',
@@ -2509,133 +2429,21 @@ class TransactionListTile extends StatelessWidget {
                   tooltip: 'تعديل المعاملة',
                   onPressed: () async {
                 if (onEdit == null) return;
-                final amountController = TextEditingController(text: transaction.amountChanged.toStringAsFixed(2));
-                final noteController = TextEditingController(text: transaction.transactionNote ?? '');
-                DateTime selectedDate = transaction.transactionDate ?? DateTime.now();
-                final result = await showDialog<Map<String, dynamic>>(
-                  context: context,
-                  builder: (context) {
-                    bool isDebt = transaction.amountChanged >= 0;
-                    amountController.text = NumberFormat('#,##0.##', 'en_US').format(transaction.amountChanged.abs());
-                    double previewBalance = (transaction.newBalanceAfterTransaction ?? 0);
-
-                    void computePreview() {
-                      final entered = double.tryParse(amountController.text.trim().replaceAll(',', '')) ?? transaction.amountChanged.abs();
-                      final signed = isDebt ? entered : -entered;
-                      final delta = signed - transaction.amountChanged;
-                      previewBalance = (transaction.newBalanceAfterTransaction ?? 0) + delta;
-                    }
-
-                    computePreview();
-
-                    return StatefulBuilder(
-                      builder: (ctx, setState) {
-                        return AlertDialog(
-                          title: const Text('تعديل المعاملة'),
-                          content: SingleChildScrollView(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // نوع العملية: إضافة دين أو تسديد دين
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: ChoiceChip(
-                                        selected: isDebt,
-                                        label: const Text('إضافة دين'),
-                                        onSelected: (v) {
-                                          setState(() {
-                                            isDebt = true;
-                                            computePreview();
-                                          });
-                                        },
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: ChoiceChip(
-                                        selected: !isDebt,
-                                        label: const Text('تسديد دين'),
-                                        onSelected: (v) {
-                                          setState(() {
-                                            isDebt = false;
-                                            computePreview();
-                                          });
-                                        },
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                TextField(
-                                  controller: amountController,
-                                  decoration: const InputDecoration(labelText: 'المبلغ'),
-                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-                                  onChanged: (_) => setState(() => computePreview()),
-                                ),
-                                const SizedBox(height: 8),
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    'الرصيد المتوقع بعد الحفظ: ${_formatCurrency(previewBalance)}',
-                                    style: Theme.of(context).textTheme.bodyMedium,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextField(
-                                  controller: noteController,
-                                  decoration: const InputDecoration(labelText: 'ملاحظة'),
-                                ),
-                                const SizedBox(height: 8),
-                                TextButton.icon(
-                                  onPressed: () async {
-                                    final picked = await showDatePicker(
-                                      context: context,
-                                      initialDate: selectedDate,
-                                      firstDate: DateTime(2000),
-                                      lastDate: DateTime(2100),
-                                    );
-                                    if (picked != null) {
-                                      setState(() {
-                                        selectedDate = picked;
-                                      });
-                                    }
-                                  },
-                                  icon: const Icon(Icons.calendar_today),
-                                  label: Text('التاريخ: ${_formatDate(selectedDate)}'),
-                                ),
-                              ],
-                            ),
-                          ),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.pop(context, {'ok': false}), child: const Text('إلغاء')),
-                            TextButton(onPressed: () => Navigator.pop(context, {'ok': true, 'isDebt': isDebt}), child: const Text('حفظ')),
-                          ],
-                        );
-                      },
-                    );
-                  },
+                // ✏️ نافذة التعديل الجديدة (widgets/edit_transaction_dialog.dart)
+                final r = await showEditTransactionDialog(context, transaction);
+                if (r == null) return;
+                final updated = transaction.copyWith(
+                  amountChanged: r.amount,
+                  transactionNote: r.note,
+                  transactionDate: r.date,
+                  transactionType: (r.amount >= 0) ? 'manual_debt' : 'manual_payment',
                 );
-                if (result != null && (result['ok'] == true)) {
-                  final bool isDebtSelected = result['isDebt'] as bool? ?? (transaction.amountChanged >= 0);
-                  final entered = double.tryParse(amountController.text.trim().replaceAll(',', '')) ?? transaction.amountChanged.abs();
-                  final newAmount = (amountController.text.trim().isEmpty)
-                      ? transaction.amountChanged
-                      : (isDebtSelected ? entered : -entered);
-                  final updated = transaction.copyWith(
-                    amountChanged: newAmount,
-                    transactionNote: noteController.text.trim().isEmpty ? null : noteController.text.trim(),
-                    transactionDate: selectedDate,
-                    transactionType: (newAmount >= 0) ? 'manual_debt' : 'manual_payment',
-                  );
-                  await onEdit!(updated);
-                }
+                await onEdit!(updated);
               },
               ),
               const SizedBox(width: 8),
               Text(
-                _formatDate(transaction.transactionDate!),
+                _formatDate(transaction.transactionDate),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Colors.grey[700],
                       fontSize: 12,
@@ -2744,114 +2552,132 @@ class GroupedTransactionListTile extends StatelessWidget {
     }
   }
 
-  /// بناء بطاقة الفاتورة المجمعة
-  Widget _buildInvoiceTile(BuildContext context) {
-    final isDebt = item.amount > 0;
-    final color = item.isFullyPaid
-        ? Colors.green
-        : (isDebt ? Theme.of(context).colorScheme.error : Theme.of(context).colorScheme.tertiary);
-    
-    final icon = item.isFullyPaid
-        ? Icons.check_circle
-        : (item.isCashInvoice ? Icons.payments : Icons.receipt_long);
+  // 🧾 سطر دفتر: حافة ملونة بنوع الحركة، التاريخ، البيان، المبلغ، والرصيد بعده
+  static const _lInk = Color(0xFF1B2433);
+  static const _lMuted = Color(0xFF667085);
+  static const _lLine = Color(0xFFE4E9F1);
+  static const _lDebt = Color(0xFFB42318);
+  static const _lPay = Color(0xFF067647);
+  static const _lInv = Color(0xFF1D4ED8);
+  static const _lSync = Color(0xFF0E7490);
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12.0),
-      elevation: 2,
-      child: InkWell(
-        onTap: () => _showInvoiceDetails(context),
+  Widget _ledger(
+    BuildContext context, {
+    required Color edge,
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    List<Widget> badges = const [],
+    required String amount,
+    required Color amountColor,
+    String? amountCaption,
+    double? balanceAfter,
+    VoidCallback? onTap,
+    Widget? action,
+    Color? background,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: background ?? Colors.white,
         borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Row(
-            children: [
-              // أيقونة الفاتورة
-              CircleAvatar(
-                backgroundColor: color.withOpacity(0.1),
-                radius: 24,
-                child: Icon(icon, color: color, size: 24),
-              ),
-              const SizedBox(width: 12),
-              // معلومات الفاتورة
+        border: Border.all(color: _lLine),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          child: IntrinsicHeight(
+            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Container(width: 4, color: edge),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          item.description,
-                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                        ),
-                        if (item.transactionCount > 1) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.blue[100],
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              '${_formatCurrency(item.transactionCount)} تعديل',
-                              style: TextStyle(fontSize: 10, color: Colors.blue[800]),
-                            ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  child: Row(children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(color: edge.withValues(alpha: 0.09), borderRadius: BorderRadius.circular(10)),
+                      child: Icon(icon, color: edge, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                        Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                          Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: _lInk)),
+                          ...badges,
+                        ]),
+                        if (subtitle != null && subtitle.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Text(subtitle, style: const TextStyle(fontSize: 12.5, color: _lMuted, height: 1.4)),
                           ),
-                        ],
-                      ],
+                      ]),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'إجمالي الفاتورة: ${_formatCurrency(item.invoiceTotal ?? 0)} دينار',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Text(
-                      'التاريخ: ${_formatDate(item.date)}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Colors.grey[600],
-                          ),
-                    ),
-                  ],
+                    const SizedBox(width: 10),
+                    Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                      if (amountCaption != null)
+                        Text(amountCaption, style: const TextStyle(fontSize: 11.5, color: _lMuted)),
+                      Text(amount,
+                          textDirection: TextDirection.ltr,
+                          style: TextStyle(
+                              fontSize: 16.5,
+                              fontWeight: FontWeight.w900,
+                              color: amountColor,
+                              fontFeatures: const [FontFeature.tabularFigures()])),
+                      if (balanceAfter != null)
+                        Text('الرصيد ${_formatCurrency(balanceAfter)}',
+                            textDirection: TextDirection.rtl,
+                            style: const TextStyle(fontSize: 11.5, color: _lMuted)),
+                    ]),
+                    if (action != null) ...[const SizedBox(width: 4), action],
+                  ]),
                 ),
               ),
-              // المبلغ المتبقي وزر الذهاب للفاتورة
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // زر الذهاب للفاتورة
-                  IconButton(
-                    icon: Icon(Icons.open_in_new, color: Theme.of(context).colorScheme.primary, size: 20),
-                    tooltip: 'الذهاب للفاتورة',
-                    onPressed: () => _navigateToInvoice(context),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                  const SizedBox(width: 8),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        item.isFullyPaid ? 'مسددة' : 'المتبقي',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.grey[600],
-                            ),
-                      ),
-                      Text(
-                        '${_formatCurrency(item.amount.abs())}',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              color: color,
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
-                      const Icon(Icons.chevron_left, color: Colors.grey),
-                    ],
-                  ),
-                ],
-              ),
-            ],
+            ]),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _badge(String t, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(color: c.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(20)),
+        child: Text(t, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
+      );
+
+  /// بناء بطاقة الفاتورة المجمعة
+  Widget _buildInvoiceTile(BuildContext context) {
+    final paid = item.isFullyPaid;
+    final cash = item.isCashInvoice;
+    final edge = paid ? _lPay : (cash ? _lInv : _lDebt);
+    final total = item.invoiceTotal ?? 0;
+    final sub = [
+      _formatDate(item.date),
+      'الإجمالي ${_formatCurrency(total)}',
+      if ((item.invoicePaid ?? 0) > 0 && !cash) 'مسدد عليها ${_formatCurrency(item.invoicePaid!)}',
+    ].join('  •  ');
+    return _ledger(
+      context,
+      edge: edge,
+      icon: paid ? Icons.task_alt_rounded : (cash ? Icons.payments_rounded : Icons.receipt_long_rounded),
+      title: item.description,
+      subtitle: sub,
+      badges: [
+        _badge(cash ? 'نقد' : 'دين', cash ? _lInv : _lDebt),
+        if (item.transactionCount > 1) _badge('${item.transactionCount - 1} تعديل', const Color(0xFF7A5AF8)),
+      ],
+      amountCaption: paid ? 'مسددة' : (cash ? 'نقد' : 'المتبقي عليه'),
+      amount: _formatCurrency(item.amount.abs()),
+      amountColor: paid ? _lPay : (item.amount > 0 ? _lDebt : _lPay),
+      balanceAfter: item.balanceAfter,
+      onTap: () => _showInvoiceDetails(context),
+      action: IconButton(
+        icon: const Icon(Icons.open_in_new_rounded, size: 19, color: _lMuted),
+        tooltip: 'فتح الفاتورة',
+        onPressed: () => _navigateToInvoice(context),
       ),
     );
   }
@@ -2859,175 +2685,42 @@ class GroupedTransactionListTile extends StatelessWidget {
   /// بناء بطاقة المعاملة اليدوية
   Widget _buildManualTransactionTile(BuildContext context) {
     final isDebt = item.amount > 0;
-    final color = isDebt
-        ? Theme.of(context).colorScheme.error
-        : Theme.of(context).colorScheme.tertiary;
-    final icon = isDebt ? Icons.add : Icons.remove;
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12.0),
-      elevation: 2,
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color.withOpacity(0.1),
-          child: Icon(icon, color: color, size: 28),
-        ),
-        title: Text(
-          '${_formatCurrency(item.amount.abs())} دينار',
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: color,
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'الرصيد قبل: ${_formatCurrency(item.balanceBefore ?? 0)} دينار',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            Text(
-              'الرصيد بعد: ${_formatCurrency(item.balanceAfter ?? 0)} دينار',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            Text(
-              item.description,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            Text(
-              _formatDate(item.date),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.grey[600],
-                  ),
-            ),
-          ],
-        ),
-      ),
+    final c = isDebt ? _lDebt : _lPay;
+    return _ledger(
+      context,
+      edge: c,
+      icon: isDebt ? Icons.north_east_rounded : Icons.south_west_rounded,
+      title: isDebt ? 'دين' : 'تسديد',
+      subtitle: [_formatDate(item.date), if (item.description.trim().isNotEmpty) item.description.trim()].join('  •  '),
+      amount: '${isDebt ? '+' : '−'}${_formatCurrency(item.amount.abs())}',
+      amountColor: c,
+      balanceAfter: item.balanceAfter,
     );
   }
 
   /// بناء بطاقة مجموعة المعاملات اليدوية أو المزامنة (إضافة دين أو تسديد)
   Widget _buildManualGroupTile(BuildContext context, {required bool isDebt, required bool isSync}) {
-    final color = isDebt
-        ? Theme.of(context).colorScheme.error
-        : Theme.of(context).colorScheme.tertiary;
-    
-    // أيقونة مختلفة للمزامنة
-    final IconData icon;
-    final String title;
-    if (isSync) {
-      icon = isDebt ? Icons.cloud_download : Icons.cloud_upload;
-      title = isDebt ? 'معاملات مزامنة (إضافة دين)' : 'معاملات مزامنة (تسديد)';
-    } else {
-      icon = isDebt ? Icons.add_circle : Icons.remove_circle;
-      title = isDebt ? 'معاملات يدوية (إضافة دين)' : 'معاملات يدوية (تسديد)';
-    }
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12.0),
-      elevation: 2,
-      // خلفية مميزة لمعاملات المزامنة
-      color: isSync ? Colors.blue[50] : null,
-      child: InkWell(
-        onTap: () => _showManualGroupDetails(context, isDebt: isDebt, isSync: isSync),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Row(
-            children: [
-              // أيقونة المجموعة
-              CircleAvatar(
-                backgroundColor: isSync ? Colors.blue.withOpacity(0.2) : color.withOpacity(0.1),
-                radius: 24,
-                child: Icon(icon, color: isSync ? Colors.blue : color, size: 24),
-              ),
-              const SizedBox(width: 12),
-              // معلومات المجموعة
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            title,
-                            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: isSync ? Colors.blue.withOpacity(0.1) : color.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            '${_formatCurrency(item.transactionCount)} معاملة',
-                            style: TextStyle(fontSize: 10, color: isSync ? Colors.blue : color),
-                          ),
-                        ),
-                        // شارة المزامنة
-                        if (isSync) ...[
-                          const SizedBox(width: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.blue,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.sync, color: Colors.white, size: 10),
-                                SizedBox(width: 2),
-                                Text(
-                                  'مزامنة',
-                                  style: TextStyle(fontSize: 8, color: Colors.white, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'آخر تاريخ: ${_formatDate(item.date)}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Colors.grey[600],
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-              // المجموع
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    'المجموع',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey[600],
-                        ),
-                  ),
-                  Text(
-                    '${isDebt ? '+' : ''}${_formatCurrency(item.amount.abs())}',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: color,
-                          fontWeight: FontWeight.bold,
-                        ),
-                  ),
-                  const Icon(Icons.chevron_left, color: Colors.grey),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
+    final c = isDebt ? _lDebt : _lPay;
+    final title = isDebt ? 'ديون يدوية' : 'تسديدات';
+    return _ledger(
+      context,
+      edge: isSync ? _lSync : c,
+      icon: isSync
+          ? (isDebt ? Icons.cloud_download_rounded : Icons.cloud_upload_rounded)
+          : (isDebt ? Icons.north_east_rounded : Icons.south_west_rounded),
+      title: title,
+      subtitle: 'آخرها ${_formatDate(item.date)}',
+      badges: [
+        _badge('${item.transactionCount} معاملة', c),
+        if (isSync) _badge('من جهاز آخر', _lSync),
+      ],
+      amountCaption: 'المجموع',
+      amount: '${isDebt ? '+' : '−'}${_formatCurrency(item.amount.abs())}',
+      amountColor: c,
+      balanceAfter: item.balanceAfter,
+      onTap: () => _showManualGroupDetails(context, isDebt: isDebt, isSync: isSync),
+      background: isSync ? const Color(0xFFF2FBFD) : null,
+      action: const Icon(Icons.chevron_left_rounded, color: _lMuted),
     );
   }
 
@@ -3125,7 +2818,7 @@ class GroupedTransactionListTile extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: color.withOpacity(0.1),
+                      color: color.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
@@ -3157,7 +2850,7 @@ class GroupedTransactionListTile extends StatelessWidget {
                     color: isSync ? Colors.blue[50] : null,
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: isSync ? Colors.blue.withOpacity(0.2) : txColor.withOpacity(0.1),
+                        backgroundColor: isSync ? Colors.blue.withValues(alpha: 0.2) : txColor.withValues(alpha: 0.1),
                         radius: 18,
                         child: isSync 
                             ? const Icon(Icons.sync, color: Colors.blue, size: 16)
@@ -3185,6 +2878,8 @@ class GroupedTransactionListTile extends StatelessWidget {
                               tx.transactionNote!,
                               style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                             ),
+                          if ((tx.createdByUsername ?? '').isNotEmpty)
+                            Text('👤 ${tx.createdByUsername}', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
                           Text(
                             DateFormat('yyyy/MM/dd HH:mm').format(tx.transactionDate),
                             style: TextStyle(fontSize: 10, color: Colors.grey[500]),
@@ -3346,7 +3041,7 @@ class GroupedTransactionListTile extends StatelessWidget {
                     margin: const EdgeInsets.only(bottom: 8),
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: txColor.withOpacity(0.1),
+                        backgroundColor: txColor.withValues(alpha: 0.1),
                         radius: 18,
                         child: Text(
                           '${index + 1}',
@@ -3372,6 +3067,8 @@ class GroupedTransactionListTile extends StatelessWidget {
                               tx.transactionNote!,
                               style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                             ),
+                          if ((tx.createdByUsername ?? '').isNotEmpty)
+                            Text('👤 ${tx.createdByUsername}', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
                           Text(
                             DateFormat('yyyy/MM/dd HH:mm').format(tx.transactionDate),
                             style: TextStyle(fontSize: 10, color: Colors.grey[500]),

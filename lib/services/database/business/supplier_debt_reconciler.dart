@@ -35,6 +35,10 @@ class SupplierDebtReconciler {
 
   static String paymentUuid(int paymentId) => 'spay_$paymentId';
 
+  /// رصيد افتتاحي واحد لكل (مورد، عملة) — الحفظ مرة أخرى يستبدل القيمة.
+  static String openingUuid(int supplierId, String currency) => 'sopen_${supplierId}_$currency';
+  static const String openingType = 'opening_balance';
+
   // ═══════════════════════════════════════════════════════════════════════
   // 1) توفيق مساهمة فاتورة مشتريات
   // ═══════════════════════════════════════════════════════════════════════
@@ -236,6 +240,64 @@ class SupplierDebtReconciler {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // 2ب) الرصيد الافتتاحي للمورد
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// الرصيد الافتتاحي الحالي للمورد بعملة (0 إن لم يُسجَّل).
+  static Future<double> openingBalance(DatabaseExecutor db, int supplierId, String currency) async {
+    final r = await db.query('supplier_transactions',
+        columns: ['amount_changed'],
+        where: 'transaction_uuid = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+        whereArgs: [openingUuid(supplierId, currency)],
+        limit: 1);
+    return r.isEmpty ? 0.0 : ((r.first['amount_changed'] as num?)?.toDouble() ?? 0.0);
+  }
+
+  /// يضبط الرصيد الافتتاحي للمورد بعملة: موجب = له علينا، سالب = لنا عنده،
+  /// صفر = إلغاؤه. صف واحد بمعرّف اشتقاقي، فلا يتراكم بتكرار الحفظ.
+  static Future<void> setOpeningBalance(
+    DatabaseExecutor db, {
+    required int supplierId,
+    required double amount,
+    required String currency,
+    required DateTime date,
+    String? description,
+  }) async {
+    final uuid = openingUuid(supplierId, currency);
+    final desc = (description == null || description.trim().isEmpty)
+        ? 'رصيد افتتاحي'
+        : 'رصيد افتتاحي — ${description.trim()}';
+    final existing = await db.query('supplier_transactions',
+        columns: ['id'], where: 'transaction_uuid = ?', whereArgs: [uuid], limit: 1);
+    if (existing.isEmpty) {
+      if (amount.abs() > 0.004) {
+        await _insert(db,
+            supplierId: supplierId,
+            amount: amount,
+            currency: currency,
+            type: openingType,
+            description: desc,
+            uuid: uuid,
+            date: date.toIso8601String());
+      }
+    } else {
+      await db.update(
+        'supplier_transactions',
+        {
+          'amount_changed': amount,
+          'transaction_date': date.toIso8601String(),
+          'description': desc,
+          // صفر = لا رصيد افتتاحي (حذف منطقي يحفظ الأثر)
+          'is_deleted': amount.abs() > 0.004 ? 0 : 1,
+        },
+        where: 'id = ?',
+        whereArgs: [existing.first['id']],
+      );
+    }
+    await rebuildSupplierBalances(db, supplierId);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // 3) إعادة بناء أرصدة المورد من دفتره
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -284,12 +346,21 @@ class SupplierDebtReconciler {
       invoiceCount = (r1.first['c'] as num?)?.toInt() ?? 0;
     } catch (_) {}
     try {
+      // السندات الملغاة لا تُعدّ (العمود is_void قد لا يوجد في قاعدة قديمة)
       final r2 = await db.rawQuery(
-        'SELECT COUNT(*) AS c FROM supplier_payments WHERE supplier_id = ?',
+        'SELECT COUNT(*) AS c FROM supplier_payments WHERE supplier_id = ? AND COALESCE(is_void, 0) = 0',
         [supplierId],
       );
       paymentCount = (r2.first['c'] as num?)?.toInt() ?? 0;
-    } catch (_) {}
+    } catch (_) {
+      try {
+        final r2 = await db.rawQuery(
+          'SELECT COUNT(*) AS c FROM supplier_payments WHERE supplier_id = ?',
+          [supplierId],
+        );
+        paymentCount = (r2.first['c'] as num?)?.toInt() ?? 0;
+      } catch (_) {}
+    }
 
     await db.update(
       'suppliers',

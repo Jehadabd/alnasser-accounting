@@ -8,7 +8,6 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../services/settings_manager.dart';
 import '../models/app_settings.dart';
 import 'transactions_list_dialog.dart';
-import 'material_inventory_screen.dart';
 import '../widgets/app_side_nav.dart';
 
 class InventoryScreen extends StatefulWidget {
@@ -28,8 +27,8 @@ class _InventoryScreenState extends State<InventoryScreen>
   // بيانات الجرد الشهري
   Map<String, MonthlyOverview> _monthlySummaries = {};
   Map<String, List<Map<String, dynamic>>> _dailySalesPerMonth = {};
-  Map<String, String> _selectedMetricPerMonth = {};
-  Map<String, int?> _hoveredDayIndexPerMonth = {};
+  final Map<String, String> _selectedMetricPerMonth = {};
+  final Map<String, int?> _hoveredDayIndexPerMonth = {};
 
   // بيانات المقارنة
   MonthlyOverview? _currentMonth;
@@ -136,7 +135,7 @@ class _InventoryScreenState extends State<InventoryScreen>
         title: const Text('الجرد والتحليلات'),
         backgroundColor: const Color(0xFF3F51B5),
         elevation: 0,
-        actions: [],
+        actions: const [],
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
@@ -217,7 +216,9 @@ class _InventoryScreenState extends State<InventoryScreen>
     
     // === بيانات الفواتير ===
     // دين الفواتير = creditSales - إضافة الدين اليدوية
-    final invoiceCreditSales = summary.creditSales - summary.totalManualDebt;
+    // creditSales = آجل الفواتير فقط (الدين اليدوي منفصل في totalManualDebt)؛
+    // كان يُطرح منه الدين اليدوي فيخرج «دين الفواتير» ناقصاً أو صفراً.
+    final invoiceCreditSales = summary.creditSales;
     final invoiceCreditSalesPositive = invoiceCreditSales > 0 ? invoiceCreditSales : 0.0;
     
     // إجمالي مبيعات الفواتير = نقد + دين الفواتير
@@ -257,7 +258,7 @@ class _InventoryScreenState extends State<InventoryScreen>
       margin: const EdgeInsets.only(bottom: 24),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: isCurrentMonth ? const Color(0xFF3F51B5).withOpacity(0.4) : Colors.grey.withOpacity(0.2), width: 2),
+        side: BorderSide(color: isCurrentMonth ? const Color(0xFF3F51B5).withValues(alpha: 0.4) : Colors.grey.withValues(alpha: 0.2), width: 2),
       ),
       child: Container(
         padding: const EdgeInsets.all(16),
@@ -265,8 +266,8 @@ class _InventoryScreenState extends State<InventoryScreen>
           borderRadius: BorderRadius.circular(20),
           gradient: LinearGradient(
             colors: isCurrentMonth
-                ? [const Color(0xFF3F51B5).withOpacity(0.08), const Color(0xFF3F51B5).withOpacity(0.02)]
-                : [Colors.grey.withOpacity(0.06), Colors.grey.withOpacity(0.01)],
+                ? [const Color(0xFF3F51B5).withValues(alpha: 0.08), const Color(0xFF3F51B5).withValues(alpha: 0.02)]
+                : [Colors.grey.withValues(alpha: 0.06), Colors.grey.withValues(alpha: 0.01)],
           ),
         ),
         child: Column(
@@ -280,7 +281,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: isCurrentMonth ? const Color(0xFF3F51B5).withOpacity(0.15) : Colors.grey.withOpacity(0.2),
+                    color: isCurrentMonth ? const Color(0xFF3F51B5).withValues(alpha: 0.15) : Colors.grey.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(Icons.calendar_month, color: isCurrentMonth ? const Color(0xFF3F51B5) : Colors.grey[600], size: 28),
@@ -290,7 +291,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(monthYear, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: isCurrentMonth ? const Color(0xFF3F51B5) : Colors.grey[700])),
-                    if (isCurrentMonth) Text('الشهر الحالي', style: TextStyle(fontSize: 12, color: const Color(0xFF3F51B5), fontWeight: FontWeight.w500)),
+                    if (isCurrentMonth) const Text('الشهر الحالي', style: TextStyle(fontSize: 12, color: Color(0xFF3F51B5), fontWeight: FontWeight.w500)),
                   ],
                 ),
               ],
@@ -414,6 +415,17 @@ class _InventoryScreenState extends State<InventoryScreen>
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildSingleRowPillItem(
+                          Icons.assignment_return,
+                          'تسديد دين راجع',
+                          '${formatCurrency(summary.totalManualPaymentReturn)} د.ع',
+                          '${formatCurrency(summary.manualPaymentReturnCount)} معاملة',
+                          const Color(0xFFE91E63),
+                          () => _showDebtPaymentReturns(monthYear),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildSingleRowPillItem(
                           Icons.assessment,
                           'إجمالي الأرباح الشامل',
                           '${formatCurrency(totalProfitAll)} د.ع',
@@ -481,6 +493,15 @@ class _InventoryScreenState extends State<InventoryScreen>
                       ),
                       const SizedBox(width: 8),
                       _buildSingleRowPillItem(
+                        Icons.assignment_return,
+                        'تسديد دين راجع',
+                        '${formatCurrency(summary.totalManualPaymentReturn)} د.ع',
+                        '${formatCurrency(summary.manualPaymentReturnCount)} معاملة',
+                        const Color(0xFFE91E63),
+                        () => _showDebtPaymentReturns(monthYear),
+                      ),
+                      const SizedBox(width: 8),
+                      _buildSingleRowPillItem(
                         Icons.assessment,
                         'إجمالي الأرباح الشامل',
                         '${formatCurrency(totalProfitAll)} د.ع',
@@ -517,82 +538,14 @@ class _InventoryScreenState extends State<InventoryScreen>
     );
   }
   
-  // بطاقة معلومات بحجم أكبر وأوضح
-  Widget _buildCompactInfoItem(IconData icon, String title, String value, String? badge, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.3), width: 1.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: color, size: 24),
-              if (badge != null) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
-                  child: Text(badge, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(title, style: TextStyle(fontSize: 13, color: color, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
-          const SizedBox(height: 4),
-          Text(value, style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: color), textAlign: TextAlign.center),
-        ],
-      ),
-    );
-  }
   
-  // بطاقة قابلة للضغط بحجم أكبر
-  Widget _buildCompactClickableItem(IconData icon, String title, String value, String subtitle, Color color, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withOpacity(0.3), width: 1.5),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, color: color, size: 24),
-                const SizedBox(width: 6),
-                Icon(Icons.touch_app, color: color.withOpacity(0.5), size: 16),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(title, style: TextStyle(fontSize: 13, color: color, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
-            const SizedBox(height: 4),
-            Text(value, style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: color), textAlign: TextAlign.center),
-            const SizedBox(height: 2),
-            Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey[600]), textAlign: TextAlign.center),
-          ],
-        ),
-      ),
-    );
-  }
   
   // عنوان قسم
   Widget _buildSectionHeader(String title, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
         border: Border(left: BorderSide(color: color, width: 4)),
       ),
@@ -607,73 +560,7 @@ class _InventoryScreenState extends State<InventoryScreen>
     );
   }
 
-  // بطاقة معلومات كبيرة مع نسبة مئوية
-  Widget _buildLargeInfoItem(IconData icon, String title, String value, String? percent, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.3), width: 1.5),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: color, size: 28),
-              if (percent != null) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
-                  child: Text(percent, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(title, style: TextStyle(fontSize: 14, color: color, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
-          const SizedBox(height: 4),
-          Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color), textAlign: TextAlign.center),
-        ],
-      ),
-    );
-  }
 
-  // بطاقة قابلة للضغط كبيرة
-  Widget _buildLargeClickableItem(IconData icon, String title, String value, String subtitle, Color color, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withOpacity(0.3), width: 1.5),
-        ),
-        child: Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, color: color, size: 28),
-                const SizedBox(width: 6),
-                Icon(Icons.touch_app, color: color.withOpacity(0.5), size: 16),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(title, style: TextStyle(fontSize: 14, color: color, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
-            const SizedBox(height: 4),
-            Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color), textAlign: TextAlign.center),
-            const SizedBox(height: 4),
-            Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[600]), textAlign: TextAlign.center),
-          ],
-        ),
-      ),
-    );
-  }
 
 
   // ==================== تبويب المقارنة المطوّر ====================
@@ -704,7 +591,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                   end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(20),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 10, offset: const Offset(0, 4))],
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 10, offset: const Offset(0, 4))],
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -717,7 +604,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                   ]),
                   Container(
                     padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), shape: BoxShape.circle),
+                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), shape: BoxShape.circle),
                     child: const Icon(Icons.compare_arrows_rounded, size: 30, color: Colors.amberAccent),
                   ),
                   Column(children: [
@@ -762,7 +649,7 @@ class _InventoryScreenState extends State<InventoryScreen>
               children: [
                 Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(12)),
+                  decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
                   child: Icon(icon, color: color, size: 22),
                 ),
                 const SizedBox(width: 12),
@@ -848,7 +735,7 @@ class _InventoryScreenState extends State<InventoryScreen>
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4)],
       ),
       child: Row(
         children: [
@@ -980,7 +867,7 @@ class _InventoryScreenState extends State<InventoryScreen>
           width: 45,
           height: 45,
           decoration: BoxDecoration(
-            color: rankColor.withOpacity(0.2),
+            color: rankColor.withValues(alpha: 0.2),
             shape: BoxShape.circle,
             border: Border.all(color: rankColor, width: 2),
           ),
@@ -1073,7 +960,7 @@ class _InventoryScreenState extends State<InventoryScreen>
         leading: Container(
           width: 40,
           height: 40,
-          decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+          decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
           child: Center(child: Text('$rank', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: color))),
         ),
         title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1091,7 +978,7 @@ class _InventoryScreenState extends State<InventoryScreen>
         leading: Container(
           width: 40,
           height: 40,
-          decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+          decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
           child: Center(child: Text('$rank', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: color))),
         ),
         title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1102,61 +989,13 @@ class _InventoryScreenState extends State<InventoryScreen>
   }
 
 
-  // ==================== دوال مساعدة ====================
-  Widget _buildInfoItem(IconData icon, String title, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 18),
-          const SizedBox(height: 4),
-          Text(title, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500), textAlign: TextAlign.center),
-          const SizedBox(height: 2),
-          Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color), textAlign: TextAlign.center),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildClickableInfoItem(IconData icon, String title, String value, String subtitle, Color color, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Column(
-          children: [
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(icon, color: color, size: 18),
-              const SizedBox(width: 4),
-              Icon(Icons.touch_app, color: color.withOpacity(0.5), size: 10),
-            ]),
-            const SizedBox(height: 4),
-            Text(title, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500), textAlign: TextAlign.center),
-            const SizedBox(height: 2),
-            Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color), textAlign: TextAlign.center),
-            Text(subtitle, style: TextStyle(fontSize: 9, color: Colors.grey[600]), textAlign: TextAlign.center),
-          ],
-        ),
-      ),
-    );
-  }
 
   void _showDebtAdditions(String monthYear) {
     final year = int.parse(monthYear.split('-')[0]);
     final month = int.parse(monthYear.split('-')[1]);
     final startDate = DateTime(year, month, 1);
-    final endDate = month == 12 ? DateTime(year + 1, 1, 1) : DateTime(year, month + 1, 1);
+    final endDate = DateTime(year, month + 1, 0);
     TransactionsListDialog.showDebtAdditions(context: context, startDate: startDate, endDate: endDate, periodTitle: monthYear);
   }
 
@@ -1164,8 +1003,15 @@ class _InventoryScreenState extends State<InventoryScreen>
     final year = int.parse(monthYear.split('-')[0]);
     final month = int.parse(monthYear.split('-')[1]);
     final startDate = DateTime(year, month, 1);
-    final endDate = month == 12 ? DateTime(year + 1, 1, 1) : DateTime(year, month + 1, 1);
+    final endDate = DateTime(year, month + 1, 0);
     TransactionsListDialog.showDebtPayments(context: context, startDate: startDate, endDate: endDate, periodTitle: monthYear);
+  }
+
+  void _showDebtPaymentReturns(String monthYear) {
+    final year = int.parse(monthYear.split('-')[0]);
+    final month = int.parse(monthYear.split('-')[1]);
+    TransactionsListDialog.showDebtPaymentReturns(
+        context: context, startDate: DateTime(year, month, 1), endDate: DateTime(year, month + 1, 0), periodTitle: monthYear);
   }
 
   // كروت الفواتير الهيدر المتأقلمة ديناميكياً في سطر واحد
@@ -1173,9 +1019,9 @@ class _InventoryScreenState extends State<InventoryScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.09),
+        color: color.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.28), width: 1.5),
+        border: Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1199,7 +1045,7 @@ class _InventoryScreenState extends State<InventoryScreen>
               if (badge != null)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(color: color.withOpacity(0.18), borderRadius: BorderRadius.circular(8)),
+                  decoration: BoxDecoration(color: color.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(8)),
                   child: Text(badge, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color)),
                 ),
             ],
@@ -1218,50 +1064,6 @@ class _InventoryScreenState extends State<InventoryScreen>
     );
   }
 
-  // كروت الفواتير الكبيرة والديناميكية التكيّفية
-  Widget _buildDynamicGridCard(String title, String value, IconData icon, String? badge, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.09),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.3), width: 1.5),
-        boxShadow: [
-          BoxShadow(color: color.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 3)),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: color.withOpacity(0.18), shape: BoxShape.circle),
-                child: Icon(icon, color: color, size: 22),
-              ),
-              if (badge != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
-                  child: Text(badge, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color)),
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(title, style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.bold)),
-          const SizedBox(height: 2),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerRight,
-            child: Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: color)),
-          ),
-        ],
-      ),
-    );
-  }
 
   // كروت السطر الواحد للمعاملات اليدوية والإجماليات
   Widget _buildSingleRowPillItem(IconData icon, String title, String value, String subtitle, Color color, VoidCallback? onTap) {
@@ -1269,9 +1071,9 @@ class _InventoryScreenState extends State<InventoryScreen>
       width: 175,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.3), width: 1.5),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1290,7 +1092,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                 ),
               ),
               if (onTap != null)
-                Icon(Icons.touch_app, color: color.withOpacity(0.6), size: 12),
+                Icon(Icons.touch_app, color: color.withValues(alpha: 0.6), size: 12),
             ],
           ),
           const SizedBox(height: 4),
@@ -1319,15 +1121,15 @@ class _InventoryScreenState extends State<InventoryScreen>
       width: 155,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.25)),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(color: color.withOpacity(0.15), shape: BoxShape.circle),
+            decoration: BoxDecoration(color: color.withValues(alpha: 0.15), shape: BoxShape.circle),
             child: Icon(icon, color: color, size: 14),
           ),
           const SizedBox(width: 8),
@@ -1400,7 +1202,7 @@ class _InventoryScreenState extends State<InventoryScreen>
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFFE2E8F0)),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 6, offset: const Offset(0, 2)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 6, offset: const Offset(0, 2)),
         ],
       ),
       child: Column(
@@ -1636,8 +1438,8 @@ class LineChartPainter extends CustomPainter {
       final areaGradient = Paint()
         ..shader = LinearGradient(
           colors: [
-            color.withOpacity(0.30),
-            color.withOpacity(0.01),
+            color.withValues(alpha: 0.30),
+            color.withValues(alpha: 0.01),
           ],
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
@@ -1660,9 +1462,9 @@ class LineChartPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (values.isEmpty) return;
 
-    final double marginX = 24.0;
-    final double marginYTop = 20.0;
-    final double marginYBottom = 28.0;
+    const double marginX = 24.0;
+    const double marginYTop = 20.0;
+    const double marginYBottom = 28.0;
 
     final double chartW = size.width - (marginX * 2);
     final double chartH = size.height - marginYTop - marginYBottom;
@@ -1704,7 +1506,7 @@ class LineChartPainter extends CustomPainter {
       final p = mainPoints[selectedIndex!];
 
       final crosshairPaint = Paint()
-        ..color = lineColor.withOpacity(0.45)
+        ..color = lineColor.withValues(alpha: 0.45)
         ..strokeWidth = 1.5
         ..style = PaintingStyle.stroke;
 
@@ -1732,7 +1534,7 @@ class LineChartPainter extends CustomPainter {
     }
 
     // X-Axis Day Labels
-    final textStyle = const TextStyle(fontSize: 9, color: Color(0xFF64748B), fontWeight: FontWeight.w600);
+    const textStyle = TextStyle(fontSize: 9, color: Color(0xFF64748B), fontWeight: FontWeight.w600);
 
     for (int i = 0; i < mainPoints.length; i++) {
       final dayNum = i + 1;
@@ -1762,7 +1564,7 @@ class LineChartPainter extends CustomPainter {
       final dotPaint = Paint()..color = lineColor;
       final whiteDotPaint = Paint()..color = Colors.white;
 
-      canvas.drawCircle(p, 9, Paint()..color = lineColor.withOpacity(0.25));
+      canvas.drawCircle(p, 9, Paint()..color = lineColor.withValues(alpha: 0.25));
       canvas.drawCircle(p, 5, dotPaint);
       canvas.drawCircle(p, 2.5, whiteDotPaint);
 
@@ -1822,7 +1624,7 @@ class LineChartPainter extends CustomPainter {
 
       canvas.drawRRect(
         rRect.shift(const Offset(0, 3)),
-        Paint()..color = Colors.black.withOpacity(0.25),
+        Paint()..color = Colors.black.withValues(alpha: 0.25),
       );
 
       canvas.drawRRect(

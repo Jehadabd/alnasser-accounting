@@ -7,6 +7,7 @@
 //   1) تجاوز المدة التي ضبطها المستخدم في الإعدادات.
 //   2) قراءة المستند من كل الأجهزة المؤهلة (فحص ACKs).
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_sync_config.dart';
@@ -35,16 +36,16 @@ class FirebaseCleanupService {
         }
       }
 
-      print('🧹 FirebaseCleanupService: تشغيل الحذف الذكي الآمن (ACK-gated)...');
+      debugPrint('🧹 FirebaseCleanupService: تشغيل الحذف الذكي الآمن (ACK-gated)...');
 
       final result = await SmartPipeCleanupService().runManualCleanup();
 
       await prefs.setString(_lastCleanupKey, DateTime.now().toIso8601String());
-      print('✅ FirebaseCleanupService: اكتمل التنظيف الآمن '
+      debugPrint('✅ FirebaseCleanupService: اكتمل التنظيف الآمن '
           '(معاملات=${result.deletedTransactions}، فواتير=${result.deletedInvoices}، '
           'متروكة بانتظار قراءة=${result.skippedPendingRead}).');
     } catch (e) {
-      print('❌ FirebaseCleanupService - خطأ في التنظيف الآمن: $e');
+      debugPrint('❌ FirebaseCleanupService - خطأ في التنظيف الآمن: $e');
     }
   }
 }

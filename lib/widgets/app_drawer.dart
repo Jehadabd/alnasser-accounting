@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 // removed font settings navigation
 
 class AppDrawer extends StatelessWidget {
+  const AppDrawer({super.key});
+
   @override
   Widget build(BuildContext context) {
     return Drawer(
@@ -12,7 +14,7 @@ class AppDrawer extends StatelessWidget {
           DrawerHeader(
             decoration: BoxDecoration(
               color: Theme.of(context).primaryColor,
-              gradient: LinearGradient(
+              gradient: const LinearGradient(
                 colors: [Color(0xFF2E5BFF), Color(0xFF8C54FF)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -27,14 +29,14 @@ class AppDrawer extends StatelessWidget {
                   child: Icon(Icons.store,
                       size: 36, color: Theme.of(context).primaryColor),
                 ),
-                SizedBox(height: 16),
-                Text('بابت',
+                const SizedBox(height: 16),
+                const Text('بابت',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
                     )),
-                Text('نظام إدارة المتاجر',
+                const Text('نظام إدارة المتاجر',
                     style: TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
@@ -47,7 +49,7 @@ class AppDrawer extends StatelessWidget {
           _buildDrawerItem(context, 'المنتجات', Icons.inventory, () {}),
           _buildDrawerItem(context, 'العملاء', Icons.people, () {}),
           _buildDrawerItem(context, 'التقارير', Icons.analytics, () {}),
-          Divider(),
+          const Divider(),
           
           _buildDrawerItem(context, 'الإعدادات', Icons.settings, () {}),
           _buildDrawerItem(context, 'الدعم', Icons.help, () {}),
@@ -60,9 +62,9 @@ class AppDrawer extends StatelessWidget {
       BuildContext context, String title, IconData icon, VoidCallback onTap) {
     return ListTile(
       leading: Icon(icon, color: Colors.grey.shade700),
-      title: Text(title, style: TextStyle(fontSize: 16)),
+      title: Text(title, style: const TextStyle(fontSize: 16)),
       onTap: onTap,
-      contentPadding: EdgeInsets.symmetric(horizontal: 20),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20),
     );
   }
 }

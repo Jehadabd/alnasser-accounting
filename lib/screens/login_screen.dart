@@ -526,7 +526,9 @@ class _LoginScreenState extends State<LoginScreen> {
           if (lic != null) ...[
             const Divider(color: Colors.white24),
             Text('الترخيص: ${lic.username}${lic.isMainDevice ? '' : ' (جهاز إضافي)'}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-            if (lic.expires.length >= 10)
+            if (lic.isLifetime)
+              const Text('الترخيص: دائم — بلا تاريخ انتهاء', style: TextStyle(color: Colors.white54, fontSize: 12))
+            else if (lic.expires.length >= 10)
               Text('صالح حتى: ${lic.expires.substring(0, 10)}',
                   style: const TextStyle(color: Colors.white54, fontSize: 12)),
           ],
@@ -759,6 +761,9 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
           const SizedBox(height: 12),
+          // 🔐 الخروج يخرج من حساب المستخدم فقط؛ الترخيص لا يُغيَّر من هنا بعد
+          //    إنشاء المدير — تصفيره ونقله من الإعدادات ← الحسابات والموظفين فقط.
+          if (setup)
           TextButton.icon(
             onPressed: () => Navigator.of(context).pushNamed('/license'),
             icon: const Icon(Icons.verified_user_outlined, color: _navy),
@@ -772,21 +777,8 @@ class _LoginScreenState extends State<LoginScreen> {
               icon: const Icon(Icons.lan_outlined, color: _navy),
               label: const Text('هذا الجهاز طرفية؟ اربطه بحاسبة السيرفر', style: TextStyle(color: _navy)),
             ),
-          if (!kIsWeb) ...[
-            const SizedBox(height: 8),
-            const Divider(),
-            TextButton.icon(
-              onPressed: () => _switchDemo(
-                enable: true,
-                message: 'سيُغلق البرنامج الآن. افتحه من جديد لتدخل الوضع التجريبي.\n\n'
-                    'قاعدة منفصلة فيها سنة من البيانات الوهمية للتجربة وتدريب الموظفين. '
-                    'قاعدتك الحقيقية لا تُفتح ولا تُلمس، والمزامنة والشبكة ورفع البيانات تتوقف في هذا الوضع.\n'
-                    'في أول فتح تُنشأ البيانات (بضع دقائق).',
-              ),
-              icon: const Icon(Icons.science_outlined, color: Colors.orange),
-              label: const Text('تجربة البرنامج ببيانات وهمية', style: TextStyle(color: Colors.orange)),
-            ),
-          ],
+          // 🧪 زر «تجربة البرنامج ببيانات وهمية» أُزيل بطلب المالك. لوحة الوضع
+          //    التجريبي (_demoPanel) باقية فقط ليخرج منها من دخله سابقاً.
         ],
       ),
     );

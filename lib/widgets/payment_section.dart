@@ -1,6 +1,5 @@
 // widgets/payment_section.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'formatters.dart';
 
 class PaymentSection extends StatelessWidget {
@@ -31,23 +30,25 @@ class PaymentSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Radio<String>(
-              value: 'نقد',
-              groupValue: paymentType,
-              onChanged: isViewOnly ? null : onPaymentTypeChanged,
-            ),
-            const Text('نقد'),
-            const SizedBox(width: 24),
-            Radio<String>(
-              value: 'دين',
-              groupValue: paymentType,
-              onChanged: isViewOnly ? null : onPaymentTypeChanged,
-            ),
-            const Text('دين'),
-          ],
+        RadioGroup<String>(
+          groupValue: paymentType,
+          onChanged: onPaymentTypeChanged,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Radio<String>(
+                value: 'نقد',
+                enabled: !isViewOnly,
+              ),
+              const Text('نقد'),
+              const SizedBox(width: 24),
+              Radio<String>(
+                value: 'دين',
+                enabled: !isViewOnly,
+              ),
+              const Text('دين'),
+            ],
+          ),
         ),
         if (paymentType == 'دين' && showPaidAmountField)
           Padding(

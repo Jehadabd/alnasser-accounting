@@ -10,14 +10,18 @@
 class LicenseConfig {
   LicenseConfig._();
 
+  /// معرّف هذا البرنامج عند السيرفر الموحّد (يرسَل مع كل طلب، ويُكتب داخل الترخيص الموقَّع).
+  /// السيرفر يرفض تفعيل حساب «شوب مانجر» على «الناصر» والعكس.
+  static const String appId = 'alnasser';
+  static const String appLabel = 'الناصر للحسابات';
+
   /// روابط السيرفر بالترتيب: الأول هو المعتمد، والبقية احتياط إن تعطّل
   /// (نشر محذوف أو مؤرشف). كلها لنفس السكربت ونفس الجدول ونفس مفتاح التوقيع.
   static const List<String> serverUrls = [
-    'https://script.google.com/macros/s/AKfycbwjQyu6uySoh48hnhnpaR_7TNhCmkXdGR4SuAfVsVlLBrT7foeiDOKf68KYS84ELVEMQQ/exec',
-    'https://script.google.com/macros/s/AKfycbzluC_BLnVyqUyFO0NjJzUQDImcX0qgrmLQcOaycBT_jexqvs-RvwbDg3HNndQvYiNJJg/exec',
+    'https://script.google.com/macros/s/AKfycbz2vW4B1pJkilCKelw1-oYIXFtPRPTHGWF4-zP31Z6GgAoRlOU7PfZmvUi6PUWz_APa/exec',
   ];
   static String get serverUrl => serverUrls.first;
-  static const String publicKeyHex = '31dc0ccf8b49bb730d25a48a807c29ce54e01a1dbb3bc88614f693a6d37eddb6';
+  static const String publicKeyHex = 'e35d89ce1ed6066e285ceab0624a19b8f42acac8eabbf29958e34ad2f8e48ec1';
 
   /// يظهر للعميل في رسائل التجديد والتفعيل
   static const String supportPhone = '07705252905';

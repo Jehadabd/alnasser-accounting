@@ -1,5 +1,5 @@
 // services/product_cost_service.dart
-import 'dart:convert';
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../models/product.dart';
 
 class ProductCostService {
@@ -21,7 +21,7 @@ class ProductCostService {
       // إذا لم يتم العثور على التكلفة، احسبها من الوحدة الأساسية
       return _calculateCostFromBaseUnit(product, saleUnit, quantity);
     } catch (e) {
-      print('Error calculating unit cost: $e');
+      debugPrint('Error calculating unit cost: $e');
       return null;
     }
   }
@@ -45,7 +45,7 @@ class ProductCostService {
       
       return baseUnitCost * multiplier;
     } catch (e) {
-      print('Error calculating cost from base unit: $e');
+      debugPrint('Error calculating cost from base unit: $e');
       return null;
     }
   }
@@ -61,7 +61,7 @@ class ProductCostService {
       
       return totalRevenue - totalCost;
     } catch (e) {
-      print('Error calculating profit: $e');
+      debugPrint('Error calculating profit: $e');
       return null;
     }
   }
@@ -77,7 +77,7 @@ class ProductCostService {
       
       return (profit / totalRevenue) * 100;
     } catch (e) {
-      print('Error calculating profit margin: $e');
+      debugPrint('Error calculating profit margin: $e');
       return null;
     }
   }
@@ -115,7 +115,7 @@ class ProductCostService {
       
       return totalCost;
     } catch (e) {
-      print('Error calculating total inventory cost: $e');
+      debugPrint('Error calculating total inventory cost: $e');
       return null;
     }
   }
@@ -170,7 +170,7 @@ class ProductCostService {
       
       return true;
     } catch (e) {
-      print('Error validating unit costs: $e');
+      debugPrint('Error validating unit costs: $e');
       return false;
     }
   }

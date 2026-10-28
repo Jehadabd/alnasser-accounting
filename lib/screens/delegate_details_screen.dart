@@ -5,6 +5,7 @@ import '../models/supplier_delegate.dart';
 import '../models/purchase_invoice.dart';
 import '../services/purchase_service.dart';
 import 'invoice_details_split_screen.dart';
+import '../accounting/screens/acc_ui.dart' show accAppBar;
 
 class DelegateDetailsScreen extends StatefulWidget {
   final SupplierDelegate delegate;
@@ -61,13 +62,8 @@ class _DelegateDetailsScreenState extends State<DelegateDetailsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        foregroundColor: const Color(0xFF1E293B),
-        title: Text(_delegate.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-      ),
+      backgroundColor: const Color(0xFFF3F6FB),
+      appBar: accAppBar(_delegate.name, icon: Icons.badge_rounded, subtitle: 'مندوب — سجل الفواتير معه'),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
@@ -87,7 +83,7 @@ class _DelegateDetailsScreenState extends State<DelegateDetailsScreen> {
                       ),
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: [
-                        BoxShadow(color: Colors.blue.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10)),
+                        BoxShadow(color: Colors.blue.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 10)),
                       ],
                     ),
                     child: Column(
@@ -110,7 +106,7 @@ class _DelegateDetailsScreenState extends State<DelegateDetailsScreen> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
+                              color: Colors.white.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Row(

@@ -2,6 +2,7 @@
 // 🛡️ خدمة التحقق المتبادل بين الأجهزة (Cross-Device Verification)
 // تقوم بمقارنة "ما يدعي الجهاز الآخر أنه أرسله" مع "ما استقبله هذا الجهاز فعلياً"
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../database_service.dart';
 import 'device_snapshot_service.dart';
 
@@ -50,14 +51,14 @@ class CrossDeviceVerifier {
 
   /// 🛡️ تنفيذ عملية التحقق الشاملة
   Future<VerificationReport> runVerification() async {
-    print('🛡️ بدء عملية التدقيق المالي المتبادل...');
+    debugPrint('🛡️ بدء عملية التدقيق المالي المتبادل...');
     final startTime = DateTime.now();
     
     // 1. جلب لقطات الأجهزة الأخرى (Remote Claims)
     final snapshots = await _snapshotService.fetchOtherDevicesSnapshots();
     
     if (snapshots.isEmpty) {
-      print('ℹ️ لا توجد لقطات من أجهزة أخرى للمقارنة');
+      debugPrint('ℹ️ لا توجد لقطات من أجهزة أخرى للمقارنة');
       return VerificationReport(
         timestamp: startTime,
         totalCustomersChecked: 0,
@@ -143,9 +144,9 @@ class CrossDeviceVerifier {
       discrepancies: discrepancies,
     );
 
-    print('🛡️ اكتمل التدقيق: تم فحص ${report.totalCustomersChecked} عميل، وجد ${report.totalDiscrepancies} خلاف.');
+    debugPrint('🛡️ اكتمل التدقيق: تم فحص ${report.totalCustomersChecked} عميل، وجد ${report.totalDiscrepancies} خلاف.');
     for (var d in discrepancies) {
-      print('🔴 $d');
+      debugPrint('🔴 $d');
     }
 
     return report;

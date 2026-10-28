@@ -2,16 +2,12 @@
 // 🛡️ النظام المتكامل لحماية السلامة المالية - 9 طبقات أمان
 // هذا الملف مسؤول فقط عن التحقق والمراقبة، ولا يغير منطق الحفظ الحالي
 
-import 'dart:convert';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
-import 'package:uuid/uuid.dart';
 import '../../../models/invoice.dart';
 import '../../../models/invoice_item.dart';
 import '../../../models/invoice_input_data.dart';
-import '../../../models/customer.dart';
-import '../../../models/transaction.dart';
 import '../../../models/invoice_adjustment.dart';
-import '../../../models/product.dart';
 import '../../../utils/money_calculator.dart';
 import '../../../services/auth_service.dart';
 import '../dao/invoice_dao.dart';
@@ -103,7 +99,6 @@ class FinancialIntegrityGuard {
 
   /// سجل الإنذارات
   final List<IntegrityAlert> _alerts = [];
-  int _alertCounter = 0;
 ///
   FinancialIntegrityGuard({
     required this.getDatabase,
@@ -139,7 +134,6 @@ class FinancialIntegrityGuard {
     int? customerId,
     Map<String, dynamic>? context,
   }) {
-    _alertCounter++;
     final alert = IntegrityAlert(
       alertCode: 'FIG-$code',
       timestamp: DateTime.now(),
@@ -152,8 +146,8 @@ class FinancialIntegrityGuard {
       context: context,
     );
     _alerts.add(alert);
-    print('⚠️ [FIG-${alert.alertCode}] $severity: $message');
-    if (details != null) print('   📋 $details');
+    debugPrint('⚠️ [FIG-${alert.alertCode}] $severity: $message');
+    if (details != null) debugPrint('   📋 $details');
     return alert;
   }
 
@@ -220,7 +214,6 @@ class FinancialIntegrityGuard {
 
   /// التحقق من أن إجمالي الفاتورة = مجموع الأصناف + أجور التحميل - الخصم
   Future<GuardResult> checkInvoiceTotalInvariant(int invoiceId) async {
-    final db = await getDatabase();
     final invoice = await invoiceDao.getInvoiceById(invoiceId);
     if (invoice == null) {
       return GuardResult.fail('I001', 'الفاتورة $invoiceId غير موجودة');
@@ -661,14 +654,6 @@ class FinancialIntegrityGuard {
       );
     }
 
-    // الطريقة الثالثة: من فواتير الدين (للتحقق الإضافي)
-    final invoiceRes = await db.rawQuery('''
-      SELECT COALESCE(SUM(total_amount - amount_paid_on_invoice), 0) as total
-      FROM invoices
-      WHERE customer_id = ? AND payment_type = 'دين'
-    ''', [customerId]);
-    // تحذير: هذه الطريقة قد لا تتطابق مع الأولى والثانية بسبب التسويات
-    // لذلك نستخدمها للتحذير فقط وليس للإيقاف
 
     return GuardResult.success;
   }
@@ -709,7 +694,6 @@ class FinancialIntegrityGuard {
     required Invoice oldInvoice,
     required InvoiceInputData newData,
   }) async {
-    final db = await getDatabase();
     final issues = <String>[];
 
     // 1. تغيير كبير غير منطقي في المبلغ الإجمالي

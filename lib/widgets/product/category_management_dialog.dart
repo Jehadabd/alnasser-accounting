@@ -66,7 +66,7 @@ class _CategoryManagementDialogState extends State<CategoryManagementDialog> {
                  children: [
                    Container(
                      padding: const EdgeInsets.all(10),
-                     decoration: BoxDecoration(color: kPrimaryColor.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                     decoration: BoxDecoration(color: kPrimaryColor.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
                      child: const Icon(Icons.category, color: kPrimaryColor),
                    ),
                    const SizedBox(width: 12),

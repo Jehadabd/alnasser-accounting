@@ -1,6 +1,5 @@
 // lib/models/analytics_data.dart
 import 'invoice.dart';
-import 'person_data.dart'; // Import to use PersonMonthData if needed, or keep separate
 
 // أنواع البيانات لنظام التقارير
 class ProductInvoiceAnalytics { // Renamed from InvoiceWithProductData

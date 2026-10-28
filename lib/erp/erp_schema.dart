@@ -14,6 +14,8 @@
 
 import 'package:sqflite/sqflite.dart';
 
+import 'warranty/warranty_schema.dart'; // 🛠️ الضمان والصيانة
+
 class ErpSchema {
   ErpSchema._();
 
@@ -576,6 +578,8 @@ class ErpSchema {
       body TEXT,
       updated_at TEXT NOT NULL
     )''',
+    // 🛠️ الضمان والصيانة (سجل متابعة — لا مال ولا مخزون)
+    ...WarrantySchema.statements,
   ];
 
   /// أعمدة تُضاف لجداول موجودة: [جدول، عمود، تعريف].
@@ -586,6 +590,7 @@ class ErpSchema {
     ['invoice_items', 'discount_type', 'TEXT'], // percent | amount | gift
     ['invoice_items', 'discount_value', 'REAL'],
     ['users', 'display_name', 'TEXT'], // 👤 اسم الموظف للعرض
+    ['users', 'job_title', 'TEXT'], // 👷 المسمى الوظيفي (محاسب، مجهز، مدقق...)
     ['cash_boxes', 'currency', "TEXT NOT NULL DEFAULT 'IQD'"],
     ['sales_returns', 'cash_amount', 'REAL'],
     ['stock_docs', 'gain_account_id', 'INTEGER'],
@@ -615,6 +620,11 @@ class ErpSchema {
     ['product_details', 'opening_cost', 'REAL'],
     ['product_details', 'default_unit', 'TEXT'],
     ['product_details', 'min_role', 'TEXT'],
+    // 💱 كلفة المادة بالدولار: تتبع سعر الصرف (cost_price = cost_usd × السعر)
+    ['product_details', 'cost_currency', "TEXT NOT NULL DEFAULT 'IQD'"],
+    ['product_details', 'cost_usd', 'REAL'], // كلفة الوحدة الأساسية بالدولار
+    // كلفة الوحدة الأساسية يوم تسوية الفاتورة — لا تتغير بتغير كلفة المادة لاحقاً
+    ['invoice_adjustments', 'base_unit_cost', 'REAL'],
   ];
 
   /// حسابات يحتاجها النظام الجديد: [المفتاح، الاسم، رمز مفضّل، رمز الأب، النوع، مراقبة؟]

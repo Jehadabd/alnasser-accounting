@@ -1,23 +1,28 @@
 // lib/screens/pos/pos_receipts_screen.dart
 //
 // 🧾 إيصالات الكاشير — على طريقة أنظمة البيع العالمية (Square، Loyverse، Odoo POS):
-//   • قائمة الإيصالات مع بحث وتصفية بالتاريخ ونوع الدفع، وملخص الفترة.
-//   • تفاصيل الإيصال كما طُبع: المواد، الخصم، المدفوع، الباقي، والكاشير.
-//   • الإيصال المكتمل لا يُعدَّل من الكاشير: التصحيح يكون بـ«مرتجع» (كلي أو جزئي)
-//     ثم بيع جديد، وتبقى إعادة الطباعة متاحة («نسخة»).
-//   • «عرض كامل» يفتح الفاتورة للعرض؛ تعديلها (بصلاحية «تعديل الفواتير») يُسجَّل في سجلها.
+//   • إيصالات الكاشير فقط (فواتير «إنشاء فاتورة» في «تعديل الفواتير»). العلامة في
+//     جدول invoice_tags؛ الإيصالات القديمة قبل هذه العلامة لا تظهر هنا.
+//   • تحميل تدريجي: أول 50 إيصالاً، ثم 50 أخرى كلما وصلت آخر القائمة — تبقى
+//     الشاشة سريعة حتى مع آلاف الإيصالات.
+//   • ملخص الفترة (المبيعات، النقد، الآجل، المرتجعات، الصافي) لمن لديه صلاحية
+//     «رؤية الكلفة والأرباح» فقط؛ الكاشير العادي لا يراه.
+//   • الإيصال المكتمل لا يُعدَّل من الكاشير: التصحيح بـ«مرتجع» ثم بيع جديد،
+//     وتبقى إعادة الطباعة متاحة («نسخة»).
 //
 // قراءة فقط: هذه الشاشة لا تغيّر أي رصيد أو مخزون بنفسها.
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../accounting/screens/acc_ui.dart' show requirePermission;
 import '../../erp/sales/sales_return_screen.dart';
 import '../../models/app_user.dart';
 import '../../models/invoice.dart';
 import '../../models/invoice_item.dart';
+import '../../services/auth_service.dart';
 import '../../services/database_service.dart';
+import '../../services/invoice_upload_tracker.dart';
 import '../../services/thermal_receipt_service.dart';
 import '../create_invoice_screen.dart';
 
@@ -48,32 +53,55 @@ class _Row {
   DateTime get date => DateTime.tryParse('${m['invoice_date']}') ?? DateTime.now();
 }
 
+// ألوان الشاشة (نفس كحلي رؤوس البرنامج)
+const _navy = Color(0xFF0F3460);
+const _navyDeep = Color(0xFF020F2B);
+const _bg = Color(0xFFF2F5F9);
+const _line = Color(0xFFE3E9F1);
+const _muted = Color(0xFF64748B);
+const _green = Color(0xFF15803D);
+const _orange = Color(0xFFC2410C);
+const _red = Color(0xFFB91C1C);
+const _blue = Color(0xFF1D4ED8);
+
 class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
   static final _money = NumberFormat('#,##0.##', 'en');
   static final _time = DateFormat('HH:mm');
-  static final _day = DateFormat('yyyy/MM/dd');
+  static const _pageSize = 50;
 
   final _search = TextEditingController();
+  final _scroll = ScrollController();
   _Range _range = _Range.today;
   String? _payment; // null = الكل
   bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = false;
+  int _loadSeq = 0; // يتجاهل نتائج تحميل قديم إذا غيّر المستخدم الفلتر أثناءه
   List<_Row> _rows = const [];
   _Row? _selected;
 
-  // ملخص الفترة
+  // ملخص الفترة (لمن يرى الأرباح فقط)
+  late final bool _canSeeTotals = AuthService().hasPermission(AppPermissions.viewCostProfit);
   int _count = 0;
   double _cash = 0, _credit = 0, _returns = 0;
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
     _load();
   }
 
   @override
   void dispose() {
     _search.dispose();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_hasMore || _loadingMore || _loading) return;
+    if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 300) _loadMore();
   }
 
   (String?, String?) _bounds() {
@@ -94,76 +122,120 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
     }
   }
 
+  /// شروط القائمة (الفترة + الدفع + البحث) — إيصالات الكاشير فقط
+  (List<String>, List<Object?>) _where() {
+    final (from, to) = _bounds();
+    final where = <String>['COALESCE(i.is_deleted, 0) = 0', InvoiceUploadTracker.isPosSql('i')];
+    final args = <Object?>[];
+    if (from != null) {
+      where.add('i.invoice_date >= ? AND i.invoice_date < ?');
+      args.addAll([from, to]);
+    }
+    if (_payment != null) {
+      where.add('i.payment_type = ?');
+      args.add(_payment);
+    }
+    final q = _search.text.trim();
+    if (q.isNotEmpty) {
+      final isNum = RegExp(r'^\d+$').hasMatch(q);
+      where.add('(i.invoice_number LIKE ? OR i.customer_name LIKE ?${isNum ? ' OR i.id = ?' : ''})');
+      args.addAll(['%$q%', '%$q%', if (isNum) int.parse(q)]);
+    }
+    return (where, args);
+  }
+
+  Future<List<_Row>> _page(int offset) async {
+    final db = await DatabaseService().database;
+    final (where, args) = _where();
+    final rows = await db.rawQuery('''
+      SELECT i.id, i.invoice_number, i.customer_name, i.total_amount, i.payment_type, i.status,
+             i.invoice_date, i.created_by_username,
+             (SELECT COALESCE(SUM(r.total), 0) FROM sales_returns r
+               WHERE r.original_invoice_id = i.id AND r.status = 'posted') AS returned
+      FROM invoices i
+      WHERE ${where.join(' AND ')}
+      ORDER BY i.invoice_date DESC, i.id DESC
+      LIMIT $_pageSize OFFSET $offset
+    ''', args);
+    return rows.map((m) => _Row(m)).toList();
+  }
+
   Future<void> _load() async {
+    final seq = ++_loadSeq;
     setState(() => _loading = true);
     try {
       final db = await DatabaseService().database;
-      final (from, to) = _bounds();
-      final where = <String>['COALESCE(i.is_deleted, 0) = 0'];
-      final args = <Object?>[];
-      if (from != null) {
-        where.add('i.invoice_date >= ? AND i.invoice_date < ?');
-        args.addAll([from, to]);
-      }
-      if (_payment != null) {
-        where.add('i.payment_type = ?');
-        args.add(_payment);
-      }
-      final q = _search.text.trim();
-      if (q.isNotEmpty) {
-        final isNum = RegExp(r'^\d+$').hasMatch(q);
-        where.add('(i.invoice_number LIKE ? OR i.customer_name LIKE ?${isNum ? ' OR i.id = ?' : ''})');
-        args.addAll(['%$q%', '%$q%', if (isNum) int.parse(q)]);
-      }
-      final rows = await db.rawQuery('''
-        SELECT i.id, i.invoice_number, i.customer_name, i.total_amount, i.payment_type, i.status,
-               i.invoice_date, i.created_by_username,
-               (SELECT COALESCE(SUM(r.total), 0) FROM sales_returns r
-                 WHERE r.original_invoice_id = i.id AND r.status = 'posted') AS returned
-        FROM invoices i
-        WHERE ${where.join(' AND ')}
-        ORDER BY i.invoice_date DESC, i.id DESC
-        LIMIT 500
-      ''', args);
+      await InvoiceUploadTracker.ensure(db);
+      final list = await _page(0);
 
-      // ملخص الفترة (بلا تصفية البحث): المبيعات حسب نوع الدفع + المرتجعات
-      final sumWhere = <String>["COALESCE(is_deleted, 0) = 0", "COALESCE(status, '') != 'معلقة'"];
-      final sumArgs = <Object?>[];
-      if (from != null) {
-        sumWhere.add('invoice_date >= ? AND invoice_date < ?');
-        sumArgs.addAll([from, to]);
+      // ملخص الفترة (بلا البحث) — إيصالات الكاشير فقط، ولمن يرى الأرباح فقط
+      int count = 0;
+      double cash = 0, credit = 0, returns = 0;
+      if (_canSeeTotals) {
+        final (from, to) = _bounds();
+        final sumWhere = <String>[
+          'COALESCE(i.is_deleted, 0) = 0',
+          "COALESCE(i.status, '') != 'معلقة'",
+          InvoiceUploadTracker.isPosSql('i'),
+        ];
+        final sumArgs = <Object?>[];
+        if (from != null) {
+          sumWhere.add('i.invoice_date >= ? AND i.invoice_date < ?');
+          sumArgs.addAll([from, to]);
+        }
+        final sums = await db.rawQuery('''
+          SELECT COUNT(*) AS c,
+                 COALESCE(SUM(CASE WHEN i.payment_type = 'نقد' THEN i.total_amount ELSE 0 END), 0) AS cash,
+                 COALESCE(SUM(CASE WHEN i.payment_type != 'نقد' THEN i.total_amount ELSE 0 END), 0) AS credit
+          FROM invoices i WHERE ${sumWhere.join(' AND ')}
+        ''', sumArgs);
+        count = (sums.first['c'] as num?)?.toInt() ?? 0;
+        cash = (sums.first['cash'] as num?)?.toDouble() ?? 0;
+        credit = (sums.first['credit'] as num?)?.toDouble() ?? 0;
+        try {
+          final r = await db.rawQuery('''
+            SELECT COALESCE(SUM(r.total), 0) AS t FROM sales_returns r
+            WHERE r.status = 'posted'
+              AND EXISTS (SELECT 1 FROM invoice_tags t WHERE t.invoice_id = r.original_invoice_id AND t.source = 'pos')
+              ${from != null ? 'AND r.return_date >= ? AND r.return_date < ?' : ''}
+          ''', [if (from != null) ...[from, to]]);
+          returns = (r.first['t'] as num?)?.toDouble() ?? 0;
+        } catch (_) {}
       }
-      final sums = await db.rawQuery('''
-        SELECT COUNT(*) AS c,
-               COALESCE(SUM(CASE WHEN payment_type = 'نقد' THEN total_amount ELSE 0 END), 0) AS cash,
-               COALESCE(SUM(CASE WHEN payment_type != 'نقد' THEN total_amount ELSE 0 END), 0) AS credit
-        FROM invoices WHERE ${sumWhere.join(' AND ')}
-      ''', sumArgs);
-      double returns = 0;
-      try {
-        final r = await db.rawQuery('''
-          SELECT COALESCE(SUM(total), 0) AS t FROM sales_returns
-          WHERE status = 'posted' ${from != null ? 'AND return_date >= ? AND return_date < ?' : ''}
-        ''', [if (from != null) ...[from, to]]);
-        returns = (r.first['t'] as num?)?.toDouble() ?? 0;
-      } catch (_) {}
 
-      if (!mounted) return;
-      final list = rows.map((m) => _Row(m)).toList();
+      if (!mounted || seq != _loadSeq) return;
       setState(() {
         _rows = list;
-        _count = (sums.first['c'] as num?)?.toInt() ?? 0;
-        _cash = (sums.first['cash'] as num?)?.toDouble() ?? 0;
-        _credit = (sums.first['credit'] as num?)?.toDouble() ?? 0;
+        _hasMore = list.length == _pageSize;
+        _count = count;
+        _cash = cash;
+        _credit = credit;
         _returns = returns;
         final keep = _selected == null ? const <_Row>[] : list.where((r) => r.id == _selected!.id).toList();
         _selected = keep.isNotEmpty ? keep.first : (list.isEmpty ? null : list.first);
         _loading = false;
       });
+      if (_scroll.hasClients) _scroll.jumpTo(0);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذّر تحميل الإيصالات: $e')));
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final seq = _loadSeq;
+    setState(() => _loadingMore = true);
+    try {
+      final more = await _page(_rows.length);
+      if (!mounted || seq != _loadSeq) return;
+      setState(() {
+        _rows = [..._rows, ...more];
+        _hasMore = more.length == _pageSize;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
     }
   }
 
@@ -172,22 +244,12 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F6FA),
-      appBar: AppBar(
-        title: const Text('إيصالات الكاشير'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
-        elevation: 0.5,
-        actions: [
-          IconButton(tooltip: 'تحديث', icon: const Icon(Icons.refresh), onPressed: _load),
-          const SizedBox(width: 8),
-        ],
-      ),
+      backgroundColor: _bg,
       body: Column(
         children: [
-          _summaryStrip(),
+          _header(),
+          if (_canSeeTotals) _summaryStrip(),
           _filters(),
-          const Divider(height: 1),
           Expanded(
             child: LayoutBuilder(builder: (context, c) {
               final wide = c.maxWidth >= 900;
@@ -199,16 +261,20 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SizedBox(width: 420, child: list),
-                  const VerticalDivider(width: 1),
+                  SizedBox(width: 440, child: list),
                   Expanded(
-                    child: _selected == null
-                        ? const Center(child: Text('اختر إيصالاً لعرضه', style: TextStyle(color: Colors.grey)))
-                        : _ReceiptDetail(
-                            key: ValueKey(_selected!.id),
-                            row: _selected!,
-                            onChanged: _load,
-                          ),
+                    child: Container(
+                      margin: const EdgeInsetsDirectional.fromSTEB(0, 0, 14, 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: _line),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: _selected == null
+                          ? _emptyState(Icons.receipt_long_outlined, 'اختر إيصالاً لعرضه')
+                          : _ReceiptDetail(key: ValueKey(_selected!.id), row: _selected!, onChanged: _load),
+                    ),
                   ),
                 ],
               );
@@ -219,43 +285,140 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
     );
   }
 
+  Widget _header() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(colors: [_navyDeep, _navy], begin: Alignment.topCenter, end: Alignment.bottomCenter),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 16, 14),
+          child: Row(children: [
+            const BackButton(color: Colors.white),
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.receipt_long_rounded, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Text('إيصالات الكاشير', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                Text('إعادة طباعة، مرتجع، وعرض كامل', style: TextStyle(color: Color(0xFFB8C7DC), fontSize: 12.5)),
+              ]),
+            ),
+            SizedBox(
+              width: 300,
+              child: TextField(
+                controller: _search,
+                onSubmitted: (_) => _load(),
+                onChanged: (v) {
+                  if (v.isEmpty) _load();
+                },
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'رقم الإيصال أو اسم العميل ثم Enter',
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 11),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            IconButton(
+              tooltip: 'تحديث',
+              onPressed: _load,
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
   void _openDetailSheet(_Row r) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => SizedBox(
-        height: MediaQuery.of(context).size.height * 0.85,
+        height: MediaQuery.of(context).size.height * 0.88,
         child: _ReceiptDetail(row: r, onChanged: _load),
       ),
     );
   }
 
   Widget _summaryStrip() {
-    Widget kpi(String label, double v, Color c, {String? hint}) => Expanded(
-          child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 5),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border(top: BorderSide(color: c, width: 3)),
-            ),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(label, style: const TextStyle(fontSize: 12, color: Colors.black54)),
-              Text(_money.format(v), style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: c)),
-              if (hint != null) Text(hint, style: const TextStyle(fontSize: 11, color: Colors.black45)),
-            ]),
+    Widget kpi(String label, double v, Color c, IconData icon, {String? hint}) => Container(
+          width: 196,
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _line),
           ),
+          child: Row(children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(color: c.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, color: c, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(label, style: const TextStyle(fontSize: 12, color: _muted)),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Text(_money.format(v), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c)),
+                ),
+                if (hint != null) Text(hint, style: const TextStyle(fontSize: 11, color: _muted)),
+              ]),
+            ),
+          ]),
         );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(11, 10, 11, 4),
-      child: Row(children: [
-        kpi('المبيعات', _cash + _credit, const Color(0xFF1565C0), hint: '$_count إيصال'),
-        kpi('نقداً', _cash, const Color(0xFF2E7D32)),
-        kpi('آجل (دين)', _credit, const Color(0xFFE65100)),
-        kpi('المرتجعات', _returns, const Color(0xFFC62828)),
-        kpi('الصافي', _cash + _credit - _returns, const Color(0xFF0F3460)),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+      child: Wrap(spacing: 10, runSpacing: 10, children: [
+        kpi('المبيعات', _cash + _credit, _blue, Icons.point_of_sale_rounded, hint: '$_count إيصال'),
+        kpi('نقداً', _cash, _green, Icons.payments_rounded),
+        kpi('آجل (دين)', _credit, _orange, Icons.schedule_rounded),
+        kpi('المرتجعات', _returns, _red, Icons.assignment_return_rounded),
+        kpi('الصافي', _cash + _credit - _returns, _navy, Icons.account_balance_wallet_rounded),
       ]),
+    );
+  }
+
+  Widget _pill(String label, bool selected, VoidCallback onTap, {IconData? icon}) {
+    return Material(
+      color: selected ? _navy : Colors.white,
+      shape: StadiumBorder(side: BorderSide(color: selected ? _navy : _line)),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (icon != null) ...[
+              Icon(icon, size: 16, color: selected ? Colors.white : _muted),
+              const SizedBox(width: 6),
+            ],
+            Text(label,
+                style: TextStyle(
+                  color: selected ? Colors.white : const Color(0xFF1E293B),
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  fontSize: 13,
+                )),
+          ]),
+        ),
+      ),
     );
   }
 
@@ -268,126 +431,190 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
       _Range.all: 'الكل',
     };
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
       child: Wrap(
         spacing: 8,
-        runSpacing: 6,
+        runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          SizedBox(
-            width: 300,
-            child: TextField(
-              controller: _search,
-              onSubmitted: (_) => _load(),
-              onChanged: (v) {
-                if (v.isEmpty) _load();
-              },
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'رقم الإيصال أو اسم العميل ثم Enter',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(22)),
-              ),
-            ),
-          ),
           for (final e in labels.entries)
-            ChoiceChip(
-              label: Text(e.value),
-              selected: _range == e.key,
-              onSelected: (_) {
-                setState(() => _range = e.key);
-                _load();
-              },
-            ),
-          const SizedBox(width: 8),
+            _pill(e.value, _range == e.key, () {
+              setState(() => _range = e.key);
+              _load();
+            }),
+          Container(width: 1, height: 22, color: _line, margin: const EdgeInsets.symmetric(horizontal: 4)),
           for (final p in const [null, 'نقد', 'دين'])
-            FilterChip(
-              label: Text(p ?? 'كل الدفعات'),
-              selected: _payment == p,
-              onSelected: (_) {
+            _pill(
+              p == null ? 'كل الدفعات' : (p == 'نقد' ? 'نقداً' : 'آجل'),
+              _payment == p,
+              () {
                 setState(() => _payment = p);
                 _load();
               },
+              icon: p == null ? Icons.all_inclusive_rounded : (p == 'نقد' ? Icons.payments_outlined : Icons.schedule_rounded),
             ),
         ],
       ),
     );
   }
 
+  Widget _emptyState(IconData icon, String text) => Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(color: _navy.withValues(alpha: 0.06), shape: BoxShape.circle),
+            child: Icon(icon, size: 34, color: _navy.withValues(alpha: 0.5)),
+          ),
+          const SizedBox(height: 12),
+          Text(text, style: const TextStyle(color: _muted, fontSize: 15)),
+        ]),
+      );
+
   Widget _list({required void Function(_Row) onTap}) {
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_rows.isEmpty) {
-      return const Center(child: Text('لا توجد إيصالات في هذه الفترة', style: TextStyle(color: Colors.grey)));
-    }
-    // تجميع حسب اليوم
-    final items = <Widget>[];
+    if (_rows.isEmpty) return _emptyState(Icons.receipt_long_outlined, 'لا توجد إيصالات كاشير في هذه الفترة');
+
+    // تجميع حسب اليوم: [عنوان يوم، إيصال، إيصال...] ثم تذييل التحميل
+    final entries = <Object>[];
     String? lastDay;
     for (final r in _rows) {
-      final day = _day.format(r.date);
+      final day = DateFormat('yyyy/MM/dd').format(r.date);
       if (day != lastDay) {
         lastDay = day;
-        items.add(Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text(day, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black54)),
-        ));
+        entries.add(day);
       }
-      final sel = _selected?.id == r.id;
-      final fullyReturned = r.returned > 0 && r.returned >= r.total - 0.5;
-      items.add(Material(
-        color: sel ? const Color(0xFFE3F2FD) : Colors.white,
+      entries.add(r);
+    }
+
+    return ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
+      itemCount: entries.length + 1,
+      itemBuilder: (context, i) {
+        if (i == entries.length) return _footer();
+        final e = entries[i];
+        if (e is String) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
+            child: Text(_dayLabel(e), style: const TextStyle(fontWeight: FontWeight.w800, color: _muted, fontSize: 13)),
+          );
+        }
+        return _card(e as _Row, onTap);
+      },
+    );
+  }
+
+  String _dayLabel(String day) {
+    final now = DateTime.now();
+    final f = DateFormat('yyyy/MM/dd');
+    if (day == f.format(now)) return 'اليوم — $day';
+    if (day == f.format(now.subtract(const Duration(days: 1)))) return 'أمس — $day';
+    return day;
+  }
+
+  Widget _footer() {
+    if (_loadingMore) {
+      return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator(strokeWidth: 2.5)));
+    }
+    if (_hasMore) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Center(
+          child: OutlinedButton.icon(onPressed: _loadMore, icon: const Icon(Icons.expand_more_rounded), label: const Text('تحميل المزيد')),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(14),
+      child: Center(child: Text('${_rows.length} إيصال — انتهت القائمة', style: const TextStyle(color: _muted, fontSize: 12))),
+    );
+  }
+
+  Widget _card(_Row r, void Function(_Row) onTap) {
+    final sel = _selected?.id == r.id;
+    final fullyReturned = r.returned > 0 && r.returned >= r.total - 0.5;
+    final cash = r.payment == 'نقد';
+    final accent = r.status == 'معلقة' ? Colors.grey : (cash ? _green : _orange);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: sel ? const Color(0xFFEAF1FB) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: sel ? _navy.withValues(alpha: 0.45) : _line, width: sel ? 1.5 : 1),
+        ),
+        clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: () => onTap(r),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(children: [
-              CircleAvatar(
-                radius: 17,
-                backgroundColor: r.payment == 'نقد' ? Colors.green.shade50 : Colors.orange.shade50,
-                child: Icon(r.payment == 'نقد' ? Icons.payments_outlined : Icons.receipt_long,
-                    size: 18, color: r.payment == 'نقد' ? Colors.green : Colors.orange),
-              ),
-              const SizedBox(width: 12),
+          child: IntrinsicHeight(
+            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Container(width: 4, color: accent),
               Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Text(r.number, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(width: 8),
-                    Text(_time.format(r.date), style: const TextStyle(fontSize: 12, color: Colors.black45)),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  child: Row(children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(color: accent.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(12)),
+                      child: Icon(cash ? Icons.payments_rounded : Icons.schedule_rounded, size: 20, color: accent),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Flexible(
+                            child: Text(r.number,
+                                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                            decoration: BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(8)),
+                            child: Text(_time.format(r.date), style: const TextStyle(fontSize: 11.5, color: _muted)),
+                          ),
+                        ]),
+                        const SizedBox(height: 2),
+                        Text(
+                          (r.cashier ?? '').isNotEmpty ? '${r.customer} · ${r.cashier}' : r.customer,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12.5, color: _muted),
+                        ),
+                      ]),
+                    ),
+                    Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                      Text(_money.format(r.total),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15.5,
+                            color: const Color(0xFF0F172A),
+                            decoration: fullyReturned ? TextDecoration.lineThrough : null,
+                          )),
+                      if (r.status == 'معلقة')
+                        _badge('معلقة', Colors.grey)
+                      else if (fullyReturned)
+                        _badge('مرتجع كلي', _red)
+                      else if (r.returned > 0)
+                        _badge('مرتجع جزئي', Colors.deepOrange)
+                      else if (!cash)
+                        _badge('دين', _orange),
+                    ]),
                   ]),
-                  Text(r.customer, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: Colors.black54)),
-                ]),
+                ),
               ),
-              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text(_money.format(r.total),
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      decoration: fullyReturned ? TextDecoration.lineThrough : null,
-                    )),
-                if (r.status == 'معلقة')
-                  _badge('معلقة', Colors.grey)
-                else if (fullyReturned)
-                  _badge('مرتجع كلي', Colors.red)
-                else if (r.returned > 0)
-                  _badge('مرتجع جزئي', Colors.deepOrange)
-                else if (r.payment != 'نقد')
-                  _badge('دين', Colors.orange),
-              ]),
             ]),
           ),
         ),
-      ));
-      items.add(const Divider(height: 1, indent: 16, endIndent: 16));
-    }
-    return ListView(children: items);
+      ),
+    );
   }
 
   static Widget _badge(String t, Color c) => Container(
-        margin: const EdgeInsets.only(top: 2),
+        margin: const EdgeInsets.only(top: 3),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-        decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+        decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
         child: Text(t, style: TextStyle(fontSize: 11, color: c, fontWeight: FontWeight.bold)),
       );
 }
@@ -555,7 +782,7 @@ class _ReceiptDetailState extends State<_ReceiptDetail> {
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(8),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 12)],
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12)],
               ),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 Text('إيصال ${inv.formattedInvoiceNumber}',
@@ -568,7 +795,7 @@ class _ReceiptDetailState extends State<_ReceiptDetail> {
                 if (held) line('الحالة', 'معلقة (لم تُحفظ بعد)', color: Colors.grey),
                 const Divider(height: 20),
                 // المواد
-                Row(children: const [
+                const Row(children: [
                   Expanded(flex: 5, child: Text('المادة', style: TextStyle(fontSize: 12, color: Colors.black54))),
                   Expanded(flex: 3, child: Text('الكمية', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.black54))),
                   Expanded(flex: 3, child: Text('السعر', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.black54))),

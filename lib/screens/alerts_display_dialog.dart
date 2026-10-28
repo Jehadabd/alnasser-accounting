@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/product.dart';
 import '../accounting/screens/acc_ui.dart' show fmtMoney;
-import '../screens/product_entry_screen.dart'; // للانتقال للتعديل اذا لزم
 
 class AlertsDisplayDialog extends StatefulWidget {
   final List<Product> lowStockProducts;

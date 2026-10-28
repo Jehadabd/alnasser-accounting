@@ -162,8 +162,8 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
               final r = rows[i];
               final a = r.account;
               return Container(
-                color: a.isGroup ? AccColors.navy.withOpacity(0.04) : Colors.white,
-                child: ListTile(
+                color: a.isGroup ? AccColors.navy.withValues(alpha: 0.04) : Colors.white,
+                child: Material(type: MaterialType.transparency, child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.only(right: 12.0 + r.depth * 22, left: 8),
                   leading: Icon(
@@ -216,7 +216,7 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                       ],
                     ),
                   ]),
-                ),
+                )),
               );
             },
           ),

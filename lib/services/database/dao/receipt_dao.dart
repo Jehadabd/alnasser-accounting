@@ -2,7 +2,6 @@
 // عمليات سندات القبض
 
 import 'package:sqflite/sqflite.dart';
-import '../../database_service.dart';
 import '../core/database_helpers.dart';
 
 class ReceiptDao {

@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 
 import '../accounting/screens/acc_ui.dart';
 import 'activity/activity_log.dart';
+import 'erp_kit.dart';
+
+export 'erp_kit.dart';
 
 class ErpColors {
   static const navy = AccColors.navy;
@@ -50,6 +53,13 @@ class ErpPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     ActivityLog.viewed(title);
+    return Theme(
+      data: ErpTheme.apply(Theme.of(context)),
+      child: _scaffold(context),
+    );
+  }
+
+  Widget _scaffold(BuildContext context) {
     return Scaffold(
       backgroundColor: ErpColors.bg,
       floatingActionButton: floatingActionButton,
@@ -84,7 +94,7 @@ class ErpPage extends StatelessWidget {
                             margin: const EdgeInsets.only(left: 10, right: 4),
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.14),
+                              color: Colors.white.withValues(alpha: 0.14),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Icon(icon, color: Colors.white, size: 22),
@@ -100,7 +110,7 @@ class ErpPage extends StatelessWidget {
                                 Text(subtitle!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12.5)),
+                                    style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 12.5)),
                             ],
                           ),
                         ),
@@ -148,13 +158,13 @@ class ErpSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: ErpColors.card,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: ErpColors.border),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.035), blurRadius: 14, offset: const Offset(0, 4)),
+          BoxShadow(color: const Color(0xFF0F172A).withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 3)),
         ],
       ),
       child: Column(
@@ -166,17 +176,18 @@ class ErpSection extends StatelessWidget {
               children: [
                 if (icon != null)
                   Container(
-                    padding: const EdgeInsets.all(7),
+                    width: 32,
+                    height: 32,
                     decoration: BoxDecoration(
-                      color: color.withOpacity(0.10),
-                      borderRadius: BorderRadius.circular(10),
+                      color: color.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(9),
                     ),
                     child: Icon(icon, size: 18, color: color),
                   ),
                 if (icon != null) const SizedBox(width: 10),
                 Expanded(
                   child: Text(title,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15.5, color: color)),
+                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: ErpColors.text)),
                 ),
                 if (trailing != null) trailing!,
               ],
@@ -233,10 +244,10 @@ class StatCard extends StatelessWidget {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: [color, color.withOpacity(0.7)]),
+                    color: color.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(icon, color: Colors.white, size: 22),
+                  child: Icon(icon, color: color, size: 22),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -250,7 +261,7 @@ class StatCard extends StatelessWidget {
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(value,
                             textDirection: TextDirection.ltr,
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
+                            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: color)),
                       ),
                       if (hint != null)
                         Text(hint!,
@@ -278,7 +289,7 @@ class StatusBadge extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
+          color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
@@ -333,13 +344,14 @@ class PrimaryButton extends StatelessWidget {
   final Color color;
   final bool busy;
   @override
-  Widget build(BuildContext context) => ElevatedButton.icon(
-        style: ElevatedButton.styleFrom(
+  Widget build(BuildContext context) => FilledButton.icon(
+        style: FilledButton.styleFrom(
           backgroundColor: color,
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+          textStyle: TextStyle(
+              fontWeight: FontWeight.w700, fontSize: 15, fontFamily: DefaultTextStyle.of(context).style.fontFamily),
         ),
         onPressed: busy ? null : onPressed,
         icon: busy
@@ -363,17 +375,21 @@ class SearchBox extends StatelessWidget {
         onChanged: onChanged,
         decoration: InputDecoration(
           hintText: hint,
-          prefixIcon: const Icon(Icons.search),
+          prefixIcon: const Icon(Icons.search_rounded),
           filled: true,
           fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: ErpColors.border),
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: ErpColors.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: ErpColors.blue, width: 1.6),
           ),
         ),
       );
@@ -389,7 +405,7 @@ class EmptyState extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(40),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 56, color: ErpColors.muted.withOpacity(0.5)),
+            Icon(icon, size: 56, color: ErpColors.muted.withValues(alpha: 0.5)),
             const SizedBox(height: 10),
             Text(text, textAlign: TextAlign.center, style: const TextStyle(color: ErpColors.muted, fontSize: 15)),
           ]),
@@ -416,17 +432,11 @@ class DropBox<T> extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         width: width,
         child: DropdownButtonFormField<T>(
-          value: value,
+          initialValue: value,
           isExpanded: true,
           items: items,
           onChanged: onChanged,
-          decoration: InputDecoration(
-            labelText: label,
-            isDense: true,
-            filled: true,
-            fillColor: Colors.white,
-            border: const OutlineInputBorder(),
-          ),
+          decoration: InputDecoration(labelText: label),
         ),
       );
 }

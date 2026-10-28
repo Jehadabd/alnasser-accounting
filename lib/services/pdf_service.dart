@@ -70,7 +70,7 @@ class PdfService {
             child: pw.Text(
               'تاريخ التحديث: ${DateTime.now().year}/${DateTime.now().month.toString().padLeft(2, '0')}/${DateTime.now().day.toString().padLeft(2, '0')} - ${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}',
               textAlign: pw.TextAlign.center,
-              style: pw.TextStyle(
+              style: const pw.TextStyle(
                 fontSize: 14,
                 color: PdfColors.grey700,
               ),
@@ -101,7 +101,7 @@ class PdfService {
             pw.Container(
               alignment: pw.Alignment.center,
               child: pw.Text(
-                'إجمالي الديون: ${fmt(customers.fold(0.0, (sum, customer) => sum + (customer.currentTotalDebt ?? 0)))} دينار',
+                'إجمالي الديون: ${fmt(customers.fold(0.0, (sum, customer) => sum + customer.currentTotalDebt))} دينار',
                 style: pw.TextStyle(
                   fontSize: 16,
                   fontWeight: pw.FontWeight.bold,
@@ -111,7 +111,7 @@ class PdfService {
             ),
             pw.SizedBox(height: 20),
             // جدول العملاء
-            pw.Table.fromTextArray(
+            pw.TableHelper.fromTextArray(
               context: context,
               data: <List<String>>[
                 // Header
@@ -122,7 +122,7 @@ class PdfService {
                 ],
                 // Data
                 ...customers.map((customer) => [
-                      fmt(customer.currentTotalDebt ?? 0),
+                      fmt(customer.currentTotalDebt),
                       customer.address ?? '-',
                       customer.name,
                     ]),
@@ -260,11 +260,9 @@ class PdfService {
 
     final pdf = pw.Document();
     final now = DateTime.now();
-    final statementId =
-        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
 
     // دالة مساعدة لبناء رأس الصفحة - نفس تصميم الفاتورة
-    pw.Widget _buildHeader() {
+    pw.Widget buildHeader() {
       return pw.Column(
         children: [
           buildPdfHeader(ttf, alnaserFont, logoImage, appSettings: appSettings, logoSize: 100),
@@ -291,20 +289,6 @@ class PdfService {
       );
     }
 
-    // دالة مساعدة لبناء رأس الجدول
-    pw.TableRow _buildTableHeader() {
-      return pw.TableRow(
-        decoration: const pw.BoxDecoration(),
-        children: [
-          _headerCell('الدين بعد', ttf),
-          _headerCell('الدين قبل', ttf),
-          _headerCell('المبلغ', ttf),
-          _headerCell('البيان', ttf),
-          _headerCell('التاريخ', ttf),
-          _headerCell('ت', ttf),
-        ],
-      );
-    }
 
     // تقسيم المعاملات إلى صفحات (30 معاملة في كل صفحة)
     const int transactionsPerPage = 30;
@@ -322,7 +306,7 @@ class PdfService {
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  _buildHeader(),
+                  buildHeader(),
                   pw.Spacer(),
                   pw.Center(
                     child: pw.Text(
@@ -361,7 +345,7 @@ class PdfService {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    _buildHeader(),
+                    buildHeader(),
                     pw.SizedBox(height: 5),
                     if (pageIndex == 0) ...[
                       pw.Text(
@@ -407,9 +391,9 @@ class PdfService {
                           
                           return pw.TableRow(
                             children: [
-                              _dataCell(formatNumber(transaction.balanceAfter ?? 0), ttf),
-                              _dataCell(formatNumber(transaction.balanceBefore ?? 0), ttf),
-                              _dataCell(formatNumber(transaction.amount ?? 0), ttf),
+                              _dataCell(formatNumber(transaction.balanceAfter), ttf),
+                              _dataCell(formatNumber(transaction.balanceBefore), ttf),
+                              _dataCell(formatNumber(transaction.amount), ttf),
                               _dataCell(formatDescription(transaction), ttf, align: pw.TextAlign.right),
                               _dataCell(transaction.formattedDate, ttf),
                               _dataCell('${globalIndex + 1}', ttf),
@@ -622,8 +606,8 @@ class PdfService {
     sortedCustomers.sort((a, b) => a.name.compareTo(b.name));
     
     // فلترة العملاء: فقط من لديهم رصيد أو معاملات
-    final customersWithActivity = sortedCustomers.where((c) => (c.currentTotalDebt ?? 0) != 0).toList();
-    final totalDebt = customersWithActivity.fold(0.0, (sum, c) => sum + (c.currentTotalDebt ?? 0));
+    final customersWithActivity = sortedCustomers.where((c) => (c.currentTotalDebt) != 0).toList();
+    final totalDebt = customersWithActivity.fold(0.0, (sum, c) => sum + c.currentTotalDebt);
 
     // صفحة الغلاف
     pdf.addPage(
@@ -676,7 +660,6 @@ class PdfService {
 
     // إنشاء كشف حساب لكل عميل (فقط للعملاء الذين لديهم معاملات أو رصيد)
     int customerIndex = 0;
-    int includedCustomers = 0;
     for (final customer in sortedCustomers) {
       customerIndex++;
 
@@ -686,11 +669,10 @@ class PdfService {
       final transactions = await getCustomerTransactions(customer.id!);
       
       // كشف الحساب يكون فقط للأشخاص الذين لديهم ديون أكبر من 0
-      if ((customer.currentTotalDebt ?? 0) <= 0) {
+      if (customer.currentTotalDebt <= 0) {
         continue; // تخطي هذا العميل
       }
       
-      includedCustomers++;
 
       // دالة بناء رأس الصفحة للعميل
       pw.Widget buildCustomerHeader() {
@@ -749,9 +731,9 @@ class PdfService {
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
                           pw.Text('الرصيد المستحق:', style: pw.TextStyle(font: ttf, fontSize: 12, fontWeight: pw.FontWeight.bold)),
-                          pw.Text('${formatNumber(customer.currentTotalDebt ?? 0)} دينار',
+                          pw.Text('${formatNumber(customer.currentTotalDebt)} دينار',
                             style: pw.TextStyle(font: ttf, fontSize: 14, fontWeight: pw.FontWeight.bold,
-                              color: (customer.currentTotalDebt ?? 0) > 0 ? PdfColors.red : PdfColors.green)),
+                              color: customer.currentTotalDebt > 0 ? PdfColors.red : PdfColors.green)),
                         ],
                       ),
                     ),
@@ -765,7 +747,7 @@ class PdfService {
         // تقسيم المعاملات إلى صفحات
         const int transactionsPerPage = 25;
         final int totalPages = (transactions.length / transactionsPerPage).ceil();
-        final double finalBalance = transactions.isNotEmpty ? (transactions.last.balanceAfter ?? 0) : (customer.currentTotalDebt ?? 0);
+        final double finalBalance = transactions.isNotEmpty ? transactions.last.balanceAfter : customer.currentTotalDebt;
 
         for (int pageIndex = 0; pageIndex < totalPages; pageIndex++) {
           final startIndex = pageIndex * transactionsPerPage;
@@ -820,9 +802,9 @@ class PdfService {
                             final transaction = entry.value;
                             return pw.TableRow(
                               children: [
-                                _dataCell(formatNumber(transaction.balanceAfter ?? 0), ttf),
-                                _dataCell(formatNumber(transaction.balanceBefore ?? 0), ttf),
-                                _dataCell(formatNumber(transaction.amount ?? 0), ttf),
+                                _dataCell(formatNumber(transaction.balanceAfter), ttf),
+                                _dataCell(formatNumber(transaction.balanceBefore), ttf),
+                                _dataCell(formatNumber(transaction.amount), ttf),
                                 _dataCell(formatDescription(transaction), ttf, align: pw.TextAlign.right),
                                 _dataCell(transaction.formattedDate, ttf),
                                 _dataCell('${globalIndex + 1}', ttf),

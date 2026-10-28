@@ -1,57 +1,93 @@
 // screens/invoice_design_screen.dart
+//
+// 🏢 معلومات الشركة والشعار — تظهر في رأس كل فاتورة وإيصال، بأي تصميم.
+//   • الشعار، الاسم، الوصف، العنوان، حتى 4 أرقام هواتف، الرقم الضريبي، السجل التجاري، التذييل.
+//   • معاينة حيّة لرأس الفاتورة بجانب الحقول.
+//   • أعمدة الجدول وترتيبها وعرضها: من «مصمم الفاتورة» وحده (لا مكانين لنفس الشيء).
+//   • ألوان «التصميم الأصلي» (حين لا يُختار تصميم من المصمم) في قسم مطويّ.
+
 import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+
 import 'package:alnaser/models/app_settings.dart';
 import 'package:alnaser/models/invoice_design_settings.dart';
 import 'package:alnaser/services/settings_manager.dart';
 
+import '../erp/erp_ui.dart' show ErpPage, ErpSection, ErpColors;
+import '../invoice_designer/invoice_designer_screen.dart' show InvoiceDesignerScreen;
+
 class InvoiceDesignScreen extends StatefulWidget {
-  const InvoiceDesignScreen({super.key});
+  const InvoiceDesignScreen({super.key, this.fromDesigner = false});
+
+  /// فُتحت من داخل المصمم: زر «الأعمدة» يرجع إليه بدل فتح نسخة ثانية منه.
+  final bool fromDesigner;
 
   @override
   State<InvoiceDesignScreen> createState() => _InvoiceDesignScreenState();
 }
 
+/// لون قابل للتعديل من ألوان التصميم الأصلي.
+class _ColorKey {
+  const _ColorKey(this.key, this.label);
+  final String key;
+  final String label;
+}
+
 class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
-  static const Color primaryColor = Color(0xFF3F51B5);
-  
+  static const int maxPhones = 4;
+
   late AppSettings _appSettings;
   late InvoiceDesignSettings _invoiceDesign;
   bool _isLoading = true;
-  
-  // Controllers
-  final TextEditingController _companyNameController = TextEditingController();
-  final TextEditingController _companyAddressController = TextEditingController();
-  final TextEditingController _phone1Controller = TextEditingController();
-  final TextEditingController _phone2Controller = TextEditingController();
-  final TextEditingController _companyDescriptionController = TextEditingController();
-  final TextEditingController _taxNumberController = TextEditingController();
-  final TextEditingController _commercialRegisterController = TextEditingController();
-  final TextEditingController _footerNoteController = TextEditingController();
-  
+  bool _dirty = false;
+  bool _saving = false;
+  bool _colorsOpen = false;
+
+  final _name = TextEditingController();
+  final _description = TextEditingController();
+  final _address = TextEditingController();
+  final _tax = TextEditingController();
+  final _cr = TextEditingController();
+  final _footer = TextEditingController();
+  final List<TextEditingController> _phones = [];
+
+  /// ☎️ اسم كل رقم («كهربائيات»، «صحيات»…) — بنفس ترتيب [_phones]
+  final List<TextEditingController> _phoneLabels = [];
+
   File? _logoFile;
-  
-  // ألوان عناصر الفاتورة
-  Color _companyNameColor = Colors.green;
-  Color _companyDescriptionColor = Colors.black;
-  Color _remainingAmountColor = Colors.black;
-  Color _discountColor = Colors.black;
-  Color _loadingFeesColor = Colors.black;
-  Color _totalBeforeDiscountColor = Colors.black;
-  Color _totalAfterDiscountColor = Colors.black;
-  Color _previousDebtColor = Colors.black;
-  Color _currentDebtColor = Colors.black;
-  Color _paidAmountColor = Colors.black;
-  Color _phoneColor = Colors.black;
-  Color _itemSerialColor = Colors.black;
-  Color _itemDetailsColor = Colors.black;
-  Color _itemQuantityColor = Colors.black;
-  Color _itemPriceColor = Colors.black;
-  Color _itemTotalColor = Colors.black;
-  Color _noticeColor = Colors.red;
+  final Map<String, Color> _colors = {};
+
+  static const _colorGroups = <(String, IconData, List<_ColorKey>)>[
+    ('رأس الفاتورة', Icons.storefront_rounded, [
+      _ColorKey('companyName', 'اسم الشركة'),
+      _ColorKey('companyDescription', 'وصف الشركة'),
+      _ColorKey('phone', 'أرقام الهواتف'),
+    ]),
+    ('ملخص الفاتورة', Icons.calculate_rounded, [
+      _ColorKey('totalBeforeDiscount', 'الإجمالي قبل الخصم'),
+      _ColorKey('discount', 'الخصم'),
+      _ColorKey('totalAfterDiscount', 'الإجمالي بعد الخصم'),
+      _ColorKey('loadingFees', 'أجور التحميل'),
+      _ColorKey('paidAmount', 'المبلغ المدفوع'),
+      _ColorKey('remainingAmount', 'المبلغ المتبقي'),
+      _ColorKey('previousDebt', 'الدين السابق'),
+      _ColorKey('currentDebt', 'الدين الحالي'),
+    ]),
+    ('جدول المواد', Icons.table_rows_rounded, [
+      _ColorKey('itemSerial', 'التسلسل'),
+      _ColorKey('itemDetails', 'أسماء المواد'),
+      _ColorKey('itemQuantity', 'العدد'),
+      _ColorKey('itemPrice', 'السعر'),
+      _ColorKey('itemTotal', 'المبلغ'),
+    ]),
+    ('أخرى', Icons.color_lens_rounded, [
+      _ColorKey('notice', 'التنويه'),
+    ]),
+  ];
 
   @override
   void initState() {
@@ -59,896 +95,757 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
     _loadSettings();
   }
 
-  Future<void> _loadSettings() async {
-    _appSettings = await SettingsManager.getAppSettings();
-    _invoiceDesign = _appSettings.invoiceDesign;
-    
-    _companyNameController.text = _invoiceDesign.companyName;
-    _companyAddressController.text = _invoiceDesign.companyAddress;
-    _taxNumberController.text = _invoiceDesign.taxNumber;
-    _commercialRegisterController.text = _invoiceDesign.commercialRegister;
-    _footerNoteController.text = _invoiceDesign.footerNote;
-    _companyDescriptionController.text = _appSettings.companyDescription;
-    
-    if (_invoiceDesign.phoneNumbers.isNotEmpty) {
-      _phone1Controller.text = _invoiceDesign.phoneNumbers[0];
-    }
-    if (_invoiceDesign.phoneNumbers.length > 1) {
-      _phone2Controller.text = _invoiceDesign.phoneNumbers[1];
-    }
-    
-    if (_invoiceDesign.logoPath != null) {
-      final file = File(_invoiceDesign.logoPath!);
-      if (await file.exists()) {
-        _logoFile = file;
-      }
-    }
-    
-    // تحميل الألوان من الإعدادات
-    _companyNameColor = Color(_appSettings.companyNameColor);
-    _companyDescriptionColor = Color(_appSettings.companyDescriptionColor);
-    _remainingAmountColor = Color(_appSettings.remainingAmountColor);
-    _discountColor = Color(_appSettings.discountColor);
-    _loadingFeesColor = Color(_appSettings.loadingFeesColor);
-    _totalBeforeDiscountColor = Color(_appSettings.totalBeforeDiscountColor);
-    _totalAfterDiscountColor = Color(_appSettings.totalAfterDiscountColor);
-    _previousDebtColor = Color(_appSettings.previousDebtColor);
-    _currentDebtColor = Color(_appSettings.currentDebtColor);
-    _paidAmountColor = Color(_appSettings.paidAmountColor);
-    _phoneColor = Color(_appSettings.electricPhoneColor);
-    _itemSerialColor = Color(_appSettings.itemSerialColor);
-    _itemDetailsColor = Color(_appSettings.itemDetailsColor);
-    _itemQuantityColor = Color(_appSettings.itemQuantityColor);
-    _itemPriceColor = Color(_appSettings.itemPriceColor);
-    _itemTotalColor = Color(_appSettings.itemTotalColor);
-    _noticeColor = Color(_appSettings.noticeColor);
-    
-    setState(() => _isLoading = false);
-  }
-
-  Future<void> _saveSettings() async {
-    // جمع أرقام الهواتف
-    final phones = <String>[];
-    if (_phone1Controller.text.trim().isNotEmpty) {
-      phones.add(_phone1Controller.text.trim());
-    }
-    if (_phone2Controller.text.trim().isNotEmpty) {
-      phones.add(_phone2Controller.text.trim());
-    }
-
-    final updatedDesign = _invoiceDesign.copyWith(
-      companyName: _companyNameController.text.trim(),
-      companyAddress: _companyAddressController.text.trim(),
-      phoneNumbers: phones,
-      logoPath: _logoFile?.path,
-      taxNumber: _taxNumberController.text.trim(),
-      commercialRegister: _commercialRegisterController.text.trim(),
-      footerNote: _footerNoteController.text.trim(),
-    );
-
-    final updatedSettings = _appSettings.copyWith(
-      invoiceDesign: updatedDesign,
-      companyDescription: _companyDescriptionController.text.trim(),
-      // حفظ الألوان
-      companyNameColor: _companyNameColor.value,
-      companyDescriptionColor: _companyDescriptionColor.value,
-      remainingAmountColor: _remainingAmountColor.value,
-      discountColor: _discountColor.value,
-      loadingFeesColor: _loadingFeesColor.value,
-      totalBeforeDiscountColor: _totalBeforeDiscountColor.value,
-      totalAfterDiscountColor: _totalAfterDiscountColor.value,
-      previousDebtColor: _previousDebtColor.value,
-      currentDebtColor: _currentDebtColor.value,
-      paidAmountColor: _paidAmountColor.value,
-      electricPhoneColor: _phoneColor.value,
-      healthPhoneColor: _phoneColor.value,
-      itemSerialColor: _itemSerialColor.value,
-      itemDetailsColor: _itemDetailsColor.value,
-      itemQuantityColor: _itemQuantityColor.value,
-      itemPriceColor: _itemPriceColor.value,
-      itemTotalColor: _itemTotalColor.value,
-      noticeColor: _noticeColor.value,
-    );
-
-    await SettingsManager.saveAppSettings(updatedSettings);
-    _appSettings = updatedSettings;
-    _invoiceDesign = updatedDesign;
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تم حفظ إعدادات تصميم الفاتورة بنجاح'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    }
-  }
-
-  void _pickColor(String colorType) {
-    Color currentColor;
-    switch (colorType) {
-      case 'companyName': currentColor = _companyNameColor; break;
-      case 'companyDescription': currentColor = _companyDescriptionColor; break;
-      case 'remainingAmount': currentColor = _remainingAmountColor; break;
-      case 'discount': currentColor = _discountColor; break;
-      case 'loadingFees': currentColor = _loadingFeesColor; break;
-      case 'totalBeforeDiscount': currentColor = _totalBeforeDiscountColor; break;
-      case 'totalAfterDiscount': currentColor = _totalAfterDiscountColor; break;
-      case 'previousDebt': currentColor = _previousDebtColor; break;
-      case 'currentDebt': currentColor = _currentDebtColor; break;
-      case 'paidAmount': currentColor = _paidAmountColor; break;
-      case 'phone': currentColor = _phoneColor; break;
-      case 'itemSerial': currentColor = _itemSerialColor; break;
-      case 'itemDetails': currentColor = _itemDetailsColor; break;
-      case 'itemQuantity': currentColor = _itemQuantityColor; break;
-      case 'itemPrice': currentColor = _itemPriceColor; break;
-      case 'itemTotal': currentColor = _itemTotalColor; break;
-      case 'notice': currentColor = _noticeColor; break;
-      default: currentColor = Colors.black;
-    }
-
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        Color tempColor = currentColor;
-        return AlertDialog(
-          title: const Text('اختر اللون'),
-          content: SingleChildScrollView(
-            child: BlockPicker(
-              pickerColor: currentColor,
-              onColorChanged: (color) => tempColor = color,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إلغاء'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
-              onPressed: () {
-                setState(() {
-                  switch (colorType) {
-                    case 'companyName': _companyNameColor = tempColor; break;
-                    case 'companyDescription': _companyDescriptionColor = tempColor; break;
-                    case 'remainingAmount': _remainingAmountColor = tempColor; break;
-                    case 'discount': _discountColor = tempColor; break;
-                    case 'loadingFees': _loadingFeesColor = tempColor; break;
-                    case 'totalBeforeDiscount': _totalBeforeDiscountColor = tempColor; break;
-                    case 'totalAfterDiscount': _totalAfterDiscountColor = tempColor; break;
-                    case 'previousDebt': _previousDebtColor = tempColor; break;
-                    case 'currentDebt': _currentDebtColor = tempColor; break;
-                    case 'paidAmount': _paidAmountColor = tempColor; break;
-                    case 'phone': _phoneColor = tempColor; break;
-                    case 'itemSerial': _itemSerialColor = tempColor; break;
-                    case 'itemDetails': _itemDetailsColor = tempColor; break;
-                    case 'itemQuantity': _itemQuantityColor = tempColor; break;
-                    case 'itemPrice': _itemPriceColor = tempColor; break;
-                    case 'itemTotal': _itemTotalColor = tempColor; break;
-                    case 'notice': _noticeColor = tempColor; break;
-                  }
-                });
-                Navigator.pop(context);
-              },
-              child: const Text('حفظ'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildColorTile(String title, Color color, VoidCallback onTap) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      title: Text(title),
-      trailing: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade300, width: 2),
-          boxShadow: [
-            BoxShadow(color: color.withOpacity(0.4), blurRadius: 4, offset: const Offset(0, 2)),
-          ],
-        ),
-      ),
-      onTap: onTap,
-    );
-  }
-
-  Future<void> _pickLogo() async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-    
-    if (pickedFile != null) {
-      // حفظ الصورة في مجلد التطبيق
-      final appDir = await getApplicationDocumentsDirectory();
-      final logoDir = Directory('${appDir.path}/logo');
-      if (!await logoDir.exists()) {
-        await logoDir.create(recursive: true);
-      }
-      
-      final savedFile = await File(pickedFile.path).copy('${logoDir.path}/company_logo.png');
-      
-      setState(() {
-        _logoFile = savedFile;
-      });
-    }
-  }
-
-  void _removeLogo() {
-    setState(() {
-      _logoFile = null;
-    });
-  }
-
-  void _toggleColumn(String columnId, bool visible) {
-    setState(() {
-      final columns = _invoiceDesign.columns.map((c) {
-        if (c.id == columnId) {
-          return c.copyWith(visible: visible);
-        }
-        return c;
-      }).toList();
-      _invoiceDesign = _invoiceDesign.copyWith(columns: columns);
-    });
-  }
-
-  void _updateColumnWidth(String columnId, double width) {
-    setState(() {
-      final columns = _invoiceDesign.columns.map((c) {
-        if (c.id == columnId) {
-          return c.copyWith(widthFlex: width);
-        }
-        return c;
-      }).toList();
-      _invoiceDesign = _invoiceDesign.copyWith(columns: columns);
-    });
-  }
-
-  void _reorderColumns(int oldIndex, int newIndex) {
-    if (newIndex > oldIndex) newIndex--;
-    setState(() {
-      final visibleColumns = _invoiceDesign.visibleColumns;
-      final movedColumn = visibleColumns.removeAt(oldIndex);
-      visibleColumns.insert(newIndex, movedColumn);
-      
-      // تحديث الترتيب
-      final allColumns = _invoiceDesign.columns.map((c) {
-        final visibleIndex = visibleColumns.indexWhere((vc) => vc.id == c.id);
-        if (visibleIndex >= 0) {
-          return c.copyWith(order: visibleIndex);
-        }
-        return c;
-      }).toList();
-      
-      _invoiceDesign = _invoiceDesign.copyWith(columns: allColumns);
-    });
-  }
-
   @override
   void dispose() {
-    _companyNameController.dispose();
-    _companyAddressController.dispose();
-    _phone1Controller.dispose();
-    _phone2Controller.dispose();
-    _companyDescriptionController.dispose();
-    _taxNumberController.dispose();
-    _commercialRegisterController.dispose();
-    _footerNoteController.dispose();
+    for (final c in [_name, _description, _address, _tax, _cr, _footer, ..._phones, ..._phoneLabels]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  Widget _buildSettingsCard({
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required Widget child,
-  }) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: iconColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(icon, color: iconColor, size: 24),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            child,
-          ],
-        ),
-      ),
-    );
+  void _touch() {
+    if (!_dirty) {
+      setState(() => _dirty = true);
+    } else {
+      setState(() {});
+    }
   }
 
-  Widget _buildInvoicePreview() {
-    final visibleColumns = _invoiceDesign.visibleColumns;
-    
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.3),
-            spreadRadius: 2,
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+  TextEditingController _phoneCtl(String text) => TextEditingController(text: text)..addListener(_touch);
+
+  Future<void> _loadSettings() async {
+    _appSettings = await SettingsManager.getAppSettings();
+    _invoiceDesign = _appSettings.invoiceDesign;
+    final s = _appSettings;
+    final d = _invoiceDesign;
+
+    _name.text = d.companyName;
+    _description.text = s.companyDescription;
+    _address.text = d.companyAddress;
+    _tax.text = d.taxNumber;
+    _cr.text = d.commercialRegister;
+    _footer.text = d.footerNote;
+    final src = d.phoneNumbers.isNotEmpty ? d.phoneNumbers : s.phoneNumbers;
+    final fromDesign = d.phoneNumbers.isNotEmpty;
+    for (var i = 0; i < src.length && _phones.length < maxPhones; i++) {
+      if (src[i].trim().isEmpty) continue;
+      _phones.add(_phoneCtl(src[i]));
+      _phoneLabels.add(_phoneCtl(fromDesign && i < d.phoneLabels.length ? d.phoneLabels[i] : ''));
+    }
+    if (_phones.isEmpty) {
+      _phones.add(_phoneCtl(''));
+      _phoneLabels.add(_phoneCtl(''));
+    }
+
+    if (d.logoPath != null && d.logoPath!.isNotEmpty) {
+      final f = File(d.logoPath!);
+      if (await f.exists()) _logoFile = f;
+    }
+
+    _colors.addAll({
+      'companyName': Color(s.companyNameColor),
+      'companyDescription': Color(s.companyDescriptionColor),
+      'phone': Color(s.electricPhoneColor),
+      'remainingAmount': Color(s.remainingAmountColor),
+      'discount': Color(s.discountColor),
+      'loadingFees': Color(s.loadingFeesColor),
+      'totalBeforeDiscount': Color(s.totalBeforeDiscountColor),
+      'totalAfterDiscount': Color(s.totalAfterDiscountColor),
+      'previousDebt': Color(s.previousDebtColor),
+      'currentDebt': Color(s.currentDebtColor),
+      'paidAmount': Color(s.paidAmountColor),
+      'itemSerial': Color(s.itemSerialColor),
+      'itemDetails': Color(s.itemDetailsColor),
+      'itemQuantity': Color(s.itemQuantityColor),
+      'itemPrice': Color(s.itemPriceColor),
+      'itemTotal': Color(s.itemTotalColor),
+      'notice': Color(s.noticeColor),
+    });
+
+    for (final c in [_name, _description, _address, _tax, _cr, _footer]) {
+      c.addListener(_touch);
+    }
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+      _dirty = false;
+    });
+  }
+
+  int _c(String k) => (_colors[k] ?? Colors.black).toARGB32();
+
+  List<String> get _phoneList =>
+      _phones.map((c) => c.text.trim()).where((p) => p.isNotEmpty).take(maxPhones).toList();
+
+  /// أسماء الأرقام بنفس ترتيب [_phoneList] (رقم فارغ يسقط مع اسمه)
+  List<String> get _labelList => [
+        for (var i = 0; i < _phones.length; i++)
+          if (_phones[i].text.trim().isNotEmpty) _phoneLabels[i].text.trim(),
+      ].take(maxPhones).toList();
+
+  /// للمعاينة: «كهربائيات: 0770…»
+  List<String> get _labeledPhones {
+    final n = _phoneList, l = _labelList;
+    return [for (var i = 0; i < n.length; i++) (i < l.length && l[i].isNotEmpty) ? '${l[i]}: ${n[i]}' : n[i]];
+  }
+
+  Future<bool> _saveSettings() async {
+    setState(() => _saving = true);
+    try {
+      // يُبنى من جديد (لا copyWith) حتى تُحفظ «إزالة الشعار» فعلاً: copyWith يتجاهل null
+      final updatedDesign = InvoiceDesignSettings(
+        logoPath: _logoFile?.path,
+        companyName: _name.text.trim(),
+        companyAddress: _address.text.trim(),
+        phoneNumbers: _phoneList,
+        phoneLabels: _labelList,
+        columns: _invoiceDesign.columns, // أعمدة التصميم الأصلي كما هي
+        taxNumber: _tax.text.trim(),
+        commercialRegister: _cr.text.trim(),
+        footerNote: _footer.text.trim(),
+      );
+      final updated = _appSettings.copyWith(
+        invoiceDesign: updatedDesign,
+        companyDescription: _description.text.trim(),
+        companyNameColor: _c('companyName'),
+        companyDescriptionColor: _c('companyDescription'),
+        remainingAmountColor: _c('remainingAmount'),
+        discountColor: _c('discount'),
+        loadingFeesColor: _c('loadingFees'),
+        totalBeforeDiscountColor: _c('totalBeforeDiscount'),
+        totalAfterDiscountColor: _c('totalAfterDiscount'),
+        previousDebtColor: _c('previousDebt'),
+        currentDebtColor: _c('currentDebt'),
+        paidAmountColor: _c('paidAmount'),
+        electricPhoneColor: _c('phone'),
+        healthPhoneColor: _c('phone'),
+        itemSerialColor: _c('itemSerial'),
+        itemDetailsColor: _c('itemDetails'),
+        itemQuantityColor: _c('itemQuantity'),
+        itemPriceColor: _c('itemPrice'),
+        itemTotalColor: _c('itemTotal'),
+        noticeColor: _c('notice'),
+      );
+      await SettingsManager.saveAppSettings(updated);
+      _appSettings = updated;
+      _invoiceDesign = updatedDesign;
+      if (!mounted) return true;
+      setState(() {
+        _dirty = false;
+        _saving = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        width: 420,
+        backgroundColor: ErpColors.green,
+        content: const Row(children: [
+          Icon(Icons.check_circle_rounded, color: Colors.white),
+          SizedBox(width: 8),
+          Text('حُفظت معلومات الشركة — تظهر في كل التصاميم'),
+        ]),
+      ));
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(backgroundColor: ErpColors.red, content: Text('تعذّر الحفظ: $e')));
+      return false;
+    }
+  }
+
+  /// الخروج بتعديلات غير محفوظة: حفظ، أو تجاهل، أو البقاء.
+  Future<void> _leave() async {
+    final r = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(children: [
+          Icon(Icons.edit_note_rounded, color: ErpColors.orange),
+          SizedBox(width: 8),
+          Text('تعديلات غير محفوظة'),
+        ]),
+        content: const Text('هل تحفظ معلومات الشركة قبل الرجوع؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'stay'), child: const Text('البقاء هنا')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'discard'),
+            child: const Text('رجوع بلا حفظ', style: TextStyle(color: ErpColors.red)),
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Header Preview
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.grey[50],
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(
-                            _companyNameController.text.isEmpty 
-                              ? 'اسم الشركة' 
-                              : _companyNameController.text,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.green,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _companyDescriptionController.text.isEmpty
-                              ? 'وصف الشركة'
-                              : _companyDescriptionController.text,
-                            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _companyAddressController.text.isEmpty
-                              ? 'العنوان'
-                              : _companyAddressController.text,
-                            style: TextStyle(fontSize: 10, color: Colors.grey[600]),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            [_phone1Controller.text, _phone2Controller.text]
-                              .where((p) => p.isNotEmpty)
-                              .join('  |  '),
-                            style: TextStyle(fontSize: 10, color: Colors.grey[700]),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Container(
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: Colors.grey[200],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: _logoFile != null
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.file(_logoFile!, fit: BoxFit.contain),
-                          )
-                        : Icon(Icons.image, color: Colors.grey[400]),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          // Table Preview
-          Container(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              children: [
-                // Table Header
-                Container(
-                  decoration: BoxDecoration(
-                    color: primaryColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    children: visibleColumns.map((col) {
-                      return Expanded(
-                        flex: (col.widthFlex * 10).toInt(),
-                        child: Text(
-                          col.label,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-                // Sample Rows
-                ...List.generate(3, (index) => Container(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(color: Colors.grey[200]!),
-                    ),
-                  ),
-                  child: Row(
-                    children: visibleColumns.map((col) {
-                      String sampleData = '';
-                      switch (col.id) {
-                        case 'serial': sampleData = '${index + 1}'; break;
-                        case 'productId': sampleData = '${100 + index}'; break;
-                        case 'details': sampleData = 'منتج ${index + 1}'; break;
-                        case 'quantity': sampleData = '${(index + 1) * 5}'; break;
-                        case 'unitsCount': sampleData = '${index + 1}×12'; break;
-                        case 'priceBeforeDiscount': sampleData = index == 0 ? '1,000' : ''; break;
-                        case 'discount': sampleData = index == 0 ? '10%' : (index == 2 ? 'هدية' : ''); break;
-                        case 'price': sampleData = index == 0 ? '900' : (index == 2 ? '0' : '${(index + 1) * 1000}'); break;
-                        case 'amount': sampleData = '${(index + 1) * 5000}'; break;
-                        case 'weight': sampleData = '${(index + 1) * 0.5} كغ'; break;
-                        case 'expiry': sampleData = '2026/06'; break;
-                      }
-                      return Expanded(
-                        flex: (col.widthFlex * 10).toInt(),
-                        child: Text(
-                          sampleData,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 9, color: Colors.grey[700]),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                )),
-              ],
-            ),
-          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('حفظ ورجوع')),
         ],
       ),
     );
+    if (!mounted || r == null || r == 'stay') return;
+    if (r == 'save' && !await _saveSettings()) return;
+    if (!mounted) return;
+    setState(() => _dirty = false);
+    Navigator.of(context).pop();
   }
+
+  // ───────── الشعار ─────────
+
+  Future<void> _pickLogo() async {
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked == null) return;
+    final appDir = await getApplicationDocumentsDirectory();
+    final dir = Directory('${appDir.path}/logo');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    // اسم جديد لكل صورة: نفس الاسم يُبقي الصورة القديمة في ذاكرة العرض
+    final ext = picked.path.contains('.') ? picked.path.substring(picked.path.lastIndexOf('.')) : '.png';
+    final saved = await File(picked.path).copy('${dir.path}/company_logo_${DateTime.now().millisecondsSinceEpoch}$ext');
+    if (!mounted) return;
+    setState(() {
+      _logoFile = saved;
+      _dirty = true;
+    });
+  }
+
+  void _removeLogo() => setState(() {
+        _logoFile = null;
+        _dirty = true;
+      });
+
+  // ───────── الهواتف ─────────
+
+  void _addPhone() {
+    if (_phones.length >= maxPhones) return;
+    setState(() {
+      _phones.add(_phoneCtl(''));
+      _phoneLabels.add(_phoneCtl(''));
+      _dirty = true;
+    });
+  }
+
+  void _removePhone(int i) {
+    final c = _phones.removeAt(i);
+    final lc = _phoneLabels.removeAt(i);
+    if (_phones.isEmpty) {
+      _phones.add(_phoneCtl(''));
+      _phoneLabels.add(_phoneCtl(''));
+    }
+    setState(() => _dirty = true);
+    // بعد إعادة البناء: حقلاه لم يعودا على الشاشة
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      c.dispose();
+      lc.dispose();
+    });
+  }
+
+  // ───────── الألوان ─────────
+
+  Future<void> _pickColor(_ColorKey k) async {
+    var temp = _colors[k.key] ?? Colors.black;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('لون «${k.label}»'),
+        content: SizedBox(
+          width: 340,
+          child: SingleChildScrollView(
+            child: BlockPicker(pickerColor: temp, onColorChanged: (c) => temp = c),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('اعتماد')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() {
+      _colors[k.key] = temp;
+      _dirty = true;
+    });
+  }
+
+  void _openColumns() {
+    if (widget.fromDesigner) {
+      // فُتحت من المصمم: نرجع إليه (بعد سؤال الحفظ إن لزم)
+      Navigator.of(context).maybePop();
+      return;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const InvoiceDesignerScreen()));
+  }
+
+  // ───────── البناء ─────────
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
+      return const ErpPage(
+        title: 'معلومات الشركة والشعار',
+        icon: Icons.storefront_rounded,
         body: Center(child: CircularProgressIndicator()),
       );
     }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('تصميم الفاتورة'),
-        centerTitle: true,
-        backgroundColor: primaryColor,
-        foregroundColor: Colors.white,
-        elevation: 0,
+    return PopScope(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: ErpPage(
+        title: 'معلومات الشركة والشعار',
+        subtitle: 'تظهر في رأس كل فاتورة وإيصال — بأي تصميم',
+        icon: Icons.storefront_rounded,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.save),
-            tooltip: 'حفظ الإعدادات',
-            onPressed: _saveSettings,
-          ),
-        ],
-      ),
-      body: Row(
-        children: [
-          // Left Panel - Preview
-          Expanded(
-            flex: 2,
-            child: Container(
-              color: Colors.grey[100],
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'معاينة الفاتورة',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Expanded(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 400),
-                        child: _buildInvoicePreview(),
-                      ),
-                    ),
-                  ),
-                ],
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _dirty ? Colors.white : Colors.white24,
+                foregroundColor: _dirty ? ErpColors.navy : Colors.white,
               ),
-            ),
-          ),
-          // Right Panel - Settings
-          Expanded(
-            flex: 3,
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                // Company Logo
-                _buildSettingsCard(
-                  icon: Icons.image,
-                  iconColor: Colors.purple,
-                  title: 'شعار الشركة (اللوجو)',
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 100,
-                        height: 100,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[100],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.grey[300]!),
-                        ),
-                        child: _logoFile != null
-                          ? Stack(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Image.file(_logoFile!, fit: BoxFit.contain, width: 100, height: 100),
-                                ),
-                                Positioned(
-                                  top: 4,
-                                  right: 4,
-                                  child: GestureDetector(
-                                    onTap: _removeLogo,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(4),
-                                      decoration: const BoxDecoration(
-                                        color: Colors.red,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(Icons.close, color: Colors.white, size: 16),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            )
-                          : Icon(Icons.add_photo_alternate, size: 40, color: Colors.grey[400]),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ElevatedButton.icon(
-                              onPressed: _pickLogo,
-                              icon: const Icon(Icons.upload),
-                              label: const Text('اختيار صورة'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: primaryColor,
-                                foregroundColor: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'يفضل استخدام صورة مربعة بدقة عالية',
-                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Company Info
-                _buildSettingsCard(
-                  icon: Icons.business,
-                  iconColor: Colors.indigo,
-                  title: 'معلومات الشركة',
-                  child: Column(
-                    children: [
-                      TextField(
-                        controller: _companyNameController,
-                        decoration: InputDecoration(
-                          labelText: 'اسم الشركة',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.store),
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _companyDescriptionController,
-                        decoration: InputDecoration(
-                          labelText: 'وصف الشركة',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.description),
-                        ),
-                        maxLines: 2,
-                        onChanged: (_) => setState(() {}),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _companyAddressController,
-                        decoration: InputDecoration(
-                          labelText: 'عنوان الشركة',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.location_on),
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // 🧾 البيانات الرسمية وتذييل القائمة
-                _buildSettingsCard(
-                  icon: Icons.verified_outlined,
-                  iconColor: Colors.indigo,
-                  title: 'الرقم الضريبي وتذييل القائمة',
-                  child: Column(
-                    children: [
-                      TextField(
-                        controller: _taxNumberController,
-                        decoration: InputDecoration(
-                          labelText: 'الرقم الضريبي (اختياري)',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.numbers),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _commercialRegisterController,
-                        decoration: InputDecoration(
-                          labelText: 'رقم السجل التجاري (اختياري)',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.badge_outlined),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _footerNoteController,
-                        maxLines: 2,
-                        decoration: InputDecoration(
-                          labelText: 'عبارة أسفل القائمة',
-                          hintText: 'مثال: البضاعة المباعة لا ترد إلا خلال 3 أيام — شكراً لتعاملكم معنا',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.short_text),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Phone Numbers
-                _buildSettingsCard(
-                  icon: Icons.phone,
-                  iconColor: Colors.green,
-                  title: 'أرقام الهاتف (حد أقصى 2)',
-                  child: Column(
-                    children: [
-                      TextField(
-                        controller: _phone1Controller,
-                        keyboardType: TextInputType.phone,
-                        decoration: InputDecoration(
-                          labelText: 'رقم الهاتف الأول',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.phone),
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _phone2Controller,
-                        keyboardType: TextInputType.phone,
-                        decoration: InputDecoration(
-                          labelText: 'رقم الهاتف الثاني',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.phone),
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Columns Configuration
-                _buildSettingsCard(
-                  icon: Icons.view_column,
-                  iconColor: Colors.orange,
-                  title: 'أعمدة جدول الفاتورة',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'اختر الأعمدة التي تريد إظهارها في الفاتورة وحدد عرض كل عمود',
-                        style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '🏷️ عمودا «السعر قبل الخصم» و«الخصم» يُطبعان فقط في الفواتير التي فيها صنف مخصوم أو هدية.',
-                        style: TextStyle(fontSize: 12, color: Colors.green[700]),
-                      ),
-                      const SizedBox(height: 16),
-                      ..._invoiceDesign.columns.map((column) => _buildColumnItem(column)),
-                    ],
-                  ),
-                ),
-
-                // Reorder Columns
-                _buildSettingsCard(
-                  icon: Icons.reorder,
-                  iconColor: Colors.teal,
-                  title: 'ترتيب الأعمدة',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'اسحب لتغيير ترتيب الأعمدة في الفاتورة',
-                        style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                      ),
-                      const SizedBox(height: 16),
-                      ReorderableListView(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        onReorder: _reorderColumns,
-                        children: _invoiceDesign.visibleColumns.asMap().entries.map((entry) {
-                          final col = entry.value;
-                          return ListTile(
-                            key: ValueKey(col.id),
-                            leading: const Icon(Icons.drag_handle),
-                            title: Text(col.label),
-                            trailing: Text(
-                              'العرض: ${(col.widthFlex * 100 / 2).toStringAsFixed(0)}%',
-                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // ألوان معلومات الشركة
-                _buildSettingsCard(
-                  icon: Icons.palette,
-                  iconColor: Colors.green,
-                  title: 'ألوان معلومات الشركة',
-                  child: Column(
-                    children: [
-                      _buildColorTile('لون اسم الشركة', _companyNameColor, () => _pickColor('companyName')),
-                      _buildColorTile('لون وصف الشركة', _companyDescriptionColor, () => _pickColor('companyDescription')),
-                      _buildColorTile('لون أرقام الهواتف', _phoneColor, () => _pickColor('phone')),
-                    ],
-                  ),
-                ),
-
-                // ألوان عناصر الفاتورة (الملخص)
-                _buildSettingsCard(
-                  icon: Icons.receipt_long,
-                  iconColor: Colors.blue,
-                  title: 'ألوان ملخص الفاتورة',
-                  child: Column(
-                    children: [
-                      _buildColorTile('المبلغ المتبقي', _remainingAmountColor, () => _pickColor('remainingAmount')),
-                      _buildColorTile('الخصم', _discountColor, () => _pickColor('discount')),
-                      _buildColorTile('أجور التحميل', _loadingFeesColor, () => _pickColor('loadingFees')),
-                      _buildColorTile('الإجمالي قبل الخصم', _totalBeforeDiscountColor, () => _pickColor('totalBeforeDiscount')),
-                      _buildColorTile('الإجمالي بعد الخصم', _totalAfterDiscountColor, () => _pickColor('totalAfterDiscount')),
-                      _buildColorTile('الدين السابق', _previousDebtColor, () => _pickColor('previousDebt')),
-                      _buildColorTile('الدين الحالي', _currentDebtColor, () => _pickColor('currentDebt')),
-                      _buildColorTile('المبلغ المدفوع', _paidAmountColor, () => _pickColor('paidAmount')),
-                    ],
-                  ),
-                ),
-
-                // ألوان عناصر الجدول
-                _buildSettingsCard(
-                  icon: Icons.table_chart,
-                  iconColor: Colors.purple,
-                  title: 'ألوان عناصر الجدول',
-                  child: Column(
-                    children: [
-                      _buildColorTile('التسلسل', _itemSerialColor, () => _pickColor('itemSerial')),
-                      _buildColorTile('التفاصيل (أسماء المواد)', _itemDetailsColor, () => _pickColor('itemDetails')),
-                      _buildColorTile('العدد', _itemQuantityColor, () => _pickColor('itemQuantity')),
-                      _buildColorTile('السعر', _itemPriceColor, () => _pickColor('itemPrice')),
-                      _buildColorTile('المبلغ', _itemTotalColor, () => _pickColor('itemTotal')),
-                    ],
-                  ),
-                ),
-
-                // ألوان أخرى
-                _buildSettingsCard(
-                  icon: Icons.color_lens,
-                  iconColor: Colors.red,
-                  title: 'ألوان أخرى',
-                  child: Column(
-                    children: [
-                      _buildColorTile('التنويه', _noticeColor, () => _pickColor('notice')),
-                    ],
-                  ),
-                ),
-              ],
+              onPressed: _dirty && !_saving ? _saveSettings : null,
+              icon: _saving
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Icon(_dirty ? Icons.save_rounded : Icons.check_rounded),
+              label: Text(_dirty ? 'حفظ' : 'محفوظ'),
             ),
           ),
         ],
+        body: LayoutBuilder(builder: (context, box) {
+          final wide = box.maxWidth >= 1050;
+          final form = _form();
+          if (!wide) {
+            return ListView(padding: const EdgeInsets.only(top: 10, bottom: 30), children: [
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _preview()),
+              const SizedBox(height: 6),
+              ...form,
+            ]);
+          }
+          return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: ListView(padding: const EdgeInsets.only(top: 10, bottom: 30), children: form),
+            ),
+            Container(
+              width: 460,
+              margin: const EdgeInsets.fromLTRB(12, 16, 4, 16),
+              child: SingleChildScrollView(child: _preview()),
+            ),
+          ]);
+        }),
       ),
     );
   }
 
-  Widget _buildColumnItem(InvoiceColumnConfig column) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Checkbox(
-            value: column.visible,
-            activeColor: primaryColor,
-            onChanged: (value) => _toggleColumn(column.id, value ?? false),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              column.label,
-              style: TextStyle(
-                fontWeight: FontWeight.w500,
-                color: column.visible ? Colors.black : Colors.grey,
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 3,
-            child: Row(
-              children: [
-                const Text('العرض:', style: TextStyle(fontSize: 12)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Slider(
-                    value: column.widthFlex,
-                    min: 0.3,
-                    max: 3.0,
-                    divisions: 27,
-                    activeColor: primaryColor,
-                    label: '${(column.widthFlex * 100 / 2).toStringAsFixed(0)}%',
-                    onChanged: column.visible 
-                      ? (value) => _updateColumnWidth(column.id, value)
-                      : null,
+  List<Widget> _form() => [
+        ErpSection(
+          title: 'الشعار',
+          icon: Icons.image_rounded,
+          color: const Color(0xFF7C3AED),
+          child: Row(children: [
+            InkWell(
+              onTap: _pickLogo,
+              borderRadius: BorderRadius.circular(18),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 118,
+                height: 118,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F3FF),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: _logoFile == null ? const Color(0xFFC4B5FD) : const Color(0xFFE9E5FB),
+                    width: _logoFile == null ? 1.6 : 1,
                   ),
                 ),
-              ],
+                child: _logoFile == null
+                    ? const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.add_photo_alternate_rounded, size: 34, color: Color(0xFF7C3AED)),
+                        SizedBox(height: 6),
+                        Text('اختر شعاراً', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF7C3AED))),
+                      ])
+                    : ClipRRect(
+                        borderRadius: BorderRadius.circular(17),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Image.file(_logoFile!, fit: BoxFit.contain, key: ValueKey(_logoFile!.path)),
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_logoFile == null ? 'لا شعار بعد' : 'الشعار الحالي',
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                const SizedBox(height: 4),
+                const Text('صورة PNG بخلفية شفافة تظهر أنظف على الورق. يظهر الشعار في كل تصميم فيه عنصر «الشعار».',
+                    style: TextStyle(fontSize: 12.5, color: ErpColors.muted, height: 1.5)),
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  FilledButton.tonalIcon(
+                    onPressed: _pickLogo,
+                    icon: const Icon(Icons.upload_rounded, size: 18),
+                    label: Text(_logoFile == null ? 'اختيار صورة' : 'تغيير'),
+                  ),
+                  if (_logoFile != null)
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(foregroundColor: ErpColors.red),
+                      onPressed: _removeLogo,
+                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                      label: const Text('إزالة'),
+                    ),
+                ]),
+              ]),
+            ),
+          ]),
+        ),
+        ErpSection(
+          title: 'هوية الشركة',
+          icon: Icons.badge_rounded,
+          child: Column(children: [
+            _field(_name, 'اسم الشركة', Icons.storefront_rounded),
+            const SizedBox(height: 12),
+            _field(_description, 'وصف النشاط (تحت الاسم)', Icons.short_text_rounded,
+                hint: 'مثال: لتجارة المواد الكهربائية والصحية'),
+          ]),
+        ),
+        ErpSection(
+          title: 'العنوان والهواتف',
+          icon: Icons.contact_phone_rounded,
+          color: const Color(0xFF0284C7),
+          trailing: _counter(),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _field(_address, 'العنوان', Icons.location_on_rounded),
+            const SizedBox(height: 12),
+            for (var i = 0; i < _phones.length; i++)
+              Padding(
+                key: ObjectKey(_phones[i]),
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0284C7).withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text('${i + 1}',
+                        style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF0284C7))),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 170,
+                    child: _field(_phoneLabels[i], 'اسمه (اختياري)', Icons.label_outline_rounded,
+                        hint: 'كهربائيات، صحيات…'),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _field(_phones[i], 'رقم الهاتف ${i + 1}', Icons.phone_rounded, ltr: true),
+                  ),
+                  const SizedBox(width: 6),
+                  IconButton(
+                    tooltip: 'حذف الرقم',
+                    onPressed: () => _removePhone(i),
+                    icon: const Icon(Icons.remove_circle_outline_rounded, color: ErpColors.red),
+                  ),
+                ]),
+              ),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: _phones.length >= maxPhones ? null : _addPhone,
+                icon: const Icon(Icons.add_circle_rounded),
+                label: Text(_phones.length >= maxPhones ? 'الحد الأقصى $maxPhones أرقام' : 'إضافة رقم'),
+              ),
+            ),
+          ]),
+        ),
+        ErpSection(
+          title: 'بيانات رسمية وتذييل',
+          icon: Icons.verified_rounded,
+          color: ErpColors.green,
+          child: Column(children: [
+            Row(children: [
+              Expanded(child: _field(_tax, 'الرقم الضريبي', Icons.numbers_rounded, ltr: true)),
+              const SizedBox(width: 12),
+              Expanded(child: _field(_cr, 'السجل التجاري', Icons.assignment_rounded, ltr: true)),
+            ]),
+            const SizedBox(height: 12),
+            _field(_footer, 'عبارة أسفل الفاتورة', Icons.notes_rounded,
+                maxLines: 2, hint: 'شكر، شروط، سياسة الإرجاع…'),
+          ]),
+        ),
+        _columnsCard(),
+        _colorsSection(),
+      ];
+
+  Widget _counter() {
+    final n = _phoneList.length;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0284C7).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text('$n / $maxPhones أرقام',
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF0284C7))),
+    );
+  }
+
+  Widget _field(TextEditingController c, String label, IconData icon,
+          {int maxLines = 1, String? hint, bool ltr = false}) =>
+      TextField(
+        controller: c,
+        maxLines: maxLines,
+        textDirection: ltr ? TextDirection.ltr : null,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          prefixIcon: Icon(icon, size: 20),
+          filled: true,
+          fillColor: const Color(0xFFF8FAFD),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: ErpColors.border),
+          ),
+        ),
+      );
+
+  Widget _columnsCard() => Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [ErpColors.navy.withValues(alpha: 0.06), ErpColors.cyan.withValues(alpha: 0.06)],
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: ErpColors.navy.withValues(alpha: 0.15)),
+        ),
+        child: Row(children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(color: ErpColors.navy, borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.view_column_rounded, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('أعمدة الجدول وترتيبها وعرضها', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
+              SizedBox(height: 2),
+              Text('من «مصمم الفاتورة»: اضغط جدول المواد ← الأعمدة (ومنها الوزن وتاريخ الانتهاء).',
+                  style: TextStyle(fontSize: 12.5, color: ErpColors.muted, height: 1.4)),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: ErpColors.navy),
+            onPressed: _openColumns,
+            icon: Icon(widget.fromDesigner ? Icons.arrow_forward_rounded : Icons.dashboard_customize_rounded, size: 18),
+            label: Text(widget.fromDesigner ? 'رجوع للمصمم' : 'افتح المصمم'),
+          ),
+        ]),
+      );
+
+  Widget _colorsSection() => ErpSection(
+        title: 'ألوان التصميم الأصلي',
+        icon: Icons.palette_rounded,
+        color: const Color(0xFFDB2777),
+        trailing: IconButton(
+          tooltip: _colorsOpen ? 'طيّ' : 'عرض',
+          onPressed: () => setState(() => _colorsOpen = !_colorsOpen),
+          icon: AnimatedRotation(
+            turns: _colorsOpen ? 0.5 : 0,
+            duration: const Duration(milliseconds: 200),
+            child: const Icon(Icons.expand_more_rounded),
+          ),
+        ),
+        child: AnimatedCrossFade(
+          duration: const Duration(milliseconds: 220),
+          crossFadeState: _colorsOpen ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+          firstChild: InkWell(
+            onTap: () => setState(() => _colorsOpen = true),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 4),
+              child: Text('تُستعمل فقط لأنواع الطباعة التي ما زالت على «التصميم الأصلي للبرنامج». '
+                  'تصاميم المصمم لها ألوانها الخاصة.',
+                  style: TextStyle(fontSize: 12.5, color: ErpColors.muted, height: 1.5)),
             ),
           ),
-        ],
+          secondChild: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            for (final g in _colorGroups) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 8),
+                child: Row(children: [
+                  Icon(g.$2, size: 16, color: ErpColors.muted),
+                  const SizedBox(width: 6),
+                  Text(g.$1, style: const TextStyle(fontWeight: FontWeight.w800, color: ErpColors.muted)),
+                ]),
+              ),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final k in g.$3) _swatch(k),
+              ]),
+            ],
+          ]),
+        ),
+      );
+
+  Widget _swatch(_ColorKey k) {
+    final c = _colors[k.key] ?? Colors.black;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => _pickColor(k),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: ErpColors.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(k.label, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 10),
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: c,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+              boxShadow: [BoxShadow(color: c.withValues(alpha: 0.45), blurRadius: 6)],
+            ),
+          ),
+        ]),
       ),
     );
+  }
+
+  // ───────── المعاينة ─────────
+
+  Widget _preview() {
+    final name = _name.text.trim().isEmpty ? 'اسم الشركة' : _name.text.trim();
+    final desc = _description.text.trim();
+    final addr = _address.text.trim();
+    final phones = _labeledPhones;
+    final official = [
+      if (_tax.text.trim().isNotEmpty) 'الرقم الضريبي: ${_tax.text.trim()}',
+      if (_cr.text.trim().isNotEmpty) 'السجل التجاري: ${_cr.text.trim()}',
+    ];
+    final nameColor = _colors['companyName'] ?? ErpColors.green;
+    Widget bar(double w, {double h = 7, Color? c}) => Container(
+          width: w,
+          height: h,
+          decoration: BoxDecoration(color: c ?? const Color(0xFFEFF2F7), borderRadius: BorderRadius.circular(4)),
+        );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Padding(
+        padding: EdgeInsets.fromLTRB(4, 0, 4, 8),
+        child: Row(children: [
+          Icon(Icons.visibility_rounded, size: 18, color: ErpColors.muted),
+          SizedBox(width: 6),
+          Text('معاينة رأس الفاتورة', style: TextStyle(fontWeight: FontWeight.w800, color: ErpColors.muted)),
+        ]),
+      ),
+      AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(color: const Color(0xFF0F172A).withValues(alpha: 0.10), blurRadius: 24, offset: const Offset(0, 10)),
+          ],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(children: [
+                Text(name,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900, color: nameColor)),
+                if (desc.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(desc,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: _colors['companyDescription'] ?? Colors.black87)),
+                ],
+                if (addr.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.location_on_rounded, size: 13, color: ErpColors.muted),
+                    const SizedBox(width: 3),
+                    Flexible(child: Text(addr, style: const TextStyle(fontSize: 11.5, color: Colors.black87))),
+                  ]),
+                ],
+                if (phones.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(alignment: WrapAlignment.center, spacing: 6, runSpacing: 4, children: [
+                    for (final p in phones)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF1F5F9),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(p,
+                            style: TextStyle(
+                                fontSize: 11.5, fontWeight: FontWeight.w700, color: _colors['phone'] ?? Colors.black)),
+                      ),
+                  ]),
+                ],
+                if (official.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(official.join('   •   '),
+                      textAlign: TextAlign.center, style: const TextStyle(fontSize: 10.5, color: ErpColors.muted)),
+                ],
+              ]),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 74,
+              height: 74,
+              decoration: BoxDecoration(
+                color: _logoFile == null ? const Color(0xFFF5F3FF) : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFEDE9FE)),
+              ),
+              child: _logoFile == null
+                  ? const Icon(Icons.image_outlined, color: Color(0xFFC4B5FD))
+                  : Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Image.file(_logoFile!, fit: BoxFit.contain, key: ValueKey('p${_logoFile!.path}')),
+                    ),
+            ),
+          ]),
+          const SizedBox(height: 14),
+          Container(height: 2, color: nameColor.withValues(alpha: 0.6)),
+          const SizedBox(height: 12),
+          // هيكل الجدول — الأعمدة الفعلية حسب التصميم المختار في المصمم
+          Container(
+            height: 22,
+            decoration: BoxDecoration(color: ErpColors.navy.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(6)),
+          ),
+          for (var i = 0; i < 4; i++)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(children: [
+                bar(18),
+                const SizedBox(width: 10),
+                Expanded(child: Align(alignment: AlignmentDirectional.centerStart, child: bar(120.0 - i * 18))),
+                bar(40),
+                const SizedBox(width: 10),
+                bar(54),
+              ]),
+            ),
+          const SizedBox(height: 8),
+          const Text('الأعمدة حسب التصميم المختار في المصمم',
+              textAlign: TextAlign.center, style: TextStyle(fontSize: 10.5, color: ErpColors.muted)),
+          if (_footer.text.trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            Text(_footer.text.trim(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 11.5, fontStyle: FontStyle.italic, color: Colors.black87)),
+          ],
+        ]),
+      ),
+    ]);
   }
 }

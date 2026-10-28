@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 // lib/services/smart_search/smart_search_models.dart
 // نماذج البيانات لنظام البحث الذكي
 
@@ -164,6 +165,11 @@ class SessionContext {
   List<int> addedProductIds = [];
   List<String> addedProductNames = [];
   
+  // 🆕 الذاكرة المؤقتة للعلاقات للفاتورة الحالية (لتسريع البحث)
+  Map<int, Map<String, dynamic>> cachedAssociations = {};
+  List<ProductSequence> cachedSequences = [];
+  bool isRelationshipsDirty = true;
+  
   // تفضيلات العميل والمُركّب المحملة
   List<CustomerBrandPreference> customerPreferences = [];
   List<InstallerBrandPreference> installerPreferences = [];
@@ -183,7 +189,7 @@ class SessionContext {
   /// تحديث الماركات المكتشفة تلقائياً
   static void setAutoDiscoveredBrands(Set<String> brands) {
     _autoDiscoveredBrands = brands;
-    print('🏷️ Auto-discovered brands updated: ${brands.length} brands');
+    debugPrint('🏷️ Auto-discovered brands updated: ${brands.length} brands');
   }
   
   /// الحصول على الماركات المكتشفة
@@ -195,6 +201,7 @@ class SessionContext {
       addedProductIds.add(productId);
     }
     addedProductNames.add(productName);
+    isRelationshipsDirty = true; // 🆕 طلب تحديث الذاكرة المؤقتة
     
     // استخراج الكلمة الأخيرة (للنظام الهجين)
     final lastWord = extractLastWord(productName);
@@ -221,6 +228,9 @@ class SessionContext {
     customerPreferences.clear();
     installerPreferences.clear();
     preferencesLoaded = false;
+    cachedAssociations.clear(); // 🆕
+    cachedSequences.clear(); // 🆕
+    isRelationshipsDirty = true; // 🆕
   }
 
 

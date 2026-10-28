@@ -16,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../lan/lan_bootstrap.dart';
 import '../lan/lan_settings.dart';
 import '../services/license_service.dart';
+import '../services/seat_service.dart';
 
 Future<void> openSupportWhatsApp() async {
   try {
@@ -63,6 +64,10 @@ class _LicenseScreenState extends State<LicenseScreen> {
     final r = await _licenseService.recoverByFingerprint();
     if (!mounted) return;
     if (r.success && _licenseService.isLicenseActivated()) {
+      if (LicenseService.syncLinkApplied) {
+        await _restartForSync();
+        return;
+      }
       _goIn();
       return;
     }
@@ -121,11 +126,20 @@ class _LicenseScreenState extends State<LicenseScreen> {
     setState(() => _isLoading = false);
 
     if (result.success) {
-      if (_mode == 1 && LicenseService.syncLinkApplied) {
+      final sync = _licenseService.payload?.syncAllowed == true;
+      // 1) جهاز إضافي على شبكة حاسبة السيرفر ⇒ يرتبط بها وحده فوراً (طرفية على
+      //    قاعدتها مباشرة) — بلا أي سؤال. هذا يسبق المزامنة: نفس المحل = نفس القاعدة.
+      if (_mode == 1 && await _autoJoinLan(keepSearching: !sync)) return;
+      // 2) لا سيرفر على هذه الشبكة (فرع/محافظة أخرى) + حساب مزامنة ⇒ عبر الإنترنت
+      if (LicenseService.syncLinkApplied) {
         await _restartForSync();
         return;
       }
-      if (_mode == 1 && await _autoJoinLan()) return;
+      if (_mode == 1 && sync) {
+        await _syncNotReadyYet();
+        _goIn();
+        return;
+      }
       _goIn();
       return;
     }
@@ -138,7 +152,9 @@ class _LicenseScreenState extends State<LicenseScreen> {
 
   /// 🖧 جهاز إضافي: يرتبط وحده بحاسبة السيرفر في شبكة المحل (بترخيصه، بلا رمز ربط)،
   /// فيعمل على بياناتها وموظفيها مباشرة.
-  Future<bool> _autoJoinLan() async {
+  /// [keepSearching]: حساب بلا مزامنة — إن لم يجد السيرفر الآن يبقى يبحث عنه عند
+  /// كل تشغيل. حساب مزامنة: إن لم يجده يُرجع false فيتصل عبر الإنترنت.
+  Future<bool> _autoJoinLan({required bool keepSearching}) async {
     if (kIsWeb) return false;
     setState(() {
       _isLoading = true;
@@ -150,23 +166,28 @@ class _LicenseScreenState extends State<LicenseScreen> {
     } catch (_) {}
     if (!mounted) return false;
     setState(() => _isLoading = false);
+    if (joined == null && !keepSearching) return false;
     if (joined == null) {
+      // 🔁 لا سؤال «طرفية أم لا»: الجهاز الإضافي يبقى يبحث عن حاسبة السيرفر عند كل
+      // تشغيل ويتصل وحده حين تظهر (مثل الواي فاي المحفوظ)
+      await LanRuntime.markPendingJoin();
+      if (!mounted) return true;
       await showDialog(
         context: context,
+        barrierDismissible: false,
         builder: (ctx) => AlertDialog(
           title: const Text('✅ أُضيف هذا الجهاز'),
           content: const Text(
-            'لم أجد حاسبة السيرفر على هذه الشبكة.\n\n'
-            '• إن كان هذا الجهاز سيعمل على بيانات حاسبة المحل: افتح البرنامج على الحاسبة '
-            '(وضع «حاسبة السيرفر»)، وتأكد أنكما على نفس الواي فاي، ثم من شاشة الدخول اضغط '
-            '«هذا الجهاز طرفية؟ اربطه بحاسبة السيرفر».\n'
-            '• وإن كان سيعمل وحده: أنشئ له حساب مدير.',
+            'لم أجد حاسبة السيرفر على هذه الشبكة الآن.\n'
+            'سيبقى هذا الجهاز يبحث عنها ويتصل وحده حين تظهر — شغّل البرنامج على حاسبة السيرفر '
+            'وتأكد أن الجهازين على نفس الشبكة.',
             style: TextStyle(height: 1.6),
           ),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('متابعة'))],
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
         ),
       );
-      return false;
+      await LanRuntime.relaunch();
+      return true;
     }
     final j = joined;
     await showDialog(
@@ -185,10 +206,29 @@ class _LicenseScreenState extends State<LicenseScreen> {
     );
     if (!kIsWeb && Platform.isWindows) {
       try {
-        await Process.start(Platform.resolvedExecutable, const [], mode: ProcessStartMode.detached);
+        await Process.start(Platform.resolvedExecutable, SeatService.relaunchArgs, mode: ProcessStartMode.detached);
       } catch (_) {}
     }
     exit(0);
+  }
+
+  /// حساب مزامنة، لكن ربط Firebase لم يُحفظ في حساب الترخيص بعد
+  Future<void> _syncNotReadyYet() async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('✅ أُضيف هذا الجهاز'),
+        content: const Text(
+          'هذا الحساب يشمل المزامنة عبر الإنترنت، لكن إعداد المزامنة لم يصل بعد.\n\n'
+          '• افتح البرنامج على الجهاز الرئيسي وهو متصل بالإنترنت: يرسل إعداده تلقائياً.\n'
+          '• أو اطلب من الدعم ضبط المزامنة لحسابك.\n\n'
+          'عند وصوله يتصل هذا الجهاز وحده (من أي مكان، لا يلزم أن يكون على شبكة المحل) '
+          'ويطلب منك إعادة تشغيل البرنامج مرة واحدة.',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('متابعة'))],
+      ),
+    );
   }
 
   /// جهاز إضافي وصل معه ربط المزامنة: إعادة تشغيل ليتصل ويجلب البيانات والموظفين
@@ -199,7 +239,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('✅ أُضيف هذا الجهاز'),
         content: const Text(
-          'وصل مع الرمز ربط المزامنة من الجهاز الرئيسي.\n'
+          'وصل ربط المزامنة من حساب الترخيص (يعمل عبر الإنترنت من أي مكان).\n'
           'سيُعاد تشغيل البرنامج الآن ليتصل ويجلب بيانات المحل وحسابات الموظفين، '
           'ثم ادخل باسم المستخدم الذي أنشأه لك المدير.',
           style: TextStyle(height: 1.6),
@@ -211,7 +251,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
     );
     if (!kIsWeb && Platform.isWindows) {
       try {
-        await Process.start(Platform.resolvedExecutable, const [], mode: ProcessStartMode.detached);
+        await Process.start(Platform.resolvedExecutable, SeatService.relaunchArgs, mode: ProcessStartMode.detached);
         exit(0);
       } catch (_) {}
     }
@@ -238,7 +278,6 @@ class _LicenseScreenState extends State<LicenseScreen> {
   }
 
   Future<void> _mainBoundElsewhere(LicenseResult r) async {
-    final moves = r.movesLeft ?? 0;
     final choice = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -247,18 +286,14 @@ class _LicenseScreenState extends State<LicenseScreen> {
           'حساب الترخيص هذا مربوط بحاسبة رئيسية أخرى${r.mainDeviceName != null ? ' (اسمها: ${r.mainDeviceName})' : ''}، '
           'وهذه الحاسبة ليست هي (القطع الداخلية مختلفة).\n\n'
           '• لإضافة هذا الجهاز كجهاز إضافي: اطلب «رمز إضافة جهاز» من الجهاز الرئيسي.\n'
-          '${moves > 0 ? '• أو انقل الجهاز الرئيسي إلى هذا الجهاز (متبقٍ $moves مرات). الجهاز القديم يتوقف.' : '• لنقل الجهاز الرئيسي تواصل معنا: ${LicenseConfig.supportPhone}'}',
+          '• لنقل الترخيص إلى هنا: من الحاسبة الرئيسية ادخل الإعدادات ← الحسابات والموظفون ← '
+          '«تصفير الترخيص ونقل الحساب»، ثم سجّل الدخول هنا.\n'
+          '• إن تعطّلت الحاسبة الرئيسية أو ضاعت: تواصل معنا ${LicenseConfig.supportPhone}',
           style: const TextStyle(height: 1.6),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           TextButton(onPressed: () => Navigator.pop(ctx, 'code'), child: const Text('عندي رمز إضافة')),
-          if (moves > 0)
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.orange.shade800),
-              onPressed: () => Navigator.pop(ctx, 'move'),
-              child: const Text('نقل الجهاز الرئيسي إلى هنا'),
-            ),
         ],
       ),
     );
@@ -268,8 +303,6 @@ class _LicenseScreenState extends State<LicenseScreen> {
         _mode = 1;
         _errorMessage = null;
       });
-    } else if (choice == 'move') {
-      await _submit(move: true);
     }
   }
 
@@ -450,7 +483,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
               OutlinedButton.icon(
                 onPressed: openSupportWhatsApp,
                 icon: const Icon(Icons.chat, color: Colors.green),
-                label: Text('واتساب ${LicenseConfig.supportPhone}'),
+                label: const Text('واتساب ${LicenseConfig.supportPhone}'),
               ),
             ],
           ),

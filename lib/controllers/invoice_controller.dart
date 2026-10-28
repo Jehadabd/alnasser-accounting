@@ -1,24 +1,29 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../erp/erp_common.dart' show PeriodLock;
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
+import 'package:sqflite/sqflite.dart' show DatabaseException;
 
-import '../models/app_settings.dart';
 import '../models/customer.dart';
 import '../models/invoice.dart';
-import '../models/invoice_adjustment.dart';
 import '../models/invoice_input_data.dart';
 import '../models/invoice_item.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
 import '../services/database/business/invoice_debt_reconciler.dart';
 import '../services/smart_search/smart_search.dart';
+import '../services/smart_pricing_service.dart';
 import '../services/auth_service.dart';
 import '../services/invoice_settings_service.dart';
 import '../services/database/business/invoice_numbering.dart';
-import 'package:sqflite/sqflite.dart';
+import '../services/seat_service.dart';
+import '../services/invoice_edit_log.dart'; // ✏️ إضافة/مرتجع عند التعديل
+import '../services/invoice_edit_events.dart'; // ✏️ التعديل عملية بتاريخ يومه
+import '../services/settings_manager.dart';
+import '../accounting/posting_engine.dart' show PostingEngine;
+
 
 class InvoiceValidationResult {
   final bool isValid;
@@ -33,7 +38,10 @@ class InvoiceSaveResult {
   final Invoice? invoice;
   final String? errorMessage;
 
-  InvoiceSaveResult({required this.success, this.invoice, this.errorMessage});
+  /// ✏️ حدث التعديل (إضافة/مرتجع بتاريخ اليوم) إن كان للحفظ أثر مالي — لطباعة سنده.
+  final int? editEventId;
+
+  InvoiceSaveResult({required this.success, this.invoice, this.errorMessage, this.editEventId});
 }
 
 class InvoiceController {
@@ -59,10 +67,10 @@ class InvoiceController {
       cleaned = cleaned.substring(1);
     }
     if (cleaned.startsWith('0')) {
-      cleaned = '964' + cleaned.substring(1);
+      cleaned = '964${cleaned.substring(1)}';
     }
     if (!cleaned.startsWith('964')) {
-      cleaned = '964' + cleaned;
+      cleaned = '964$cleaned';
     }
     return cleaned;
   }
@@ -116,7 +124,7 @@ class InvoiceController {
           }
         }
       } catch (e) {
-        print('خطأ في حساب التكلفة الهيراركية: $e');
+        debugPrint('خطأ في حساب التكلفة الهيراركية: $e');
       }
     }
     return baseCost;
@@ -254,7 +262,7 @@ class InvoiceController {
     
     // Check Customer Change
     final newCustomerName = data.customerName.trim();
-    final oldCustomerName = oldInvoice.customerName?.trim() ?? '';
+    final oldCustomerName = oldInvoice.customerName.trim();
     final isCustomerChanged = newCustomerName.replaceAll(' ', '').toLowerCase() != 
                               oldCustomerName.replaceAll(' ', '').toLowerCase();
     
@@ -410,8 +418,17 @@ class InvoiceController {
             createdBy: currentUserName,
           );
         } catch (e) {
-          print('تحذير: فشل حفظ نسخة الفاتورة: $e');
+          debugPrint('تحذير: فشل حفظ نسخة الفاتورة: $e');
         }
+      }
+
+      // ✏️ أحداث التعديل: كلفة محرك الترحيل تحتاج نسبة ربح المواد بلا كلفة
+      double editAdHoc = 0.10;
+      int? editEventId;
+      if (!data.isNewInvoice) {
+        try {
+          editAdHoc = (await SettingsManager.getAppSettings()).defaultAdHocProfitPercentage / 100.0;
+        } catch (_) {}
       }
 
       // 🏁 Start Transaction
@@ -430,57 +447,76 @@ class InvoiceController {
           final normalizedName = data.customerName.trim().replaceAll(' ', '');
           String nameKey(String s) => s.replaceAll(RegExp(r'\s+'), '').toLowerCase();
 
-          // 🛡️ تعديل فاتورة محفوظة:
-          //   • الاسم والهاتف كما في الفاتورة ⇒ هي لعميلها نفسه (بالمعرّف)، حتى لو
-          //     تغيّر اسمه أو هاتفه في بطاقته بعد إنشاء الفاتورة. كان البحث بالاسم
-          //     القديم لا يجده فيُنشئ عميلاً جديداً وينقل إليه الدين.
-          //   • تغيّر الاسم فقط والهاتف بقي هاتف العميل القديم ⇒ الهاتف متروك من
-          //     العميل السابق (نقل الفاتورة لعميل آخر)، فلا يُبحث به.
-          var usePhone = normalizedPhone != null && normalizedPhone.trim().isNotEmpty;
+          // 🛡️ قاعدة سجل الديون: الاسم (بتجاهل المسافات) يحدد الحساب — لا يُنشأ
+          // حسابان بالاسم نفسه أبداً. الهاتف لا يفرّق بين الحسابات:
+          //   • للعميل هاتف وكُتب غيره ⇒ الفاتورة لحسابه ويبقى هاتفه كما هو
+          //     (الفاتورة تحفظ الرقم المكتوب عليها).
+          //   • ليس للعميل هاتف وكُتب رقم ⇒ يُضاف الرقم إلى بطاقته.
+          //   • لم يُكتب رقم ⇒ الفاتورة لحسابه وهاتفه يبقى.
+          // كان البحث بالاسم + الهاتف معاً، فاسم موجود مع رقم مختلف (أو بلا رقم)
+          // يُنشئ حساباً ثانياً بالاسم نفسه ويقسم دينه على حسابين.
+
+          // تعديل فاتورة محفوظة بالاسم نفسه ⇒ هي لعميلها نفسه (بالمعرّف)، حتى
+          // لو تغيّر اسمه في بطاقته بعد إنشاء الفاتورة.
           final old = data.invoiceToManage;
-          if (!data.isNewInvoice && old != null) {
-            final oldPhone = (old.customerPhone ?? '').trim().isEmpty
-                ? null
-                : _normalizePhoneNumber(old.customerPhone!.trim());
-            final sameName = nameKey(old.customerName) == nameKey(data.customerName);
-            final samePhone = oldPhone == normalizedPhone;
-            if (sameName && samePhone && old.customerId != null) {
-              final byId = await txn.query('customers',
-                  where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [old.customerId], limit: 1);
-              if (byId.isNotEmpty) {
-                customer = Customer.fromMap(byId.first);
-                resolvedName = customer.name;
-              }
-            } else if (!sameName && samePhone) {
-              usePhone = false;
+          if (!data.isNewInvoice &&
+              old != null &&
+              old.customerId != null &&
+              nameKey(old.customerName) == nameKey(data.customerName)) {
+            final byId = await txn.query('customers',
+                where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [old.customerId], limit: 1);
+            if (byId.isNotEmpty) {
+              customer = Customer.fromMap(byId.first);
             }
           }
 
           if (customer == null) {
-            // الأسماء المطابقة (غير المحذوفة)؛ الهاتف يُقارن بعد توحيد صيغته في الطرفين
-            // (العميل المُدخل من شاشة العملاء قد يُحفظ هاتفه 07… والفاتورة توحّده 964…)
             final candidates = await txn.rawQuery(
               "SELECT * FROM customers WHERE REPLACE(name, ' ', '') = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY id",
               [normalizedName],
             );
-            if (usePhone) {
-              for (final m in candidates) {
-                final p = (m['phone'] as String?)?.trim() ?? '';
-                if (p.isNotEmpty && _normalizePhoneNumber(p) == normalizedPhone) {
-                  customer = Customer.fromMap(m);
-                  break;
+            if (candidates.isNotEmpty) {
+              // أكثر من حساب بالاسم نفسه = تكرار قديم لم يُدمج بعد (شاشة «دمج
+              // الحسابات المكررة»): نختار صاحب الهاتف نفسه إن وُجد، وإلا الأقدم.
+              Map<String, Object?> picked = candidates.first;
+              if (normalizedPhone != null && normalizedPhone.isNotEmpty) {
+                for (final m in candidates) {
+                  final p = (m['phone'] as String?)?.trim() ?? '';
+                  if (p.isNotEmpty && _normalizePhoneNumber(p) == normalizedPhone) {
+                    picked = m;
+                    break;
+                  }
                 }
               }
-            } else if (candidates.isNotEmpty) {
-              customer = Customer.fromMap(candidates.first);
-              if (!data.isNewInvoice) {
-                resolvedPhone = customer.phone;
-                phoneFromCustomer = true;
-              }
+              customer = Customer.fromMap(picked);
             }
           }
 
-          if (customer == null) {
+          final found = customer;
+          if (found != null) {
+            resolvedName = found.name;
+            final cardPhone = (found.phone ?? '').trim();
+            if (cardPhone.isEmpty && normalizedPhone != null && normalizedPhone.isNotEmpty) {
+              // ليس للعميل هاتف: يُضاف الرقم المكتوب إلى بطاقته
+              try {
+                await txn.update(
+                  'customers',
+                  {'phone': normalizedPhone, 'last_modified_at': DateTime.now().toIso8601String()},
+                  where: 'id = ?',
+                  whereArgs: [found.id],
+                );
+                customer = found.copyWith(phone: normalizedPhone);
+              } on DatabaseException catch (e) {
+                // قيد UNIQUE(name, phone) القديم مع حساب مكرر لم يُدمج بعد: يبقى بلا هاتف
+                if (!e.isUniqueConstraintError()) rethrow;
+              }
+            }
+            if (normalizedPhone == null && !data.isNewInvoice) {
+              // تعديل فاتورة بلا هاتف مكتوب: يُعرض هاتف العميل عليها
+              resolvedPhone = found.phone;
+              phoneFromCustomer = true;
+            }
+          } else {
             customer = Customer(
               id: null,
               name: data.customerName.trim(),
@@ -511,17 +547,6 @@ class InvoiceController {
         }
 
         String newStatus = 'محفوظة';
-        bool newIsLocked = data.invoiceToManage?.isLocked ?? false;
-
-        if (data.invoiceToManage != null) {
-          if (data.invoiceToManage!.status == 'معلقة') {
-            newStatus = 'محفوظة';
-            newIsLocked = false;
-          }
-        } else {
-          newIsLocked = false;
-        }
-
         String? normalizedPhoneForInvoice;
         if (data.customerPhone.trim().isNotEmpty) {
           normalizedPhoneForInvoice = _normalizePhoneNumber(data.customerPhone.trim());
@@ -570,7 +595,8 @@ class InvoiceController {
           customerId: customer?.id,
           status: newStatus,
           isLocked: false,
-          pointsRate: 0.0,
+          // 👷 معدل نقاط المؤسس يُحفظ مع الفاتورة (يُزامَن معها)؛ بلا مؤسس = صفر
+          pointsRate: (data.installerName == null || data.installerName!.trim().isEmpty) ? 0.0 : data.pointsRate,
           createdByUserId: data.invoiceToManage?.createdByUserId ?? currentUser?.id,
           createdByUsername: data.invoiceToManage?.createdByUsername ?? currentUser?.username,
           invoiceUuid: data.invoiceToManage?.invoiceUuid,
@@ -607,6 +633,17 @@ class InvoiceController {
         );
         // ملاحظة: ربط المعاملة بـ invoice_uuid صار من مسؤولية
         // InvoiceDebtReconciler الذي يقرأه من صف الفاتورة مباشرة.
+
+        // ✏️ حال الفاتورة قبل هذا التعديل (قبل تحديث رأسها وبنودها)
+        InvoiceMoneyState? editBefore;
+        if (!data.isNewInvoice && existingId != null) {
+          try {
+            editBefore = await InvoiceEditEvents.capture(txn, existingId,
+                costOf: (d, id) => PostingEngine.invoiceCostOf(d, id, editAdHoc));
+          } catch (e) {
+            debugPrint('⚠️ حدث التعديل (قبل): $e');
+          }
+        }
 
         if (data.isNewInvoice) {
           // سبقنا جهاز آخر بالرقم نفسه في اللحظة نفسها؟ يُعاد الترقيم تلقائياً
@@ -675,6 +712,26 @@ class InvoiceController {
         //    تلقائياً (دفتر المخزون — مشغّلات SQLite). كان هنا «إرجاع القديم ثم
         //    خصم الجديد» بكود التطبيق فوق مشغّلين يفعلان الشيء نفسه: ضعف الفرق
         //    لبنود القطعة/المتر.
+        // ✏️ تعديل فاتورة محفوظة: ما زاد «إضافة» وما نقص «مرتجع» (سجل توضيحي
+        //    فقط — الأثر المالي والمخزني يحسبه الحارس والمشغّلات أدناه مرة واحدة)
+        String? editSummary;
+        if (!data.isNewInvoice) {
+          try {
+            final oldItems = await txn.query('invoice_items',
+                columns: ['product_name', 'sale_type', 'quantity_individual', 'quantity_large_unit', 'item_total'],
+                where: 'invoice_id = ?', whereArgs: [invoiceId]);
+            editSummary = await InvoiceEditLog.record(
+              txn,
+              invoiceId: invoiceId,
+              oldItems: oldItems,
+              newItems: itemsToInsert,
+              editedBy: AuthService().currentUser?.username,
+            );
+          } catch (e) {
+            debugPrint('⚠️ سجل تعديل الفاتورة تعذّر (لا يؤثر على الحفظ): $e');
+          }
+        }
+
         await txn.delete('invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
         
         // 2. Insert new items (stock follows automatically)
@@ -709,8 +766,31 @@ class InvoiceController {
           txn,
           invoiceId,
           createMissing: true,
-          reason: data.isNewInvoice ? 'دين فاتورة جديدة' : 'تعديل فاتورة',
+          reason: data.isNewInvoice
+              ? 'دين فاتورة جديدة'
+              : (editSummary == null ? 'تعديل فاتورة' : 'تعديل فاتورة: $editSummary'),
         );
+
+        // ✏️ حدث التعديل بتاريخ اليوم — في المعاملة نفسها: يُحفظ مع التعديل أو لا شيء.
+        //    فشله لا يُفشل الحفظ: تبقى الفاتورة على السلوك القديم (كلها بتاريخها).
+        if (editBefore != null) {
+          try {
+            final editAfter = await InvoiceEditEvents.capture(txn, invoiceId,
+                costOf: (d, id) => PostingEngine.invoiceCostOf(d, id, editAdHoc));
+            if (editAfter != null) {
+              editEventId = await InvoiceEditEvents.record(
+                txn,
+                invoiceId: invoiceId,
+                before: editBefore,
+                after: editAfter,
+                user: AuthService().currentUser?.username,
+                summary: editSummary,
+              );
+            }
+          } catch (e) {
+            debugPrint('⚠️ حدث التعديل: $e');
+          }
+        }
 
         final maps = await txn
             .query('invoices', where: 'id = ?', whereArgs: [invoiceId]);
@@ -727,7 +807,7 @@ class InvoiceController {
             expectedItems: completeItems,
           );
         } catch (guardError) {
-          print('⚠️ Post-save guard error (non-blocking): $guardError');
+          debugPrint('⚠️ Post-save guard error (non-blocking): $guardError');
         }
       }
 
@@ -798,7 +878,9 @@ class InvoiceController {
                 notes: 'النسخة الأصلية عند الإنشاء',
                 createdBy: currentUserName,
               );
-            } catch (e) {}
+            } catch (_) {
+              // فشل حفظ اللقطة لا يُفشل حفظ الفاتورة (اللقطة للسجل فقط)
+            }
           } else {
             try {
               await _db.saveInvoiceSnapshot(
@@ -807,30 +889,37 @@ class InvoiceController {
                 notes: 'بعد التعديل - الإجمالي: $totalAmount',
                 createdBy: currentUserName,
               );
-            } catch (e) {}
+            } catch (_) {
+              // فشل حفظ اللقطة لا يُفشل حفظ الفاتورة (اللقطة للسجل فقط)
+            }
           }
         }
       } catch (auditError) {
         // Ignore
       }
 
-      await _storage.delete(key: 'temp_invoice_data');
+      await _storage.delete(key: SeatService.key('temp_invoice_data'));
 
       // Smart Search Training
       if (savedInvoice != null && savedInvoice!.id != null) {
         try {
           await SmartSearchService.instance.trainOnNewInvoice(savedInvoice!.id!);
         } catch (e) {
-          print('⚠️ Smart Search training error (non-blocking): $e');
+          debugPrint('⚠️ Smart Search training error (non-blocking): $e');
         }
+        // 🧠 علاقات مستويات الأسعار — في الخلفية، لا ينتظرها الحفظ
+        final sid = savedInvoice!.id!;
+        SmartPricingService().recordInvoicePriceLevels(sid).catchError((e) {
+          debugPrint('⚠️ Price-level learning error (non-blocking): $e');
+        });
       }
       
       SmartSearchService.instance.forceNewSession();
 
-      return InvoiceSaveResult(success: true, invoice: savedInvoice);
+      return InvoiceSaveResult(success: true, invoice: savedInvoice, editEventId: editEventId);
 
     } catch (e, stack) {
-      print("Save Error: $e \n $stack");
+      debugPrint("Save Error: $e \n $stack");
        return InvoiceSaveResult(success: false, errorMessage: e.toString());
     }
   }

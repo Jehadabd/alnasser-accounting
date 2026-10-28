@@ -2,6 +2,7 @@
 // نظام تتبع التحديثات والإقرار المحسّن
 // يحل مشكلة تعارض التحديثات بين الأجهزة
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -147,7 +148,7 @@ class SyncOperationTracker {
     _startCleanupTimer();
 
     _isInitialized = true;
-    print('✅ تم تهيئة SyncOperationTracker');
+    debugPrint('✅ تم تهيئة SyncOperationTracker');
   }
 
   void dispose() {
@@ -325,10 +326,10 @@ class SyncOperationTracker {
       // تسجيل في السجل المحلي
       await _logOperation(operation);
       
-      print('📤 تم رفع عملية ${operationType.name} للـ $entityType (v$currentVersion)');
+      debugPrint('📤 تم رفع عملية ${operationType.name} للـ $entityType (v$currentVersion)');
       return operation;
     } catch (e) {
-      print('❌ فشل رفع العملية: $e');
+      debugPrint('❌ فشل رفع العملية: $e');
       return null;
     }
   }
@@ -405,7 +406,7 @@ class SyncOperationTracker {
         _operationController.add(operation);
         
       } catch (e) {
-        print('❌ خطأ في معالجة العملية: $e');
+        debugPrint('❌ خطأ في معالجة العملية: $e');
       }
     }
   }
@@ -443,7 +444,7 @@ class SyncOperationTracker {
       // تسجيل في السجل
       await _logOperation(operation);
 
-      print('📥 عملية ${operation.operationType.name} v${operation.version} من ${operation.originDeviceId}');
+      debugPrint('📥 عملية ${operation.operationType.name} v${operation.version} من ${operation.originDeviceId}');
     }
 
     // تعليم العملية كمقروءة
@@ -550,11 +551,11 @@ class SyncOperationTracker {
       }
 
       if (deletedCount > 0) {
-        print('🧹 تم حذف $deletedCount عملية مقروءة من Firebase');
+        debugPrint('🧹 تم حذف $deletedCount عملية مقروءة من Firebase');
       }
 
     } catch (e) {
-      print('❌ خطأ في التنظيف: $e');
+      debugPrint('❌ خطأ في التنظيف: $e');
     }
   }
 
@@ -630,7 +631,7 @@ class SyncOperationTracker {
     );
 
     if (deleted > 0) {
-      print('🧹 تم حذف $deleted سجل قديم');
+      debugPrint('🧹 تم حذف $deleted سجل قديم');
     }
 
     return deleted;

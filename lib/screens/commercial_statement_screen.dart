@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 import '../models/customer.dart';
 import '../services/commercial_statement_service.dart';
 import '../services/pdf_service.dart';
+import '../widgets/loading_dialog.dart';
 
 /// حوار اختيار الفترة الزمنية
 class PeriodSelectionDialog extends StatefulWidget {
@@ -196,8 +197,8 @@ class _CommercialStatementScreenState extends State<CommercialStatementScreen> {
           Container(
             color: Colors.grey[200],
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: const [
+            child: const Row(
+              children: [
                 Expanded(flex: 2, child: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold))),
                 Expanded(flex: 3, child: Text('البيان', style: TextStyle(fontWeight: FontWeight.bold))),
                 Expanded(flex: 2, child: Text('المبلغ', style: TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
@@ -418,9 +419,8 @@ class _CommercialStatementScreenState extends State<CommercialStatementScreen> {
 
   Future<void> _exportPdf() async {
     try {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
+      LoadingDialog.show(
+        context,
         builder: (context) => const Center(child: CircularProgressIndicator()),
       );
 
@@ -431,7 +431,7 @@ class _CommercialStatementScreenState extends State<CommercialStatementScreen> {
         periodDescription: widget.periodDescription,
       );
 
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
 
       // 🌐 الويب: مشاركة وتنزيل كشف الحساب التجاري مباشرة وتجنب Platform
       if (kIsWeb) {
@@ -464,7 +464,7 @@ class _CommercialStatementScreenState extends State<CommercialStatementScreen> {
         if (mounted) await Printing.layoutPdf(onLayout: (format) async => pdf);
       }
     } catch (e) {
-      if (mounted) Navigator.pop(context);
+      LoadingDialog.hide();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('خطأ في إنشاء PDF: $e'), backgroundColor: Colors.red),

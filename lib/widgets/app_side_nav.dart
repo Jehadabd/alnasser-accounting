@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/app_settings.dart';
-import '../services/settings_manager.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import '../services/license_service.dart';
+import 'home_destinations.dart';
 
 /// 🧭 شريط التنقل الجانبي التكيفي (Adaptive Side Navigation Rail)
 /// يظهر على الشاشات الكبيرة (تابلت / ديسكتوب) تلقائياً، أو عندما يُفعّله المستخدم من الإعدادات.
@@ -15,40 +15,35 @@ class AppSideNav extends StatelessWidget {
     required this.currentRoute,
   });
 
-  /// التحقق مما إذا كان يجب عرض شريط التنقل بناءً على الإعدادات
-  static bool shouldShow(BuildContext context, AppSettings settings) {
-    return settings.showSideNav;
-  }
+  /// 🧭 اللوحة صارت عامة لكل الشاشات (widgets/global_side_nav.dart، تُوضع في
+  /// main.dart حول الملاح). هذه النسخة داخل كل شاشة أُطفئت كي لا تظهر مرتين.
+  static bool shouldShow(BuildContext context, AppSettings settings) => false;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => const SizedBox.shrink();
+
+  // النسخة القديمة (لم تعد تُستعمل)
+  // ignore: unused_element
+  Widget _legacyBuild(BuildContext context) {
     final license = LicenseService().getStoredLicense();
     final bool isDebtsOnly = license?.isDebtsOnly ?? false;
 
     // نفس أزرار الشاشة الرئيسية وبنفس الترتيب (6 يومية + 5 أقسام)
+    // الألوان والأيقونات من HomeDests — نفس ما في الشاشة الرئيسية
+    _NavItem item(HomeDest d, {String? permission, bool fullOnly = false}) => _NavItem(
+        route: d.route!, title: d.title, icon: d.icon, color: d.color, permission: permission, isFullAppOnly: fullOnly);
     final allItems = [
-      _NavItem(route: '/pos', title: 'الكاشير', icon: Icons.point_of_sale, color: const Color(0xFFFF5722),
-          permission: AppPermissions.posAccess, isFullAppOnly: true),
-      _NavItem(route: '/create_invoice', title: 'إنشاء فاتورة', icon: Icons.list_alt, color: const Color(0xFF2196F3),
-          permission: AppPermissions.createInvoice, isFullAppOnly: true),
-      _NavItem(route: '/edit_invoices', title: 'تعديل الفواتير', icon: Icons.edit_note, color: const Color(0xFF8D6E63),
-          permission: AppPermissions.editInvoices, isFullAppOnly: true),
-      _NavItem(route: '/debt_register', title: 'سجل الديون', icon: Icons.book, color: const Color(0xFF4A90E2),
-          permission: AppPermissions.debtRegister),
-      _NavItem(route: '/product_entry', title: 'إدخال بضاعة', icon: Icons.add_box_rounded, color: const Color(0xFF4CAF50),
-          permission: AppPermissions.productEntry, isFullAppOnly: true),
-      _NavItem(route: '/suppliers', title: 'الموردون', icon: Icons.local_shipping, color: const Color(0xFF9C27B0),
-          permission: AppPermissions.suppliers, isFullAppOnly: true),
-      _NavItem(route: '/sales_hub', title: 'المبيعات', icon: Icons.storefront_rounded, color: const Color(0xFF0E7C61),
-          permission: AppPermissions.salesDocs, isFullAppOnly: true),
-      _NavItem(route: '/inventory_hub', title: 'المخزون', icon: Icons.warehouse_rounded, color: const Color(0xFF5B3CC4),
-          isFullAppOnly: true),
-      _NavItem(route: '/accounting', title: 'المحاسبة', icon: Icons.account_balance, color: const Color(0xFF0F3460),
-          permission: AppPermissions.accounting, isFullAppOnly: true),
-      _NavItem(route: '/reports', title: 'التقارير', icon: Icons.bar_chart, color: const Color(0xFFFF9800),
-          permission: AppPermissions.reports),
-      _NavItem(route: '/general_settings', title: 'الإعدادات', icon: Icons.settings, color: const Color(0xFF607D8B),
-          permission: AppPermissions.settings),
+      item(HomeDests.pos, permission: AppPermissions.posAccess, fullOnly: true),
+      item(HomeDests.createInvoice, permission: AppPermissions.createInvoice, fullOnly: true),
+      item(HomeDests.debtRegister, permission: AppPermissions.debtRegister),
+      item(HomeDests.editInvoices, permission: AppPermissions.editInvoices, fullOnly: true),
+      item(HomeDests.productEntry, permission: AppPermissions.productEntry, fullOnly: true),
+      item(HomeDests.suppliers, permission: AppPermissions.suppliers, fullOnly: true),
+      item(HomeDests.sales, permission: AppPermissions.salesDocs, fullOnly: true),
+      item(HomeDests.inventory, fullOnly: true),
+      item(HomeDests.accounting, permission: AppPermissions.accounting, fullOnly: true),
+      item(HomeDests.reports, permission: AppPermissions.reports),
+      item(HomeDests.settings, permission: AppPermissions.settings),
     ];
 
     // 👤 الموظف يرى فقط ما تسمح به صلاحياته
@@ -62,13 +57,13 @@ class AppSideNav extends StatelessWidget {
       width: 72,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF1E1E2E), Color(0xFF2D2D44)],
+          colors: [Color(0xFF020F2B), Color(0xFF0F3460)], // نفس كحلي الرؤوس
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 10,
             offset: const Offset(2, 0),
           ),
@@ -92,7 +87,7 @@ class AppSideNav extends StatelessWidget {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.1),
+                    color: Colors.white.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(
@@ -143,7 +138,7 @@ class AppSideNav extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(vertical: 8),
                           decoration: BoxDecoration(
                             color: isSelected
-                                ? item.color.withOpacity(0.25)
+                                ? item.color.withValues(alpha: 0.25)
                                 : Colors.transparent,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(

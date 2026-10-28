@@ -9,7 +9,6 @@ import '../../accounting/screens/acc_ui.dart';
 import '../../inventory/item_card_screen.dart';
 import '../../models/app_user.dart';
 import '../../org/screens/branches_warehouses_screen.dart';
-import '../../screens/material_inventory_screen.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
 import 'categories_screen.dart';
@@ -22,6 +21,52 @@ import 'stock_docs_screen.dart';
 
 class InventoryHubScreen extends StatefulWidget {
   const InventoryHubScreen({super.key});
+
+  /// 🧭 أزرار المركز — مصدر واحد للشاشة نفسها وللوحة الجانبية
+  static List<HubSection> menu(BuildContext context, void Function(Widget) go) => [
+      HubSection('المواد', [
+        HubTile('المواد', Icons.inventory_2_rounded, ErpColors.navy, () => go(const ItemCardsListScreen()),
+            subtitle: 'كل المواد: بحث، تعديل، حذف، فلاتر (بلا سعر، نفدت…)', permission: AppPermissions.itemCard),
+        HubTile('الأقسام والتعديل الجماعي', Icons.account_tree_rounded, ErpColors.navy, () => go(const CategoriesScreen()),
+            subtitle: 'شجرة الأقسام، نقل مواد، تفعيل وإيقاف، ترميز', permission: AppPermissions.editProducts),
+        HubTile('أدوات الأسعار', Icons.price_change_rounded, ErpColors.gold, () => go(const PriceToolsScreen()),
+            subtitle: 'رفع أو خفض أسعار مجموعة مواد بمعاينة وتراجع', permission: AppPermissions.priceTools),
+      ]),
+      HubSection('حركة المخزون', [
+        HubTile('سند إدخال', Icons.move_to_inbox_rounded, ErpColors.green, () => go(const StockDocEditorScreen(docType: 'in')),
+            subtitle: 'زيادة كمية: هدايا، فائض، بلا مورد', permission: AppPermissions.inventoryDocs),
+        HubTile('سند إخراج', Icons.outbox_rounded, ErpColors.red, () => go(const StockDocEditorScreen(docType: 'out')),
+            subtitle: 'نقص كمية: تالف، ضيافة، استهلاك', permission: AppPermissions.inventoryDocs),
+        HubTile('بضاعة أول المدة', Icons.inventory_rounded, ErpColors.cyan,
+            () => go(const StockDocEditorScreen(docType: 'opening')),
+            subtitle: 'الكميات الموجودة عند بدء العمل بالبرنامج', permission: AppPermissions.inventoryDocs),
+        HubTile('الجرد الفعلي', Icons.fact_check_rounded, ErpColors.orange, () => go(const StockCountsScreen()),
+            subtitle: 'عدّ البضاعة على الرفوف بالباركود وتصحيح الفروقات', permission: AppPermissions.inventoryDocs),
+        HubTile('تحويل بين المخازن', Icons.swap_horiz_rounded, ErpColors.green, () {
+          if (!requireAnyPermission(context, const [AppPermissions.stockTransfer, AppPermissions.manageBranches])) return;
+          go(const BranchesWarehousesScreen(initialTab: 2));
+        }, subtitle: 'نقل بضاعة من مخزن إلى آخر'),
+        HubTile('التصنيع', Icons.precision_manufacturing_rounded, ErpColors.purple, () => go(const ManufacturingScreen()),
+            subtitle: 'نماذج وعمليات وهدر', permission: AppPermissions.inventoryDocs),
+        HubTile('سجل المستندات', Icons.receipt_long_rounded, ErpColors.muted, () => go(const StockDocsListScreen()),
+            subtitle: 'كل السندات السابقة: عرض، طباعة، إلغاء', permission: AppPermissions.inventoryDocs),
+      ]),
+      HubSection('الفروع والمخازن', [
+        HubTile('الفروع والمخازن', Icons.warehouse_outlined, ErpColors.green, () {
+          if (!requireAnyPermission(context, const [AppPermissions.manageBranches, AppPermissions.stockTransfer])) return;
+          go(const BranchesWarehousesScreen());
+        }, subtitle: 'الفروع والمخازن، وأرصدة كل مخزن وتعديلها'),
+      ]),
+      HubSection('تقارير المخزون', [
+        HubTile('لوحة المخزون والتقارير', Icons.analytics_rounded, ErpColors.blue,
+            () => go(const InventoryReportsScreen(initial: 'overview')),
+            subtitle: 'مؤشرات دائرية + حركة، تقييم، راكدة، حدود، صلاحية', permission: AppPermissions.inventoryReports),
+        HubTile('قيمة المخزون الحالية', Icons.account_balance_wallet_rounded, ErpColors.green,
+            () => go(const InventoryReportsScreen(initial: 'valuation')),
+            subtitle: 'كم تساوي بضاعتك الآن بالكلفة وبسعر البيع', permission: AppPermissions.inventoryReports),
+      ]),
+      ];
+
   @override
   State<InventoryHubScreen> createState() => _InventoryHubScreenState();
 }
@@ -83,51 +128,7 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
           StatCard(label: 'جرد مفتوح', value: fmtQty(_openCounts), icon: Icons.fact_check_outlined, color: ErpColors.purple,
               onTap: () => _go(const StockCountsScreen())),
       ]),
-      body: HubSections(sections: [
-        HubSection('المواد', [
-          HubTile('بطاقات المواد', Icons.style_rounded, ErpColors.navy, () => _go(const ItemCardsListScreen()),
-              subtitle: 'تعريف، أسعار، باركودات، حركة', permission: AppPermissions.itemCard),
-          HubTile('تعديل المواد وحذفها', Icons.edit_note_rounded, ErpColors.blue,
-              () => Navigator.pushNamed(context, '/edit_products'),
-              subtitle: 'القائمة القديمة: وحدات، حذف مادة', permission: AppPermissions.editProducts),
-          HubTile('الأقسام والتعديل الجماعي', Icons.account_tree_rounded, ErpColors.navy, () => _go(const CategoriesScreen()),
-              permission: AppPermissions.editProducts),
-          HubTile('أدوات الأسعار', Icons.price_change_rounded, ErpColors.gold, () => _go(const PriceToolsScreen()),
-              subtitle: 'تعديل جماعي + تراجع', permission: AppPermissions.priceTools),
-        ]),
-        HubSection('حركة المخزون', [
-          HubTile('سند إدخال', Icons.move_to_inbox_rounded, ErpColors.green, () => _go(const StockDocEditorScreen(docType: 'in')),
-              subtitle: 'زيادة كمية: هدايا، فائض، بلا مورد', permission: AppPermissions.inventoryDocs),
-          HubTile('سند إخراج', Icons.outbox_rounded, ErpColors.red, () => _go(const StockDocEditorScreen(docType: 'out')),
-              subtitle: 'نقص كمية: تالف، ضيافة، استهلاك', permission: AppPermissions.inventoryDocs),
-          HubTile('بضاعة أول المدة', Icons.inventory_rounded, ErpColors.cyan,
-              () => _go(const StockDocEditorScreen(docType: 'opening')),
-              permission: AppPermissions.inventoryDocs),
-          HubTile('الجرد الفعلي', Icons.fact_check_rounded, ErpColors.orange, () => _go(const StockCountsScreen()),
-              subtitle: 'بالباركود مع تسوية تلقائية', permission: AppPermissions.inventoryDocs),
-          HubTile('تحويل بين المخازن', Icons.swap_horiz_rounded, ErpColors.green, () {
-            if (!requireAnyPermission(context, const [AppPermissions.stockTransfer, AppPermissions.manageBranches])) return;
-            _go(const BranchesWarehousesScreen(initialTab: 2));
-          }),
-          HubTile('التصنيع', Icons.precision_manufacturing_rounded, ErpColors.purple, () => _go(const ManufacturingScreen()),
-              subtitle: 'نماذج وعمليات وهدر', permission: AppPermissions.inventoryDocs),
-          HubTile('سجل المستندات', Icons.receipt_long_rounded, ErpColors.muted, () => _go(const StockDocsListScreen()),
-              subtitle: 'كل السندات مع الإلغاء', permission: AppPermissions.inventoryDocs),
-        ]),
-        HubSection('الفروع والمخازن', [
-          HubTile('الفروع والمخازن', Icons.warehouse_outlined, ErpColors.green, () {
-            if (!requireAnyPermission(context, const [AppPermissions.manageBranches, AppPermissions.stockTransfer])) return;
-            _go(const BranchesWarehousesScreen());
-          }, subtitle: 'الفروع، المخازن، أرصدة كل مخزن'),
-        ]),
-        HubSection('تقارير المخزون', [
-          HubTile('تقارير المخزون', Icons.analytics_rounded, ErpColors.blue, () => _go(const InventoryReportsScreen()),
-              subtitle: 'حركة، تقييم، راكدة، حدود، صلاحية', permission: AppPermissions.inventoryReports),
-          HubTile('جرد المواد (القيمة الحالية)', Icons.inventory, ErpColors.muted,
-              () => _go(const MaterialInventoryScreen()),
-              subtitle: 'المواد الموجودة وقيمتها بالكلفة', permission: AppPermissions.inventoryReports),
-        ]),
-      ]),
+      body: HubSections(sections: InventoryHubScreen.menu(context, _go)),
     );
   }
 }

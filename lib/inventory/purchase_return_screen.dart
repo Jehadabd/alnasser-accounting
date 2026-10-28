@@ -8,6 +8,7 @@
 //   • إعادة حساب رصيد المورد من دفتره.
 // محرك الترحيل يحوّل حركة المورد إلى قيد: مدين ذمم الموردين / دائن المخزون.
 
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -123,7 +124,11 @@ class _PurchaseReturnScreenState extends State<PurchaseReturnScreen> {
         )));
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked(), message: 'جارٍ حفظ المرتجع…');
+  }
+  Future<void> _saveUnlocked() async {
     if (!requirePermission(context, AppPermissions.suppliers)) return;
     final s = _supplier;
     if (s == null) {
@@ -172,7 +177,7 @@ class _PurchaseReturnScreenState extends State<PurchaseReturnScreen> {
       ),
       body: ListView(padding: const EdgeInsets.all(12), children: [
         DropdownButtonFormField<Map<String, Object?>>(
-          value: _supplier,
+          initialValue: _supplier,
           isExpanded: true,
           decoration: const InputDecoration(labelText: 'المورد', filled: true, fillColor: Colors.white),
           items: [

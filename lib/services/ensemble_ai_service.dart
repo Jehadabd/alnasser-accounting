@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'dart:ui' as ui;
 import 'template_service.dart'; 
@@ -345,12 +344,18 @@ class EnsembleAIService {
          double val = double.tryParse(t.text.replaceAll(RegExp(r'[^\d.]'), '')) ?? 0.0;
          if (val == 0) continue;
 
-         if (t.label.contains("QTY")) qty = val;
-         else if (t.label.contains("PRICE")) price = val;
-         else if (t.label.contains("LINE_TOTAL")) lineTotal = val;
-         else if (t.label == "O") {
-            if (val < 50 && val % 1 == 0 && qty == 0) qty = val;
-            else if (price == 0) price = val;
+         if (t.label.contains("QTY")) {
+           qty = val;
+         } else if (t.label.contains("PRICE")) {
+           price = val;
+         } else if (t.label.contains("LINE_TOTAL")) {
+           lineTotal = val;
+         } else if (t.label == "O") {
+            if (val < 50 && val % 1 == 0 && qty == 0) {
+              qty = val;
+            } else if (price == 0) {
+              price = val;
+            }
          }
       }
 

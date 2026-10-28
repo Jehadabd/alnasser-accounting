@@ -153,7 +153,7 @@ class _MaterialInventoryScreenState extends State<MaterialInventoryScreen> {
       return parts.join(' و ');
 
     } catch (e) {
-      print('Hierarchy Format Error: $e');
+      debugPrint('Hierarchy Format Error: $e');
       return '';
     }
   }
@@ -215,7 +215,7 @@ class _MaterialInventoryScreenState extends State<MaterialInventoryScreen> {
                     color: const Color(0xFF3F51B5),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 4,
                         offset: const Offset(0, 4),
                       ),
@@ -305,7 +305,7 @@ class _MaterialInventoryScreenState extends State<MaterialInventoryScreen> {
                                   decoration: BoxDecoration(
                                     color: const Color(0xFFE8F5E9),
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.green.withOpacity(0.3)),
+                                    border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
                                   ),
                                   child: Text(
                                     '${_formatCurrency(totalCost)} د.ع',

@@ -1,7 +1,6 @@
 // services/invoice_helpers.dart
 // جميع الدوال المساعدة الخاصة بالفواتير
 
-import 'package:intl/intl.dart';
 import 'dart:convert';
 import '../models/invoice_item.dart';
 import '../models/product.dart';

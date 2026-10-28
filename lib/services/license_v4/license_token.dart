@@ -20,12 +20,24 @@ class LicensePayload {
   String get role => '${raw['role'] ?? ''}';
   String get mode => '${raw['mode'] ?? ''}';
   String get type => '${raw['type'] ?? ''}';
+
+  /// البرنامج الذي صدر له الترخيص: alnasser | shop_manager | '' (حساب قديم يعمل على البرنامجين)
+  String get app => '${raw['app'] ?? ''}';
+
+  /// حساب مالك (يفتح ميزات المالك). موقَّع من السيرفر فلا يمكن تفعيله يدوياً.
+  bool get isOwner => raw['own'] == 1 || raw['own'] == true;
   int? get expiresMs => _intOrNull(raw['exp']);
   int? get graceUntilMs => _intOrNull(raw['grc']);
   int get issuedAtMs => _int(raw['iat']);
   int get checkAfterMs => _int(raw['chk']);
   int? get offlineUntilMs => _intOrNull(raw['off']);
   int get maxDevices => _int(raw['max']);
+
+  /// 🖥️ عدد الشاشات المسموح على الحاسبة الواحدة (1 إن غاب — تراخيص قديمة)
+  int get seats {
+    final n = _int(raw['seats']);
+    return n < 1 ? 1 : (n > 8 ? 8 : n);
+  }
   String get supportPhone => '${raw['ph'] ?? LicenseConfig.supportPhone}';
   Map<String, String> get fingerprint {
     final f = raw['fp'];
@@ -36,6 +48,9 @@ class LicensePayload {
   bool get isLifetime => type == 'lifetime';
   bool get isMain => role == 'main';
   bool get syncAllowed => mode == 'full_sync';
+
+  /// الترخيص لبرنامج آخر؟ (الحسابات القديمة بلا برنامج تُقبل)
+  bool get isForOtherApp => app.isNotEmpty && app != LicenseConfig.appId;
 
   static int _int(dynamic v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
   static int? _intOrNull(dynamic v) => v == null ? null : (v is num ? v.toInt() : int.tryParse('$v'));

@@ -22,6 +22,7 @@
 //   • شبكة أمان: سحب كامل مرة كل 24 ساعة (performFullCatchUp) لأي وثيقة
 //     كُتبت بمسار لا يضع uploadedAt.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -70,7 +71,10 @@ class WindowedListener {
 
   // «آخر ما عولج» يُحفظ داخل قاعدة البيانات نفسها لا في الإعدادات: حذف القاعدة
   // أو استبدالها يُنسيه تلقائياً، فتُنزَّل البيانات كاملة من جديد.
-  static bool _tableReady = false;
+  // مرتبط بالقاعدة المفتوحة: قاعدة مستعادة تُجهَّز جداولها من جديد
+  static int _tableReadyGen = -1;
+  static bool get _tableReady => _tableReadyGen == DatabaseService.openGeneration;
+  static set _tableReady(bool v) => _tableReadyGen = v ? DatabaseService.openGeneration : -1;
 
   static Future<void> _ensureTable() async {
     if (_tableReady) return;
@@ -157,7 +161,7 @@ class WindowedListener {
           _schedulePersist();
         }
       }).catchError((Object e) {
-        print('⚠️ [نافذة $collection] خطأ معالجة: $e');
+        debugPrint('⚠️ [نافذة $collection] خطأ معالجة: $e');
       });
     }, onError: (Object e) {
       if (gen != _gen) return; // مستمع قديم أُغلق بإعادة التثبيت
@@ -187,7 +191,7 @@ class WindowedListener {
     await _persist();
     _since = newSince;
     SyncCrumb.mark('window:$collection reanchor size=$_lastSize since=${newSince.toDate().toIso8601String()}');
-    print('👂 [نافذة $collection] إعادة تثبيت المستمع (كان $_lastSize وثيقة)');
+    debugPrint('👂 [نافذة $collection] إعادة تثبيت المستمع (كان $_lastSize وثيقة)');
     _listen();
   }
 }

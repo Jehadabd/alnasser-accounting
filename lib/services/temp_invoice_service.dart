@@ -1,9 +1,11 @@
 // services/temp_invoice_service.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:get_storage/get_storage.dart';
 import '../models/invoice_item.dart';
+import 'seat_service.dart';
 
 class TempInvoiceService {
-  static const String _storageKey = 'temp_invoice_data';
+  static String get _storageKey => SeatService.key('temp_invoice_data'); // 🖥️ مسودة لكل شاشة
   static final GetStorage _box = GetStorage();
 
   // حفظ البيانات المؤقتة
@@ -44,7 +46,7 @@ class TempInvoiceService {
     };
 
     await _box.write(_storageKey, data);
-    print(
+    debugPrint(
         'DEBUG: TempInvoiceService - Saved temp data with ${invoiceItems.length} items');
   }
 
@@ -52,7 +54,7 @@ class TempInvoiceService {
   static Map<String, dynamic>? loadTempInvoiceData() {
     final data = _box.read(_storageKey);
     if (data != null) {
-      print(
+      debugPrint(
           'DEBUG: TempInvoiceService - Loaded temp data with ${(data['invoiceItems'] as List).length} items');
     }
     return data;
@@ -61,7 +63,7 @@ class TempInvoiceService {
   // حذف البيانات المؤقتة
   static Future<void> clearTempInvoiceData() async {
     await _box.remove(_storageKey);
-    print('DEBUG: TempInvoiceService - Cleared temp data');
+    debugPrint('DEBUG: TempInvoiceService - Cleared temp data');
   }
 
   // التحقق من وجود بيانات مؤقتة

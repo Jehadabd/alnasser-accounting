@@ -269,7 +269,12 @@ class AccountingSchema {
     if (!await _tableExists(db, table)) return;
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == column)) return;
-    await db.execute('ALTER TABLE $table ADD COLUMN $column $def');
+    try {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $def');
+    } catch (e) {
+      // أُضيف بين الفحص والإضافة: ليس خطأ. غير ذلك يُرمى كما هو
+      if (!'$e'.contains('duplicate column')) rethrow;
+    }
   }
 
   static Future<void> _seed(DatabaseExecutor db) async {

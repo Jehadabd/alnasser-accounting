@@ -69,7 +69,7 @@ class _ProductYearDetailsScreenState extends State<ProductYearDetailsScreen> {
   }
 
   String getNumericMonthLabel(int year, int month) {
-    return '${year}-${month.toString().padLeft(2, '0')}';
+    return '$year-${month.toString().padLeft(2, '0')}';
   }
 
   void _showCustomersBuying() {
@@ -187,7 +187,7 @@ class _ProductYearDetailsScreenState extends State<ProductYearDetailsScreen> {
         borderRadius: BorderRadius.circular(16),
         side: hasSales
             ? BorderSide(
-                color: const Color(0xFF4CAF50).withOpacity(0.3), width: 1)
+                color: const Color(0xFF4CAF50).withValues(alpha: 0.3), width: 1)
             : BorderSide.none,
       ),
       child: InkWell(
@@ -215,12 +215,12 @@ class _ProductYearDetailsScreenState extends State<ProductYearDetailsScreen> {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      const Color(0xFF4CAF50).withOpacity(0.1),
-                      const Color(0xFF4CAF50).withOpacity(0.05),
+                      const Color(0xFF4CAF50).withValues(alpha: 0.1),
+                      const Color(0xFF4CAF50).withValues(alpha: 0.05),
                     ],
                   )
                 : null,
-            color: hasSales ? null : Colors.grey.withOpacity(0.1),
+            color: hasSales ? null : Colors.grey.withValues(alpha: 0.1),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -231,8 +231,8 @@ class _ProductYearDetailsScreenState extends State<ProductYearDetailsScreen> {
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: hasSales
-                          ? const Color(0xFF4CAF50).withOpacity(0.1)
-                          : Colors.grey.withOpacity(0.3),
+                          ? const Color(0xFF4CAF50).withValues(alpha: 0.1)
+                          : Colors.grey.withValues(alpha: 0.3),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
@@ -312,9 +312,9 @@ class _ProductYearDetailsScreenState extends State<ProductYearDetailsScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Column(
         children: [

@@ -48,17 +48,34 @@ class InvoiceDao {
     required int offset,
     String? searchName,
     String? searchId,
+    String? status, // 'محفوظة' | 'معلقة' | null = الكل
+    String? paymentType, // 'نقد' | 'دين' | null = الكل
   }) async {
     final db = await getDatabase();
     
     String whereClause = '1=1';
     List<dynamic> args = [];
     
-    if (searchName != null && searchName.isNotEmpty) {
-      whereClause += ' AND customer_name LIKE ?';
-      args.add('%$searchName%');
+    if (searchName != null && searchName.trim().isNotEmpty) {
+      // بالكلمات (أي ترتيب) أو بلا مسافات كلياً: «عبدالرحمن» = «عبد الرحمن»
+      final words = searchName.trim().split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+      final parts = <String>[];
+      for (final t in words) {
+        parts.add('customer_name LIKE ?');
+        args.add('%$t%');
+      }
+      whereClause += " AND ((${parts.join(' AND ')}) OR REPLACE(customer_name, ' ', '') LIKE ?)";
+      args.add('%${searchName.replaceAll(RegExp(r'\s+'), '')}%');
     }
     
+    if (status != null && status.isNotEmpty) {
+      whereClause += " AND COALESCE(NULLIF(TRIM(status), ''), 'محفوظة') = ?";
+      args.add(status);
+    }
+    if (paymentType != null && paymentType.isNotEmpty) {
+      whereClause += paymentType == 'نقد' ? " AND payment_type = 'نقد'" : " AND COALESCE(payment_type, '') != 'نقد'";
+    }
+
     if (searchId != null && searchId.isNotEmpty) {
       // ✅ البحث برقم الفاتورة التجاري فقط (invoice_number)؛ الـ id الداخلي للتتبع التقني حصراً
       whereClause += ' AND invoice_number LIKE ?';
@@ -194,6 +211,21 @@ class InvoiceDao {
     // إضافة التعديل وتحديث إجمالي الفاتورة في نفس الوقت
     return await db.transaction((txn) async {
       final id = await txn.insert('invoice_adjustments', map);
+
+      // 💱 كلفة الوحدة الأساسية يومها: التقارير لا تتأثر إن تغيّرت كلفة المادة لاحقاً
+      // (مثلاً مادة كلفتها بالدولار وارتفع سعره).
+      if (adj.productId != null) {
+        try {
+          final p = await txn.query('products',
+              columns: ['cost_price'], where: 'id = ?', whereArgs: [adj.productId], limit: 1);
+          final c = p.isEmpty ? 0.0 : ((p.first['cost_price'] as num?)?.toDouble() ?? 0.0);
+          if (c > 0) {
+            await txn.update('invoice_adjustments', {'base_unit_cost': c}, where: 'id = ?', whereArgs: [id]);
+          }
+        } catch (_) {
+          // عمود base_unit_cost لم يُضف بعد (قاعدة قبل ErpSchema.ensure)
+        }
+      }
       
       // تحديث إجمالي الفاتورة (انعكاس التعديل)
       final adjustmentAmount = adj.amountDelta;

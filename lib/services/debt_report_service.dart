@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -95,7 +95,7 @@ class DebtReportService {
             pw.SizedBox(height: 20),
 
             // Table
-            pw.Table.fromTextArray(
+            pw.TableHelper.fromTextArray(
               headers: ['المبلغ', 'رقم الهاتف', 'العنوان', 'الاسم', 'ت'],
               data: List<List<dynamic>>.generate(
                 customers.length,
@@ -143,7 +143,7 @@ class DebtReportService {
       await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
     } catch (e) {
       // ignore
-      print('Error generated pdf: $e');
+      debugPrint('Error generated pdf: $e');
       rethrow;
     }
   }

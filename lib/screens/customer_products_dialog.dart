@@ -115,9 +115,9 @@ class _CustomerProductsDialogState extends State<CustomerProductsDialog> {
             // Header
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2196F3),
-                borderRadius: const BorderRadius.only(
+              decoration: const BoxDecoration(
+                color: Color(0xFF2196F3),
+                borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
                 ),
@@ -252,7 +252,7 @@ class _CustomerProductsDialogState extends State<CustomerProductsDialog> {
       ),
       selected: isSelected,
       onSelected: (_) => _changeSortBy(value),
-      selectedColor: const Color(0xFF2196F3).withOpacity(0.2),
+      selectedColor: const Color(0xFF2196F3).withValues(alpha: 0.2),
     );
   }
 
@@ -272,7 +272,7 @@ class _CustomerProductsDialogState extends State<CustomerProductsDialog> {
                   width: 32,
                   height: 32,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF2196F3).withOpacity(0.1),
+                    color: const Color(0xFF2196F3).withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Center(
@@ -322,9 +322,9 @@ class _CustomerProductsDialogState extends State<CustomerProductsDialog> {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
+                color: Colors.orange.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -359,9 +359,9 @@ class _CustomerProductsDialogState extends State<CustomerProductsDialog> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

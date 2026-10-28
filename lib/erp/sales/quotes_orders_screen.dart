@@ -70,7 +70,7 @@ Future<void> printLines(
     partyName: partyName,
     partyExtra: partyExtra,
     infos: infos,
-    headers: const ['#', 'المادة', 'الوحدة', 'الكمية', 'السعر', 'حسم %', 'الإجمالي'],
+    headers: const ['#', 'المادة', 'الوحدة', 'الكمية', 'السعر', 'خصم %', 'الإجمالي'],
     rows: [
       for (var i = 0; i < lines.length; i++)
         [
@@ -163,7 +163,7 @@ class _QuotationsScreenState extends State<QuotationsScreen> {
                                 MaterialPageRoute(builder: (_) => QuotationEditorScreen(quotationId: r['id'] as int)))
                             .then((_) => _load()),
                         leading: CircleAvatar(
-                          backgroundColor: ErpColors.cyan.withOpacity(0.14),
+                          backgroundColor: ErpColors.cyan.withValues(alpha: 0.14),
                           child: Text('${r['quote_no']}', style: const TextStyle(color: ErpColors.navy, fontSize: 12)),
                         ),
                         title: Text('${r['customer_name']}'),
@@ -338,7 +338,7 @@ class _QuotationEditorScreenState extends State<QuotationEditorScreen> {
             onSelected: (v) async {
               if (v == 'cancel') {
                 await _svc.setQuotationStatus(_id!, 'cancelled');
-                if (mounted) Navigator.pop(context);
+                if (context.mounted) Navigator.pop(context);
               }
             },
             itemBuilder: (_) => const [PopupMenuItem(value: 'cancel', child: Text('إلغاء العرض'))],
@@ -398,7 +398,7 @@ class _QuotationEditorScreenState extends State<QuotationEditorScreen> {
               items: [for (final p in priceLevelNames) DropdownMenuItem(value: p, child: Text(p))],
               onChanged: (v) => setState(() => _level = v ?? 'مفرد'),
             ),
-            MoneyField(controller: _discount, label: 'حسم على العرض', width: 160, onChanged: (_) => setState(() {})),
+            MoneyField(controller: _discount, label: 'خصم على العرض', width: 160, onChanged: (_) => setState(() {})),
           ]),
         ),
         ErpSection(
@@ -465,10 +465,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
             onPressed: () async {
               try {
                 final n = await QuoteOrderService().autoReorder();
-                if (mounted) showOk(context, n == 0 ? 'لا توجد مواد تحتاج طلباً' : 'أُنشئ ${fmtQty(n)} طلب شراء');
+                if (context.mounted) showOk(context, n == 0 ? 'لا توجد مواد تحتاج طلباً' : 'أُنشئ ${fmtQty(n)} طلب شراء');
                 _load();
               } catch (e) {
-                if (mounted) showError(context, e);
+                if (context.mounted) showError(context, e);
               }
             },
           ),
@@ -522,7 +522,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                       elevation: 0,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: late ? ErpColors.red.withOpacity(0.4) : ErpColors.border)),
+                          side: BorderSide(color: late ? ErpColors.red.withValues(alpha: 0.4) : ErpColors.border)),
                       child: ListTile(
                         onTap: () => Navigator.push(
                                 context,
@@ -530,7 +530,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                                     builder: (_) => OrderEditorScreen(orderType: _type, orderId: r['id'] as int)))
                             .then((_) => _load()),
                         leading: CircleAvatar(
-                          backgroundColor: (pr == 1 ? ErpColors.red : ErpColors.navy).withOpacity(0.12),
+                          backgroundColor: (pr == 1 ? ErpColors.red : ErpColors.navy).withValues(alpha: 0.12),
                           child: Text('${r['order_no']}',
                               style: TextStyle(color: pr == 1 ? ErpColors.red : ErpColors.navy, fontSize: 12)),
                         ),
@@ -788,9 +788,9 @@ class _OrderEditorScreenState extends State<OrderEditorScreen> {
               try {
                 if (v == 'close') await _svc.closeOrder(_id!);
                 if (v == 'cancel') await _svc.cancelOrder(_id!);
-                if (mounted) Navigator.pop(context);
+                if (context.mounted) Navigator.pop(context);
               } catch (e) {
-                if (mounted) showError(context, e);
+                if (context.mounted) showError(context, e);
               }
             },
             itemBuilder: (_) => const [
@@ -868,7 +868,7 @@ class _OrderEditorScreenState extends State<OrderEditorScreen> {
             TextBox(controller: _deliveryMethod, label: 'طريقة التسليم', width: 170),
             TextBox(controller: _shipping, label: 'شركة الشحن', width: 170),
             TextBox(controller: _payment, label: 'طريقة التسديد', width: 170),
-            if (_sales) TextBox(controller: _seller, label: 'البائع', width: 170),
+            if (_sales) TextBox(controller: _seller, label: 'المندوب', width: 170),
             if (_sales)
               SizedBox(
                 width: 260,

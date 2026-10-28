@@ -1,9 +1,13 @@
 // lib/services/database/dao/customer_dao.dart
 // عمليات CRUD للعملاء
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import '../../../models/customer.dart';
 import '../core/database_helpers.dart';
+import '../business/customer_name_rule.dart';
+import '../../name_search.dart'; // 🔤 الأسماء بلا مسافات
+import '../business/tx_author.dart';
 import '../../../services/firebase_sync/uuid_helper.dart';
 import '../../../services/sync/sync_security.dart';
 
@@ -25,6 +29,9 @@ class CustomerDao {
     final db = await getDatabase();
     
     return await db.transaction((txn) async {
+      // 🛡️ سجل الديون: لا حسابان بالاسم نفسه (بتجاهل المسافات)
+      await CustomerNameRule.ensureAvailable(txn, customer.name);
+
       // 🆔 هوية مزامنة فورية للعميل الجديد:
       // بدونها يبقى sync_uuid فارغاً فلا يراه أي مسار رفع أبداً
       // (كان هذا سبب عدم وصول العملاء الجدد للأجهزة الأخرى).
@@ -81,7 +88,7 @@ class CustomerDao {
       if (customer.currentTotalDebt > 0) {
         final now = DateTime.now();
         final txUuid = UuidHelper.newTransactionUuid();
-        await txn.insert('transactions', {
+        await txn.insert('transactions', await TxAuthor.stamped(txn, {
           'customer_id': customerId,
           'transaction_uuid': txUuid, // 🆔 هوية فورية — لا ننتظر backfill الإقلاع
           'sync_uuid': txUuid,
@@ -96,9 +103,9 @@ class CustomerDao {
           'is_deleted': 0,
           'is_created_by_me': 1, // 🏷️ ملكية الرفع لهذا الجهاز
           'is_uploaded': 0,
-        });
+        }));
 
-        print('✅ تم إضافة معاملة الدين المبدئي: ${customer.currentTotalDebt} دينار للعميل: ${customer.name}');
+        debugPrint('✅ تم إضافة معاملة الدين المبدئي: ${customer.currentTotalDebt} دينار للعميل: ${customer.name}');
       }
 
       return customerId;
@@ -117,7 +124,7 @@ class CustomerDao {
           );
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting all customers: $e');
+      debugPrint('Error getting all customers: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }
@@ -132,9 +139,8 @@ class CustomerDao {
   }) async {
     final db = await getDatabase();
     try {
-      final String searchCondition = searchQuery.isNotEmpty 
-          ? " AND (c.name LIKE ? OR c.phone LIKE ? OR c.address LIKE ?) " 
-          : "";
+      final nameQ = NameSearch.where('c.name', searchQuery, phoneCol: 'c.phone');
+      final String searchCondition = nameQ != null ? " AND (${nameQ.sql} OR c.address LIKE ?) " : "";
       
       // تحديد فلتر الجهاز بناءً على المصدر
       String deviceFilter = "";
@@ -145,9 +151,9 @@ class CustomerDao {
       }
 
       final List<dynamic> args = [];
-      if (searchQuery.isNotEmpty) {
-        final likeQuery = '%$searchQuery%';
-        args.addAll([likeQuery, likeQuery, likeQuery]);
+      if (nameQ != null) {
+        args.addAll(nameQ.args);
+        args.add('%${searchQuery.trim()}%');
       }
       args.addAll([limit, offset]);
 
@@ -167,7 +173,7 @@ class CustomerDao {
       
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting paginated customers: $e');
+      debugPrint('Error getting paginated customers: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }
@@ -185,7 +191,7 @@ class CustomerDao {
       ''');
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting customers for debt register: $e');
+      debugPrint('Error getting customers for debt register: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }
@@ -211,20 +217,28 @@ class CustomerDao {
           AND (COALESCE(c.current_total_debt, 0) != 0 OR EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1))
         ''';
       } else {
-        final normalized = DatabaseHelpers.normalizeArabic(trimmedQuery);
-        final sqOriginal = '%$trimmedQuery%';
-        final sqNormalized = '%$normalized%';
-
-        whereClause += '''
-          AND (
-            c.name LIKE ? 
-            OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.name, 'أ', 'ا'), 'إ', 'ا'), 'آ', 'ا'), 'ة', 'ه'), 'ى', 'ي'), 'ؤ', 'و') LIKE ?
-            OR COALESCE(c.phone, '') LIKE ?
-          )
-        ''';
-        args.add(sqOriginal);
-        args.add(sqNormalized);
-        args.add(sqOriginal);
+        // 🔎 يطابق إن تحقق أيٌّ من: كل الكلمات موجودة (بأي ترتيب)، أو الاسم بلا مسافات
+        // يحتوي البحث بلا مسافات. كان النص يُطابَق كما هو فتُفشله أي مسافة زائدة أو ناقصة.
+        const normName = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.name, 'أ', 'ا'), 'إ', 'ا'), 'آ', 'ا'), 'ة', 'ه'), 'ى', 'ي'), 'ؤ', 'و'), 'ئ', 'ي')";
+        final tokens = trimmedQuery.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+        final parts = <String>[];
+        for (final t in tokens) {
+          parts.add("(c.name LIKE ? OR $normName LIKE ? OR COALESCE(c.phone, '') LIKE ?)");
+          args.add('%$t%');
+          args.add('%${DatabaseHelpers.normalizeArabic(t)}%');
+          args.add('%$t%');
+        }
+        // 🔤 تجاهل المسافات كلياً: «عبدالرحمن» = «عبد الرحمن» = «عبد  الرحمن» (في الاسم والبحث)
+        final compact = DatabaseHelpers.normalizeArabic(trimmedQuery).replaceAll(RegExp(r'\s+'), '');
+        const compactClause = " OR REPLACE($normName, ' ', '') LIKE ?";
+        args.add('%$compact%');
+        // رقم هاتف مكتوب بمسافات (0770 123 4567)
+        final digits = trimmedQuery.replaceAll(RegExp(r'\s+'), '');
+        final phoneClause = RegExp(r'^[0-9+]{4,}$').hasMatch(digits)
+            ? " OR REPLACE(COALESCE(c.phone, ''), ' ', '') LIKE ?"
+            : '';
+        if (phoneClause.isNotEmpty) args.add('%$digits%');
+        whereClause += ' AND ((${parts.join(' AND ')})$compactClause$phoneClause)';
       }
 
       final safeOrderBy = orderBy.replaceAll("'", "");
@@ -240,7 +254,7 @@ class CustomerDao {
       ''', args);
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting paginated customers for debt register: $e');
+      debugPrint('Error getting paginated customers for debt register: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
   }
@@ -262,7 +276,7 @@ class CustomerDao {
       ''');
       return maps.map((m) => m['id'] as int).toList();
     } catch (e) {
-      print('Error getting customers sorted by last debt added: $e');
+      debugPrint('Error getting customers sorted by last debt added: $e');
       return [];
     }
   }
@@ -284,7 +298,7 @@ class CustomerDao {
       ''');
       return maps.map((m) => m['id'] as int).toList();
     } catch (e) {
-      print('Error getting customers sorted by last payment: $e');
+      debugPrint('Error getting customers sorted by last payment: $e');
       return [];
     }
   }
@@ -305,7 +319,7 @@ class CustomerDao {
       ''');
       return maps.map((m) => m['id'] as int).toList();
     } catch (e) {
-      print('Error getting customers sorted by last transaction: $e');
+      debugPrint('Error getting customers sorted by last transaction: $e');
       return [];
     }
   }
@@ -324,7 +338,7 @@ class CustomerDao {
         return Customer.fromMap(maps.first);
       }
     } catch (e) {
-      print('Error getting customer by ID $id: $e');
+      debugPrint('Error getting customer by ID $id: $e');
       throw Exception(DatabaseHelpers.handleDatabaseError(e));
     }
     return null;
@@ -339,18 +353,15 @@ class CustomerDao {
   /// صريح كزر «اعتمد المجموع» أو الإصلاح المتعمَّد.
   Future<int> updateCustomer(Customer customer, {bool updateBalance = false}) async {
     final db = await getDatabase();
-    
-    // 🔄 تتبع المزامنة: جلب البيانات القديمة قبل التحديث
-    Map<String, dynamic>? oldData;
-    String? syncUuid;
-    try {
-      final oldRows = await db.query('customers', where: 'id = ?', whereArgs: [customer.id], limit: 1);
-      if (oldRows.isNotEmpty) {
-        oldData = oldRows.first;
-        syncUuid = oldData['sync_uuid'] as String?;
+
+    // 🛡️ تغيير الاسم إلى اسم حساب آخر مرفوض (لا حسابان بالاسم نفسه)
+    if (customer.id != null) {
+      final current = await db.query('customers',
+          columns: ['name'], where: 'id = ?', whereArgs: [customer.id], limit: 1);
+      final oldName = current.isEmpty ? null : current.first['name'] as String?;
+      if (oldName == null || CustomerNameRule.key(oldName) != CustomerNameRule.key(customer.name)) {
+        await CustomerNameRule.ensureAvailable(db, customer.name, excludeId: customer.id);
       }
-    } catch (e) {
-      print('⚠️ تحذير: فشل جلب بيانات العميل القديمة: $e');
     }
     
     final Map<String, dynamic> values = customer.toMap();
@@ -416,11 +427,13 @@ class CustomerDao {
   Future<List<Customer>> searchCustomers(String query) async {
     final db = await getDatabase();
     try {
-      final List<Map<String, dynamic>> maps = await db.query(
-        'customers',
-        where: '(name LIKE ? OR phone LIKE ?) AND (is_deleted IS NULL OR is_deleted = 0)',
-        whereArgs: ['%$query%', '%$query%'],
-        orderBy: 'name ASC',
+      // 🔤 «ابراهيممحمد» و«إبراهيم    محمد» يجدان «إبراهيم محمد العسكر»؛ المطابق تماماً أولاً
+      final w = NameSearch.where('name', query, phoneCol: 'phone');
+      if (w == null) return [];
+      final o = NameSearch.order('name', query);
+      final List<Map<String, dynamic>> maps = await db.rawQuery(
+        'SELECT * FROM customers WHERE ${w.sql} AND (is_deleted IS NULL OR is_deleted = 0) ORDER BY ${o.sql}',
+        [...w.args, ...o.args],
       );
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
@@ -434,6 +447,10 @@ class CustomerDao {
     final normalizedQuery = DatabaseHelpers.normalizeArabic(name.trim());
     
     try {
+      // 🛡️ نفس قاعدة حفظ الفاتورة: الاسم بلا مسافات يحدد الحساب (الهاتف لا يفرّق)
+      final active = await CustomerNameRule.findActive(db, name.trim());
+      if (active != null) return Customer.fromMap(active);
+
       List<Map<String, dynamic>> results;
       
       if (phone != null && phone.isNotEmpty) {
@@ -458,7 +475,7 @@ class CustomerDao {
       }
       return null;
     } catch (e) {
-      print('Error finding customer by normalized name: $e');
+      debugPrint('Error finding customer by normalized name: $e');
       return null;
     }
   }
@@ -476,7 +493,7 @@ class CustomerDao {
       }
       return 0.0;
     } catch (e) {
-      print('Error getting customer balance from view: $e');
+      debugPrint('Error getting customer balance from view: $e');
       return 0.0;
     }
   }
@@ -497,7 +514,7 @@ class CustomerDao {
       
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting customers modified today: $e');
+      debugPrint('Error getting customers modified today: $e');
       return [];
     }
   }
@@ -520,7 +537,7 @@ class CustomerDao {
       
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting customers for month: $e');
+      debugPrint('Error getting customers for month: $e');
       return [];
     }
   }
@@ -541,7 +558,7 @@ class CustomerDao {
       
       return List.generate(maps.length, (i) => Customer.fromMap(maps[i]));
     } catch (e) {
-      print('Error getting late customers: $e');
+      debugPrint('Error getting late customers: $e');
       return [];
     }
   }
@@ -559,7 +576,7 @@ class CustomerDao {
         return Customer.fromMap(maps.first);
       }
     } catch (e) {
-      print('Error getting customer by ID in transaction: $e');
+      debugPrint('Error getting customer by ID in transaction: $e');
     }
     return null;
   }

@@ -1,4 +1,5 @@
 // lib/services/firebase_sync/invoice_verifier_service.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'invoice_snapshot_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -48,7 +49,7 @@ class InvoiceVerifierService {
       
       return discrepancies;
     } catch (e) {
-      print('⚠️ خطأ أثناء تدقيق الفواتير: $e');
+      debugPrint('⚠️ خطأ أثناء تدقيق الفواتير: $e');
       return [];
     }
   }

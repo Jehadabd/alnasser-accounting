@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/ai_chat_service.dart';
@@ -28,7 +27,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
   }
 
   Future<void> _initializeService() async {
-    print('🚀 AI Chat Screen: تهيئة الخدمة...');
+    debugPrint('🚀 AI Chat Screen: تهيئة الخدمة...');
     
     final dbService = DatabaseService();
     await dbService.database;
@@ -39,7 +38,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
     final geminiKey3 = dotenv.env['GEMINI_API_KEY_3'] ?? '';
     
     final geminiKeysCount = [geminiKey, geminiKey2, geminiKey3].where((k) => k.isNotEmpty).length;
-    print('🔑 Gemini API Keys: $geminiKeysCount مفتاح/مفاتيح ${geminiKeysCount > 0 ? "✅" : "❌"}');
+    debugPrint('🔑 Gemini API Keys: $geminiKeysCount مفتاح/مفاتيح ${geminiKeysCount > 0 ? "✅" : "❌"}');
     
     GeminiService? geminiService;
     if (geminiKeysCount > 0) {
@@ -48,7 +47,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
         apiKey2: geminiKey2.isNotEmpty ? geminiKey2 : null,
         apiKey3: geminiKey3.isNotEmpty ? geminiKey3 : null,
       );
-      print('✅ تم تفعيل Gemini ($geminiKeysCount مفاتيح)');
+      debugPrint('✅ تم تفعيل Gemini ($geminiKeysCount مفاتيح)');
     }
     
     _chatService = AIChatService(
@@ -56,7 +55,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
       geminiService: geminiService,
     );
     
-    print('✅ AI Chat Service جاهز!');
+    debugPrint('✅ AI Chat Service جاهز!');
   }
 
   void _addWelcomeMessage() {
@@ -189,7 +188,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
                 color: Colors.white,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: Colors.grey.withValues(alpha: 0.2),
                     spreadRadius: 1,
                     blurRadius: 5,
                   ),

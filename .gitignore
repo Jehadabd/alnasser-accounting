@@ -66,3 +66,8 @@ checkpoints_arabic/
 
 # Graphify code graph (rebuilt locally by the git hook; ~9 MB)
 graphify-out/
+
+# 🔑 مفاتيح توقيع أندرويد — لا تُرفع أبداً
+android/key.properties
+*.jks
+*.keystore

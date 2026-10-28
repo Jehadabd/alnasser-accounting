@@ -2,7 +2,7 @@
 // قاعدة بيانات منفصلة لنظام البحث الذكي
 
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint; // 🌐
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -26,27 +26,31 @@ class SmartSearchDatabase {
   }
 
   Future<Database> _initDatabase() async {
+
     // 🌐 الويب: اسم فقط — المحرك (IndexedDB) يدير التخزين، بلا مجلدات
     final String path;
     if (kIsWeb) {
       path = 'smart_search.db';
     } else {
       final Directory documentsDirectory = await getApplicationDocumentsDirectory();
+      if (!await documentsDirectory.exists()) {
+        await documentsDirectory.create(recursive: true);
+      }
       path = join(documentsDirectory.path, 'smart_search.db');
     }
 
-    print('📂 Smart Search DB path: $path');
+    debugPrint('📂 Smart Search DB path: $path');
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
   }
 
   Future<void> _onCreate(Database db, int version) async {
-    print('🔧 Creating Smart Search database tables...');
+    debugPrint('🔧 Creating Smart Search database tables...');
 
     // جدول علاقات المنتجات (أي منتج يُشترى مع أي منتج)
     await db.execute('''
@@ -163,13 +167,27 @@ class SmartSearchDatabase {
       ON product_sequences(from_product_id)
     ''');
 
-    print('✅ Smart Search database tables created successfully');
+    // 🆕 جدول علاقات مستويات الأسعار
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS price_level_associations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id_a INTEGER NOT NULL,
+        product_id_b INTEGER NOT NULL,
+        price_level_a TEXT NOT NULL,
+        price_level_b TEXT NOT NULL,
+        co_occurrence_count INTEGER DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        UNIQUE(product_id_a, product_id_b, price_level_a, price_level_b)
+      )
+    ''');
+
+    debugPrint('✅ Smart Search database tables created successfully');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     // للترقيات المستقبلية
     if (oldVersion < 2) {
-      print('🔄 Upgrading Smart Search database to version 2...');
+      debugPrint('🔄 Upgrading Smart Search database to version 2...');
       await db.execute('DROP TABLE IF EXISTS product_sequences');
       
       // 🆕 جدول تتابع المنتجات (أ يليه ب) مع المسافة (Distance)
@@ -189,7 +207,24 @@ class SmartSearchDatabase {
         CREATE INDEX IF NOT EXISTS idx_sequences_from 
         ON product_sequences(from_product_id)
       ''');
-      print('✅ Upgrade completed.');
+      debugPrint('✅ Upgrade to version 2 completed.');
+    }
+    
+    if (oldVersion < 3) {
+      debugPrint('🔄 Upgrading Smart Search database to version 3...');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS price_level_associations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id_a INTEGER NOT NULL,
+          product_id_b INTEGER NOT NULL,
+          price_level_a TEXT NOT NULL,
+          price_level_b TEXT NOT NULL,
+          co_occurrence_count INTEGER DEFAULT 1,
+          updated_at TEXT NOT NULL,
+          UNIQUE(product_id_a, product_id_b, price_level_a, price_level_b)
+        )
+      ''');
+      debugPrint('✅ Upgrade to version 3 completed.');
     }
   }
 
@@ -345,6 +380,86 @@ class SmartSearchDatabase {
       FROM product_associations 
       WHERE product_id_a IN ($placeholders) OR product_id_b IN ($placeholders)
     ''', [...productIds, ...productIds, ...productIds]);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🆕 دوال علاقات مستويات الأسعار
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// إضافة أو تحديث علاقة سعرية بين منتجين
+  Future<void> upsertPriceLevelAssociation({
+    required int productIdA,
+    required int productIdB,
+    required String priceLevelA,
+    required String priceLevelB,
+  }) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    // ترتيب المنتجات لضمان الاتساق
+    final int idA = productIdA < productIdB ? productIdA : productIdB;
+    final int idB = productIdA < productIdB ? productIdB : productIdA;
+    final String levelA = productIdA < productIdB ? priceLevelA : priceLevelB;
+    final String levelB = productIdA < productIdB ? priceLevelB : priceLevelA;
+
+    await db.rawInsert('''
+      INSERT INTO price_level_associations 
+        (product_id_a, product_id_b, price_level_a, price_level_b, co_occurrence_count, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?)
+      ON CONFLICT(product_id_a, product_id_b, price_level_a, price_level_b) DO UPDATE SET
+        co_occurrence_count = co_occurrence_count + 1,
+        updated_at = ?
+    ''', [idA, idB, levelA, levelB, now, now]);
+  }
+
+  /// الاستعلام عن المستوى السعري المتوقع للمنتج ب بناءً على مستوى المنتج أ
+  Future<String?> getExpectedPriceLevel({
+    required int queryProductId,
+    required List<Map<String, dynamic>> contextProducts, // [{ 'id': 1, 'level': 'wholesale' }]
+  }) async {
+    if (contextProducts.isEmpty) return null;
+    
+    final db = await database;
+    final Map<String, int> levelScores = {'wholesale': 0, 'average': 0, 'retail': 0};
+
+    for (var contextItem in contextProducts) {
+      final int contextId = contextItem['id'];
+      final String contextLevel = contextItem['level'];
+
+      final int idA = queryProductId < contextId ? queryProductId : contextId;
+      final int idB = queryProductId < contextId ? contextId : queryProductId;
+
+      final results = await db.query(
+        'price_level_associations',
+        where: 'product_id_a = ? AND product_id_b = ? AND '
+            '${queryProductId < contextId ? 'price_level_b = ?' : 'price_level_a = ?'}',
+        whereArgs: [idA, idB, contextLevel],
+      );
+
+      for (var row in results) {
+        final String queryLevel = queryProductId < contextId 
+            ? row['price_level_a'] as String 
+            : row['price_level_b'] as String;
+        final int count = row['co_occurrence_count'] as int;
+        
+        if (levelScores.containsKey(queryLevel)) {
+          levelScores[queryLevel] = levelScores[queryLevel]! + count;
+        }
+      }
+    }
+
+    // إرجاع المستوى ذو الرصيد الأعلى
+    String? bestLevel;
+    int maxScore = 0;
+    
+    levelScores.forEach((level, score) {
+      if (score > maxScore) {
+        maxScore = score;
+        bestLevel = level;
+      }
+    });
+
+    return bestLevel;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -543,7 +658,7 @@ class SmartSearchDatabase {
       where: 'brand = ?',
       whereArgs: [brand],
     );
-    print('🗑️ Deleted brand: $brand (rows: $deleted)');
+    debugPrint('🗑️ Deleted brand: $brand (rows: $deleted)');
     return deleted > 0;
   }
   
@@ -559,7 +674,7 @@ class SmartSearchDatabase {
       ON CONFLICT(brand) DO UPDATE SET
         occurrence_count = 999
     ''', [brand, now]);
-    print('➕ Added manual brand: $brand');
+    debugPrint('➕ Added manual brand: $brand');
   }
   
   /// 🆕 التحقق من وجود علامة تجارية
@@ -652,7 +767,7 @@ class SmartSearchDatabase {
     int deletedSeq = await db.delete('product_sequences', where: 'last_occurred <= ?', whereArgs: [oneYearAgo]);
     
     if (deletedAssoc > 0 || deletedSeq > 0) {
-      print('🧹 Cleaned up old data: $deletedAssoc associations, $deletedSeq sequences (older than 1 year)');
+      debugPrint('🧹 Cleaned up old data: $deletedAssoc associations, $deletedSeq sequences (older than 1 year)');
     }
   }
 
@@ -663,7 +778,7 @@ class SmartSearchDatabase {
     await db.delete('customer_brand_preferences');
     await db.delete('installer_brand_preferences');
     await db.delete('discovered_brands');
-    print('🗑️ Smart Search data cleared');
+    debugPrint('🗑️ Smart Search data cleared');
   }
 
   /// تحديث قوة العلاقات (بعد التدريب)
@@ -682,7 +797,7 @@ class SmartSearchDatabase {
       SET strength = CAST(co_occurrence_count AS REAL) / ?
     ''', [maxCount]);
 
-    print('✅ Association strengths updated (max: $maxCount)');
+    debugPrint('✅ Association strengths updated (max: $maxCount)');
   }
 
   /// تحديث نسب تفضيلات العملاء
@@ -700,7 +815,7 @@ class SmartSearchDatabase {
       )
     ''');
 
-    print('✅ Customer preference percentages updated');
+    debugPrint('✅ Customer preference percentages updated');
   }
 
   /// تحديث نسب تفضيلات المُركّبين
@@ -716,7 +831,7 @@ class SmartSearchDatabase {
       )
     ''');
 
-    print('✅ Installer preference percentages updated');
+    debugPrint('✅ Installer preference percentages updated');
   }
 
   /// إغلاق قاعدة البيانات

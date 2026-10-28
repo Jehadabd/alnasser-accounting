@@ -32,8 +32,10 @@ class _PasswordSetupScreenState extends State<PasswordSetupScreen> {
         await _passwordService.savePasswords([p1, p2, p3]);
         await _passwordService.setFirstLaunchCompleted();
         // Navigate to the main screen after successful setup
+        if (!mounted) return;
         Navigator.of(context).pushReplacementNamed('/');
       } catch (e) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('فشل حفظ كلمات السر: ${e.toString()}')),
         );

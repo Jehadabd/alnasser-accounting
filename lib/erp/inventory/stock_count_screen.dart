@@ -53,25 +53,48 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
       cats = await db.query('categories', orderBy: 'name');
     } catch (_) {}
     if (!mounted) return;
+    Widget step(int n, String title, String sub, IconData icon) => Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: ErpColors.orange.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: ErpColors.orange.withValues(alpha: 0.2)),
+            ),
+            child: Column(children: [
+              Icon(icon, color: ErpColors.orange, size: 22),
+              const SizedBox(height: 4),
+              Text('$n. $title', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800)),
+              Text(sub, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: ErpColors.muted, height: 1.3)),
+            ]),
+          ),
+        );
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          title: const Row(children: [
-            Icon(Icons.fact_check_rounded, color: ErpColors.orange),
-            SizedBox(width: 8),
-            Text('جلسة جرد جديدة'),
-          ]),
-          content: SizedBox(
-            width: 380,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
+        builder: (ctx, setS) => ErpDialog(
+          title: 'جلسة جرد جديدة',
+          subtitle: 'عدّ البضاعة الموجودة فعلاً ومطابقتها مع البرنامج',
+          icon: Icons.fact_check_rounded,
+          color: ErpColors.orange,
+          width: 540,
+          content: LayoutBuilder(builder: (context, box) {
+            final w = box.maxWidth;
+            return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                step(1, 'لقطة', 'نحفظ كميات البرنامج الآن', Icons.photo_camera_outlined),
+                const SizedBox(width: 8),
+                step(2, 'العدّ', 'امسح الباركود أو اكتب المعدود', Icons.qr_code_scanner_rounded),
+                const SizedBox(width: 8),
+                step(3, 'الاعتماد', 'تُصحَّح الفروقات تلقائياً', Icons.verified_rounded),
+              ]),
+              const SizedBox(height: 16),
               WarehouseDropdown(
-                  value: wid, width: 360, label: 'المخزن (فارغ = الكمية الكلية)', onChanged: (w) => setS(() => wid = w?.id)),
+                  value: wid, width: w, label: 'المخزن (فارغ = الكمية الكلية)', onChanged: (x) => setS(() => wid = x?.id)),
               const SizedBox(height: 12),
               DropBox<int?>(
-                label: 'القسم (اختياري)',
-                width: 360,
+                label: 'القسم (اختياري — لجرد جزء من البضاعة)',
+                width: w,
                 value: cat,
                 items: [
                   const DropdownMenuItem<int?>(value: null, child: Text('كل المواد')),
@@ -80,16 +103,23 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
                 onChanged: (v) => setS(() => cat = v),
               ),
               const SizedBox(height: 12),
-              TextBox(controller: notes, label: 'ملاحظات', width: 360),
-              const SizedBox(height: 10),
-              const Text('ستُؤخذ لقطة لكميات النظام الآن. يمكنك البيع أثناء الجرد: الفرق يُحسب عند الاعتماد مقابل الكمية الحالية.',
-                  style: TextStyle(color: ErpColors.muted, fontSize: 12)),
-            ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بدء الجرد')),
-          ],
+              TextBox(controller: notes, label: 'ملاحظات', width: w),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: ErpColors.blue.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(10)),
+                child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.info_outline_rounded, size: 18, color: ErpColors.blue),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text('يمكنك البيع أثناء الجرد: الفرق يُحسب عند الاعتماد مقابل الكمية في تلك اللحظة.',
+                        style: TextStyle(fontSize: 12.5, height: 1.5)),
+                  ),
+                ]),
+              ),
+            ]);
+          }),
+          actions: erpDialogActions(ctx, ok: 'بدء الجرد', color: ErpColors.orange, icon: Icons.play_arrow_rounded),
         ),
       ),
     );
@@ -482,7 +512,7 @@ class _StockCountEditorScreenState extends State<StockCountEditorScreen> {
                         borderRadius: BorderRadius.circular(12),
                         border: Border(right: BorderSide(color: color, width: 4)),
                       ),
-                      child: ListTile(
+                      child: Material(type: MaterialType.transparency, child: ListTile(
                         onTap: _draft ? () => _edit(r) : null,
                         title: Text('${r['product_name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text('النظام: ${fmtQty(d0(r['system_qty']))}'
@@ -496,7 +526,7 @@ class _StockCountEditorScreenState extends State<StockCountEditorScreen> {
                             padding: const EdgeInsets.symmetric(vertical: 8),
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: color.withOpacity(.08),
+                              color: color.withValues(alpha: .08),
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Text(c == null ? '—' : fmtQty(d0(c)),
@@ -511,7 +541,7 @@ class _StockCountEditorScreenState extends State<StockCountEditorScreen> {
                             ),
                           ],
                         ]),
-                      ),
+                      )),
                     );
                   },
                 ),

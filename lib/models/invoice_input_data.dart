@@ -10,6 +10,9 @@ class InvoiceInputData {
   final String customerPhone;
   final String customerAddress;
   final String? installerName;
+
+  /// 👷 نقاط المؤسس لكل 100,000 لهذه الفاتورة (ميزة حساب المالك). 0 = بلا نقاط.
+  final double pointsRate;
   final double paidAmount;
   final double loadingFee;
   final double discount;
@@ -25,6 +28,7 @@ class InvoiceInputData {
     required this.customerPhone,
     required this.customerAddress,
     this.installerName,
+    this.pointsRate = 0.0,
     required this.paidAmount,
     required this.loadingFee,
     required this.discount,

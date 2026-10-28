@@ -20,6 +20,10 @@ class DebtTransaction {
   final String? audioNotePath; // 🎙️ مسار ملاحظة صوتية مرفقة
   final String? invoiceSyncUuid; // 🔒 ربط المعاملة بالفاتورة عبر UUID (مزامنة ذرية)
 
+  /// 👤 المستخدم الذي أنشأها (للعرض فقط؛ يكتبه TxAuthor عند الإدراج، وليس في toMap
+  /// حتى لا يُرسل إلى قاعدة أو مزامنة لا تعرف العمود).
+  final String? createdByUsername;
+
   DebtTransaction({
     this.id,
     required this.customerId,
@@ -40,6 +44,7 @@ class DebtTransaction {
     this.syncUuid,
     this.audioNotePath,
     this.invoiceSyncUuid,
+    this.createdByUsername,
   })  : transactionDate = transactionDate ?? DateTime.now(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -90,6 +95,7 @@ class DebtTransaction {
       syncUuid: map['sync_uuid'] as String?,
       audioNotePath: map['audio_note_path'] as String?,
       invoiceSyncUuid: map['invoice_sync_uuid'] as String?,
+      createdByUsername: map['created_by_username'] as String?,
     );
   }
 
@@ -135,6 +141,7 @@ class DebtTransaction {
       syncUuid: syncUuid ?? this.syncUuid,
       audioNotePath: audioNotePath ?? this.audioNotePath,
       invoiceSyncUuid: invoiceSyncUuid ?? this.invoiceSyncUuid,
+      createdByUsername: createdByUsername,
     );
   }
 }

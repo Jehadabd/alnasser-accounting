@@ -1,5 +1,5 @@
-#define MyAppName "Alnaser"
-#define MyAppVersion "1.0"
+﻿#define MyAppName "Alnaser Accounting"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Alnaser Company"
 #define MyAppURL "https://www.alnaser.com/"
 #define MyAppExeName "debt_book.exe"
@@ -7,20 +7,21 @@
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId={{9F8425F8-360C-4257-86E5-DFAA3D9D4460}
-AppName=Alnaser
-AppVersion=1.0
+; هوية خاصة بـ«الناصر للحسابات» (كانت مشتركة مع شوب مانجر ودفتر الديون فيحلّ أحدهما محل الآخر)
+AppId={{C61570EE-B926-4B43-9236-775B4BFD201D}
+AppName={#MyAppName}
+AppVersion=1.0.1
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\Alnaser
-DefaultGroupName=Alnaser
+DefaultDirName={autopf}\AlnaserAccounting
+DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\debt_book.exe
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 OutputDir=installer_output
-OutputBaseFilename=AlnaserSetup
+OutputBaseFilename=AlnaserAccountingSetup
 SetupIconFile=assets\icon\app_icon.ico
 Compression=lzma
 SolidCompression=yes
@@ -48,11 +49,11 @@ Source: ".env"; DestDir: "{app}"; Flags: ignoreversion
 ; ملفات التطبيق
 Source: "build\windows\x64\runner\Release\debt_book.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; استثناء نماذج الذكاء الاصطناعي ومحرك OCR لتقليل حجم التطبيق (~500MB → ~50MB)
-Source: "build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "tesseract\*,data\flutter_assets\assets\models\*,data\flutter_assets\assets\tessdata\*"
+Source: "build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "onnxruntime.dll,tesseract\*,data\flutter_assets\assets\models\*,data\flutter_assets\assets\tessdata\*"
 
 [Icons]
-Name: "{autoprograms}\Alnaser"; Filename: "{app}\debt_book.exe"
-Name: "{autodesktop}\Alnaser"; Filename: "{app}\debt_book.exe"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\debt_book.exe"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\debt_book.exe"; Tasks: desktopicon
 
 [Code]
 // إغلاق التطبيق قبل التثبيت بالقوة
@@ -60,10 +61,9 @@ function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
 begin
-  // محاولة إغلاق التطبيق إذا كان يعمل
-  Exec('taskkill.exe', '/F /IM debt_book.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  // انتظار قليلاً للتأكد من إغلاق التطبيق
-  Sleep(1000);
+  // لا taskkill باسم debt_book.exe: كان يُغلق شوب مانجر ودفتر الديون أيضاً (نفس اسم الملف).
+  // CloseApplications=force في [Setup] يُغلق فقط البرامج التي تستعمل ملفات مجلد التثبيت.
+  ResultCode := 0;
   Result := True;
 end;
 
@@ -72,7 +72,8 @@ function InitializeUninstall(): Boolean;
 var
   ResultCode: Integer;
 begin
-  Exec('taskkill.exe', '/F /IM debt_book.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // إغلاق نسخة هذا المجلد فقط (لا كل برنامج اسمه debt_book.exe)
+  Exec('powershell.exe', '-NoProfile -Command "Get-Process debt_book -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq ''' + ExpandConstant('{app}') + '\debt_book.exe'' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1000);
   Result := True;
 end;

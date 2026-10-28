@@ -74,7 +74,8 @@ class Supplier {
   factory Supplier.fromMap(Map<String, dynamic> map) {
     return Supplier(
       id: map['id'],
-      name: map['company_name'] ?? map['name'], // Handle both column names just in case
+      // name هو المرجع؛ company_name للقواعد القديمة فقط
+      name: ((map['name'] ?? '').toString().isNotEmpty ? map['name'] : map['company_name']) ?? '',
       phone: map['phone_number'] ?? map['phone'],
       address: map['address'],
       currency: map['currency'] ?? 'IQD',

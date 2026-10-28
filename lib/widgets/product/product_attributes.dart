@@ -38,7 +38,7 @@ class ProductAttributesWidget extends StatelessWidget {
               value: isWeighable,
               onChanged: onWeighableChanged,
               secondary: const Icon(Icons.monitor_weight_outlined),
-              activeColor: Theme.of(context).primaryColor,
+              activeThumbColor: Theme.of(context).primaryColor,
             ),
             const Divider(),
             SwitchListTile(
@@ -47,7 +47,7 @@ class ProductAttributesWidget extends StatelessWidget {
               value: hasExpiry,
               onChanged: onExpiryChanged,
               secondary: const Icon(Icons.calendar_today_outlined),
-              activeColor: Theme.of(context).primaryColor,
+              activeThumbColor: Theme.of(context).primaryColor,
             ),
           ],
         ),

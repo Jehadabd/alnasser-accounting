@@ -12,6 +12,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../screens/create_invoice_screen.dart';
 import '../erp_common.dart';
+import '../../services/seat_service.dart';
 
 class DraftLine {
   DraftLine({
@@ -45,7 +46,7 @@ class DraftLine {
 class InvoiceBridge {
   InvoiceBridge._();
 
-  static const _key = 'temp_invoice_data';
+  static String get _key => SeatService.key('temp_invoice_data'); // 🖥️ مسودة لكل شاشة
   static const _storage = FlutterSecureStorage();
 
   static bool _isBase(DraftLine l) =>

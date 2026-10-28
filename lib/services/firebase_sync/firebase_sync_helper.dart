@@ -1,6 +1,7 @@
 // lib/services/firebase_sync/firebase_sync_helper.dart
 // مساعد لربط عمليات قاعدة البيانات مع Firebase Sync
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'firebase_sync_service.dart';
 import 'firebase_sync_config.dart';
 
@@ -27,7 +28,7 @@ class FirebaseSyncHelper {
     try {
       await _syncService.uploadCustomer(customerData);
     } catch (e) {
-      print('⚠️ Firebase Sync: فشل رفع العميل: $e');
+      debugPrint('⚠️ Firebase Sync: فشل رفع العميل: $e');
       // لا نوقف العملية - سيتم المزامنة لاحقاً
     }
   }
@@ -39,7 +40,7 @@ class FirebaseSyncHelper {
     try {
       await _syncService.uploadTransaction(txData, customerSyncUuid);
     } catch (e) {
-      print('⚠️ Firebase Sync: فشل رفع المعاملة: $e');
+      debugPrint('⚠️ Firebase Sync: فشل رفع المعاملة: $e');
     }
   }
   

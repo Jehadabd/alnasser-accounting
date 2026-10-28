@@ -15,7 +15,10 @@
 // يُستدعى بعد ensureSchema (حتى تعمل الترحيلات التي تعتمد على غياب عمود
 // أولاً)، ثم تعمل بقية مخططات النظام على قاعدة مكتملة.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
+
+import 'database_doctor.dart' show MaintenanceLog;
 
 class SchemaHealer {
   SchemaHealer._();
@@ -57,9 +60,9 @@ class SchemaHealer {
           try {
             await db.execute(t['sql'] as String);
             changes++;
-            print('🩹 [SchemaHealer] أُنشئ الجدول الناقص: $name');
+            debugPrint('🩹 [SchemaHealer] أُنشئ الجدول الناقص: $name');
           } catch (e) {
-            print('⚠️ [SchemaHealer] تعذّر إنشاء $name: $e');
+            debugPrint('⚠️ [SchemaHealer] تعذّر إنشاء $name: $e');
           }
           continue;
         }
@@ -76,9 +79,9 @@ class SchemaHealer {
           try {
             await db.execute('ALTER TABLE "$name" ADD COLUMN "$col" $def');
             changes++;
-            print('🩹 [SchemaHealer] أُضيف العمود الناقص: $name.$col');
+            debugPrint('🩹 [SchemaHealer] أُضيف العمود الناقص: $name.$col');
           } catch (e) {
-            print('⚠️ [SchemaHealer] تعذّر إضافة $name.$col: $e');
+            debugPrint('⚠️ [SchemaHealer] تعذّر إضافة $name.$col: $e');
           }
         }
       }
@@ -100,13 +103,16 @@ class SchemaHealer {
         } catch (_) {}
       }
     } catch (e) {
-      print('⚠️ [SchemaHealer] تعذّر فحص المخطط: $e');
+      debugPrint('⚠️ [SchemaHealer] تعذّر فحص المخطط: $e');
     } finally {
       try {
         await ref?.close();
       } catch (_) {}
     }
-    if (changes > 0) print('🩹 [SchemaHealer] اكتمل: $changes تغيير');
+    if (changes > 0) {
+      debugPrint('🩹 [SchemaHealer] اكتمل: $changes تغيير');
+      MaintenanceLog.add('أُكمل $changes من الجداول والأعمدة والفهارس الناقصة (قاعدة من إصدار آخر)');
+    }
     return changes;
   }
 

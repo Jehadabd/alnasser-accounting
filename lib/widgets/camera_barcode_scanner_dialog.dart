@@ -1,5 +1,6 @@
 // widgets/camera_barcode_scanner_dialog.dart
 // نافذة كاشف الباركود عبر الكاميرا (للأجهزة المحمولة والأندرويد)
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -12,11 +13,45 @@ class CameraBarcodeScannerDialog extends StatefulWidget {
 
   /// فتح النافذة وإرجاع الباركود الممسوح
   static Future<String?> scan(BuildContext context, {String title = 'مسح الباركود بالكاميرا'}) {
+    // 🪟 مكتبة الكاميرا لا تعمل على ويندوز ولينكس (كانت ترمي MissingPluginException):
+    //    إدخال يدوي — وقارئ الباركود USB يكتب في الحقل مباشرة.
+    final noCamera = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows || defaultTargetPlatform == TargetPlatform.linux);
+    if (noCamera) return _manual(context);
     return showDialog<String>(
       context: context,
       barrierDismissible: true,
       builder: (context) => CameraBarcodeScannerDialog(title: title),
     );
+  }
+
+  static Future<String?> _manual(BuildContext context) {
+    final c = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إدخال الباركود'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('الكاميرا غير متاحة على الحاسبة. امسح بقارئ الباركود أو اكتب الرقم.',
+              style: TextStyle(height: 1.5)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: c,
+            autofocus: true,
+            textDirection: TextDirection.ltr,
+            decoration: const InputDecoration(prefixIcon: Icon(Icons.qr_code_scanner), border: OutlineInputBorder()),
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim().isEmpty ? null : v.trim()),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, c.text.trim().isEmpty ? null : c.text.trim()),
+            child: const Text('موافق'),
+          ),
+        ],
+      ),
+    ).whenComplete(c.dispose);
   }
 
   @override
@@ -77,7 +112,7 @@ class _CameraBarcodeScannerDialogState extends State<CameraBarcodeScannerDialog>
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withValues(alpha: 0.5),
               blurRadius: 20,
               offset: const Offset(0, 10),
             ),
@@ -97,7 +132,7 @@ class _CameraBarcodeScannerDialogState extends State<CameraBarcodeScannerDialog>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF4F46E5).withOpacity(0.2),
+                      color: const Color(0xFF4F46E5).withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF818CF8), size: 20),
@@ -180,7 +215,7 @@ class _CameraBarcodeScannerDialogState extends State<CameraBarcodeScannerDialog>
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF4F46E5).withOpacity(0.15),
+                          color: const Color(0xFF4F46E5).withValues(alpha: 0.15),
                           blurRadius: 16,
                           spreadRadius: 2,
                         ),
@@ -194,7 +229,7 @@ class _CameraBarcodeScannerDialogState extends State<CameraBarcodeScannerDialog>
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.7),
+                        color: Colors.black.withValues(alpha: 0.7),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: Colors.white24),
                       ),

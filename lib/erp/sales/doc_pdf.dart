@@ -30,6 +30,7 @@ class DocPdf {
     String? notes,
     String? terms,
     bool showWords = true,
+    bool showTotals = true,
     String currency = 'IQD',
   }) async {
     final f = await ReportExport.font();
@@ -99,6 +100,7 @@ class DocPdf {
           cellPadding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
         ),
         pw.SizedBox(height: 10),
+        if (showTotals)
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.end, children: [
           pw.Container(
             width: 220,
@@ -106,7 +108,7 @@ class DocPdf {
             decoration: pw.BoxDecoration(border: pw.Border.all(color: navy), borderRadius: pw.BorderRadius.circular(6)),
             child: pw.Column(children: [
               _kv('الإجمالي', fmtMoney(total), st(11)),
-              if (discount > 0) _kv('الحسم', fmtMoney(discount), st(11)),
+              if (discount > 0) _kv('الخصم', fmtMoney(discount), st(11)),
               pw.Divider(color: PdfColors.grey400),
               _kv('الصافي', fmtMoney(net), st(13, c: navy)),
             ]),

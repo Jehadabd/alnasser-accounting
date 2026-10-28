@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/product.dart';
 import '../models/category.dart';
 import '../models/customer.dart';
@@ -54,6 +56,62 @@ class POSProvider extends ChangeNotifier {
   double _discount = 0.0;
   double _paidAmount = 0.0;
 
+  // 💰 مستوى السعر في الكاشير — نفس مستويات «نوع الفاتورة» في شاشة إنشاء الفاتورة.
+  //    أسعار المواد محفوظة في price1..price6 (unit_price قديم ويكون صفراً غالباً).
+  static const List<String> priceLevels = ['مفرد', 'مفرد 2', 'منزل', 'جملة', 'جملة 2', 'أخرى'];
+  static const String _kPriceLevel = 'pos_price_level';
+  String _priceLevel = 'مفرد';
+  String get priceLevel => _priceLevel;
+
+  double? _levelPrice(Product p, String level) {
+    switch (level) {
+      case 'مفرد 2':
+        return p.price2;
+      case 'منزل':
+        return p.price3;
+      case 'جملة':
+        return p.price4;
+      case 'جملة 2':
+        return p.price5;
+      case 'أخرى':
+        return p.price6;
+      default:
+        return p.price1;
+    }
+  }
+
+  /// سعر الوحدة الأساسية: سعر المستوى المختار، فإن كان فارغاً فسعر المفرد، ثم unit_price القديم
+  double basePriceOf(Product p) {
+    for (final v in [_levelPrice(p, _priceLevel), p.price1, p.unitPrice]) {
+      if (v != null && v > 0) return v;
+    }
+    return 0.0;
+  }
+
+  double _unitPriceFor(Product p, String unitName) {
+    for (final u in getProductUnits(p)) {
+      if (u['name'] == unitName) return (u['price'] as num).toDouble();
+    }
+    return basePriceOf(p);
+  }
+
+  /// تغيير مستوى السعر: تُعاد تسعيرة الأسطر التي لم يُعدَّل سعرها يدوياً، ويُحفظ الاختيار
+  Future<void> setPriceLevel(String level) async {
+    if (!priceLevels.contains(level) || level == _priceLevel) return;
+    final before = {for (final it in _cartItems) it.id: _unitPriceFor(it.product, it.selectedUnit)};
+    _priceLevel = level;
+    for (final it in _cartItems) {
+      final was = before[it.id];
+      if (was != null && (it.price - was).abs() < 0.0001) {
+        it.price = _unitPriceFor(it.product, it.selectedUnit);
+      }
+    }
+    notifyListeners();
+    try {
+      await (await SharedPreferences.getInstance()).setString(_kPriceLevel, level);
+    } catch (_) {}
+  }
+
   // Getters
   List<Category> get categories => _categories;
   List<Product> get displayedProducts => _displayedProducts;
@@ -92,10 +150,15 @@ class POSProvider extends ChangeNotifier {
       
       final settings = await SettingsManager.getAppSettings();
       _allowNegativeStock = settings.allowNegativeStock;
+
+      try {
+        final lv = (await SharedPreferences.getInstance()).getString(_kPriceLevel);
+        if (lv != null && priceLevels.contains(lv)) _priceLevel = lv;
+      } catch (_) {}
       
       _applyFilter();
     } catch (e) {
-      print("Error loading POS data: $e");
+      debugPrint("Error loading POS data: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -176,24 +239,32 @@ class POSProvider extends ChangeNotifier {
   }
 
   // Get available units for a product
+  // السعر من مستوى السعر المختار (price1..price6). الوحدات الأكبر بمضاعف تراكمي
+  // (صندوق = 12 كيس × 25 قطعة) كما في شاشة إنشاء الفاتورة.
   List<Map<String, dynamic>> getProductUnits(Product product) {
-    List<Map<String, dynamic>> units = [];
-    
+    final units = <Map<String, dynamic>>[];
+    final base = basePriceOf(product);
+
     // Base unit
     String baseUnitName = product.unit == 'piece' ? 'قطعة' : (product.unit == 'meter' ? 'متر' : product.unit);
-    units.add({'name': baseUnitName, 'quantity': 1, 'price': product.unitPrice});
-    
+    units.add({'name': baseUnitName, 'quantity': 1, 'price': base});
+
     // Hierarchy units
-    final hierarchy = product.getUnitHierarchyList();
-    for (var item in hierarchy) {
-      final unitName = item['unit_name'] ?? '';
-      final qty = (item['quantity'] as num?)?.toInt() ?? 1;
-      final price = (item['price'] as num?)?.toDouble() ?? product.unitPrice * qty;
-      if (unitName.isNotEmpty) {
-        units.add({'name': unitName, 'quantity': qty, 'price': price});
-      }
+    double multiplier = 1.0;
+    for (final item in product.getUnitHierarchyList()) {
+      final unitName = (item['unit_name'] ?? item['name'] ?? '').toString();
+      final q = item['quantity'];
+      final qty = q is num ? q.toDouble() : (double.tryParse('$q') ?? 1.0);
+      multiplier *= qty > 0 ? qty : 1.0;
+      if (unitName.isEmpty || units.any((u) => u['name'] == unitName)) continue;
+      final own = (item['price'] as num?)?.toDouble();
+      units.add({
+        'name': unitName,
+        'quantity': multiplier.round(),
+        'price': (own != null && own > 0) ? own : base * multiplier,
+      });
     }
-    
+
     return units;
   }
 
@@ -258,7 +329,8 @@ class POSProvider extends ChangeNotifier {
       double? customPrice;
       try {
         final barcodePriceInfo = await DatabaseService().getBarcodePrice(cleanBarcode);
-        customPrice = barcodePriceInfo['sell_price'];
+        final num? sp = barcodePriceInfo['sell_price'];
+        if (sp != null && sp > 0) customPrice = sp.toDouble();
       } catch (_) {}
 
       addToCart(product, price: customPrice);
@@ -344,7 +416,10 @@ class POSProvider extends ChangeNotifier {
   String? _lastErrorMessage;
   String? get lastErrorMessage => _lastErrorMessage;
 
-  Future<bool> processCheckout() async {
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
+  Future<bool> processCheckout() async =>
+      (await SaveLock.run(() => _processCheckoutUnlocked(), message: 'جارٍ حفظ البيع…')) ?? false;
+  Future<bool> _processCheckoutUnlocked() async {
     _lastErrorMessage = null;
     if (_cartItems.isEmpty) return false;
 
@@ -388,10 +463,10 @@ class POSProvider extends ChangeNotifier {
         if (invoiceUuid != null && invoiceUuid.isNotEmpty) {
           InvoiceSyncService().syncInvoiceBundleNow(invoiceUuid).then((ok) {
             if (!ok) {
-              print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت الدوري لاحقاً)');
+              debugPrint('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت الدوري لاحقاً)');
             }
           }).catchError((e) {
-            print('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت): $e');
+            debugPrint('⚠️ الرفع الفوري تأجّل (سيلتقطه المؤقت): $e');
           });
         }
         
@@ -418,7 +493,7 @@ class POSProvider extends ChangeNotifier {
           
           await ThermalReceiptService().printReceipt(receipt);
         } catch (e) {
-          print('⚠️ فشل طباعة الإيصال: $e');
+          debugPrint('⚠️ فشل طباعة الإيصال: $e');
         }
         
         await loadInitialData();
@@ -427,7 +502,7 @@ class POSProvider extends ChangeNotifier {
         return true;
     } catch(e) {
         _lastErrorMessage = e.toString().replaceAll('Exception: ', '');
-        print("Checkout error: $e");
+        debugPrint("Checkout error: $e");
         return false;
     } finally {
         _isLoading = false;

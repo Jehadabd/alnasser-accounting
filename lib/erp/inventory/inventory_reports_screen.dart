@@ -23,6 +23,8 @@ class _Report {
 }
 
 const _reports = [
+  _Report('overview', 'لوحة المخزون', Icons.donut_large_rounded, ErpColors.navy,
+      'نظرة سريعة على حال المخزون — اضغط أي دائرة لتفاصيلها'),
   _Report('movements', 'حركة المواد', Icons.swap_vert_rounded, ErpColors.blue,
       'أول المدة + الوارد − الصادر = آخر المدة لكل مادة'),
   _Report('stock_at', 'الجرد بتاريخ', Icons.history_rounded, ErpColors.purple, 'كميات المخزون كما كانت في تاريخ سابق'),
@@ -36,7 +38,7 @@ const _reports = [
 ];
 
 class InventoryReportsScreen extends StatefulWidget {
-  const InventoryReportsScreen({super.key, this.initial = 'movements'});
+  const InventoryReportsScreen({super.key, this.initial = 'overview'});
   final String initial;
   @override
   State<InventoryReportsScreen> createState() => _InventoryReportsScreenState();
@@ -70,6 +72,9 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
   List<Widget> _stats = const [];
   List<int> _rowIds = const [];
 
+  // لوحة المخزون
+  Map<String, double> _ov = const {};
+
   _Report get _r => _reports.firstWhere((x) => x.key == _key);
 
   @override
@@ -90,6 +95,9 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     setState(() => _loading = true);
     try {
       switch (_key) {
+        case 'overview':
+          await _runOverview();
+          break;
         case 'movements':
           await _runMovements();
           break;
@@ -114,6 +122,126 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _runOverview() async {
+    final db = await erpDb();
+    final a = await db.rawQuery('''
+      SELECT COUNT(*) AS n,
+             COALESCE(SUM(CASE WHEN COALESCE(p.stock_quantity, 0) > 0 THEN 1 ELSE 0 END), 0) AS instock
+      FROM products p LEFT JOIN product_details d ON d.product_id = p.id
+      WHERE COALESCE(p.is_deleted, 0) = 0 AND COALESCE(d.item_type, 'trade') != 'service'
+    ''');
+    final total = d0(a.first['n']);
+    final inStock = d0(a.first['instock']);
+    final val = await _svc.valuation('current');
+    final cost = val.fold<double>(0, (s, r) => s + d0(r['value']));
+    final sale = val.fold<double>(0, (s, r) => s + d0(r['sale_value']));
+    final below = (await _svc.limits('below_min')).length.toDouble();
+    final now = DateTime.now();
+    final stag = await _svc.stagnant(from: now.subtract(const Duration(days: 90)), to: now, type: 'sales', maxQty: 0);
+    final stagValue = stag.fold<double>(0, (s, r) => s + d0(r['stock_value']));
+    final expiring = (await _svc.expiring(30)).length.toDouble();
+    _ov = {
+      'total': total,
+      'instock': inStock,
+      'zero': total - inStock,
+      'cost': cost,
+      'sale': sale,
+      'below': below,
+      'stag_n': stag.length.toDouble(),
+      'stag_v': stagValue,
+      'expiring': expiring,
+    };
+    _headers = const [];
+    _rows = const [];
+    _rowIds = const [];
+    _footer = null;
+    _stats = const [];
+  }
+
+  void _goTo(String key, {String? limitMode}) {
+    setState(() {
+      _key = key;
+      if (limitMode != null) _limitMode = limitMode;
+      _rows = const [];
+      _headers = const [];
+      _stats = const [];
+    });
+    _run();
+  }
+
+  Widget _overview() {
+    final o = _ov;
+    double v(String k) => o[k] ?? 0;
+    final total = v('total');
+    double ratio(double x, double of) => of <= 0 ? 0 : x / of;
+    String pct(double r) => '${(r * 100).toStringAsFixed(r < 0.1 && r > 0 ? 1 : 0)}%';
+    final margin = ratio(v('sale') - v('cost'), v('sale'));
+    final stagShare = ratio(v('stag_v'), v('cost'));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          StatCard(label: 'قيمة المخزون بالكلفة', value: fmtMoney(v('cost')), icon: Icons.account_balance_wallet_outlined,
+              color: ErpColors.green, onTap: () => _goTo('valuation')),
+          StatCard(label: 'قيمته بسعر البيع', value: fmtMoney(v('sale')), icon: Icons.sell_outlined, color: ErpColors.blue,
+              onTap: () => _goTo('valuation')),
+          StatCard(label: 'المواد المخزنية', value: fmtQty(total), icon: Icons.inventory_2_outlined, color: ErpColors.navy),
+        ]),
+        const SizedBox(height: 14),
+        Wrap(spacing: 12, runSpacing: 12, children: [
+          RingGauge(
+            value: ratio(v('instock'), total),
+            center: pct(ratio(v('instock'), total)),
+            label: 'المواد المتوفرة',
+            caption: '${fmtQty(v('instock'))} من ${fmtQty(total)} مادة لها رصيد',
+            color: ErpColors.green,
+            onTap: () => _goTo('valuation'),
+          ),
+          RingGauge(
+            value: ratio(v('zero'), total),
+            center: fmtQty(v('zero')),
+            label: 'نافدة',
+            caption: 'مادة رصيدها صفر أو أقل',
+            color: ErpColors.red,
+            onTap: () => _goTo('limits', limitMode: 'zero'),
+          ),
+          RingGauge(
+            value: ratio(v('below'), total),
+            center: fmtQty(v('below')),
+            label: 'تحت الحد الأدنى',
+            caption: 'تحتاج طلب شراء',
+            color: ErpColors.orange,
+            onTap: () => _goTo('limits', limitMode: 'below_min'),
+          ),
+          RingGauge(
+            value: margin.clamp(0, 1).toDouble(),
+            center: pct(margin),
+            label: 'هامش الربح المتوقع',
+            caption: 'لو بيعت البضاعة الحالية بسعر المفرد',
+            color: ErpColors.blue,
+            onTap: () => _goTo('valuation'),
+          ),
+          RingGauge(
+            value: stagShare,
+            center: pct(stagShare),
+            label: 'رأس مال راكد',
+            caption: '${fmtQty(v('stag_n'))} مادة لم تُبع منذ 90 يوماً (${fmtMoney(v('stag_v'))})',
+            color: ErpColors.purple,
+            onTap: () => _goTo('stagnant'),
+          ),
+          RingGauge(
+            value: ratio(v('expiring'), total),
+            center: fmtQty(v('expiring')),
+            label: 'صلاحية قريبة',
+            caption: 'تنتهي خلال 30 يوماً أو انتهت',
+            color: ErpColors.gold,
+            onTap: () => _goTo('expiring'),
+          ),
+        ]),
+      ]),
+    );
   }
 
   Future<void> _runMovements() async {
@@ -476,14 +604,22 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
         ]),
       ),
       body: ListView(padding: const EdgeInsets.only(bottom: 24), children: [
-        ErpSection(title: r.title, icon: r.icon, color: r.color, child: _params()),
+        if (_key == 'overview') ...[
+          if (_loading && _ov.isEmpty)
+            const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()))
+          else
+            _overview(),
+        ] else
+          ErpSection(title: r.title, icon: r.icon, color: r.color, child: _params()),
         if (_stats.isNotEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Wrap(spacing: 10, runSpacing: 10, children: _stats),
           ),
         const SizedBox(height: 8),
-        if (_loading)
+        if (_key == 'overview')
+          const SizedBox.shrink()
+        else if (_loading)
           const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()))
         else if (_rows.isEmpty)
           const EmptyState('لا توجد نتائج', icon: Icons.analytics_outlined)

@@ -76,24 +76,28 @@ class _ProductEntryModeTileState extends State<ProductEntryModeTile> {
   @override
   Widget build(BuildContext context) {
     final v = _classic;
-    return Column(children: [
-      RadioListTile<bool>(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('الواجهة الجديدة (بطاقة المادة)'),
-        subtitle: const Text('كل بيانات المادة في شاشة واحدة: الوحدات والأسعار والباركود والمخزن', style: TextStyle(fontSize: 12)),
-        value: false,
-        groupValue: v,
-        onChanged: v == null ? null : (x) => _set(false),
-      ),
-      const Divider(height: 1),
-      RadioListTile<bool>(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('الواجهة القديمة'),
-        subtitle: const Text('نموذج الإدخال السابق كما اعتدت عليه', style: TextStyle(fontSize: 12)),
-        value: true,
-        groupValue: v,
-        onChanged: v == null ? null : (x) => _set(true),
-      ),
-    ]);
+    return RadioGroup<bool>(
+      groupValue: v,
+      onChanged: (x) {
+        if (x != null) _set(x);
+      },
+      child: Column(children: [
+        RadioListTile<bool>(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('الواجهة الجديدة (بطاقة المادة)'),
+          subtitle: const Text('كل بيانات المادة في شاشة واحدة: الوحدات والأسعار والباركود والمخزن', style: TextStyle(fontSize: 12)),
+          value: false,
+          enabled: v != null,
+        ),
+        const Divider(height: 1),
+        RadioListTile<bool>(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('الواجهة القديمة'),
+          subtitle: const Text('نموذج الإدخال السابق كما اعتدت عليه', style: TextStyle(fontSize: 12)),
+          value: true,
+          enabled: v != null,
+        ),
+      ]),
+    );
   }
 }

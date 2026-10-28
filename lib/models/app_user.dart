@@ -1,5 +1,4 @@
 // models/app_user.dart
-import 'dart:convert';
 
 class AppUser {
   final int? id;
@@ -10,6 +9,7 @@ class AppUser {
   final List<String> permissions;
   final String? displayName; // اسم الموظف للعرض (اختياري)
   final DateTime? lastLoginAt;
+  final String? jobTitle; // 👷 المسمى الوظيفي: محاسب، مجهز، مدقق...
 
   AppUser({
     this.id,
@@ -20,6 +20,7 @@ class AppUser {
     this.permissions = const [],
     this.displayName,
     this.lastLoginAt,
+    this.jobTitle,
   });
 
   bool get isAdmin => role == 'admin';
@@ -33,7 +34,12 @@ class AppUser {
 
   bool hasPermission(String permissionKey) {
     if (isAdmin) return true; // Admin has all permissions
-    return permissions.contains(permissionKey);
+    if (permissions.contains(permissionKey)) return true;
+    // 📊 تقرير محدد: الموظف القديم (صلاحية «التقارير» بلا اختيار تقارير محددة) يرى كل التقارير
+    if (AppPermissions.isReportKey(permissionKey)) {
+      return permissions.contains(AppPermissions.reports) && !permissions.any(AppPermissions.isReportKey);
+    }
+    return false;
   }
 
   Map<String, dynamic> toMap() {
@@ -56,6 +62,7 @@ class AppUser {
       permissions: permissions ?? [],
       displayName: map['display_name'] as String?,
       lastLoginAt: DateTime.tryParse('${map['last_login_at'] ?? ''}'),
+      jobTitle: map['job_title'] as String?,
     );
   }
 
@@ -76,6 +83,7 @@ class AppUser {
       permissions: permissions ?? this.permissions,
       displayName: displayName,
       lastLoginAt: lastLoginAt,
+      jobTitle: jobTitle,
     );
   }
 }
@@ -123,6 +131,30 @@ class AppPermissions {
   static const String currencies = 'erp_currencies'; // العملات وأسعار الصرف
   static const String periodClose = 'erp_period_close'; // تثبيت الإدخالات وإقفال السنة
 
+  // 📊 التقارير واحداً واحداً (تحتاج معها «التقارير» لفتح الشاشة)
+  static const String repDaily = 'rep_daily';
+  static const String repWeekly = 'rep_weekly';
+  static const String repMonthly = 'rep_monthly';
+  static const String repYearly = 'rep_yearly';
+  static const String repCustom = 'rep_custom';
+  static const String repProducts = 'rep_products';
+  static const String repPeople = 'rep_people';
+  static const String repReturns = 'rep_returns';
+  static const String repFounders = 'rep_founders';
+
+  static const List<String> reportKeys = [
+    repDaily, repWeekly, repMonthly, repYearly, repCustom, repProducts, repPeople, repReturns, repFounders,
+  ];
+
+  static bool isReportKey(String k) => k.startsWith('rep_');
+
+  /// صلاحيات موظف قديم: «التقارير» بلا تقارير محددة = كل التقارير (تُكتب صريحة عند التعديل)
+  static Set<String> expandLegacy(Iterable<String> perms) {
+    final s = perms.toSet();
+    if (s.contains(reports) && !s.any(isReportKey)) s.addAll(reportKeys);
+    return s;
+  }
+
   static const Map<String, String> allPermissions = {
     // أزرار الشاشة الرئيسية
     posAccess: 'الوصول للكاشير',
@@ -145,7 +177,7 @@ class AppPermissions {
     // النسخة المحاسبية
     accounting: 'المحاسبة: عرض القيود والكشوفات وميزان المراجعة',
     accountingPost: 'المحاسبة: السندات والمصاريف والقيود اليدوية',
-    viewCostProfit: 'رؤية الكلفة والأرباح (قائمة الدخل والميزانية)',
+    viewCostProfit: 'رؤية الكلفة والأرباح (عمود الكلفة والربح في الفاتورة، قائمة الدخل، الميزانية)',
     manageBranches: 'الفروع والمخازن',
     stockTransfer: 'التحويل بين المخازن',
     itemCard: 'بطاقة المادة الموسّعة',
@@ -161,6 +193,16 @@ class AppPermissions {
     inventoryReports: 'تقارير المخزون',
     currencies: 'العملات وأسعار الصرف',
     periodClose: 'تثبيت الإدخالات وإقفال السنة المالية',
+    // التقارير المحددة
+    repDaily: 'تقرير اليوم',
+    repWeekly: 'تقرير الأسبوع',
+    repMonthly: 'التقرير الشهري',
+    repYearly: 'التقرير السنوي',
+    repCustom: 'تقرير فترة مخصصة',
+    repProducts: 'تقارير البضاعة',
+    repPeople: 'تقارير الأشخاص',
+    repReturns: 'تقرير المرتجعات',
+    repFounders: 'تقارير المؤسسين',
   };
 
   /// قوالب الأدوار الجاهزة — تملأ الصلاحيات بضغطة، ويمكن تعديلها بعدها.
@@ -174,6 +216,7 @@ class AppPermissions {
       debtRegister, lateCustomers, shareDebtsPdf, reports, suppliers, addCustomer,
       addTransaction, editInvoices, accounting, accountingPost, viewCostProfit,
       dashboard, salesDocs, collection, debtReports, customerCard, currencies, inventoryReports,
+      ...reportKeys,
     ],
     'مدير فرع': [
       posAccess, debtRegister, productEntry, createInvoice, lateCustomers, shareDebtsPdf,
@@ -181,6 +224,7 @@ class AppPermissions {
       addTransaction, accounting, accountingPost, viewCostProfit, manageBranches,
       stockTransfer, itemCard, dashboard, salesDocs, collection, debtReports, customerCard,
       inventoryDocs, priceTools, inventoryReports, currencies,
+      ...reportKeys,
     ],
   };
 

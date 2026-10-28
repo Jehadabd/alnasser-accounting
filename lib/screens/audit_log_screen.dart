@@ -372,7 +372,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
             elevation: 2,
             child: ListTile(
               leading: CircleAvatar(
-                backgroundColor: _getOperationColor(operationType).withOpacity(0.2),
+                backgroundColor: _getOperationColor(operationType).withValues(alpha: 0.2),
                 child: Icon(
                   _getOperationIcon(operationType),
                   color: _getOperationColor(operationType),

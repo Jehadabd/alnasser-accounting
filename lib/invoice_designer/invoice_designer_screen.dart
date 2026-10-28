@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:printing/printing.dart';
 
 import '../screens/invoice_design_screen.dart';
+import '../services/voucher_print.dart' show VoucherKinds, VoucherPrint;
 import 'designer_widgets.dart';
 import 'invoice_layout.dart';
 import 'invoice_layout_store.dart';
@@ -34,8 +35,11 @@ class _C {
 }
 
 class InvoiceDesignerScreen extends StatefulWidget {
-  const InvoiceDesignerScreen({super.key, this.initialPaper = LayoutPaper.a4});
+  const InvoiceDesignerScreen({super.key, this.initialPaper = LayoutPaper.a4, this.docKind = 'invoice'});
   final LayoutPaper initialPaper;
+
+  /// 'invoice' = مصمم الفاتورة؛ نوع سند = مصمم ذلك السند (من «مصمم السندات»)
+  final String docKind;
 
   @override
   State<InvoiceDesignerScreen> createState() => _InvoiceDesignerScreenState();
@@ -56,6 +60,10 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
   String? _curId;
   String? _sel;
   bool _dirty = false;
+
+  /// ↩️ خطوات الرجوع: كل تنقّل بين التصاميم (اختيار نموذج جاهز، نسخة، فتح تصميم آخر)
+  /// يُسجَّل، فزر الرجوع يعيد خطوة خطوة قبل أن يخرج من المصمم.
+  final List<_ViewStep> _steps = [];
   double _zoom = 1.0;
   bool _grid = true;
   int _leftTab = 0; // 0 إضافة، 1 الطبقات
@@ -128,7 +136,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
 
   Future<void> _load() async {
     final layouts = await InvoiceLayoutStore.loadAll();
-    for (final t in PrintTarget.all) {
+    for (final t in PrintTarget.everything) {
       _targets[t.key] = await InvoiceLayoutStore.target(t.key);
     }
     PrintCompany company;
@@ -149,7 +157,15 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
 
   // ─────────────────────────── الحالة ───────────────────────────
 
-  List<InvoiceLayout> get _forPaper => _layouts.where((l) => l.paper == _paper).toList();
+  /// 🧾 مصمم سند (لا فاتورة)
+  bool get _isVoucher => widget.docKind != 'invoice';
+
+  /// أنواع الطباعة التي يخدمها هذا المصمم
+  List<PrintTarget> get _modeTargets => PrintTarget.forKind(widget.docKind);
+
+  /// تصاميم هذا الورق ولهذا النوع فقط (تصاميم الفواتير لا تظهر في السندات والعكس)
+  List<InvoiceLayout> get _forPaper =>
+      _layouts.where((l) => l.paper == _paper && l.kind == widget.docKind).toList();
 
   InvoiceLayout? get _cur {
     for (final l in _layouts) {
@@ -166,7 +182,8 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
     _sel = null;
   }
 
-  InvoicePrintData get _sample => _sampleCache ??= InvoicePrintData.sample(_company);
+  InvoicePrintData get _sample => _sampleCache ??=
+      _isVoucher ? InvoicePrintData.sampleVoucher(_company, widget.docKind) : InvoicePrintData.sample(_company);
 
   String _nameOf(LayoutElement e) {
     if (e.type == ElType.totals) {
@@ -223,6 +240,9 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
   Future<void> _save({bool quiet = false}) async {
     try {
       await InvoiceLayoutStore.saveAll(_layouts);
+      for (final s in _steps) {
+        s.createdId = null;
+      }
       if (!mounted) return;
       setState(() => _dirty = false);
       if (!quiet) _snack('حُفظت التصاميم', icon: Icons.check_circle, color: Colors.green.shade700);
@@ -245,25 +265,56 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
     ));
   }
 
-  Future<bool> _confirmLeave() async {
-    if (!_dirty) return true;
+  /// تعديلات غير محفوظة عند الرجوع: 'save' | 'discard' | null (البقاء).
+  Future<String?> _askUnsaved() async {
     final r = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('تعديلات غير محفوظة'),
-        content: const Text('هل تحفظ تعديلات التصميم قبل الخروج؟'),
+        content: const Text('هل تحفظ تعديلات التصميم قبل الرجوع؟'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('إلغاء')),
-          TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خروج بلا حفظ')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('حفظ وخروج')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('البقاء هنا')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('تجاهل التعديلات')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('حفظ')),
         ],
       ),
     );
-    if (r == 'save') {
-      await _save(quiet: true);
+    return r == 'save' || r == 'discard' ? r : null;
+  }
+
+  /// يتجاهل كل ما لم يُحفظ: التصاميم تعود كما هي محفوظة.
+  Future<void> _discardChanges() async {
+    final saved = await InvoiceLayoutStore.loadAll();
+    if (!mounted) return;
+    setState(() {
+      _layouts = saved;
+      _dirty = false;
+      _undo.clear();
+      _redo.clear();
+      _sel = null;
+      _sampleCache = null;
+    });
+  }
+
+  /// بعد الحفظ أو التجاهل: خطوة واحدة إلى الوراء بلا سؤال (true = بقي في المصمم).
+  /// تصميم من «نموذج جاهز» تُجوهل ← تُفتح النماذج من جديد؛ وإلا يعود التصميم السابق.
+  Future<bool> _stepBackResolved() async {
+    while (_steps.isNotEmpty) {
+      final s = _steps.removeLast();
+      final created = s.createdId;
+      final createdGone = created != null && !_layouts.any((l) => l.id == created);
+      final prev = s.prevCurId;
+      if (prev != null && !_layouts.any((l) => l.id == prev)) continue;
+      if (prev == null && !createdGone) continue;
+      setState(() {
+        _curId = prev;
+        _sel = null;
+        if (_cur == null) _pickFirst();
+      });
+      if (createdGone && s.fromGallery) await _newFromGallery();
       return true;
     }
-    return r == 'discard';
+    return false;
   }
 
   // ─────────────────────────── التصاميم ───────────────────────────
@@ -271,10 +322,17 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
   Future<void> _newFromGallery() async {
     final tpl = await showDialog<LayoutTemplate>(
       context: context,
-      builder: (ctx) => _GalleryDialog(paper: _paper, data: InvoicePrintData.sample(_company, rows: 5)),
+      builder: (ctx) => _GalleryDialog(
+        paper: _paper,
+        kind: widget.docKind,
+        data: _isVoucher
+            ? InvoicePrintData.sampleVoucher(_company, widget.docKind)
+            : InvoicePrintData.sample(_company, rows: 5),
+      ),
     );
     if (tpl == null) return;
     final l = tpl.build().copy(id: InvoiceLayout.newId('L'));
+    l.kind = widget.docKind; // 🧾 يبقى في مصممه (فاتورة أو هذا السند)
     var name = tpl.name;
     var n = 2;
     while (_layouts.any((x) => x.name == name)) {
@@ -282,6 +340,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       n++;
     }
     l.name = name;
+    final prevCur = _curId, prevDirty = _dirty;
     setState(() {
       _layouts.add(l);
       _curId = l.id;
@@ -289,6 +348,8 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       _dirty = true;
       _zoom = 1;
     });
+    _steps.add(_ViewStep(
+        prevCurId: prevCur, prevDirty: prevDirty, createdId: l.id, fromGallery: true, undoLen: _undo.length));
     _snack('أُنشئ «${l.name}». عدّله كما تريد، ثم احفظ وفعّل استعماله في الطباعة من لوحة التصميم.',
         icon: Icons.auto_awesome);
   }
@@ -297,12 +358,14 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
     final c = _cur;
     if (c == null) return;
     final copy = c.copy(id: InvoiceLayout.newId('L'), name: '${c.name} (نسخة)');
+    final prevCur = _curId, prevDirty = _dirty;
     setState(() {
       _layouts.add(copy);
       _curId = copy.id;
       _sel = null;
       _dirty = true;
     });
+    _steps.add(_ViewStep(prevCurId: prevCur, prevDirty: prevDirty, createdId: copy.id, undoLen: _undo.length));
   }
 
   Future<void> _rename() async {
@@ -347,13 +410,68 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       _pickFirst();
       _dirty = true;
     });
-    for (final t in PrintTarget.all) {
+    for (final t in PrintTarget.everything) {
       if (_targets[t.key] == c.id) {
         _targets[t.key] = '';
         await InvoiceLayoutStore.setTarget(t.key, '');
       }
     }
     await _save(quiet: true);
+  }
+
+  /// 🖨️ ما يُطبع الآن لكل نوع طباعة: التصميم الأصلي للبرنامج أو أحد التصاميم.
+  /// الرجوع للتصميم الأصلي بضغطة واحدة في أي وقت.
+  Future<void> _openPrintChoices() async {
+    if (_dirty) await _save(quiet: true);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('ما يُطبع الآن'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final t in _modeTargets) ...[
+                    Text(t.label, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(t.hint, style: const TextStyle(fontSize: 11.5, color: _C.muted)),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey('print_target_${t.key}_${_targets[t.key] ?? ''}'),
+                      initialValue: _layouts.any((l) => l.id == _targets[t.key] && t.accepts(l))
+                          ? _targets[t.key]
+                          : '',
+                      isExpanded: true,
+                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                      items: [
+                        const DropdownMenuItem(value: '', child: Text('التصميم الأصلي للبرنامج')),
+                        for (final l in _layouts.where(t.accepts))
+                          DropdownMenuItem(value: l.id, child: Text(l.name, overflow: TextOverflow.ellipsis)),
+                      ],
+                      onChanged: (v) async {
+                        final id = v ?? '';
+                        await InvoiceLayoutStore.setTarget(t.key, id);
+                        if (!mounted) return;
+                        setState(() => _targets[t.key] = id);
+                        setLocal(() {});
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('تم')),
+          ],
+        ),
+      ),
+    );
   }
 
   /// تفعيل/إيقاف استعمال هذا التصميم لنوع طباعة
@@ -396,7 +514,9 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
             ),
             Expanded(
               child: PdfPreview(
-                build: (_) async => (await LayoutPdfRenderer.render(c, data)).save(),
+                // 🔢 السندات: المعاينة كالطباعة (رقم السند يُضاف إن لم يكن في التصميم)
+                build: (_) async =>
+                    (await (_isVoucher ? VoucherPrint.renderVoucher(c, data) : LayoutPdfRenderer.render(c, data))).save(),
                 canChangePageFormat: false,
                 canChangeOrientation: false,
                 canDebug: false,
@@ -410,7 +530,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
   }
 
   Future<void> _openCompanySettings() async {
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => const InvoiceDesignScreen()));
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const InvoiceDesignScreen(fromDesigner: true)));
     try {
       final company = await PrintCompany.load();
       if (mounted) {
@@ -434,6 +554,68 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
     }
     final e = InvoiceLayoutTemplates.newElement(type, c, x: x, y: y ?? math.min(20, c.heightMm - 20));
     // لا يخرج عن الورقة
+    e.x = e.x.clamp(0, math.max(0, c.widthMm - e.w)).toDouble();
+    e.y = e.y.clamp(0, math.max(0, c.heightMm - e.h)).toDouble();
+    _mutate(() {
+      c.elements.add(e);
+      _sel = e.id;
+    });
+    _canvasFocus.requestFocus();
+  }
+
+  /// 🧾 بيانات السند الجاهزة لنوعه: (المفتاح، الاسم على الورقة، مبلغ؟)
+  List<(String, String, bool)> get _voucherItems {
+    final k = widget.docKind;
+    final receipt = k == 'receipt';
+    final cash = k == 'cash_receipt' || k == 'cash_refund';
+    final party = k == 'cash_refund' ? 'المستلم' : (receipt || k == 'cash_receipt' ? 'الدافع' : 'العميل');
+    return [
+      ('voucherTitle', 'عنوان السند', false),
+      ('voucherNo', receipt ? 'رقم سند القبض' : 'رقم السند', false),
+      ('customer', 'السيد', false),
+      ('customer', party, false),
+      ('dateTime', 'التاريخ والوقت', false),
+      ('date', 'التاريخ', false),
+      ('phone', 'الهاتف', false),
+      if (receipt) ('boxName', 'الصندوق', false),
+      if (receipt) ('docNo', 'رقم المستند', false),
+      if (!receipt) ('invoiceNo', 'الفاتورة الأصلية', false),
+      if (!receipt) ('paymentType', 'طريقة الدفع', false),
+      ('voucherReason', 'البيان', false),
+      ('voucherAmount', receipt ? 'المبلغ المقبوض' : (cash ? 'المبلغ نقداً' : 'مبلغ الإشعار'), true),
+      if (receipt || !cash) ('previousDebt', receipt ? 'الرصيد قبل التسديد' : 'الرصيد قبل الإشعار', true),
+      if (receipt || !cash) ('currentDebt', receipt ? 'الرصيد بعد التسديد' : 'الرصيد بعد الإشعار', true),
+      if (receipt) ('discount', 'الخصم', true),
+      if (!receipt) ('invoiceBefore', 'الفاتورة قبل', true),
+      if (!receipt) ('invoiceAfter', 'الفاتورة بعد', true),
+      ('amountWords', 'المبلغ كتابةً', false),
+      ('accountant', 'المحاسب', false),
+      ('printedAt', 'وقت الطباعة', false),
+      ('printedBy', 'طُبع بواسطة', false),
+    ];
+  }
+
+  /// يضيف حقلاً (نص) أو مبلغاً (مربع) من بيانات السند إلى الورقة.
+  void _addDataItem(String key, String label, bool money) {
+    final c = _cur;
+    if (c == null) return;
+    final e = InvoiceLayoutTemplates.newElement(money ? ElType.totals : ElType.field, c,
+        y: math.min(20, c.heightMm - 20));
+    if (money) {
+      e.props
+        ..['items'] = [key]
+        ..['labels'] = {key: label}
+        ..['highlight'] = key
+        ..['boxMode'] = 'group'
+        ..['style'] = 'list';
+      e.w = 80;
+      e.h = 10;
+    } else {
+      e.props
+        ..['key'] = key
+        ..['label'] = label;
+      e.w = key == 'amountWords' || key == 'voucherReason' ? 150 : 70;
+    }
     e.x = e.x.clamp(0, math.max(0, c.widthMm - e.w)).toDouble();
     e.y = e.y.clamp(0, math.max(0, c.heightMm - e.h)).toDouble();
     _mutate(() {
@@ -537,15 +719,74 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
     return KeyEventResult.handled;
   }
 
+  // ─────────────────────────── الرجوع خطوة خطوة ───────────────────────────
+
+  void _switchTo(String id) {
+    if (id == _curId) return;
+    _steps.add(_ViewStep(prevCurId: _curId, prevDirty: _dirty, undoLen: _undo.length));
+    setState(() {
+      _curId = id;
+      _sel = null;
+    });
+  }
+
+  /// خطوة واحدة إلى الوراء. true = رجع خطوة (لا خروج).
+  /// 1) عنصر محدد ← يُلغى تحديده.
+  /// 2) تصميم من «نموذج جاهز» لم يُعدَّل ولم يُحفظ ← يُزال وتُفتح النماذج من جديد.
+  /// 3) تصميم آخر فُتح ← يعود التصميم السابق.
+  /// تصميم جديد عُدّل ← لا رجوع صامت: الخروج يسأل عن الحفظ كالمعتاد.
+  Future<bool> _stepBack() async {
+    if (_sel != null) {
+      setState(() => _sel = null);
+      return true;
+    }
+    while (_steps.isNotEmpty) {
+      final s = _steps.removeLast();
+      final created = s.createdId;
+      final untouched = created != null && _curId == created && _undo.length == s.undoLen;
+      if (created != null && !untouched) {
+        // تصميم جديد عُدّل: يُسأل عن الحفظ أولاً، والخطوة تبقى ليرجع إليها بعده
+        _steps.add(s);
+        return false;
+      }
+      final prev = s.prevCurId;
+      if (prev != null && !_layouts.any((l) => l.id == prev)) continue;
+      setState(() {
+        if (untouched) {
+          _layouts.removeWhere((l) => l.id == created);
+          _dirty = s.prevDirty;
+        }
+        _curId = prev;
+        _sel = null;
+      });
+      if (untouched && s.fromGallery) await _newFromGallery();
+      return true;
+    }
+    return false;
+  }
+
   // ─────────────────────────── البناء ───────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_dirty,
+      canPop: !_dirty && _sel == null && _steps.isEmpty,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        if (await _confirmLeave() && context.mounted) Navigator.of(context).pop();
+        if (await _stepBack()) return;
+        if (_dirty) {
+          final r = await _askUnsaved();
+          if (r == null) return;
+          if (r == 'save') {
+            await _save(quiet: true);
+            if (_dirty) return; // تعذّر الحفظ: نبقى
+          } else {
+            await _discardChanges();
+          }
+          // ↩️ خطوة إلى الوراء إن وُجدت (النماذج الجاهزة أو التصميم السابق)، وإلا خروج
+          if (await _stepBackResolved()) return;
+        }
+        if (context.mounted) Navigator.of(context).pop();
       },
       child: Scaffold(
         backgroundColor: _C.bg,
@@ -585,7 +826,8 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       title: Row(children: [
         const Icon(Icons.design_services_outlined),
         const SizedBox(width: 10),
-        const Text('مصمم الفاتورة', style: TextStyle(fontWeight: FontWeight.bold)),
+        Text(_isVoucher ? 'مصمم السندات — ${VoucherKinds.label(widget.docKind)}' : 'مصمم الفاتورة',
+            style: const TextStyle(fontWeight: FontWeight.bold)),
         if (cur != null) ...[
           const SizedBox(width: 14),
           Flexible(
@@ -627,6 +869,13 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
         const SizedBox(width: 6),
         TextButton.icon(
           style: TextButton.styleFrom(foregroundColor: Colors.white),
+          onPressed: _openPrintChoices,
+          icon: const Icon(Icons.print_outlined),
+          label: const Text('ما يُطبع الآن'),
+        ),
+        const SizedBox(width: 6),
+        TextButton.icon(
+          style: TextButton.styleFrom(foregroundColor: Colors.white),
           onPressed: cur == null ? null : _previewPdf,
           icon: const Icon(Icons.visibility_outlined),
           label: const Text('معاينة الطباعة'),
@@ -657,10 +906,10 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(children: [
           // نوع الورق
-          for (final p in LayoutPaper.values) ...[
+          for (final p in _isVoucher ? const [LayoutPaper.a4] : LayoutPaper.values) ...[
             _PaperTab(
               label: p.shortLabel,
-              sub: p == LayoutPaper.a4 ? 'فاتورة كبيرة' : 'إيصال',
+              sub: _isVoucher ? 'سند' : (p == LayoutPaper.a4 ? 'فاتورة كبيرة' : 'إيصال'),
               icon: p.isRoll ? Icons.receipt_long : Icons.description_outlined,
               selected: _paper == p,
               onTap: () => setState(() {
@@ -685,10 +934,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
                     name: l.name,
                     selected: l.id == _curId,
                     used: _targets.values.contains(l.id),
-                    onTap: () => setState(() {
-                      _curId = l.id;
-                      _sel = null;
-                    }),
+                    onTap: () => _switchTo(l.id),
                   ),
                   const SizedBox(width: 6),
                 ],
@@ -854,6 +1100,25 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
           ]),
         ),
         const SizedBox(height: 6),
+        // 🧾 بيانات السند: اضغط لتُضاف (تُملأ تلقائياً عند الطباعة)
+        if (_isVoucher) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 12, 4, 8),
+            child: Text('بيانات السند — اضغط لتُضاف',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: _C.muted)),
+          ),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final it in _voucherItems)
+              ActionChip(
+                avatar: Icon(it.$3 ? Icons.payments_outlined : Icons.short_text_rounded, size: 16, color: _C.blue),
+                label: Text(it.$2, style: const TextStyle(fontSize: 12)),
+                visualDensity: VisualDensity.compact,
+                side: BorderSide(color: _C.blue.withValues(alpha: 0.35)),
+                backgroundColor: _C.blue.withValues(alpha: 0.05),
+                onPressed: () => _addDataItem(it.$1, it.$2, it.$3),
+              ),
+          ]),
+        ],
         for (final g in _groups.entries) ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
@@ -904,8 +1169,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       padding: const EdgeInsets.all(8),
       buildDefaultDragHandles: false,
       itemCount: list.length,
-      onReorder: (a, b) {
-        if (b > a) b--;
+      onReorderItem: (a, b) {
         _mutate(() {
           final moved = list.removeAt(a);
           list.insert(b, moved);
@@ -1267,7 +1531,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
         PropSection('الاستعمال في الطباعة', icon: Icons.print_outlined, children: [
           const Text('فعّل ليُطبع بهذا التصميم بدل تصميم البرنامج الأصلي:',
               style: TextStyle(fontSize: 12, color: _C.muted)),
-          for (final t in PrintTarget.all.where((t) => t.accepts(c)))
+          for (final t in _modeTargets.where((t) => t.accepts(c)))
             SwitchRow(
               title: t.label,
               subtitle: t.hint,
@@ -1276,6 +1540,12 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
             ),
         ]),
         PropSection('إعدادات التصميم', icon: Icons.tune, children: [
+          SwitchRow(
+            title: 'أبيض وأسود',
+            subtitle: 'للطابعة بلا ألوان: كل الألوان تُطبع بتدرّج الرمادي (والمعاينة كذلك)',
+            value: c.mono,
+            onChanged: (v) => _mutate(() => c.mono = v),
+          ),
           SyncedField(
             label: 'اسم التصميم',
             value: c.name,
@@ -1451,7 +1721,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
 
   Widget _dropdown<T>(String label, T value, List<DropdownMenuItem<T>> items, ValueChanged<T?> onChanged) =>
       DropdownButtonFormField<T>(
-        value: value,
+        initialValue: value,
         isExpanded: true,
         decoration: InputDecoration(
           labelText: label,
@@ -1611,13 +1881,22 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
             ),
             _dropdown<String>(
               'يحمل',
-              LayoutCatalog.fields.containsKey(e.s('data', '')) ? e.s('data', '') : 'invoiceNo',
+              (LayoutCatalog.fields.containsKey(e.s('data', '')) ||
+                      e.s('data', '') == InvoicePrintData.barcodeInvoiceInfo)
+                  ? e.s('data', '')
+                  : 'invoiceNo',
               [
+                const DropdownMenuItem(
+                    value: InvoicePrintData.barcodeInvoiceInfo,
+                    child: Text('كل بيانات الفاتورة (الرقم، التاريخ والوقت، السيد، الهاتف)')),
                 for (final k in const ['invoiceNo', 'customer', 'phone', 'dateTime'])
                   DropdownMenuItem(value: k, child: Text(LayoutCatalog.fields[k]!)),
               ],
               (v) => set('data', v),
             ),
+            if (e.s('kind', 'qr') != 'qr')
+              const Text('الباركود العادي لا يحمل حروفاً عربية: يُطبع رقم الفاتورة إن كانت البيانات عربية. استعمل QR لكل البيانات.',
+                  style: TextStyle(fontSize: 11, color: _C.muted)),
           ]),
         ];
       case ElType.watermark:
@@ -1697,9 +1976,8 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
           physics: const NeverScrollableScrollPhysics(),
           buildDefaultDragHandles: false,
           itemCount: cols.length,
-          onReorder: (a, b) => _mutate(() {
+          onReorderItem: (a, b) => _mutate(() {
             final list = e.columns;
-            if (b > a) b--;
             list.insert(b, list.removeAt(a));
             e.columns = list;
           }),
@@ -1787,35 +2065,31 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
             );
           },
         ),
-        PopupMenuButton<String>(
-          tooltip: 'إضافة عمود',
-          onSelected: (id) => _mutate(() {
-            final list = e.columns
-              ..add({
-                'id': id,
-                'label': LayoutCatalog.columns[id] ?? '',
-                'flex': id == 'details' ? 3.0 : 1.0,
-                'align': id == 'details' ? 'right' : 'center',
-              });
-            e.columns = list;
-          }),
-          itemBuilder: (_) => [
-            for (final k in LayoutCatalog.columns.entries)
-              if (k.key == 'blank' || !present.contains(k.key)) PopupMenuItem(value: k.key, child: Text(k.value)),
-          ],
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _C.blue.withValues(alpha: 0.5)),
-            ),
-            child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.add, color: _C.blue),
-              SizedBox(width: 6),
-              Text('إضافة عمود', style: TextStyle(color: _C.blue, fontWeight: FontWeight.w600)),
-            ]),
-          ),
-        ),
+        const SizedBox(height: 4),
+        const Text('أضف عموداً:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final k in LayoutCatalog.columns.entries)
+            if (k.key == 'blank' || !present.contains(k.key))
+              ActionChip(
+                avatar: const Icon(Icons.add, size: 16, color: _C.blue),
+                label: Text(k.value, style: const TextStyle(fontSize: 12)),
+                visualDensity: VisualDensity.compact,
+                side: BorderSide(color: _C.blue.withValues(alpha: 0.4)),
+                backgroundColor: _C.blue.withValues(alpha: 0.05),
+                onPressed: () => _mutate(() {
+                  final list = e.columns
+                    ..add({
+                      'id': k.key,
+                      'label': LayoutCatalog.columns[k.key] ?? '',
+                      'flex': k.key == 'details' ? 3.0 : 1.0,
+                      'align': k.key == 'details' ? 'right' : 'center',
+                    });
+                  e.columns = list;
+                }),
+              ),
+        ]),
+        const SizedBox(height: 6),
         const Text('«الخصم» و«السعر قبل الخصم» يظهران فقط إن كان في الفاتورة صنف مخصوم.',
             style: TextStyle(fontSize: 11, color: _C.muted)),
       ]),
@@ -2005,9 +2279,8 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
           physics: const NeverScrollableScrollPhysics(),
           buildDefaultDragHandles: false,
           itemCount: items.length,
-          onReorder: (a, b) => _mutate(() {
+          onReorderItem: (a, b) => _mutate(() {
             final list = e.strings('items');
-            if (b > a) b--;
             list.insert(b, list.removeAt(a));
             e.props['items'] = list;
           }),
@@ -2174,13 +2447,17 @@ class _DesignChip extends StatelessWidget {
 
 /// معرض النماذج الجاهزة (معاينات مصغّرة)
 class _GalleryDialog extends StatelessWidget {
-  const _GalleryDialog({required this.paper, required this.data});
+  const _GalleryDialog({required this.paper, required this.data, this.kind = 'invoice'});
   final LayoutPaper paper;
   final InvoicePrintData data;
 
+  /// 'invoice' أو نوع سند — لكل نوع قوالبه
+  final String kind;
+
   @override
   Widget build(BuildContext context) {
-    final templates = InvoiceLayoutTemplates.forPaper(paper);
+    final templates =
+        kind == 'invoice' ? InvoiceLayoutTemplates.forPaper(paper) : InvoiceLayoutTemplates.forKind(kind);
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
       clipBehavior: Clip.antiAlias,
@@ -2307,4 +2584,23 @@ class _TemplateCardState extends State<_TemplateCard> {
       ),
     );
   }
+}
+
+/// خطوة رجوع في المصمم: التصميم المعروض قبلها، وما أُنشئ فيها إن وُجد.
+class _ViewStep {
+  _ViewStep({
+    required this.prevCurId,
+    required this.prevDirty,
+    required this.undoLen,
+    this.createdId,
+    this.fromGallery = false,
+  });
+
+  final String? prevCurId;
+  final bool prevDirty;
+  final int undoLen;
+
+  /// التصميم الذي أنشأته هذه الخطوة؛ يصير null بعد الحفظ (صار محفوظاً فلا يُزال).
+  String? createdId;
+  final bool fromGallery;
 }

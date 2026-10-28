@@ -10,10 +10,10 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fauth;
 import '../services/firebase_sync/firebase_custom_config.dart';
-import '../services/firebase_sync/firebase_sync_config.dart';
-import '../services/firebase_sync/firebase_auth_service.dart';
-import '../services/firebase_sync/firebase_sync.dart';
 import '../services/sync/sync_security.dart';
+import '../services/license_service.dart';
+import '../widgets/settings_kit.dart';
+import '../services/seat_service.dart';
 
 class FirebaseCustomSetupScreen extends StatefulWidget {
   const FirebaseCustomSetupScreen({super.key});
@@ -45,17 +45,22 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
 
   Future<void> _loadExistingConfig() async {
     final options = await FirebaseCustomConfig.getCustomOptions();
-    if (options != null) {
-      _apiKeyController.text = options.apiKey;
-      _appIdController.text = options.appId;
-      _projectIdController.text = options.projectId;
-      _messagingSenderIdController.text = options.messagingSenderId;
+    if (options != null && mounted) {
+      // setState: كانت الحقول تُملأ بلا إعادة بناء فلا تظهر الروابط السريعة حتى أول كتابة.
+      setState(() {
+        _apiKeyController.text = options.apiKey;
+        _appIdController.text = options.appId;
+        _projectIdController.text = options.projectId;
+        _messagingSenderIdController.text = options.messagingSenderId;
+        // مشروع مربوط مسبقاً → نفتح مباشرة على خطوة الإعدادات (للتعديل أو إعادة الاختبار).
+        if (options.projectId.isNotEmpty) _currentStep = 4;
+      });
     }
   }
 
   void _parseFirebaseConfig(String configStr) {
     String extractValue(String key) {
-      final regex = RegExp('[\'"]?' + key + '[\'"]?\\s*:\\s*[\'"]([^\'"]+)[\'"]');
+      final regex = RegExp('[\'"]?$key[\'"]?\\s*:\\s*[\'"]([^\'"]+)[\'"]');
       final match = regex.firstMatch(configStr);
       return match?.group(1) ?? '';
     }
@@ -150,22 +155,25 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
       if (encryptionSecret.isNotEmpty) {
         await SyncSecurity.saveSecretKey(encryptionSecret);
       }
+      // 🔄 الجهاز الرئيسي: يُحفظ الربط في حساب الترخيص فتتصل كل الأجهزة الإضافية
+      //    (في أي فرع أو محافظة) عبر الإنترنت وحدها
+      await LicenseService().pushSyncLink();
 
       String diagMessage = '';
-      print('🧪 [اختبار الاتصال] ═══════════════════════════════════');
-      print('🧪 [1/3] تم تهيئة Firebase App بنجاح');
-      print('🧪 [1/3] ProjectId: ${app.options.projectId}');
-      print('🧪 [1/3] AppId: ${app.options.appId}');
+      debugPrint('🧪 [اختبار الاتصال] ═══════════════════════════════════');
+      debugPrint('🧪 [1/3] تم تهيئة Firebase App بنجاح');
+      debugPrint('🧪 [1/3] ProjectId: ${app.options.projectId}');
+      debugPrint('🧪 [1/3] AppId: ${app.options.appId}');
       
       try {
-        print('🧪 [2/3] محاولة تسجيل الدخول المجهول (Anonymous Auth)...');
+        debugPrint('🧪 [2/3] محاولة تسجيل الدخول المجهول (Anonymous Auth)...');
         final testAuth = fauth.FirebaseAuth.instanceFor(app: app);
         final userCred = await testAuth.signInAnonymously().timeout(
           const Duration(seconds: 20),
         );
-        print('✅ [2/3] تم تسجيل الدخول المجهول بنجاح!');
-        print('✅ [2/3] User UID: ${userCred.user?.uid}');
-        print('✅ [2/3] isAnonymous: ${userCred.user?.isAnonymous}');
+        debugPrint('✅ [2/3] تم تسجيل الدخول المجهول بنجاح!');
+        debugPrint('✅ [2/3] User UID: ${userCred.user?.uid}');
+        debugPrint('✅ [2/3] isAnonymous: ${userCred.user?.isAnonymous}');
 
         // 🔑 انتظار توكن صالح قبل أول قراءة (كبوابة المصادقة في المزامنة):
         // على ويندوز قد تخرج أول قراءة بعد التسجيل المجهول مباشرة بلا توكن،
@@ -174,7 +182,7 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
           await userCred.user?.getIdToken(true).timeout(const Duration(seconds: 20));
         } catch (_) {}
 
-        print('🧪 [3/3] محاولة قراءة مجموعة customers من Firestore...');
+        debugPrint('🧪 [3/3] محاولة قراءة مجموعة customers من Firestore...');
         // 🪟 ويندوز: الاختبار عبر واجهة Firestore REST، لا عبر مكتبة C++.
         // مكتبة Firestore على ويندوز أسقطت البرنامج كله (استثناء C++ 0xE06D7363)
         // عند أول قراءة في هذا المعالج على جهاز جديد — بقراءة الوثائق ثم بالعدّ.
@@ -214,34 +222,34 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
           await Future.delayed(const Duration(seconds: 3));
           readCount = await readOnce();
         }
-        print('✅ [3/3] تمت القراءة من Firestore بنجاح!${isWindows ? ' (REST)' : ''}');
-        print('✅ [3/3] عدد المستندات المقروءة: $readCount');
+        debugPrint('✅ [3/3] تمت القراءة من Firestore بنجاح!${isWindows ? ' (REST)' : ''}');
+        debugPrint('✅ [3/3] عدد المستندات المقروءة: $readCount');
         
         diagMessage = '\n✅ تم التحقق من الوصول لقاعدة البيانات (القراءة ناجحة).';
-        print('🎉 [نهاية الاختبار] جميع الخطوات نجحت! ═══════════════');
+        debugPrint('🎉 [نهاية الاختبار] جميع الخطوات نجحت! ═══════════════');
       } on fauth.FirebaseAuthException catch (e) {
-        print('❌ [2/3] فشل تسجيل الدخول المجهول!');
-        print('❌ [2/3] Error Code: ${e.code}');
-        print('❌ [2/3] Error Message: ${e.message}');
-        print('❌ [2/3] السبب المحتمل: Anonymous Authentication غير مفعّل في Firebase Console');
-        print('❌ [2/3] الحل: Firebase Console → Authentication → Sign-in method → Enable Anonymous');
+        debugPrint('❌ [2/3] فشل تسجيل الدخول المجهول!');
+        debugPrint('❌ [2/3] Error Code: ${e.code}');
+        debugPrint('❌ [2/3] Error Message: ${e.message}');
+        debugPrint('❌ [2/3] السبب المحتمل: Anonymous Authentication غير مفعّل في Firebase Console');
+        debugPrint('❌ [2/3] الحل: Firebase Console → Authentication → Sign-in method → Enable Anonymous');
         
         diagMessage = '\n⚠️ تحذير: تهيئة Firebase نجحت لكن فشل تسجيل الدخول المجهول.\n'
             'فعّل «Anonymous Sign-in» من Firebase Console → Authentication.\n'
             'الخطأ: ${e.code}';
         // لا نوقف الحفظ: قد يكون المستخدم يريد المتابعة وإصلاحها لاحقًا.
       } on FirebaseException catch (e) {
-        print('❌ [3/3] فشلت القراءة من Firestore!');
-        print('❌ [3/3] Error Code: ${e.code}');
-        print('❌ [3/3] Error Message: ${e.message}');
+        debugPrint('❌ [3/3] فشلت القراءة من Firestore!');
+        debugPrint('❌ [3/3] Error Code: ${e.code}');
+        debugPrint('❌ [3/3] Error Message: ${e.message}');
         
         final msg = e.message ?? '';
         if (e.code.contains('permission-denied') ||
             msg.contains('permission-denied') ||
             e.code.contains('PERMISSION_DENIED')) {
-          print('❌ [3/3] السبب: قواعد Firestore Rules ترفض الوصول');
-          print('❌ [3/3] الحل المحتمل 1: تأكد من أن Anonymous Auth مفعّل');
-          print('❌ [3/3] الحل المحتمل 2: تأكد من نشر Firestore Rules التي تسمح بـ request.auth != null');
+          debugPrint('❌ [3/3] السبب: قواعد Firestore Rules ترفض الوصول');
+          debugPrint('❌ [3/3] الحل المحتمل 1: تأكد من أن Anonymous Auth مفعّل');
+          debugPrint('❌ [3/3] الحل المحتمل 2: تأكد من نشر Firestore Rules التي تسمح بـ request.auth != null');
           
           diagMessage = '\n⚠️ تحذير حرج: قواعد أمان Firestore تمنع الوصول!\n'
               ' Firestore Rules الحالية ترفض القراءة. تأكد من نشر firestore.rules '
@@ -260,7 +268,7 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
               'الخطأ: ${e.code} - ${e.message}';
         }
       } catch (e) {
-        print('❌ [اختبار] خطأ غير متوقع: $e');
+        debugPrint('❌ [اختبار] خطأ غير متوقع: $e');
         diagMessage = '\n⚠️ تحذير: اختبار قاعدة البيانات فشل (الشبكة؟).\nالخطأ: $e';
       }
 
@@ -270,6 +278,7 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
       // تم إزالة app.delete() من هنا لأنها تدمر تطبيق Firebase الافتراضي
 
       if (_isWindows) FirebaseCustomConfig.restartRequired = true;
+      if (!mounted) return;
       setState(() {
         _savedNeedsRestart = true;
         _testResult = '✅ تم الاتصال وحفظ الإعدادات بنجاح!\n⚠️ يرجى إعادة تشغيل التطبيق بالكامل لتفعيل القاعدة الجديدة.$diagMessage';
@@ -277,21 +286,24 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
       });
 
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _testResult = '❌ فشل الاتصال. تأكد من صحة البيانات.\nالخطأ: $e';
         _testResultColor = Colors.red;
       });
     } finally {
-      setState(() {
-        _isTesting = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isTesting = false;
+        });
+      }
     }
   }
 
   /// 🪟 يعيد تشغيل البرنامج: نسخة جديدة من الملف نفسه ثم إغلاق هذه.
   Future<void> _restartApp() async {
     try {
-      await Process.start(Platform.resolvedExecutable, const [],
+      await Process.start(Platform.resolvedExecutable, SeatService.relaunchArgs,
           mode: ProcessStartMode.detached);
     } catch (e) {
       if (!mounted) return;
@@ -339,7 +351,7 @@ class _FirebaseCustomSetupScreenState extends State<FirebaseCustomSetupScreen> {
       429 => 'resource-exhausted',
       _ => 'unavailable',
     };
-    print('❌ [3/3] REST ${res.statusCode}: $message');
+    debugPrint('❌ [3/3] REST ${res.statusCode}: $message');
     throw FirebaseException(plugin: 'cloud_firestore', code: code, message: message);
   }
 
@@ -442,9 +454,7 @@ service cloud.firestore {
 }
 ''';
     Clipboard.setData(const ClipboardData(text: rules));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تم نسخ قواعد الأمان')),
-    );
+    setToast(context, 'تم نسخ قواعد الأمان — الصقها في تبويب Rules ثم Publish');
   }
 
   Future<void> _launchUrl(String url) async {
@@ -454,253 +464,389 @@ service cloud.firestore {
     }
   }
 
+  static const _fbOrange = Color(0xFFEA580C);
+  static const _steps = <(String, String, IconData)>[
+    ('إنشاء المشروع', 'حساب Firebase مجاني', Icons.add_box_rounded),
+    ('قاعدة البيانات', 'Firestore وقواعد الأمان', Icons.storage_rounded),
+    ('تسجيل الدخول', 'تفعيل Anonymous', Icons.how_to_reg_rounded),
+    ('إضافة التطبيق', 'استخراج المفاتيح', Icons.web_rounded),
+    ('الإعدادات', 'لصق المفاتيح واختبارها', Icons.vpn_key_rounded),
+  ];
+  bool _showSecret = false;
+
+  SetBannerKind get _testKind {
+    if (_testResultColor == Colors.red) return SetBannerKind.error;
+    if (_testResultColor == Colors.orange) return SetBannerKind.warn;
+    if (_testResultColor == Colors.green) return SetBannerKind.ok;
+    return SetBannerKind.info;
+  }
+
+  void _goTo(int step) {
+    if (_isTesting) return;
+    setState(() => _currentStep = step.clamp(0, _steps.length - 1).toInt());
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isLast = _currentStep == _steps.length - 1;
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('إعداد مشروع فايربيز الخاص', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          centerTitle: true,
-          backgroundColor: Colors.deepOrange,
-          foregroundColor: Colors.white,
-          elevation: 0,
-        ),
-        body: Stepper(
-          currentStep: _currentStep,
-          onStepContinue: () {
-            if (_currentStep < 4) {
-              setState(() => _currentStep++);
-            } else {
-              _testAndSaveConnection();
-            }
-          },
-          onStepCancel: () {
-            if (_currentStep > 0) {
-              setState(() => _currentStep--);
-            }
-          },
-          controlsBuilder: (context, details) {
-            final isLastStep = _currentStep == 4;
-            return Padding(
-              padding: const EdgeInsets.only(top: 16.0),
-              child: Row(
-                children: [
-                  ElevatedButton.icon(
-                    onPressed: _isTesting ? null : details.onStepContinue,
-                    icon: Icon(isLastStep ? Icons.check_circle_outline : Icons.arrow_forward_rounded, size: 18),
-                    label: Text(isLastStep ? 'اختبار وحفظ الربط' : 'الخطوة التالية', style: const TextStyle(fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isLastStep ? Colors.green : Colors.deepOrange,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  if (_currentStep > 0)
-                    OutlinedButton(
-                      onPressed: _isTesting ? null : details.onStepCancel,
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                      child: const Text('السابق'),
-                    ),
-                ],
+      child: SettingsScaffold(
+        title: 'ربط مشروع Firebase الخاص',
+        subtitle: 'خمس خطوات — مرة واحدة لكل مجموعة أجهزة',
+        icon: Icons.cloud_sync_rounded,
+        maxWidth: 860,
+        bottom: _bottomBar(isLast),
+        children: [
+          _stepHeader(),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 260),
+            switchInCurve: Curves.easeOutCubic,
+            transitionBuilder: (child, anim) => FadeTransition(
+              opacity: anim,
+              child: SlideTransition(
+                position: Tween(begin: const Offset(0.03, 0), end: Offset.zero).animate(anim),
+                child: child,
               ),
-            );
-          },
-          steps: [
-            Step(
-              title: const Text('إنشاء مشروع Firebase'),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('1. قم بالدخول إلى موقع Firebase (مجاني بالكامل)'),
-                  const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: () => _launchUrl('https://console.firebase.google.com'),
-                    icon: const Icon(Icons.open_in_browser),
-                    label: const Text('افتح موقع Firebase'),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text('2. اضغط على "Add project" وقم بتسميته.'),
-                  const Text('3. قم بإلغاء تفعيل Google Analytics لست بحاجة إليه.'),
-                ],
-              ),
-              isActive: _currentStep >= 0,
             ),
-            Step(
-              title: const Text('إعداد قاعدة البيانات (Firestore)'),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('1. من القائمة الجانبية اختر "Firestore Database" ثم اضغط "Create database".'),
-                  const Text('2. اختر موقع الخادم الأقرب لك (مثلاً eur3).'),
-                  const Text('3. بعد الإنشاء، اذهب إلى تبويب "Rules".'),
-                  const Text('4. انسخ الكود بالنقر على الزر بالأسفل والصقه هناك، ثم اضغط Publish:'),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade50,
-                      border: Border.all(color: Colors.green.shade200),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.security, color: Colors.green),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'القواعد المنسوخة آمنة حسابياً بالكامل وتعتمد على التحقق من groupSecret (مفتاح تشفير 32 حرف) لمنع أي وصول غير مصرح به حتى لو تم تسريب رابط قاعدة البيانات.',
-                            style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, height: 1.5),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: _copyRules,
-                    icon: const Icon(Icons.copy),
-                    label: const Text('نسخ القواعد'),
-                  ),
-                ],
-              ),
-              isActive: _currentStep >= 1,
-            ),
-            Step(
-              title: const Text('تفعيل تسجيل الدخول (Authentication)'),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('1. من القائمة الجانبية اختر "Authentication" ثم اضغط "Get started".'),
-                  const Text('2. اذهب إلى تبويب "Sign-in method".'),
-                  const Text('3. اختر "Anonymous" وقم بتفعيله (Enable).'),
-                  const Text('4. اضغط Save. (هذا يضمن أن التطبيق فقط من يتصل بالبيانات).'),
-                ],
-              ),
-              isActive: _currentStep >= 2,
-            ),
-            Step(
-              title: const Text('إضافة التطبيق واستخراج المفاتيح'),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('1. ارجع للصفحة الرئيسية للمشروع (Project Overview).'),
-                  const Text('2. اضغط على أيقونة الويب (</>) لإضافة تطبيق.'),
-                  const Text('3. اختر اسماً للتطبيق ثم اضغط Register app.'),
-                  const Text('4. سيظهر لك كود يحتوي على المفاتيح (firebaseConfig). احتفظ بهذه الصفحة مفتوحة للخطوة التالية.'),
-                ],
-              ),
-              isActive: _currentStep >= 3,
-            ),
-            Step(
-              title: const Text('إدخال الإعدادات'),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('يمكنك ببساطة لصق الكود كاملاً من Firebase وسيقوم التطبيق باستخراج الحقول تلقائياً:'),
-                  const SizedBox(height: 8),
-                  TextField(
-                    maxLines: 4,
-                    textDirection: TextDirection.ltr,
-                    decoration: const InputDecoration(
-                      labelText: 'الصق كود firebaseConfig هنا',
-                      hintText: 'const firebaseConfig = {\n  apiKey: "...",\n  ...\n};',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Color(0xFFF5F5F5),
-                    ),
-                    onChanged: (value) {
-                      if (value.contains('apiKey') || value.contains('projectId')) {
-                        _parseFirebaseConfig(value);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 24),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  const Text('أو أدخلها يدوياً:'),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _apiKeyController,
-                    decoration: const InputDecoration(labelText: 'API Key', border: OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _appIdController,
-                    decoration: const InputDecoration(labelText: 'App ID', border: OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _projectIdController,
-                    decoration: const InputDecoration(labelText: 'Project ID', border: OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _messagingSenderIdController,
-                    decoration: const InputDecoration(labelText: 'Messaging Sender ID', border: OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _encryptionSecretController,
-                    decoration: const InputDecoration(labelText: 'مفتاح التشفير (اختياري)', border: OutlineInputBorder()),
-                  ),
-                  if (_testResult.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Text(
-                      _testResult,
-                      style: TextStyle(color: _testResultColor, fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                  if (_savedNeedsRestart && _isWindows) ...[
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _restartApp,
-                        icon: const Icon(Icons.restart_alt),
-                        label: const Text('إعادة تشغيل البرنامج الآن لتفعيل الربط'),
-                      ),
-                    ),
-                  ],
-                  if (_projectIdController.text.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    const Divider(),
-                    const SizedBox(height: 8),
-                    const Text('🔗 روابط الوصول السريع (بناءً على الكود الذي أدخلته):', style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () => _launchUrl('https://console.firebase.google.com/project/${_projectIdController.text}/firestore/rules'),
-                        icon: const Icon(Icons.security),
-                        label: const Text('افتح صفحة قواعد البيانات (Rules)'),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade50, foregroundColor: Colors.blue.shade900),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () => _launchUrl('https://console.firebase.google.com/project/${_projectIdController.text}/authentication/providers'),
-                        icon: const Icon(Icons.person),
-                        label: const Text('افتح صفحة المصادقة (Authentication)'),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.purple.shade50, foregroundColor: Colors.purple.shade900),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              isActive: _currentStep >= 4,
-            ),
-          ],
-        ),
+            child: KeyedSubtree(key: ValueKey(_currentStep), child: _stepBody(_currentStep)),
+          ),
+        ],
       ),
     );
+  }
+
+  /// مؤشر الخطوات: دوائر مرقّمة متصلة، كل خطوة قابلة للضغط.
+  Widget _stepHeader() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.fromLTRB(10, 14, 10, 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: kSetBorder),
+      ),
+      child: LayoutBuilder(builder: (context, c) {
+        final compact = c.maxWidth < 560;
+        return Row(children: [
+          for (var i = 0; i < _steps.length; i++) ...[
+            Expanded(
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _goTo(i),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: i < _currentStep
+                            ? kSetGreen
+                            : (i == _currentStep ? _fbOrange : const Color(0xFFF1F5F9)),
+                        shape: BoxShape.circle,
+                        boxShadow: i == _currentStep
+                            ? [BoxShadow(color: _fbOrange.withValues(alpha: 0.35), blurRadius: 10, offset: const Offset(0, 3))]
+                            : null,
+                      ),
+                      child: Icon(
+                        i < _currentStep ? Icons.check_rounded : _steps[i].$3,
+                        size: 18,
+                        color: i <= _currentStep ? Colors.white : kSetMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      compact ? '${i + 1}' : _steps[i].$1,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: i == _currentStep ? FontWeight.w800 : FontWeight.w600,
+                        color: i == _currentStep ? _fbOrange : kSetMuted,
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+            if (i < _steps.length - 1)
+              Container(
+                width: compact ? 10 : 22,
+                height: 2,
+                margin: const EdgeInsets.only(bottom: 22),
+                color: i < _currentStep ? kSetGreen : kSetBorder,
+              ),
+          ],
+        ]);
+      }),
+    );
+  }
+
+  Widget _bottomBar(bool isLast) => Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+        decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: kSetBorder))),
+        child: SafeArea(
+          top: false,
+          child: Align(
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 860),
+              child: Row(children: [
+                if (_currentStep > 0)
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+                    onPressed: _isTesting ? null : () => _goTo(_currentStep - 1),
+                    icon: const Icon(Icons.arrow_back_rounded, size: 18), // يُعكس تلقائياً في RTL
+                    label: const Text('السابق'),
+                  ),
+                const Spacer(),
+                Text('الخطوة ${_currentStep + 1} من ${_steps.length}',
+                    style: const TextStyle(color: kSetMuted, fontSize: 12.5)),
+                const SizedBox(width: 12),
+                SizedBox(
+                  width: 210,
+                  child: SetPrimaryButton(
+                    label: isLast ? 'اختبار وحفظ الربط' : 'الخطوة التالية',
+                    icon: isLast ? Icons.check_circle_outline_rounded : Icons.arrow_forward_rounded,
+                    color: isLast ? kSetGreen : _fbOrange,
+                    busy: _isTesting,
+                    onPressed: isLast ? _testAndSaveConnection : () => _goTo(_currentStep + 1),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      );
+
+  Widget _stepBody(int step) {
+    final s = _steps[step];
+    switch (step) {
+      case 0:
+        return SetCard(
+          title: s.$1,
+          subtitle: s.$2,
+          icon: s.$3,
+          color: _fbOrange,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SizedBox(height: 12),
+            const SetSteps([
+              'ادخل إلى موقع Firebase (مجاني بالكامل).',
+              'اضغط «Add project» وسمِّ المشروع.',
+              'ألغِ تفعيل Google Analytics — لست بحاجة إليه.',
+            ], color: _fbOrange),
+            const SizedBox(height: 4),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: _fbOrange),
+                onPressed: () => _launchUrl('https://console.firebase.google.com'),
+                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                label: const Text('افتح موقع Firebase'),
+              ),
+            ),
+          ]),
+        );
+      case 1:
+        return SetCard(
+          title: s.$1,
+          subtitle: s.$2,
+          icon: s.$3,
+          color: _fbOrange,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SizedBox(height: 12),
+            const SetSteps([
+              'من القائمة الجانبية اختر «Firestore Database» ثم «Create database».',
+              'اختر موقع الخادم الأقرب لك (مثلاً eur3).',
+              'بعد الإنشاء اذهب إلى تبويب «Rules».',
+              'انسخ القواعد بالزر أدناه والصقها هناك، ثم اضغط «Publish».',
+            ], color: _fbOrange),
+            const SizedBox(height: 4),
+            // كان النص يدّعي أن القواعد تتحقق من groupSecret — وهي فعلياً تسمح لأي
+            // مستخدم مسجّل الدخول (ولو مجهولاً). النص الآن يصف ما تفعله فعلاً.
+            const SetBanner(
+              'القواعد تسمح بالقراءة والكتابة لأي جهاز مسجّل الدخول في مشروعك (تسجيل مجهول). '
+              'الحماية من البيانات المزوّرة يوفّرها «سرّ المجموعة» مع «الوضع الصارم» في إعدادات المزامنة — '
+              'لذلك لا تشارك مفاتيح مشروعك مع أحد.',
+              kind: SetBannerKind.warn,
+              icon: Icons.shield_outlined,
+            ),
+            const SizedBox(height: 12),
+            Wrap(spacing: 10, runSpacing: 10, children: [
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: _fbOrange),
+                onPressed: _copyRules,
+                icon: const Icon(Icons.copy_rounded, size: 18),
+                label: const Text('نسخ القواعد'),
+              ),
+              if (_projectIdController.text.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed: () => _launchUrl(
+                      'https://console.firebase.google.com/project/${_projectIdController.text}/firestore/rules'),
+                  icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                  label: const Text('افتح صفحة Rules لمشروعي'),
+                ),
+            ]),
+          ]),
+        );
+      case 2:
+        return SetCard(
+          title: s.$1,
+          subtitle: s.$2,
+          icon: s.$3,
+          color: _fbOrange,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SizedBox(height: 12),
+            const SetSteps([
+              'من القائمة الجانبية اختر «Authentication» ثم «Get started».',
+              'اذهب إلى تبويب «Sign-in method».',
+              'اختر «Anonymous» وفعّله (Enable).',
+              'اضغط «Save».',
+            ], color: _fbOrange),
+            if (_projectIdController.text.isNotEmpty)
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: OutlinedButton.icon(
+                  onPressed: () => _launchUrl(
+                      'https://console.firebase.google.com/project/${_projectIdController.text}/authentication/providers'),
+                  icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                  label: const Text('افتح صفحة المصادقة لمشروعي'),
+                ),
+              ),
+          ]),
+        );
+      case 3:
+        return SetCard(
+          title: s.$1,
+          subtitle: s.$2,
+          icon: s.$3,
+          color: _fbOrange,
+          child: const Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            SizedBox(height: 12),
+            SetSteps([
+              'ارجع للصفحة الرئيسية للمشروع (Project Overview).',
+              'اضغط أيقونة الويب (</>) لإضافة تطبيق.',
+              'اختر اسماً للتطبيق ثم اضغط «Register app».',
+              'سيظهر كود فيه المفاتيح (firebaseConfig) — أبقِ الصفحة مفتوحة للخطوة التالية.',
+            ], color: _fbOrange),
+          ]),
+        );
+      default:
+        return _configStep(s);
+    }
+  }
+
+  Widget _configStep((String, String, IconData) s) {
+    Widget field(TextEditingController c, String label, IconData icon) => TextField(
+          controller: c,
+          textDirection: TextDirection.ltr,
+          decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
+          onChanged: (_) => setState(() {}),
+        );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SetCard(
+        title: 'الصق كود firebaseConfig',
+        subtitle: 'يستخرج التطبيق الحقول تلقائياً',
+        icon: Icons.content_paste_rounded,
+        color: _fbOrange,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: TextField(
+            maxLines: 5,
+            minLines: 3,
+            textDirection: TextDirection.ltr,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+            decoration: const InputDecoration(
+              hintText: 'const firebaseConfig = {\n  apiKey: "...",\n  ...\n};',
+              fillColor: Color(0xFFF8FAFC),
+            ),
+            onChanged: (value) {
+              if (value.contains('apiKey') || value.contains('projectId')) {
+                _parseFirebaseConfig(value);
+              }
+            },
+          ),
+        ),
+      ),
+      SetCard(
+        title: 'المفاتيح',
+        subtitle: 'أو أدخلها يدوياً',
+        icon: s.$3,
+        color: _fbOrange,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const SizedBox(height: 12),
+          LayoutBuilder(builder: (context, c) {
+            final cols = c.maxWidth >= 560 ? 2 : 1;
+            final w = (c.maxWidth - (cols - 1) * 12) / cols;
+            return Wrap(spacing: 12, runSpacing: 12, children: [
+              SizedBox(width: w, child: field(_apiKeyController, 'API Key *', Icons.key_rounded)),
+              SizedBox(width: w, child: field(_appIdController, 'App ID *', Icons.apps_rounded)),
+              SizedBox(width: w, child: field(_projectIdController, 'Project ID *', Icons.folder_open_rounded)),
+              SizedBox(width: w, child: field(_messagingSenderIdController, 'Messaging Sender ID', Icons.numbers_rounded)),
+            ]);
+          }),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _encryptionSecretController,
+            obscureText: !_showSecret,
+            textDirection: TextDirection.ltr,
+            decoration: InputDecoration(
+              labelText: 'سرّ المجموعة / مفتاح التشفير (اختياري)',
+              helperText: 'نفس السرّ على كل الأجهزة — اتركه فارغاً للإبقاء على السرّ الحالي',
+              prefixIcon: const Icon(Icons.lock_outline_rounded),
+              suffixIcon: IconButton(
+                tooltip: _showSecret ? 'إخفاء' : 'إظهار',
+                icon: Icon(_showSecret ? Icons.visibility_off_rounded : Icons.visibility_rounded),
+                onPressed: () => setState(() => _showSecret = !_showSecret),
+              ),
+            ),
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: _testResult.isEmpty
+                ? const SizedBox.shrink()
+                : Padding(
+                    key: ValueKey(_testResult),
+                    padding: const EdgeInsets.only(top: 14),
+                    child: SetBanner(_testResult, kind: _testKind),
+                  ),
+          ),
+          if (_savedNeedsRestart && _isWindows) ...[
+            const SizedBox(height: 12),
+            SetPrimaryButton(
+              label: 'إعادة تشغيل البرنامج الآن لتفعيل الربط',
+              icon: Icons.restart_alt_rounded,
+              color: kSetGreen,
+              onPressed: _restartApp,
+            ),
+          ],
+        ]),
+      ),
+      if (_projectIdController.text.isNotEmpty)
+        SetCard(
+          title: 'روابط سريعة لمشروعك',
+          icon: Icons.link_rounded,
+          color: kSetBlue,
+          padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+          child: Column(children: [
+            SetActionRow(
+              icon: Icons.security_rounded,
+              title: 'صفحة قواعد البيانات (Rules)',
+              color: kSetBlue,
+              onTap: () => _launchUrl(
+                  'https://console.firebase.google.com/project/${_projectIdController.text}/firestore/rules'),
+            ),
+            SetActionRow(
+              icon: Icons.person_rounded,
+              title: 'صفحة المصادقة (Authentication)',
+              color: const Color(0xFF7C3AED),
+              onTap: () => _launchUrl(
+                  'https://console.firebase.google.com/project/${_projectIdController.text}/authentication/providers'),
+            ),
+          ]),
+        ),
+    ]);
   }
 }

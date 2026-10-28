@@ -1,10 +1,12 @@
 // lib/services/database/business/customer_locking.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import '../../license_service.dart';
 import '../../auth_service.dart';
 import '../../license_v4/device_fingerprint.dart';
 import 'dart:io';
+import '../../seat_service.dart';
 
 /// نتيجة محاولة القفل
 class LockResult {
@@ -77,6 +79,8 @@ class LockService {
     try {
       device = DeviceFingerprint.deviceName();
     } catch (_) {}
+    final seat = SeatService.label;
+    if (seat.isNotEmpty) device = device.isEmpty ? seat : '$device ($seat)';
     return device.isEmpty ? user : '$user — $device';
   }
 
@@ -93,13 +97,16 @@ class LockService {
         try {
           _deviceId = await _licenseService.generateDeviceId();
         } catch (e) {
-          print('⚠️ [LockService] تعذّر توليد معرّف الجهاز: $e');
+          debugPrint('⚠️ [LockService] تعذّر توليد معرّف الجهاز: $e');
         }
       }
       // locked_by_device_id عمود NOT NULL — لا نتركه فارغاً أبداً
       if (_deviceId == null || _deviceId!.isEmpty) {
         _deviceId = 'unknown_device';
       }
+      // 🖥️ شاشة ثانية على نفس الحاسبة = طرف مستقل: كانت تُعدّ «الجهاز نفسه»
+      //    فتمدّد قفل الشاشة الأولى بدل أن تُمنع
+      if (SeatService.seat > 1) _deviceId = '${_deviceId!}#s${SeatService.seat}';
       try {
         _userName = Platform.environment['USERNAME'] ??
             Platform.environment['USER'] ??
@@ -149,7 +156,7 @@ class LockService {
       _tableReady = true;
       return true;
     } catch (e) {
-      print('⚠️ [LockService] تعذّر تجهيز جدول الأقفال: $e');
+      debugPrint('⚠️ [LockService] تعذّر تجهيز جدول الأقفال: $e');
       return false;
     }
   }
@@ -167,7 +174,7 @@ class LockService {
       await _initMsg();
       db = await getDatabase();
     } catch (e) {
-      print('⚠️ [LockService] تخطي القفل (تعذّر الوصول لقاعدة البيانات): $e');
+      debugPrint('⚠️ [LockService] تخطي القفل (تعذّر الوصول لقاعدة البيانات): $e');
       return LockResult(
           success: true, skipped: true, message: 'تُخطّي القفل: $e');
     }
@@ -228,11 +235,11 @@ class LockService {
         }
 
         // لا يوجد قفل ⇒ الفشل لم يكن تعارضاً، بل عطلاً. لا نمنع العملية.
-        print('⚠️ [LockService] تخطي القفل (فشل غير تعارضي): $e');
+        debugPrint('⚠️ [LockService] تخطي القفل (فشل غير تعارضي): $e');
         return LockResult(
             success: true, skipped: true, message: 'تُخطّي القفل: $e');
       } catch (inner) {
-        print('⚠️ [LockService] تخطي القفل (تعذّر فحص القفل القائم): $inner');
+        debugPrint('⚠️ [LockService] تخطي القفل (تعذّر فحص القفل القائم): $inner');
         return LockResult(
             success: true, skipped: true, message: 'تُخطّي القفل: $inner');
       }
@@ -260,7 +267,7 @@ class LockService {
         whereArgs: [resourceType, resourceId, _deviceId],
       );
     } catch (e) {
-      print('⚠️ [LockService] تعذّر تحرير القفل ($resourceType/$resourceId): $e');
+      debugPrint('⚠️ [LockService] تعذّر تحرير القفل ($resourceType/$resourceId): $e');
     }
   }
 
@@ -288,7 +295,7 @@ class LockService {
 
       return count > 0;
     } catch (e) {
-      print('⚠️ [LockService] تعذّر تمديد القفل: $e');
+      debugPrint('⚠️ [LockService] تعذّر تمديد القفل: $e');
       return false;
     }
   }
@@ -318,7 +325,7 @@ class LockService {
       final lockedByDevice = result.first['locked_by_device_id'] as String?;
       return lockedByDevice != null && lockedByDevice != _deviceId;
     } catch (e) {
-      print('⚠️ [LockService] تعذّر فحص القفل: $e');
+      debugPrint('⚠️ [LockService] تعذّر فحص القفل: $e');
       return false;
     }
   }
@@ -333,7 +340,7 @@ class LockService {
         whereArgs: [now],
       );
     } catch (e) {
-      print('⚠️ [LockService] تعذّر تنظيف الأقفال المنتهية: $e');
+      debugPrint('⚠️ [LockService] تعذّر تنظيف الأقفال المنتهية: $e');
     }
   }
 
@@ -350,10 +357,10 @@ class LockService {
         whereArgs: [_deviceId],
       );
       if (n > 0) {
-        print('🧹 [LockService] حُرّرت $n قفلاً معلّقاً من جلسة سابقة');
+        debugPrint('🧹 [LockService] حُرّرت $n قفلاً معلّقاً من جلسة سابقة');
       }
     } catch (e) {
-      print('⚠️ [LockService] تعذّر تحرير أقفال الجهاز: $e');
+      debugPrint('⚠️ [LockService] تعذّر تحرير أقفال الجهاز: $e');
     }
   }
 }

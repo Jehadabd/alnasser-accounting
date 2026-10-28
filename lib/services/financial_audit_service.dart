@@ -1,6 +1,7 @@
 // services/financial_audit_service.dart
 // خدمة تسجيل العمليات المالية للتدقيق
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:convert';
 import 'database_service.dart';
 
@@ -26,7 +27,7 @@ class FinancialAuditService {
         notes: notes,
       );
     } catch (e) {
-      print('خطأ في تسجيل عملية التدقيق: $e');
+      debugPrint('خطأ في تسجيل عملية التدقيق: $e');
       // لا نرمي استثناء لأن فشل التسجيل لا يجب أن يوقف العملية الأساسية
     }
   }

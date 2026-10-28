@@ -5,15 +5,13 @@ import '../models/customer.dart';
 import '../models/transaction.dart';
 import '../models/invoice.dart';
 import '../models/invoice_item.dart';
-import '../models/account_statement_item.dart'; // ✅ Added import
 import '../services/database_service.dart';
 import '../erp/erp_common.dart' show PeriodLock;
 // DriveService removed
-import '../services/pdf_service.dart';
 import '../services/financial_audit_service.dart';
 import '../services/telegram_backup_service.dart';
+import '../services/backup_files.dart';
 import '../services/settings_manager.dart';
-import '../services/debt_report_service.dart'; // ✅ Added import
 import '../services/firebase_sync/sync_event_bus.dart';
 import '../services/firebase_sync/firebase_sync_service.dart'; // 🚀 رفع فوري عند الإنشاء/التعديل
 import '../services/firebase_sync/firebase_sync_config.dart';
@@ -34,17 +32,15 @@ enum CustomerSortType {
 
 class AppProvider with ChangeNotifier {
   final DatabaseService _db = DatabaseService();
-  // final DriveService _drive = DriveService(); // Removed
-  final PdfService _pdf = PdfService();
 
-  List<Customer> _customers = [];
+  final List<Customer> _customers = [];
   List<Customer> _filteredCustomers = [];
   Customer? _selectedCustomer;
   List<DebtTransaction> _customerTransactions = [];
   bool _isLoading = false;
   String _searchQuery = '';
   // Drive related fields removed
-  bool _autoCreateCustomerOnSync = true; // إنشاء العميل تلقائياً عند المزامنة إذا لم يكن موجوداً
+  final bool _autoCreateCustomerOnSync = true; // إنشاء العميل تلقائياً عند المزامنة إذا لم يكن موجوداً
   CustomerSortType _currentSortType = CustomerSortType.alphabetical; // نوع الترتيب الحالي
 
   // 📄 Pagination لسجل الديون (تحمل آلاف العملاء بكفاءة)
@@ -158,7 +154,7 @@ class AppProvider with ChangeNotifier {
         _currentPage = 1;
         notifyListeners();
       } catch (e) {
-        print('Error loading customers page (refresh): $e');
+        debugPrint('Error loading customers page (refresh): $e');
       }
       return;
     }
@@ -186,7 +182,7 @@ class AppProvider with ChangeNotifier {
       _currentPage++;
       notifyListeners();
     } catch (e) {
-      print('Error loading customers page: $e');
+      debugPrint('Error loading customers page: $e');
     } finally {
       _isFetchingMore = false;
     }
@@ -227,46 +223,7 @@ class AppProvider with ChangeNotifier {
 
   bool get isLoadingMore => _isLoadingMore;
 
-  // تطبيق الترتيب على قائمة العملاء
-  Future<void> _applySorting() async {
-    switch (_currentSortType) {
-      case CustomerSortType.alphabetical:
-        _customers.sort((a, b) => a.name.compareTo(b.name));
-        break;
-      case CustomerSortType.lastDebtAdded:
-        // ترتيب حسب آخر إضافة دين
-        final sortedIds = await _db.getCustomerIdsSortedByLastDebtAdded();
-        _sortCustomersByIds(sortedIds);
-        break;
-      case CustomerSortType.lastPayment:
-        // ترتيب حسب آخر تسديد
-        final sortedIds = await _db.getCustomerIdsSortedByLastPayment();
-        _sortCustomersByIds(sortedIds);
-        break;
-      case CustomerSortType.lastTransaction:
-        // ترتيب حسب آخر معاملة (أي نوع)
-        final sortedIds = await _db.getCustomerIdsSortedByLastTransaction();
-        _sortCustomersByIds(sortedIds);
-        break;
-      case CustomerSortType.highestDebt:
-        // ترتيب حسب أكبر مبلغ دين
-        _customers.sort((a, b) => (b.currentTotalDebt ?? 0).compareTo(a.currentTotalDebt ?? 0));
-        break;
-    }
-  }
 
-  // ترتيب العملاء حسب قائمة IDs
-  void _sortCustomersByIds(List<int> sortedIds) {
-    final idToIndex = <int, int>{};
-    for (int i = 0; i < sortedIds.length; i++) {
-      idToIndex[sortedIds[i]] = i;
-    }
-    _customers.sort((a, b) {
-      final indexA = idToIndex[a.id] ?? 999999;
-      final indexB = idToIndex[b.id] ?? 999999;
-      return indexA.compareTo(indexB);
-    });
-  }
 
   // تغيير نوع الترتيب - 📄 يعيد التحميل من الصفحة الأولى بالترتيب الجديد
   Future<void> setSortType(CustomerSortType sortType) async {
@@ -283,10 +240,6 @@ class AppProvider with ChangeNotifier {
     super.dispose();
   }
 
-  // (محجوظة للتوافق) - الترتيب المحلي لم يعد المستخدم مع وضع الـ Pagination
-  Future<void> _applySorting_legacy() async {
-    notifyListeners();
-  }
 
   /// 📄 مع Pagination: البحث يجري في SQL، وهذه مجرد مزامنة القائمة المعروضة
   /// مع القائمة المحمّلة (تبقى لاستدعاءات addCustomer/updateCustomer القديمة).
@@ -422,7 +375,7 @@ class AppProvider with ChangeNotifier {
             : 'تسديد دين بقيمة ${transaction.amountChanged.abs()}',
       );
     } catch (e) {
-      print('تحذير: فشل تسجيل التدقيق: $e');
+      debugPrint('تحذير: فشل تسجيل التدقيق: $e');
     }
 
     notifyListeners();
@@ -495,7 +448,6 @@ class AppProvider with ChangeNotifier {
     try {
       // 1) تحضير المحتوى المطلوب: قاعدة البيانات + جميع ملفات الصوت
       onProgress?.call(0.05);
-      final dbFile = await _db.getDatabaseFile();
       final audioPaths = await _db.getAllAudioNotePaths();
 
       // 2) إنشاء مجلد مؤقت ونسخ قاعدة البيانات وجمع الصوتيات
@@ -506,7 +458,9 @@ class AppProvider with ChangeNotifier {
         await backupRoot.create(recursive: true);
       }
       final dbCopy = File('${backupRoot.path}/debt_book.db');
-      await dbCopy.writeAsBytes(await dbFile.readAsBytes(), flush: true);
+      // نسخة متّسقة تشمل ما في WAL (نسخ الملف مباشرة كان يفوّت آخر العمليات)،
+      // مهيّأة لأصغر أرشيف XZ — انظر BackupFiles.snapshotForBackup
+      await BackupFiles.snapshotForBackup(dbCopy.path);
 
       final audioDir = Directory('${backupRoot.path}/audio');
       await audioDir.create(recursive: true);
@@ -667,17 +621,17 @@ class AppProvider with ChangeNotifier {
           // يتم إرسالها دائماً عند الرفع اليدوي لضمان اكتمال النسخة
           onProgress?.call(0.75);
           
-          print('📄 جاري إرسال تقارير PDF الملحقة...');
+          debugPrint('📄 جاري إرسال تقارير PDF الملحقة...');
           await telegramService.backupDebtRecordsPdf();
           await telegramService.backupAccountStatementsPdf();
-          print('✅ تم إرسال كافة التقارير بنجاح');
+          debugPrint('✅ تم إرسال كافة التقارير بنجاح');
 
         } else {
-             print('Telegram is not configured');
+             debugPrint('Telegram is not configured');
         }
       } catch (e) {
-        print('Error uploading to Telegram: $e');
-         throw e; 
+        debugPrint('Error uploading to Telegram: $e');
+         rethrow;
       }
 
       onProgress?.call(1.0);
@@ -711,10 +665,10 @@ class AppProvider with ChangeNotifier {
     required String paidAmount,
     required List<InvoiceItem> invoiceItems,
   }) {
-    print(
+    debugPrint(
         'DEBUG: AppProvider - Saving temp data with ${invoiceItems.length} items');
     for (int i = 0; i < invoiceItems.length; i++) {
-      print(
+      debugPrint(
           'DEBUG: AppProvider - Item $i: ${invoiceItems[i].productName} - ${invoiceItems[i].itemTotal}');
     }
     _tempCustomerName = customerName;
@@ -727,7 +681,7 @@ class AppProvider with ChangeNotifier {
     _tempPaidAmount = paidAmount;
     _tempInvoiceItems = List.from(invoiceItems);
     _hasTempInvoiceData = true;
-    print(
+    debugPrint(
         'DEBUG: AppProvider - Temp data saved. Items count: ${_tempInvoiceItems.length}');
     notifyListeners();
   }
@@ -747,15 +701,15 @@ class AppProvider with ChangeNotifier {
   }
 
   void updateTempInvoiceItems(List<InvoiceItem> items) {
-    print(
+    debugPrint(
         'DEBUG: AppProvider - Updating temp invoice items. Count: ${items.length}');
     for (int i = 0; i < items.length; i++) {
-      print(
+      debugPrint(
           'DEBUG: AppProvider - Update Item $i: ${items[i].productName} - ${items[i].itemTotal}');
     }
     _tempInvoiceItems = List.from(items);
     _hasTempInvoiceData = true;
-    print(
+    debugPrint(
         'DEBUG: AppProvider - Updated temp items. New count: ${_tempInvoiceItems.length}');
     notifyListeners();
   }
@@ -781,7 +735,7 @@ class AppProvider with ChangeNotifier {
     if (discount != null) _tempDiscount = discount;
     if (paidAmount != null) _tempPaidAmount = paidAmount;
     if (invoiceItems != null) {
-      print(
+      debugPrint(
           'DEBUG: AppProvider - Updating temp data with ${invoiceItems.length} items');
       _tempInvoiceItems = List.from(invoiceItems);
     }

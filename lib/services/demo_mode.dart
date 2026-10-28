@@ -9,7 +9,7 @@
 
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -45,12 +45,12 @@ class DemoMode {
           if (await db.exists()) await db.delete();
         }
         await regen.delete();
-        print('🧪 [DemoMode] حُذفت القاعدة التجريبية القديمة — ستُولَّد بيانات جديدة');
+        debugPrint('🧪 [DemoMode] حُذفت القاعدة التجريبية القديمة — ستُولَّد بيانات جديدة');
       }
     } catch (e) {
-      print('⚠️ [DemoMode] تعذّرت قراءة حالة الوضع التجريبي: $e');
+      debugPrint('⚠️ [DemoMode] تعذّرت قراءة حالة الوضع التجريبي: $e');
     }
-    if (_on) print('🧪 [DemoMode] الوضع التجريبي مفعّل — القاعدة: $demoDatabaseName');
+    if (_on) debugPrint('🧪 [DemoMode] الوضع التجريبي مفعّل — القاعدة: $demoDatabaseName');
   }
 
   /// يغيّر الوضع للإقلاع القادم (لا يغيّر القاعدة المفتوحة الآن).

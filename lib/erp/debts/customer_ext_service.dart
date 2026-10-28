@@ -143,7 +143,7 @@ class CustomerExtService {
     }
     if ((e.creditLimit ?? 0) < 0) throw ErpException('سقف الدين لا يكون سالباً');
     final dp = e.discountPercent ?? 0;
-    if (dp < 0 || dp > 100) throw ErpException('نسبة الحسم بين 0 و 100');
+    if (dp < 0 || dp > 100) throw ErpException('نسبة الخصم بين 0 و 100');
     await db.insert('customer_ext', e.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
   }
 

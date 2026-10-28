@@ -6,6 +6,7 @@ import '../services/database_service.dart';
 import '../models/customer.dart';
 import 'package:flutter/material.dart';
 import '../models/product.dart';
+import 'seat_service.dart';
 
 class InvoiceSuspendService {
   static Future<void> suspendInvoice({
@@ -189,7 +190,9 @@ class InvoiceSuspendService {
   }) async {
     if (invoiceToManage == null ||
         invoiceToManage.status != 'معلقة' ||
-        (invoiceToManage.isLocked)) return;
+        (invoiceToManage.isLocked)) {
+      return;
+    }
     Customer? customer;
     if (customerNameController.text.trim().isNotEmpty) {
       final customers = await db.getAllCustomers();
@@ -295,6 +298,6 @@ class InvoiceSuspendService {
     setSearchResults([]);
     totalAmountController.text = '0';
     setSavedOrSuspended(false);
-    storage.remove('temp_invoice_data');
+    storage.remove(SeatService.key('temp_invoice_data'));
   }
 }

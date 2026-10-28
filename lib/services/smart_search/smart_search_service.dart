@@ -1,18 +1,23 @@
 // lib/services/smart_search/smart_search_service.dart
 // خدمة البحث الذكي الرئيسية
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../../models/product.dart';
 import '../database_service.dart';
 import 'smart_search_db.dart';
 import 'smart_search_models.dart';
 import 'smart_search_trainer.dart';
+import '../settings_manager.dart';
 
 /// منتج مع نقاط الترتيب
 class _ScoredProduct {
   final Product product;
   final double score;
   
-  _ScoredProduct({required this.product, required this.score});
+  /// موضعه قبل الترتيب — يحسم التعادل فيبقى الترتيب ثابتاً
+  final int index;
+
+  _ScoredProduct({required this.product, required this.score, this.index = 0});
 }
 
 class SmartSearchService {
@@ -46,7 +51,7 @@ class SmartSearchService {
   /// تفعيل/تعطيل البحث الذكي
   void setEnabled(bool enabled) {
     _isEnabled = enabled;
-    print('🔧 Smart Search ${enabled ? "enabled" : "disabled"}');
+    debugPrint('🔧 Smart Search ${enabled ? "enabled" : "disabled"}');
   }
 
   bool get isEnabled => _isEnabled;
@@ -72,7 +77,7 @@ class SmartSearchService {
     // 🆕 لا تمسح الجلسة إذا كانت الفاتورة قيد الإنشاء (يوجد منتجات مضافة)
     // إلا إذا تم طلب ذلك صراحة بـ forceNew
     if (!forceNew && _sessionContext.addedProductIds.isNotEmpty) {
-      print('📌 Session preserved: ${_sessionContext.addedProductIds.length} products in progress');
+      debugPrint('📌 Session preserved: ${_sessionContext.addedProductIds.length} products in progress');
       // تحديث معلومات العميل/المُركّب فقط إذا تم تمريرها
       if (customerName != null && customerName != _sessionContext.customerName) {
         _sessionContext.customerName = customerName;
@@ -93,7 +98,7 @@ class SmartSearchService {
     _sessionContext.customerName = customerName;
     _sessionContext.customerId = customerId;
     _sessionContext.installerName = installerName;
-    print('🆕 Started new session: customer=$customerName, installer=$installerName');
+    debugPrint('🆕 Started new session: customer=$customerName, installer=$installerName');
   }
   
   /// بدء جلسة جديدة بالقوة (يمسح كل شيء)
@@ -133,9 +138,9 @@ class SmartSearchService {
   /// إضافة منتج للجلسة
   void addProductToSession(int? productId, String productName) {
     _sessionContext.addProduct(productId, productName);
-    print('➕ Added to session: $productName');
-    print('   🏷️ Brands: ${_sessionContext.detectedBrands}');
-    print('   📝 Last words: ${_sessionContext.detectedLastWords}');
+    debugPrint('➕ Added to session: $productName');
+    debugPrint('   🏷️ Brands: ${_sessionContext.detectedBrands}');
+    debugPrint('   📝 Last words: ${_sessionContext.detectedLastWords}');
   }
 
   /// إزالة منتج من الجلسة
@@ -144,6 +149,7 @@ class SmartSearchService {
       _sessionContext.addedProductIds.remove(productId);
     }
     _sessionContext.addedProductNames.remove(productName);
+    _sessionContext.isRelationshipsDirty = true; // 🆕 طلب تحديث الذاكرة المؤقتة
     
     // إعادة حساب العلامات التجارية والكلمات الأخيرة
     _sessionContext.detectedBrands.clear();
@@ -163,7 +169,7 @@ class SmartSearchService {
   /// مسح الجلسة
   void clearSession() {
     _sessionContext.clear();
-    print('🗑️ Session cleared');
+    debugPrint('🗑️ Session cleared');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -195,6 +201,7 @@ class SmartSearchService {
   /// البحث الذكي عن المنتجات - نظام النقاط المتقدم
   /// [currentInvoiceProductNames] - قائمة أسماء المنتجات الموجودة حالياً في الفاتورة
   /// إذا تم تمريرها، يتم استخدامها للتحقق من المنتجات المضافة بدلاً من الاعتماد على الجلسة
+  /// ⚡ محسّن لاستقبال Set أو List
   Future<List<Product>> smartSearch(
     String query, {
     List<String>? currentInvoiceProductNames,
@@ -234,18 +241,31 @@ class SmartSearchService {
         brandQueriesFutures.add(_mainDb.searchProductsSmart('$brand $query'));
       }
 
-      // 3. جلب المنتجات المرتبطة (Associations) بالتوازي أيضاً
-      Future<Map<int, Map<String, dynamic>>> associationsFuture = Future.value({});
-      if (_sessionContext.addedProductIds.isNotEmpty) {
-        associationsFuture = _smartDb.getAssociatedProductsForList(
-          _sessionContext.addedProductIds,
-        );
-      }
+      // 3 & 3.5 جلب المنتجات المرتبطة وعلاقات الترتيب (مع استخدام الذاكرة المؤقتة Session Cache)
+      final settings = await SettingsManager.getAppSettings();
+      final useRamCache = settings.enableSmartSearchRamCache;
       
-      // 🆕 3.5 جلب علاقات الترتيب لجميع المنتجات المضافة وليس الأخير فقط (التراكمية)
-      Future<List<ProductSequence>> sequencesFuture = Future.value([]);
-      if (_sessionContext.addedProductIds.isNotEmpty) {
-        sequencesFuture = _smartDb.getSequencesForList(_sessionContext.addedProductIds);
+      Future<Map<int, Map<String, dynamic>>> associationsFuture;
+      Future<List<ProductSequence>> sequencesFuture;
+      
+      if (useRamCache) {
+          if (_sessionContext.isRelationshipsDirty && _sessionContext.addedProductIds.isNotEmpty) {
+            final newAssociations = await _smartDb.getAssociatedProductsForList(_sessionContext.addedProductIds);
+            final newSequences = await _smartDb.getSequencesForList(_sessionContext.addedProductIds);
+            
+            _sessionContext.cachedAssociations = newAssociations;
+            _sessionContext.cachedSequences = newSequences;
+            _sessionContext.isRelationshipsDirty = false;
+          }
+          associationsFuture = Future.value(_sessionContext.cachedAssociations);
+          sequencesFuture = Future.value(_sessionContext.cachedSequences);
+      } else {
+          associationsFuture = _sessionContext.addedProductIds.isNotEmpty 
+              ? _smartDb.getAssociatedProductsForList(_sessionContext.addedProductIds)
+              : Future.value({});
+          sequencesFuture = _sessionContext.addedProductIds.isNotEmpty
+              ? _smartDb.getSequencesForList(_sessionContext.addedProductIds)
+              : Future.value([]);
       }
 
       // انتظار جميع الاستعلامات المتوازية
@@ -287,8 +307,49 @@ class SmartSearchService {
 
       return scoredResults;
     } catch (e) {
-      print('⚠️ Smart search error, falling back to basic search: $e');
+      debugPrint('⚠️ Smart search error, falling back to basic search: $e');
       return await _mainDb.searchProductsSmart(query);
+    }
+  }
+
+  /// 🔢 ترتيب مرشحين جاهزين (نتائج البحث برمز المادة أو الباركود) بنفس منطق
+  /// البحث الذكي: العلاقات مع مواد الفاتورة، التسلسل، الماركات، وخفض ما أُضيف.
+  /// تطابق الأحرف لا يدخل هنا (الاستعلام فارغ) لأن المطابقة تمت على الرمز.
+  Future<List<Product>> rankCandidates(
+    List<Product> candidates, {
+    List<String>? currentInvoiceProductNames,
+  }) async {
+    if (!_isEnabled || candidates.length < 2) return candidates;
+    try {
+      await _ensurePreferencesLoaded();
+      final ids = _sessionContext.addedProductIds;
+      Map<int, Map<String, dynamic>> associations = {};
+      List<ProductSequence> sequences = [];
+      if (ids.isNotEmpty) {
+        final settings = await SettingsManager.getAppSettings();
+        if (settings.enableSmartSearchRamCache) {
+          if (_sessionContext.isRelationshipsDirty) {
+            _sessionContext.cachedAssociations = await _smartDb.getAssociatedProductsForList(ids);
+            _sessionContext.cachedSequences = await _smartDb.getSequencesForList(ids);
+            _sessionContext.isRelationshipsDirty = false;
+          }
+          associations = _sessionContext.cachedAssociations;
+          sequences = _sessionContext.cachedSequences;
+        } else {
+          associations = await _smartDb.getAssociatedProductsForList(ids);
+          sequences = await _smartDb.getSequencesForList(ids);
+        }
+      }
+      return _calculateScoresAndSort(
+        List<Product>.from(candidates),
+        '',
+        associations,
+        sequences,
+        currentInvoiceProductNames: currentInvoiceProductNames,
+      );
+    } catch (e) {
+      debugPrint('⚠️ rankCandidates error: $e');
+      return candidates;
     }
   }
 
@@ -306,6 +367,7 @@ class SmartSearchService {
   /// 
   /// [currentInvoiceProductNames] - قائمة أسماء المنتجات الموجودة حالياً في الفاتورة
   /// إذا تم تمريرها، يتم استخدامها للتحقق من المنتجات المضافة (أكثر دقة)
+  /// ⚡ محسّن لاستقبال Set<String> للتحقق O(1)
   List<Product> _calculateScoresAndSort(
     List<Product> products, 
     String query,
@@ -315,22 +377,51 @@ class SmartSearchService {
   }) {
     // 🚀 تحضير مسبق (Pre-compute) لزيادة السرعة خارج حلقة الفحص البطيئة 🚀
     
+    // 🆕 خريطة للوصول الفوري للعلاقات المتسلسلة (O(1) بدلاً من O(N) لكل منتج)
+    final Map<int, List<ProductSequence>> sequencesMap = {};
+    for (final seq in sequences) {
+      sequencesMap.putIfAbsent(seq.toProductId, () => []).add(seq);
+    }
+    
+    // 🆕 خريطة للوصول الفوري لعلامات العملاء والمُركبين
+    final Map<String, double> customerBrandScores = {};
+    for (final pref in _sessionContext.customerPreferences) {
+      final brandNorm = _normalizeForBrandMatch(pref.brand);
+      final monthsPassed = DateTime.now().difference(pref.lastPurchase).inDays / 30.0;
+      double decayFactor = 1.0 - (monthsPassed * (1.0 / 24.0));
+      if (decayFactor < 0) decayFactor = 0;
+      customerBrandScores[brandNorm] = (pref.percentage * 0.5) * decayFactor;
+    }
+    
+    final Map<String, double> installerBrandScores = {};
+    for (final pref in _sessionContext.installerPreferences) {
+      final brandNorm = _normalizeForBrandMatch(pref.brand);
+      final monthsPassed = DateTime.now().difference(pref.lastPurchase).inDays / 30.0;
+      double decayFactor = 1.0 - (monthsPassed * (1.0 / 24.0));
+      if (decayFactor < 0) decayFactor = 0;
+      installerBrandScores[brandNorm] = (pref.percentage * 0.3) * decayFactor;
+    }
+    
     // استخراج "عائلة" المنتجات المضافة (الكلمات الأولى)
     final addedProductFamilies = _extractProductFamilies(_sessionContext.addedProductNames);
     
-    // تحضير قائمة المنتجات الموجودة في الفاتورة للتحقق الدقيق مع التطبيع
-    final Set<String> invoiceProductNamesNormalized;
-    if (currentInvoiceProductNames != null && currentInvoiceProductNames.isNotEmpty) {
-      invoiceProductNamesNormalized = currentInvoiceProductNames
+    // ⚡ تحسين: استقبال Set أو تحويل List إلى Set للتحقق السريع O(1)
+    // 🔤 تطبيع عربي (أ/إ/آ، ة/ه، ى/ي، التطويل، المسافات) — من نسخة الناصر
+    final Set<String> invoiceProductNamesLower;
+    if (currentInvoiceProductNames != null) {
+      // ⚡ تحويل إلى Set للتحقق السريع O(1) بدلاً من O(n)
+      invoiceProductNamesLower = currentInvoiceProductNames
           .map((n) => normalizeForNameMatch(n))
           .where((n) => n.isNotEmpty)
           .toSet();
     } else {
-      invoiceProductNamesNormalized = _sessionContext.addedProductNames
+      invoiceProductNamesLower = _sessionContext.addedProductNames
           .map((n) => normalizeForNameMatch(n))
-          .where((n) => n.isNotEmpty)
           .toSet();
     }
+    
+    // ⚡ تحسين: تحويل Set إلى List مرة واحدة فقط خارج الحلقة
+    // ملاحظة: invoiceProductNamesLower هو Set بالفعل، لذا contains() هو O(1)
     
     // تحضير كلمات البحث للمقارنة (بدون Regex ثقيل)
     final queryLower = query.toLowerCase().trim();
@@ -353,9 +444,8 @@ class SmartSearchService {
       final product = products[i];
       double score = 0;
       
-      final productNameNormalized = normalizeForNameMatch(product.name);
-      final isInCurrentInvoice = invoiceProductNamesNormalized.contains(productNameNormalized);
       final productNameLower = product.name.toLowerCase().trim();
+      final isInCurrentInvoice = invoiceProductNamesLower.contains(normalizeForNameMatch(product.name));
       
       // استخدام انقسام بسيط للنصوص أسرع من ال Regex
       final productWords = productNameLower.split(' ').where((w) => w.isNotEmpty).toList();
@@ -383,7 +473,7 @@ class SmartSearchService {
       // ═══════════════════════════════════════════════════════════════════
       // 2. نقاط الماركة الكاملة (100 نقطة)
       // ═══════════════════════════════════════════════════════════════════
-      final productNameForBrand = _normalizeForBrandMatch(product.name);
+      final productNameNormalized = _normalizeForBrandMatch(product.name);
       bool fullBrandMatch = false;
       bool partialBrandMatch = false;
       
@@ -392,7 +482,7 @@ class SmartSearchService {
       
       for (int bIdx = 0; bIdx < normalizedDetectedBrands.length; bIdx++) {
         final brandNormalized = normalizedDetectedBrands[bIdx];
-        if (productNameForBrand.contains(brandNormalized)) {
+        if (productNameNormalized.contains(brandNormalized)) {
           score += 100;
           fullBrandMatch = true;
           break;
@@ -403,31 +493,14 @@ class SmartSearchService {
       // 2.5 نقاط تفضيلات العميل والمُركّب (مع التقادم الزمني)
       // ═══════════════════════════════════════════════════════════════════
       if (productBrandNormalized != null) {
-        // تفضيلات العميل
-        for (final pref in _sessionContext.customerPreferences) {
-          if (_normalizeForBrandMatch(pref.brand) == productBrandNormalized) {
-             final monthsPassed = DateTime.now().difference(pref.lastPurchase).inDays / 30.0;
-             // التقادم أبطأ هنا (سنتين) لأن تفضيل الماركة يدوم طويلاً
-             double decayFactor = 1.0 - (monthsPassed * (1.0 / 24.0)); 
-             if (decayFactor < 0) decayFactor = 0;
-             
-             // نعطي نقاط بناءً على النسبة المئوية للتفضيل (0-100) - بحد أقصى 50 نقطة
-             score += (pref.percentage * 0.5) * decayFactor;
-             break;
-          }
+        // تفضيلات العميل (من الخريطة المعدة مسبقاً) O(1)
+        if (customerBrandScores.containsKey(productBrandNormalized)) {
+          score += customerBrandScores[productBrandNormalized]!;
         }
         
-        // تفضيلات المُركّب
-        for (final pref in _sessionContext.installerPreferences) {
-          if (_normalizeForBrandMatch(pref.brand) == productBrandNormalized) {
-             final monthsPassed = DateTime.now().difference(pref.lastPurchase).inDays / 30.0;
-             double decayFactor = 1.0 - (monthsPassed * (1.0 / 24.0)); 
-             if (decayFactor < 0) decayFactor = 0;
-             
-             // بحد أقصى 30 نقطة
-             score += (pref.percentage * 0.3) * decayFactor;
-             break;
-          }
+        // تفضيلات المُركّب (من الخريطة المعدة مسبقاً) O(1)
+        if (installerBrandScores.containsKey(productBrandNormalized)) {
+          score += installerBrandScores[productBrandNormalized]!;
         }
       }
       
@@ -452,7 +525,7 @@ class SmartSearchService {
         
         // 🆕 3.5 نقاط الترتيب التراكمية (Sequence) مع التقادم الزمني والمسافة
         // المنتج الحالي يجمع نقاطاً من جميع المنتجات التي سبقته في الفاتورة الحالية
-        final productSequences = sequences.where((s) => s.toProductId == productId).toList();
+        final productSequences = sequencesMap[productId] ?? [];
         for (final sequence in productSequences) {
           final monthsPassed = DateTime.now().difference(sequence.lastOccurred).inDays / 30.0;
           double decayFactor = 1.0 - (monthsPassed * (1.0 / 12.0));
@@ -542,25 +615,32 @@ class SmartSearchService {
         score -= 100000000;
       }
       
-      return _ScoredProduct(product: product, score: score);
+      return _ScoredProduct(product: product, score: score, index: i);
     });
     
     // ترتيب حسب النقاط (الأعلى أولاً)
-    scoredProducts.sort((a, b) => b.score.compareTo(a.score));
+    // ترتيب ثابت عند تساوي النقاط: غير المرتبط بالفاتورة يبقى بترتيبه الأصلي (الرمز تصاعدياً)
+    scoredProducts.sort((a, b) {
+      final c = b.score.compareTo(a.score);
+      return c != 0 ? c : a.index.compareTo(b.index);
+    });
     
     // طباعة للتصحيح (أول 5 نتائج)
     if (scoredProducts.isNotEmpty) {
-      print('🔍 Smart Search Results (top 5):');
+      debugPrint('🔍 Smart Search Results (top 5):');
       for (int i = 0; i < scoredProducts.take(5).length; i++) {
         final sp = scoredProducts[i];
         final isAdded = sp.score < -50000 ? ' [مضاف]' : '';
-        print('   ${i + 1}. ${sp.product.name} (score: ${sp.score.toStringAsFixed(2)})$isAdded');
+        debugPrint('   ${i + 1}. ${sp.product.name} (score: ${sp.score.toStringAsFixed(2)})$isAdded');
       }
     }
     
     return scoredProducts.map((sp) => sp.product).toList();
   }
   
+  /// 🆕 تطبيع النص لمطابقة الماركات (إزالة الفراغات وتوحيد الأحرف)
+  /// مثال: "نيو فنار ابيض" -> "نيوفنارابيض"
+  /// هذا يسمح بمطابقة "نيو فنار ابيض" مع "نيوفنار ابيض" أو "نيو فنارابيض"
   /// تطبيع اسم المنتج لمطابقة الفاتورة وإلغاء الفروقات الشكلية في الحروف العربية
   static String normalizeForNameMatch(String text) {
     return text
@@ -576,9 +656,6 @@ class SmartSearchService {
         .replaceAll(RegExp(r'\s+'), ' '); // دمج المسافات
   }
 
-  /// 🆕 تطبيع النص لمطابقة الماركات (إزالة الفراغات وتوحيد الأحرف)
-  /// مثال: "نيو فنار ابيض" -> "نيوفنارابيض"
-  /// هذا يسمح بمطابقة "نيو فنار ابيض" مع "نيوفنار ابيض" أو "نيو فنارابيض"
   String _normalizeForBrandMatch(String text) {
     return text
         .toLowerCase()
@@ -635,89 +712,7 @@ class SmartSearchService {
     return descriptiveWords.contains(word.toLowerCase());
   }
 
-  /// إعادة ترتيب النتائج بناءً على السياق (Re-ranking) - الطريقة القديمة للتوافق
-  /// الترتيب:
-  /// 1. المنتجات التي تطابق البحث + السياق (الأفضل)
-  /// 2. المنتجات التي تطابق البحث فقط (FTS5)
-  /// 3. المنتجات التي تطابق السياق فقط
-  /// 4. باقي المنتجات
-  /// 
-  /// داخل كل مجموعة: الأكثر ارتباطاً (من Associations) يظهر أولاً
-  List<Product> _rerankResults(
-    List<Product> products, 
-    String query,
-    Map<int, Map<String, dynamic>> associations,
-  ) {
-    // تقسيم المنتجات إلى 4 مجموعات
-    final List<Product> matchesBothSearchAndContext = [];
-    final List<Product> matchesSearchOnly = [];
-    final List<Product> matchesContextOnly = [];
-    final List<Product> matchesNeither = [];
-    
-    // استخراج كلمات البحث
-    final queryWords = query.toLowerCase().trim().split(RegExp(r'\s+'));
-    
-    for (final product in products) {
-      final productName = product.name.toLowerCase();
-      final matchesContext = _sessionContext.matchesSessionContext(product.name);
-      
-      // التحقق من تطابق جميع كلمات البحث
-      final matchesAllQueryWords = queryWords.every((word) => productName.contains(word));
-      
-      if (matchesAllQueryWords && matchesContext) {
-        // يطابق البحث + السياق
-        matchesBothSearchAndContext.add(product);
-      } else if (matchesAllQueryWords) {
-        // يطابق البحث فقط
-        matchesSearchOnly.add(product);
-      } else if (matchesContext) {
-        // يطابق السياق فقط
-        matchesContextOnly.add(product);
-      } else {
-        // لا يطابق شيء (نتائج FTS5 الجزئية)
-        matchesNeither.add(product);
-      }
-    }
-    
-    // ترتيب كل مجموعة حسب قوة الارتباط (الأكثر ارتباطاً أولاً)
-    if (associations.isNotEmpty) {
-      _sortByAssociation(matchesBothSearchAndContext, associations);
-      _sortByAssociation(matchesSearchOnly, associations);
-      _sortByAssociation(matchesContextOnly, associations);
-      _sortByAssociation(matchesNeither, associations);
-    }
-    
-    // دمج المجموعات بالترتيب الصحيح
-    return [
-      ...matchesBothSearchAndContext,
-      ...matchesSearchOnly,
-      ...matchesContextOnly,
-      ...matchesNeither,
-    ];
-  }
   
-  /// ترتيب المنتجات حسب قوة الارتباط (الأكثر ارتباطاً أولاً)
-  /// المنتجات غير المرتبطة تبقى في نهاية القائمة بترتيب FTS5
-  void _sortByAssociation(List<Product> products, Map<int, Map<String, dynamic>> associations) {
-    if (products.length <= 1) return;
-    
-    products.sort((a, b) {
-      final aScore = associations[a.id]?['count'] as int? ?? 0;
-      final bScore = associations[b.id]?['count'] as int? ?? 0;
-      
-      // إذا كلاهما لهما ارتباط، رتب حسب القوة
-      if (aScore > 0 && bScore > 0) {
-        return bScore.compareTo(aScore); // الأعلى أولاً
-      }
-      
-      // إذا أحدهما فقط له ارتباط، ضعه أولاً
-      if (aScore > 0) return -1;
-      if (bScore > 0) return 1;
-      
-      // إذا كلاهما بدون ارتباط، حافظ على ترتيب FTS5
-      return 0;
-    });
-  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // اقتراحات ذكية
@@ -766,7 +761,7 @@ class SmartSearchService {
 
       return suggestions;
     } catch (e) {
-      print('⚠️ Error getting suggestions: $e');
+      debugPrint('⚠️ Error getting suggestions: $e');
       return [];
     }
   }
@@ -821,9 +816,9 @@ class SmartSearchService {
       // جلب الماركات التي تظهر في 5+ منتجات
       final brands = await _smartDb.getAutoDiscoveredBrands(minOccurrence: 5);
       SessionContext.setAutoDiscoveredBrands(brands.toSet());
-      print('✅ Loaded ${brands.length} auto-discovered brands');
+      debugPrint('✅ Loaded ${brands.length} auto-discovered brands');
     } catch (e) {
-      print('⚠️ Error loading auto-discovered brands: $e');
+      debugPrint('⚠️ Error loading auto-discovered brands: $e');
     }
   }
   
@@ -864,7 +859,7 @@ class SmartSearchService {
 
   /// طباعة معلومات السياق الحالي
   void debugPrintContext() {
-    print('''
+    debugPrint('''
 ╔══════════════════════════════════════════════════════════════╗
 ║                    Smart Search Context                       ║
 ╠══════════════════════════════════════════════════════════════╣

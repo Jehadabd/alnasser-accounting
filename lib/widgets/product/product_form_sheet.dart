@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../../models/product.dart';
 import '../../models/category.dart';
 import '../../services/database_service.dart';
@@ -56,7 +55,6 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
   // Future: int? _alertTime; // Alert days before expiry
   
   // Other State
-  bool _isLoadingUnits = true;
 
   @override
   void initState() {
@@ -88,7 +86,6 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
       setState(() {
         _availableUnits = units;
         _categories = categories;
-        _isLoadingUnits = false;
       });
     }
   }
@@ -144,7 +141,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
         color: Colors.white,
         borderRadius: BorderRadius.circular(24), // Joker Rounds
         boxShadow: [
-          BoxShadow(color: kPrimaryColor.withOpacity(0.08), blurRadius: 20, offset: const Offset(0, 8)),
+          BoxShadow(color: kPrimaryColor.withValues(alpha: 0.08), blurRadius: 20, offset: const Offset(0, 8)),
         ],
       ),
       child: Form(
@@ -206,7 +203,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
             width: 90,
             height: 90,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [kPrimaryColor.withOpacity(0.1), kSecondaryColor.withOpacity(0.1)]),
+              gradient: LinearGradient(colors: [kPrimaryColor.withValues(alpha: 0.1), kSecondaryColor.withValues(alpha: 0.1)]),
               borderRadius: BorderRadius.circular(16),
             ),
             child: const Icon(Icons.inventory_2_outlined, size: 40, color: kPrimaryColor),
@@ -231,7 +228,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
                       selected: _canBeSold,
                       label: const Text('قابل للبيع'),
                       onSelected: (v) => setState(() => _canBeSold = v),
-                      selectedColor: kPrimaryColor.withOpacity(0.2),
+                      selectedColor: kPrimaryColor.withValues(alpha: 0.2),
                       checkmarkColor: kPrimaryColor,
                     ),
                     const SizedBox(width: 8),
@@ -239,7 +236,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
                       selected: _canBePurchased,
                       label: const Text('قابل للشراء'),
                       onSelected: (v) => setState(() => _canBePurchased = v),
-                      selectedColor: kSecondaryColor.withOpacity(0.2),
+                      selectedColor: kSecondaryColor.withValues(alpha: 0.2),
                       checkmarkColor: kSecondaryColor,
                     ),
                   ],
@@ -302,7 +299,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
                            padding: const EdgeInsets.symmetric(horizontal: 16),
                            decoration: BoxDecoration(color: const Color(0xFFF8F9FA), borderRadius: BorderRadius.circular(12)),
                            child: DropdownButtonFormField<int>(
-                             value: _selectedCategoryId,
+                             initialValue: _selectedCategoryId,
                              items: _categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
                              onChanged: (v) => setState(() => _selectedCategoryId = v),
                              hint: const Text('اختر الفئة...', style: TextStyle(fontSize: 14)),
@@ -441,11 +438,11 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
                  const SizedBox(height: 16),
                  Container(
                    decoration: BoxDecoration(
-                     color: Colors.orange.withOpacity(0.05),
+                     color: Colors.orange.withValues(alpha: 0.05),
                      borderRadius: BorderRadius.circular(12),
-                     border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                     border: Border.all(color: Colors.orange.withValues(alpha: 0.2)),
                    ),
-                   child: ListTile(
+                   child: Material(type: MaterialType.transparency, child: ListTile(
                      title: Text(
                        _expiryDate == null 
                            ? 'اضغط لتحديد تاريخ الانتهاء' 
@@ -481,7 +478,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
                          setState(() => _expiryDate = picked);
                        }
                      },
-                   ),
+                   )),
                  ),
                ],
             ],
@@ -525,7 +522,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
               const Divider(),
               const SizedBox(height: 16),
               
-              Text('الوحدات الأكبر (Hierarchy)', style: TextStyle(color: kPrimaryColor, fontWeight: FontWeight.bold, fontSize: 16)),
+              const Text('الوحدات الأكبر (Hierarchy)', style: TextStyle(color: kPrimaryColor, fontWeight: FontWeight.bold, fontSize: 16)),
               const SizedBox(height: 16),
               
               // Dynamic List
@@ -602,7 +599,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.grey[100]!),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 4)),
         ],
       ),
       child: Column(
@@ -632,7 +629,7 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
            padding: const EdgeInsets.symmetric(horizontal: 16),
            decoration: BoxDecoration(color: const Color(0xFFF8F9FA), borderRadius: BorderRadius.circular(12)),
            child: DropdownButtonFormField<String>(
-             value: value,
+             initialValue: value,
              items: items.map((e) => DropdownMenuItem(value: e['val'], child: Text(e['label']!))).toList(),
              onChanged: onChanged,
              decoration: const InputDecoration(border: InputBorder.none),
@@ -666,7 +663,6 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
     // or cascading if we respect order. 
     // Let's assume order matches input: Base -> Level 1 -> Level 2
     
-    String previousUnit = _baseUnitController.text;
     double previousCost = baseCost;
     
     // We'll trust the user added them in order (Smallest to Largest)
@@ -676,8 +672,6 @@ class _ProductFormSheetState extends State<ProductFormSheet> with SingleTickerPr
       if (name.isNotEmpty) {
           double cost = previousCost * qty;
           costs[name] = cost;
-          // Set as previous for next level
-          previousUnit = name;
           previousCost = cost;
       }
     }

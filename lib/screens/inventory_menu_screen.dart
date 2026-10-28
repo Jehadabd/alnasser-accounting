@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../services/auth_service.dart';
 import '../models/app_user.dart';
-import '../services/password_service.dart';
 import 'material_inventory_screen.dart';
 import 'stock_adjustment_screen.dart';
 
@@ -27,44 +25,6 @@ class InventoryMenuScreen extends StatelessWidget {
     return true;
   }
 
-  Future<bool> _showPasswordDialog(BuildContext context) async {
-    final passwordService = PasswordService();
-    final TextEditingController passwordController = TextEditingController();
-    bool? result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('أدخل كلمة سر المدير', style: TextStyle(fontSize: 20)),
-        content: TextField(
-          controller: passwordController,
-          obscureText: true,
-          decoration: InputDecoration(
-            labelText: 'كلمة السر',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            prefixIcon: const Icon(Icons.lock, size: 28),
-          ),
-          autofocus: true,
-          onSubmitted: (value) async {
-            final bool isCorrect = await passwordService.verifyPassword(value);
-            Navigator.of(context).pop(isCorrect);
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final bool isCorrect = await passwordService.verifyPassword(passwordController.text);
-              Navigator.of(context).pop(isCorrect);
-            },
-            child: const Text('تأكيد'),
-          ),
-        ],
-      ),
-    );
-    return result ?? false;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -104,7 +64,7 @@ class InventoryMenuScreen extends StatelessWidget {
                           icon: Icons.add_box,
                           color: Colors.blue,
                           onTap: () async {
-                            if (await _checkPermission(context, AppPermissions.productEntry)) {
+                            if (await _checkPermission(context, AppPermissions.productEntry) && context.mounted) {
                               Navigator.pushNamed(context, '/product_entry');
                             }
                           },
@@ -115,7 +75,7 @@ class InventoryMenuScreen extends StatelessWidget {
                           icon: Icons.edit,
                           color: Colors.orange,
                           onTap: () async {
-                            if (await _checkPermission(context, AppPermissions.editProducts)) {
+                            if (await _checkPermission(context, AppPermissions.editProducts) && context.mounted) {
                                Navigator.pushNamed(context, '/edit_products');
                             }
                           },
@@ -126,7 +86,7 @@ class InventoryMenuScreen extends StatelessWidget {
                           icon: Icons.warehouse,
                           color: Colors.purple,
                           onTap: () async {
-                               if (await _checkPermission(context, AppPermissions.editProducts)) {
+                               if (await _checkPermission(context, AppPermissions.editProducts) && context.mounted) {
                                   Navigator.push(
                                     context, 
                                     MaterialPageRoute(builder: (context) => const StockAdjustmentScreen())
@@ -170,7 +130,7 @@ class InventoryMenuScreen extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -187,7 +147,7 @@ class InventoryMenuScreen extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
+                  color: color.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, size: 40, color: color),

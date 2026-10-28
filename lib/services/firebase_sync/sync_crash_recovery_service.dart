@@ -2,6 +2,7 @@
 // 🛡️ خدمة الحماية من الانقطاعات المفاجئة والاسترداد التلقائي
 // تضمن سلامة البيانات بنسبة 99.9% في جميع الحالات
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
@@ -105,9 +106,9 @@ class SyncCrashRecoveryService {
       await _enableWalMode();
       await _recoverPendingOperations();
       _isInitialized = true;
-      print('🛡️ تم تهيئة خدمة الحماية من الانقطاعات');
+      debugPrint('🛡️ تم تهيئة خدمة الحماية من الانقطاعات');
     } catch (e) {
-      print('❌ فشل تهيئة خدمة الحماية: $e');
+      debugPrint('❌ فشل تهيئة خدمة الحماية: $e');
     }
   }
 
@@ -177,7 +178,7 @@ class SyncCrashRecoveryService {
     // تفعيل فحص سلامة البيانات
     await db.rawQuery('PRAGMA integrity_check');
     
-    print('✅ تم تفعيل وضع WAL للحماية من الانقطاع');
+    debugPrint('✅ تم تفعيل وضع WAL للحماية من الانقطاع');
   }
 
 
@@ -215,7 +216,7 @@ class SyncCrashRecoveryService {
     );
 
     _totalOperations++;
-    print('📝 WAL: تسجيل عملية $id');
+    debugPrint('📝 WAL: تسجيل عملية $id');
     return id;
   }
 
@@ -246,7 +247,7 @@ class SyncCrashRecoveryService {
       where: 'id = ?',
       whereArgs: [operationId],
     );
-    print('✅ WAL: اكتملت العملية $operationId');
+    debugPrint('✅ WAL: اكتملت العملية $operationId');
   }
 
   /// تحديث حالة العملية إلى "فشلت"
@@ -298,11 +299,11 @@ class SyncCrashRecoveryService {
     );
 
     if (pendingOps.isEmpty) {
-      print('✅ لا توجد عمليات معلقة للاسترداد');
+      debugPrint('✅ لا توجد عمليات معلقة للاسترداد');
       return recovered;
     }
 
-    print('🔄 تم العثور على ${pendingOps.length} عملية معلقة للاسترداد');
+    debugPrint('🔄 تم العثور على ${pendingOps.length} عملية معلقة للاسترداد');
 
     for (final opMap in pendingOps) {
       final operation = WalOperation.fromMap(opMap);
@@ -325,7 +326,7 @@ class SyncCrashRecoveryService {
       }
     }
 
-    print('✅ تم استرداد ${recovered.length} عملية بنجاح');
+    debugPrint('✅ تم استرداد ${recovered.length} عملية بنجاح');
     return recovered;
   }
 
@@ -336,25 +337,25 @@ class SyncCrashRecoveryService {
         case WalOperationStatus.pending:
         case WalOperationStatus.writing:
           // العملية لم تكتمل - نحتاج إعادة تنفيذها
-          print('🔄 استرداد عملية معلقة: ${operation.id}');
+          debugPrint('🔄 استرداد عملية معلقة: ${operation.id}');
           return await _replayOperation(operation);
 
         case WalOperationStatus.committed:
           // تم الحفظ محلياً لكن لم يُرفع - نحتاج رفعها فقط
-          print('🔄 استرداد عملية محفوظة: ${operation.id}');
+          debugPrint('🔄 استرداد عملية محفوظة: ${operation.id}');
           await _updateOperationStatus(operation.id, WalOperationStatus.recovered);
           return true;
 
         case WalOperationStatus.uploading:
           // كان جاري الرفع - نحتاج التحقق والرفع مرة أخرى
-          print('🔄 استرداد عملية كانت قيد الرفع: ${operation.id}');
+          debugPrint('🔄 استرداد عملية كانت قيد الرفع: ${operation.id}');
           await _updateOperationStatus(operation.id, WalOperationStatus.recovered);
           return true;
 
         case WalOperationStatus.failed:
           // فشلت سابقاً - نحاول مرة أخرى إذا لم تتجاوز الحد
           if (operation.retryCount < 10) {
-            print('🔄 إعادة محاولة عملية فاشلة: ${operation.id}');
+            debugPrint('🔄 إعادة محاولة عملية فاشلة: ${operation.id}');
             await _updateOperationStatus(operation.id, WalOperationStatus.recovered);
             return true;
           }
@@ -364,7 +365,7 @@ class SyncCrashRecoveryService {
           return false;
       }
     } catch (e) {
-      print('❌ فشل استرداد العملية ${operation.id}: $e');
+      debugPrint('❌ فشل استرداد العملية ${operation.id}: $e');
       return false;
     }
   }
@@ -377,7 +378,7 @@ class SyncCrashRecoveryService {
       // التحقق من سلامة البيانات
       final currentChecksum = _calculateChecksum(operation.data);
       if (currentChecksum != operation.checksum) {
-        print('⚠️ تحذير: checksum غير متطابق للعملية ${operation.id}');
+        debugPrint('⚠️ تحذير: checksum غير متطابق للعملية ${operation.id}');
         // نستمر على أي حال - البيانات في WAL هي المصدر الموثوق
       }
 
@@ -393,7 +394,7 @@ class SyncCrashRecoveryService {
       return true;
 
     } catch (e) {
-      print('❌ فشل إعادة تنفيذ العملية: $e');
+      debugPrint('❌ فشل إعادة تنفيذ العملية: $e');
       await markFailed(operation.id, e.toString());
       return false;
     }
@@ -417,7 +418,7 @@ class SyncCrashRecoveryService {
         ...data,
         'sync_uuid': syncUuid,
       });
-      print('✅ تم إعادة إنشاء العميل: $syncUuid');
+      debugPrint('✅ تم إعادة إنشاء العميل: $syncUuid');
     } else if (operation.action == 'update' && existing.isNotEmpty) {
       // تحديث العميل
       await db.update(
@@ -426,7 +427,7 @@ class SyncCrashRecoveryService {
         where: 'sync_uuid = ?',
         whereArgs: [syncUuid],
       );
-      print('✅ تم إعادة تحديث العميل: $syncUuid');
+      debugPrint('✅ تم إعادة تحديث العميل: $syncUuid');
     }
   }
 
@@ -455,7 +456,7 @@ class SyncCrashRecoveryService {
       if (customerId != null) {
         await _recalculateCustomerBalance(db, customerId);
       }
-      print('✅ تم إعادة إنشاء المعاملة: $syncUuid');
+      debugPrint('✅ تم إعادة إنشاء المعاملة: $syncUuid');
     }
   }
 
@@ -584,7 +585,7 @@ class SyncCrashRecoveryService {
       'is_valid': 1,
     });
 
-    print('📍 تم إنشاء نقطة استرداد: $id ($type)');
+    debugPrint('📍 تم إنشاء نقطة استرداد: $id ($type)');
     return id;
   }
 
@@ -805,7 +806,7 @@ class SyncCrashRecoveryService {
     );
 
     if (deleted > 0) {
-      print('🧹 تم حذف $deleted عملية مكتملة قديمة');
+      debugPrint('🧹 تم حذف $deleted عملية مكتملة قديمة');
     }
 
     return deleted;

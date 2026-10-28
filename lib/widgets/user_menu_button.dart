@@ -45,13 +45,13 @@ class UserMenuButton extends StatelessWidget {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           CircleAvatar(
             radius: 15,
-            backgroundColor: color.withOpacity(0.2),
+            backgroundColor: color.withValues(alpha: 0.2),
             child: Text(_initial(user.shownName), style: TextStyle(color: color, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(width: 6),
           Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(user.shownName, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.bold)),
-            Text(user.roleLabel, style: TextStyle(color: color.withOpacity(0.75), fontSize: 11)),
+            Text(user.roleLabel, style: TextStyle(color: color.withValues(alpha: 0.75), fontSize: 11)),
           ]),
           Icon(Icons.arrow_drop_down, color: color),
         ]),
@@ -71,8 +71,8 @@ class UserMenuButton extends StatelessWidget {
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('تبديل المستخدم'),
-            content: const Text('سيُغلق حسابك وتظهر شاشة الدخول ليدخل مستخدم آخر.'),
+            title: const Text('تسجيل الخروج'),
+            content: const Text('تخرج من حسابك أنت فقط وتظهر شاشة الدخول. الترخيص يبقى مفعّلاً على هذا الجهاز كما هو.'),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
               FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('خروج')),

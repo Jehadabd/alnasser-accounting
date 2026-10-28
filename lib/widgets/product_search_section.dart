@@ -90,8 +90,8 @@ class ProductSearchSection extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('نوع الوحدة:', style: TextStyle(fontWeight: FontWeight.bold)),
-                  SizedBox(height: 8),
+                  const Text('نوع الوحدة:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
                   Container(
                     decoration: BoxDecoration(
                       color: Colors.grey[200],
@@ -121,7 +121,7 @@ class ProductSearchSection extends StatelessWidget {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         );
                       }).toList(),
                     ),
@@ -171,7 +171,7 @@ class ProductSearchSection extends StatelessWidget {
                     for (var option in priceOptions) {
                       final val = option['value'];
                       if ((val != null && val > 0 && !seenValues.contains(val)) || option['alwaysShow'] == true) {
-                        String text = option['label'] + ': ${val}';
+                        String text = option['label'] + ': $val';
                         priceItems.add(DropdownMenuItem(
                           value: val,
                           child: Text(text),
@@ -193,7 +193,7 @@ class ProductSearchSection extends StatelessWidget {
                     final dropdownValue = validValues.where((v) => v == selectedPriceLevel).length == 1 ? selectedPriceLevel : null;
                     return DropdownButtonFormField<double?>(
                       decoration: const InputDecoration(labelText: 'مستوى السعر'),
-                      value: dropdownValue,
+                      initialValue: dropdownValue,
                       items: priceItems,
                       onChanged: isViewOnly ? null : onPriceLevelChanged,
                       validator: (value) {
@@ -212,7 +212,7 @@ class ProductSearchSection extends StatelessWidget {
               Expanded(
                 flex: 1,
                 child: DropdownButtonFormField<String?>(
-                  value: selectedListType,
+                  initialValue: selectedListType,
                   decoration: const InputDecoration(labelText: 'نوع القائمة'),
                   items: listTypes.map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
                   onChanged: isViewOnly ? null : (val) => onListTypeChanged(val),

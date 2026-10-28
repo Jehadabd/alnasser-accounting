@@ -1,11 +1,13 @@
 // lib/services/database/core/database_migrations.dart
 // إنشاء الجداول وترقيتها
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../dao/product_dao.dart';
 import 'package:alnaser/services/database/core/database_helpers.dart'; // ✅ Explicit import
 import '../dao/audit_dao.dart'; // 🗜️ أدوات تنظيف وضغط اللقطات
+import 'database_doctor.dart' show MaintenanceLog; // 🧰 ما فعلته الصيانة التلقائية
 import '../business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 
 /// فئة مسؤولة عن إدارة مخطط قاعدة البيانات والترقيات
@@ -620,7 +622,7 @@ class DatabaseMigrations {
       // rebuild index
       await ProductDao(getDatabase: () async => db).rebuildFTSIndex();
     } catch (e) {
-      print('FTS5 Error: $e');
+      debugPrint('FTS5 Error: $e');
     }
   }
 
@@ -663,28 +665,32 @@ class DatabaseMigrations {
       }
     }
     if (purged > 0) {
-      print('🧹 هجرة: حُذف $purged صفاً من بقايا مزامنة Google Drive');
+      debugPrint('🧹 هجرة: حُذف $purged صفاً من بقايا مزامنة Google Drive');
+      MaintenanceLog.add('حُذف $purged صفاً من بقايا مزامنة Google Drive القديمة (سجلات تقنية، ليست بيانات مالية)');
     }
     return purged;
   }
 
-  /// 🗜️ هجرة تعمل مرة واحدة على اللقطات المخزّنة سابقاً:
-  /// تنظّف حقول الحشو، وتضغط الأصناف، وتحذف اللقطة المطابقة حرفياً لسابقتها.
-  /// المرور على دفعات وبمؤشّر (invoice_id, id) فلا تُحمّل الذاكرة ولا يكسرها الحذف.
-  /// لا تُحذف إلا لقطة لا تحمل أي حالة فريدة، فلا يضيع شيء من التاريخ.
+  /// 🗜️ ضغط اللقطات النصية (القديمة) وحذف المطابقة حرفياً لسابقتها.
+  ///
+  /// يعمل متى وُجدت في القاعدة لقطة نصية — لا علَم على الجهاز: كان العلَم في
+  /// إعدادات الجهاز، فقاعدةٌ استُعيدت بعد أول تشغيل لا تُضغط أبداً (وُجد هذا فعلاً:
+  /// 11,174 لقطة نصية و4,035 مكررة = 60 من 89 ميغابايت). اللقطات الجديدة تُكتب
+  /// مضغوطة، فبعد مرور واحد لا يبقى ما يُشغّله.
+  ///   • دفعات من 200 داخل معاملة واحدة لكل دفعة، وبمؤشّر (invoice_id, id).
+  ///   • لا تُحذف إلا لقطة مطابقة لسابقتها في كل حقل — لا يضيع شيء من التاريخ.
+  ///   • لقطة أصنافها لا تُقرأ (JSON تالف): تُضغط كما هي حرفياً، لا تُستبدل بقائمة فارغة.
   static Future<int> compactInvoiceSnapshotsOnce(Database db) async {
-    const flagKey = 'snapshots_compacted_v1';
     try {
-      final prefs = await SharedPreferences.getInstance();
-      if (prefs.getBool(flagKey) ?? false) return 0;
-
-      int scanned = 0;
-      int removed = 0;
-      int rewritten = 0;
-
-      int cursorInvoiceId = -1;
-      int cursorId = -1;
-
+      final pending = await db.rawQuery(
+          "SELECT 1 FROM invoice_snapshots WHERE typeof(items_json) = 'text' LIMIT 1");
+      if (pending.isEmpty) return 0;
+    } catch (_) {
+      return 0; // لا جدول لقطات في هذه القاعدة
+    }
+    try {
+      int scanned = 0, removed = 0, rewritten = 0;
+      int cursorInvoiceId = -1, cursorId = -1;
       int prevInvoiceId = -1;
       String prevItemsJson = '';
       Map<String, Object?> prevRow = <String, Object?>{};
@@ -697,11 +703,11 @@ class DatabaseMigrations {
           FROM invoice_snapshots
           WHERE (invoice_id > ?) OR (invoice_id = ? AND id > ?)
           ORDER BY invoice_id ASC, id ASC
-          LIMIT 120
+          LIMIT 200
         ''', [cursorInvoiceId, cursorInvoiceId, cursorId]);
-
         if (rows.isEmpty) break;
 
+        final batch = db.batch();
         for (final row in rows) {
           final id = (row['id'] as int?) ?? 0;
           final invoiceId = (row['invoice_id'] as int?) ?? 0;
@@ -709,74 +715,64 @@ class DatabaseMigrations {
           cursorId = id;
           scanned++;
 
-          final itemsJson = AuditDao.buildSnapshotItemsJson(
-              AuditDao.decodeSnapshotItemRows(row['items_json']));
+          final raw = row['items_json'];
+          final parsed = AuditDao.decodeSnapshotItemRows(raw);
+          final rawText = raw is String ? raw.trim() : '';
+          // نص غير فارغ لم يُقرأ منه شيء = JSON تالف: يُحفظ حرفياً
+          final unreadable = parsed.isEmpty && rawText.isNotEmpty && rawText != '[]';
+          final itemsJson = unreadable ? rawText : AuditDao.buildSnapshotItemsJson(parsed);
 
-          final bool duplicate = invoiceId == prevInvoiceId &&
+          final bool duplicate = !unreadable &&
+              invoiceId == prevInvoiceId &&
               itemsJson == prevItemsJson &&
-              (row['customer_name'] as String?) ==
-                  (prevRow['customer_name'] as String?) &&
-              (row['customer_phone'] as String?) ==
-                  (prevRow['customer_phone'] as String?) &&
-              (row['customer_address'] as String?) ==
-                  (prevRow['customer_address'] as String?) &&
-              (row['invoice_date'] as String?) ==
-                  (prevRow['invoice_date'] as String?) &&
-              (row['payment_type'] as String?) ==
-                  (prevRow['payment_type'] as String?) &&
-              (row['invoice_notes'] as String?) ==
-                  (prevRow['invoice_notes'] as String?) &&
-              AuditDao.sameSnapshotNum(
-                  row['total_amount'], prevRow['total_amount']) &&
+              (row['customer_name'] as String?) == (prevRow['customer_name'] as String?) &&
+              (row['customer_phone'] as String?) == (prevRow['customer_phone'] as String?) &&
+              (row['customer_address'] as String?) == (prevRow['customer_address'] as String?) &&
+              (row['invoice_date'] as String?) == (prevRow['invoice_date'] as String?) &&
+              (row['payment_type'] as String?) == (prevRow['payment_type'] as String?) &&
+              (row['invoice_notes'] as String?) == (prevRow['invoice_notes'] as String?) &&
+              AuditDao.sameSnapshotNum(row['total_amount'], prevRow['total_amount']) &&
               AuditDao.sameSnapshotNum(row['discount'], prevRow['discount']) &&
-              AuditDao.sameSnapshotNum(
-                  row['amount_paid'], prevRow['amount_paid']) &&
-              AuditDao.sameSnapshotNum(
-                  row['loading_fee'], prevRow['loading_fee']);
+              AuditDao.sameSnapshotNum(row['amount_paid'], prevRow['amount_paid']) &&
+              AuditDao.sameSnapshotNum(row['loading_fee'], prevRow['loading_fee']);
 
           if (duplicate) {
-            try {
-              await db.delete('invoice_snapshots',
-                  where: 'id = ?', whereArgs: [id]);
-              removed++;
-            } catch (_) {}
+            batch.delete('invoice_snapshots', where: 'id = ?', whereArgs: [id]);
+            removed++;
             continue;
           }
-
-          // اللقطات القديمة مخزّنة نصاً: تُعاد كتابتها منظّفة ومضغوطة مرة واحدة
-          if (row['items_json'] is String) {
-            try {
-              await db.update(
-                'invoice_snapshots',
-                {'items_json': AuditDao.encodeSnapshotItems(itemsJson)},
-                where: 'id = ?',
-                whereArgs: [id],
-              );
-              rewritten++;
-            } catch (_) {}
+          if (raw is String) {
+            batch.update('invoice_snapshots', {'items_json': AuditDao.encodeSnapshotItems(itemsJson)},
+                where: 'id = ?', whereArgs: [id]);
+            rewritten++;
           }
-
           prevInvoiceId = invoiceId;
           prevItemsJson = itemsJson;
           prevRow = Map<String, Object?>.from(row)..remove('items_json');
         }
+        await batch.commit(noResult: true);
       }
-
-      await prefs.setBool(flagKey, true);
       if (removed > 0 || rewritten > 0) {
-        print(
-            '🗜️ هجرة اللقطات: فُحصت $scanned لقطة — ضُغطت $rewritten وحُذفت $removed مكررة');
+        debugPrint('🗜️ هجرة اللقطات: فُحصت $scanned لقطة — ضُغطت $rewritten وحُذفت $removed مكررة');
+        MaintenanceLog.add('ضُغطت $rewritten لقطة من سجل تعديل الفواتير، وحُذفت $removed لقطة مكررة '
+            '(مطابقة تماماً للتي قبلها — لا يضيع شيء من السجل)');
       }
       return removed + rewritten;
     } catch (e) {
-      // لا نضع العلامة عند الفشل، فتُعاد المحاولة في التشغيل القادم
-      print('⚠️ هجرة ضغط اللقطات تعذّرت: $e');
+      // ما كُتب من دفعات سليم؛ الباقي يُكمَّل في التشغيل القادم (ما زالت نصية)
+      debugPrint('⚠️ هجرة ضغط اللقطات تعذّرت: $e');
       return 0;
     }
   }
 
   /// ضمان وجود جميع الأعمدة المطلوبة في الجداول
   static Future<void> ensureSchema(Database db) async {
+    // 🛡️ قبل أي شيء: قيد UNIQUE قديم على رقم الفاتورة وحده (موجود في قواعد
+    //    debt_book وإصدارات قديمة). بقاؤه أثناء إكمال الترقيم أدناه يسبّب
+    //    «UNIQUE constraint failed: invoices.invoice_number». الرقم ليس هوية
+    //    (الهوية invoice_uuid)؛ يُستبدل بفهرس بحث عادي. آمن التكرار.
+    await dropLegacyUniqueInvoiceNumber(db);
+
     // 0. 👥 أعمدة العملاء الأساسية المفقودة في قواعد البيانات القديمة
     //    (تُضاف أولاً حتى لا يمنعها أي خطأ لاحق في هذه الدالة)
     //    سبب الخطأ: no such column: sync_last_update_at عند حذف عميل
@@ -990,7 +986,13 @@ class DatabaseMigrations {
     } catch (_) {}
 
     // تشغيل هجرة أرقام الفواتير دائماً للتأكد من عدم وجود فواتير بدون أرقام
-    await _migrateInvoiceNumbers(db);
+    // 🛡️ تعثّر الترقيم لا يُوقف ما بعده (أعمدة المزامنة للمواد، الفهارس...):
+    //    كان استثناؤه يخرج من ensureSchema كلها فتنقص القاعدة المستوردة أعمدة.
+    try {
+      await _migrateInvoiceNumbers(db);
+    } catch (e) {
+      debugPrint('⚠️ ترقيم الفواتير القديمة: $e');
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     // 24. نظام مزامنة المنتجات + سجل تعديلات المنتجات (كتالوج موحد مركزياً)
@@ -1072,6 +1074,8 @@ class DatabaseMigrations {
     await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'amount_changed_cents', 'INTEGER DEFAULT 0');
     await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'balance_before_cents', 'INTEGER DEFAULT 0');
     await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'new_balance_after_cents', 'INTEGER DEFAULT 0');
+    // 👤 من أنشأ المعاملة (اسم المستخدم)
+    await DatabaseHelpers.addColumnIfNotExists(db, 'transactions', 'created_by_username', 'TEXT');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'total_amount_cents', 'INTEGER DEFAULT 0');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'final_total_cents', 'INTEGER DEFAULT 0');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'discount_cents', 'INTEGER DEFAULT 0');
@@ -1177,7 +1181,7 @@ class DatabaseMigrations {
           "UPDATE suppliers SET updated_at = created_at WHERE updated_at IS NULL;");
       await db.execute("UPDATE suppliers SET name = '' WHERE name IS NULL;");
     } catch (e) {
-      print('⚠️ نقل أعمدة الموردين القديمة: $e');
+      debugPrint('⚠️ نقل أعمدة الموردين القديمة: $e');
     }
 
     // 3) جداول نظام المشتريات — تُنشأ إن كانت غائبة
@@ -1299,7 +1303,7 @@ class DatabaseMigrations {
       await db.execute("UPDATE products SET cost_price_cents = CAST(ROUND(cost_price * 100) AS INTEGER) WHERE cost_price_cents = 0 AND cost_price != 0;");
       await db.execute("UPDATE suppliers SET total_debt_iqd_cents = CAST(ROUND(total_debt_iqd * 100) AS INTEGER) WHERE total_debt_iqd_cents = 0 AND total_debt_iqd != 0;");
     } catch (e) {
-      print('Financial Cents Migration Error: $e');
+      debugPrint('Financial Cents Migration Error: $e');
     }
   }
 
@@ -1315,7 +1319,7 @@ class DatabaseMigrations {
       await StockLedger.ensureSchema(db);
       await StockLedger.setupTriggers(db);
     } catch (e) {
-      print('Setup Database Triggers Error: $e');
+      debugPrint('Setup Database Triggers Error: $e');
     }
   }
 
@@ -1390,7 +1394,33 @@ class DatabaseMigrations {
 
       await batch.commit(noResult: true);
     } catch (e) {
-      print('Product Prices Migration Error: $e');
+      debugPrint('Product Prices Migration Error: $e');
+    }
+  }
+
+  /// يُسقط كل فهرس فريد على invoices يحوي invoice_number وحده، ويُبقي فهرس بحث
+  /// عادياً. القيد المكتوب داخل تعريف الجدول (origin='u') لا يُسقط إلا بإعادة
+  /// بناء الجدول — يُسجَّل فقط، وإكمال الترقيم يحافظ على الأرقام فلا يصطدم.
+  static Future<void> dropLegacyUniqueInvoiceNumber(DatabaseExecutor db) async {
+    try {
+      final list = await db.rawQuery("PRAGMA index_list('invoices')");
+      for (final ix in list) {
+        if (((ix['unique'] as num?)?.toInt() ?? 0) != 1) continue;
+        final name = '${ix['name']}';
+        final info = await db.rawQuery("PRAGMA index_info('$name')");
+        final cols = info.map((r) => '${r['name']}').toList();
+        if (cols.length != 1 || cols.first != 'invoice_number') continue;
+        if ('${ix['origin']}' == 'c') {
+          await db.execute('DROP INDEX IF EXISTS "$name"');
+          debugPrint('🛡️ هجرة: أُسقط القيد الفريد القديم على رقم الفاتورة ($name)');
+        } else {
+          debugPrint('⚠️ هجرة: رقم الفاتورة فريد داخل تعريف الجدول ($name) — يُترك');
+        }
+      }
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices(invoice_number)');
+    } catch (e) {
+      debugPrint('⚠️ هجرة: فحص قيد رقم الفاتورة تعذّر: $e');
     }
   }
 
@@ -1412,6 +1442,18 @@ class DatabaseMigrations {
         WHERE sync_uuid IS NOT NULL AND sync_uuid != ''
         GROUP BY sync_uuid HAVING COUNT(*) > 1
       ''');
+      // الجداول التي تشير إلى العميل (تُحسب مرة؛ الجديدة منها تُكتشف تلقائياً)
+      final childTables = <String>[];
+      if (groups.isNotEmpty) {
+        for (final r in await db.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'customers'")) {
+          final name = '${r['name']}';
+          try {
+            final cols = await db.rawQuery('PRAGMA table_info("$name")');
+            if (cols.any((c) => c['name'] == 'customer_id')) childTables.add(name);
+          } catch (_) {}
+        }
+      }
       for (final g in groups) {
         final uuid = g['u'] as String;
         final keep = g['keep'] as int;
@@ -1428,14 +1470,17 @@ class DatabaseMigrations {
           }
           for (final r in rows) {
             final dup = r['id'] as int;
-            await db.update('transactions', {'customer_id': keep},
-                where: 'customer_id = ?', whereArgs: [dup]);
-            await db.update('invoices', {'customer_id': keep},
-                where: 'customer_id = ?', whereArgs: [dup]);
-            try {
-              await db.update('customer_receipt_vouchers', {'customer_id': keep},
-                  where: 'customer_id = ?', whereArgs: [dup]);
-            } catch (_) {}
+            // كل جدول فيه customer_id ينتقل إلى الصف الباقي — لا الثلاثة المعروفة فقط:
+            // حذف الصف المكرر بعدها يحذف بالتتابع (ON DELETE CASCADE) ما بقي يشير
+            // إليه، فكان «تسديد دين راجع» (جدول returns) يضيع بصمت.
+            for (final child in childTables) {
+              try {
+                await db.rawUpdate(
+                    'UPDATE OR IGNORE "$child" SET customer_id = ? WHERE customer_id = ?', [keep, dup]);
+              } catch (e) {
+                debugPrint('⚠️ دمج العميل: تعذّر نقل $child: $e');
+              }
+            }
             final t = (r['tombstoned'] as int?) ?? 0;
             if (t > tomb) tomb = t;
             if (((r['is_created_by_me'] as int?) ?? 1) != 0) mine = true;
@@ -1460,14 +1505,17 @@ class DatabaseMigrations {
             whereArgs: [keep],
           );
         }
-        print('🧹 دُمج ${uuid.substring(0, 12)}…: صفوف مكررة لنفس العميل في صف واحد');
+        debugPrint('🧹 دُمج ${uuid.substring(0, 12)}…: صفوف مكررة لنفس العميل في صف واحد');
+        final kn = await db.query('customers', columns: ['name'], where: 'id = ?', whereArgs: [keep]);
+        MaintenanceLog.add('دُمج صفّان للعميل «${kn.isEmpty ? keep : kn.first['name']}» (نفس الهوية من المزامنة): '
+            'معاملاتهما كلها في صف واحد ورصيده مجموعها — لا معاملة أُضيفت أو حُذفت');
       }
       await db.execute('''
         CREATE UNIQUE INDEX IF NOT EXISTS ux_customers_sync_uuid
         ON customers(sync_uuid) WHERE sync_uuid IS NOT NULL AND sync_uuid != ''
       ''');
     } catch (e) {
-      print('⚠️ دمج هويات العملاء المكررة: $e');
+      debugPrint('⚠️ دمج هويات العملاء المكررة: $e');
     }
   }
 
@@ -1488,7 +1536,7 @@ class DatabaseMigrations {
 
     // 2) جلب الفواتير التي تنقصها أي من الحقول المركّبة، مرتبة زمنياً تصاعدياً
     final List<Map<String, dynamic>> invoices = await db.rawQuery('''
-      SELECT id, invoice_date, creator_device_id,
+      SELECT id, invoice_date, creator_device_id, invoice_number,
              monthly_sequence_number, invoice_year, invoice_month
       FROM invoices
       WHERE invoice_number IS NULL OR invoice_number = ''
@@ -1525,6 +1573,21 @@ class DatabaseMigrations {
     final batch = db.batch();
     int migratedCount = 0;
 
+    // 🛡️ الأرقام المستعملة فعلاً (فواتير مرقّمة مسبقاً، أو قاعدة مستوردة من برنامج
+    //    آخر): التسلسل يتخطاها. كان يبدأ من 1 دائماً فيصطدم برقم موجود ⇒
+    //    UNIQUE constraint failed: invoices.invoice_number ⇒ تتوقف كل الهجرات بعده.
+    final takenNumbers = <String>{};
+    final takenComposite = <String>{};
+    try {
+      for (final r in await db.rawQuery('''
+        SELECT invoice_number AS n, creator_device_id AS d, invoice_year AS y, invoice_month AS m,
+               monthly_sequence_number AS s
+        FROM invoices WHERE invoice_number IS NOT NULL AND invoice_number <> '' ''')) {
+        takenNumbers.add('${r['n']}');
+        if (r['s'] != null) takenComposite.add('${r['d']}|${r['y']}|${r['m']}|${r['s']}');
+      }
+    } catch (_) {}
+
     for (final row in invoices) {
       final int id = row['id'] as int;
       final String dateStr = row['invoice_date'] as String;
@@ -1540,16 +1603,28 @@ class DatabaseMigrations {
         creatorDeviceIdStr = deviceIdNum.toString();
       }
 
-      final int year = date.year;
-      final int month = date.month;
+      final int year = (row['invoice_year'] as int?) ?? date.year;
+      final int month = (row['invoice_month'] as int?) ?? date.month;
       final String groupKey = '$creatorDeviceIdStr|$year|$month';
 
-      // زيادة التسلسل داخل المجموعة (يبدأ من 1)
-      seqCounters[groupKey] = (seqCounters[groupKey] ?? 0) + 1;
-      final int seq = seqCounters[groupKey]!;
+      // 🛡️ فاتورة لها رقم تجاري فعلاً (قاعدة مستوردة ينقصها التسلسل فقط): يبقى رقمها
+      //    كما هو — هو المطبوع عند العميل. كان يُستبدل برقم جديد فيتغيّر رقم فاتورة
+      //    قديمة، ويصطدم أحياناً برقم فاتورة أخرى فتتوقف الهجرات كلها.
+      final String existingNumber = '${row['invoice_number'] ?? ''}'.trim();
+      final bool keepNumber = existingNumber.isNotEmpty && existingNumber != 'null';
 
-      // بناء الرقم التجاري: [جهاز][سنة][شهر][تسلسل]
-      final invoiceNumberStr = '$effectiveDeviceId$year$month$seq';
+      // التسلسل داخل المجموعة (يبدأ من 1) متخطياً المستعمل
+      var seq = (seqCounters[groupKey] ?? 0) + 1;
+      while ((!keepNumber && takenNumbers.contains('$effectiveDeviceId$year$month$seq')) ||
+          takenComposite.contains('$creatorDeviceIdStr|$year|$month|$seq')) {
+        seq++;
+      }
+      seqCounters[groupKey] = seq;
+
+      // بناء الرقم التجاري: [جهاز][سنة][شهر][تسلسل] — فقط لفاتورة بلا رقم
+      final invoiceNumberStr = keepNumber ? existingNumber : '$effectiveDeviceId$year$month$seq';
+      takenNumbers.add(invoiceNumberStr);
+      takenComposite.add('$creatorDeviceIdStr|$year|$month|$seq');
 
       batch.update(
         'invoices',
@@ -1567,7 +1642,7 @@ class DatabaseMigrations {
     }
 
     await batch.commit(noResult: true);
-    print('✅ تمت هجرة $migratedCount فاتورة وتم توليد أرقام تجارية متسلسلة لها.');
+    debugPrint('✅ تمت هجرة $migratedCount فاتورة (أُكملت حقول الترقيم؛ الأرقام الموجودة بقيت كما هي).');
 
     // 5) إعادة إنشاء القيد الفريد المركّب
     try {
@@ -1576,7 +1651,7 @@ class DatabaseMigrations {
         ON invoices(creator_device_id, invoice_year, invoice_month, monthly_sequence_number)
       ''');
     } catch (e) {
-      print('⚠️ تعذّر إنشاء القيد الفريد المركّب (يوجد تكرار في البيانات): $e');
+      debugPrint('⚠️ تعذّر إنشاء القيد الفريد المركّب (يوجد تكرار في البيانات): $e');
     }
   }
 
@@ -1625,6 +1700,6 @@ class DatabaseMigrations {
     }
 
     await batch.commit(noResult: true);
-    print('✅ تمت هجرة $migrated منتج وتم توليد sync_uuid لها (device=$deviceId).');
+    debugPrint('✅ تمت هجرة $migrated منتج وتم توليد sync_uuid لها (device=$deviceId).');
   }
 }

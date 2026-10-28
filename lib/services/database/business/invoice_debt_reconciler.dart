@@ -35,6 +35,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import 'customer_visibility.dart';
+import 'tx_author.dart';
 
 class InvoiceDebtReconciler {
   /// أنواع المعاملات التي لا تُعدّ جزءاً من مساهمة الفاتورة نفسها.
@@ -420,7 +421,7 @@ class InvoiceDebtReconciler {
     String? reason,
   }) async {
     final String now = DateTime.now().toIso8601String();
-    await db.insert('transactions', {
+    await db.insert('transactions', await TxAuthor.stamped(db, {
       'customer_id': customerId,
       'transaction_date': now,
       'amount_changed': amount,
@@ -437,7 +438,7 @@ class InvoiceDebtReconciler {
       'is_uploaded': 0,
       'is_deleted': 0,
       'created_at': now,
-    });
+    }));
   }
 
   /// يُعيد بناء عمودَي الرصيد التراكمي لكل معاملات العميل، ثم يضبط

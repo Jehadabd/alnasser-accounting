@@ -5,6 +5,7 @@
 // (حفظ القائمة، فاتورة الشراء، الوصل، دفعة المورد، سند المصروف) حتى تكون
 // الأرصدة والمخزون والقيود متطابقة كأن البيانات أُدخلت يدوياً.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:math';
 
 import '../accounting/vouchers_service.dart';
@@ -259,7 +260,7 @@ class DemoSeeder {
             cashBoxId: boxId,
           );
         } catch (e) {
-          print('🧪 تخطّي فاتورة شراء: $e');
+          debugPrint('🧪 تخطّي فاتورة شراء: $e');
         }
       }
 
@@ -280,7 +281,7 @@ class DemoSeeder {
               cashBoxId: boxId,
             );
           } catch (e) {
-            print('🧪 تخطّي دفعة مورد: $e');
+            debugPrint('🧪 تخطّي دفعة مورد: $e');
           }
         }
       }
@@ -337,7 +338,7 @@ class DemoSeeder {
           ));
           if (res.success) invoices++;
         } catch (e) {
-          print('🧪 تخطّي قائمة: $e');
+          debugPrint('🧪 تخطّي قائمة: $e');
         }
       }
 
@@ -359,7 +360,7 @@ class DemoSeeder {
                 date: day,
                 cashBoxId: boxId);
           } catch (e) {
-            print('🧪 تخطّي تسديد: $e');
+            debugPrint('🧪 تخطّي تسديد: $e');
           }
         }
       }
@@ -387,7 +388,7 @@ class DemoSeeder {
             await vouchers.create(
                 type: VoucherType.expense, amount: amount, date: day, cashBoxId: boxId, accountId: account, description: text);
           } catch (e) {
-            print('🧪 تخطّي مصروف: $e');
+            debugPrint('🧪 تخطّي مصروف: $e');
           }
         }
         if (day.day == 1) await expense(rent, 750000, 'إيجار المحل لشهر ${day.month}');

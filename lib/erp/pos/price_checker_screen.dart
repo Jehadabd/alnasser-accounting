@@ -13,6 +13,7 @@ import '../../accounting/screens/acc_ui.dart';
 import '../../models/product.dart';
 import '../../services/database_service.dart';
 import 'scale_barcode.dart';
+import '../../widgets/global_side_nav.dart';
 
 class PriceCheckerScreen extends StatefulWidget {
   const PriceCheckerScreen({super.key});
@@ -34,11 +35,15 @@ class _PriceCheckerScreenState extends State<PriceCheckerScreen> {
   @override
   void initState() {
     super.initState();
+    // 🧭 شاشة للزبائن: بلا لوحة تنقل (بعد الإطار: لا تغيير أثناء البناء)
+    WidgetsBinding.instance.addPostFrameCallback((_) => GlobalSideNav.suppress.value++);
     WidgetsBinding.instance.addPostFrameCallback((_) => _focus.requestFocus());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => GlobalSideNav.suppress.value--);
+    WidgetsBinding.instance.scheduleFrame();
     _reset?.cancel();
     _ctl.dispose();
     _focus.dispose();
@@ -168,7 +173,7 @@ class _PriceCheckerScreenState extends State<PriceCheckerScreen> {
           const SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
-            decoration: BoxDecoration(color: Colors.red.withOpacity(.25), borderRadius: BorderRadius.circular(30)),
+            decoration: BoxDecoration(color: Colors.red.withValues(alpha: .25), borderRadius: BorderRadius.circular(30)),
             child: Text(_error!, style: const TextStyle(color: Colors.white, fontSize: 20)),
           ),
         ],
@@ -185,7 +190,7 @@ class _PriceCheckerScreenState extends State<PriceCheckerScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(32),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(.3), blurRadius: 40, offset: const Offset(0, 16))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .3), blurRadius: 40, offset: const Offset(0, 16))],
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text(p.name,

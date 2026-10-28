@@ -260,7 +260,7 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
                         _dirty = true;
                       });
                     } catch (err) {
-                      if (mounted) showError(context, err);
+                      if (context.mounted) showError(context, err);
                     }
                   },
                 ),
@@ -303,13 +303,13 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             FieldGrid(children: [
               MoneyField(controller: _limit, label: 'سقف الدين (0 = بلا سقف)', width: 220, onChanged: (_) => _touch()),
-              MoneyField(controller: _discount, label: 'نسبة الحسم الدائمة %', width: 190, onChanged: (_) => _touch()),
+              MoneyField(controller: _discount, label: 'نسبة الخصم الدائمة %', width: 190, onChanged: (_) => _touch()),
               SizedBox(
                 width: 280,
                 child: SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   value: e.isBlocked,
-                  activeColor: ErpColors.red,
+                  activeThumbColor: ErpColors.red,
                   title: const Text('إيقاف البيع الآجل لهذا العميل'),
                   onChanged: (v) => setState(() {
                     e.isBlocked = v;
@@ -393,7 +393,7 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
     return Row(children: [
       CircleAvatar(
         radius: 34,
-        backgroundColor: Colors.white.withOpacity(0.18),
+        backgroundColor: Colors.white.withValues(alpha: 0.18),
         backgroundImage: hasPhoto ? FileImage(File(photo)) : null,
         child: hasPhoto
             ? null
@@ -416,7 +416,7 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
         ]),
       ),
       Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-        Text('الرصيد', style: TextStyle(color: Colors.white.withOpacity(0.75))),
+        Text('الرصيد', style: TextStyle(color: Colors.white.withValues(alpha: 0.75))),
         Text(fmtMoney(s.balance),
             textDirection: TextDirection.ltr,
             style: TextStyle(
@@ -424,7 +424,7 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
                 fontSize: 26,
                 fontWeight: FontWeight.bold)),
         if (limit > 0)
-          Text('من سقف ${fmtMoney(limit)}', style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12)),
+          Text('من سقف ${fmtMoney(limit)}', style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 12)),
       ]),
     ]);
   }
@@ -432,7 +432,7 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
   Widget _chip(String t, {Color? color}) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
         decoration: BoxDecoration(
-          color: (color ?? Colors.white).withOpacity(0.18),
+          color: (color ?? Colors.white).withValues(alpha: 0.18),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(t, style: const TextStyle(color: Colors.white, fontSize: 12)),
@@ -672,10 +672,10 @@ class _CustomersDirectoryScreenState extends State<CustomersDirectoryScreen> {
                       margin: const EdgeInsets.symmetric(vertical: 3),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: over ? ErpColors.red.withOpacity(0.4) : ErpColors.border)),
+                          side: BorderSide(color: over ? ErpColors.red.withValues(alpha: 0.4) : ErpColors.border)),
                       child: ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: ErpColors.navy.withOpacity(0.08),
+                          backgroundColor: ErpColors.navy.withValues(alpha: 0.08),
                           child: Text('${r['name']}'.isEmpty ? '?' : '${r['name']}'.characters.first,
                               style: const TextStyle(color: ErpColors.navy, fontWeight: FontWeight.bold)),
                         ),
@@ -756,7 +756,7 @@ class _CustomerGroupsScreenState extends State<CustomerGroupsScreen> {
             await _svc.addGroup(n);
             _load();
           } catch (e) {
-            if (mounted) showError(context, e);
+            if (context.mounted) showError(context, e);
           }
         },
       ),

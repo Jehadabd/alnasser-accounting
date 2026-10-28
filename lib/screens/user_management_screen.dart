@@ -14,7 +14,11 @@ import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
 import '../services/firebase_sync/users_sync_service.dart';
+import '../erp/erp_kit.dart' show ErpDialog;
+import '../widgets/settings_kit.dart';
 import '../widgets/user_menu_button.dart' show showChangeOwnPasswordDialog;
+import '../services/invoice_staff_service.dart' show InvoiceStaff;
+import '../services/employee_salary.dart'; // 💵
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
@@ -25,7 +29,7 @@ class UserManagementScreen extends StatefulWidget {
 
 /// تجميع الصلاحيات في أقسام مفهومة بدل قائمة طويلة واحدة
 const List<(String, IconData, List<String>)> _permissionGroups = [
-  ('العمل اليومي', Icons.today, [
+  ('العمل اليومي', Icons.today_rounded, [
     AppPermissions.posAccess,
     AppPermissions.createInvoice,
     AppPermissions.editInvoices,
@@ -37,7 +41,7 @@ const List<(String, IconData, List<String>)> _permissionGroups = [
     AppPermissions.productEntry,
     AppPermissions.suppliers,
   ]),
-  ('المبيعات والتحصيل', Icons.point_of_sale, [
+  ('المبيعات والتحصيل', Icons.point_of_sale_rounded, [
     AppPermissions.salesDocs,
     AppPermissions.collection,
     AppPermissions.debtReports,
@@ -62,6 +66,7 @@ const List<(String, IconData, List<String>)> _permissionGroups = [
     AppPermissions.currencies,
     AppPermissions.periodClose,
   ]),
+  ('التقارير المسموحة', Icons.insights_rounded, AppPermissions.reportKeys),
   ('الإدارة', Icons.admin_panel_settings_outlined, [
     AppPermissions.settings,
     AppPermissions.uploadDatabase,
@@ -70,9 +75,19 @@ const List<(String, IconData, List<String>)> _permissionGroups = [
   ]),
 ];
 
+/// أيقونة ولون لكل قالب جاهز (والافتراضي لأي قالب يُضاف لاحقاً).
+(IconData, Color) _templateLook(String name) => switch (name) {
+      'كاشير' => (Icons.point_of_sale_rounded, const Color(0xFF0E7490)),
+      'أمين مخزن' => (Icons.inventory_2_rounded, const Color(0xFFB45309)),
+      'محاسب' => (Icons.calculate_rounded, const Color(0xFF6D28D9)),
+      'مدير فرع' => (Icons.store_mall_directory_rounded, const Color(0xFF047857)),
+      _ => (Icons.badge_rounded, const Color(0xFF475569)),
+    };
+
 class _UserManagementScreenState extends State<UserManagementScreen> {
   final AuthService _auth = AuthService();
   List<AppUser> _users = [];
+  Map<int, double> _salaries = const {};
   bool _isLoading = true;
 
   @override
@@ -84,7 +99,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _load() async {
     setState(() => _isLoading = true);
     final users = await _auth.getAllUsers();
+    final salaries = await EmployeeSalary.all();
     if (!mounted) return;
+    _salaries = salaries;
     setState(() {
       _users = users;
       _isLoading = false;
@@ -93,7 +110,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   /// اسم القالب المطابق لصلاحيات الموظف (إن طابق أحدها تماماً)
   String? _templateOf(AppUser u) {
-    final set = u.permissions.toSet();
+    final set = AppPermissions.expandLegacy(u.permissions);
     for (final t in AppPermissions.roleTemplates.entries) {
       if (t.value.toSet().length == set.length && set.containsAll(t.value)) return t.key;
     }
@@ -105,211 +122,281 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _editEmployee({AppUser? user}) async {
     final isNew = user == null;
     final nameCtrl = TextEditingController(text: user?.displayName ?? '');
+    final titleCtrl = TextEditingController(text: user?.jobTitle ?? '');
     final userCtrl = TextEditingController(text: user?.username ?? '');
     final passCtrl = TextEditingController();
-    final perms = <String>{...(user?.permissions ?? AppPermissions.roleTemplates['كاشير']!)};
+    // 💵 الراتب الشهري (اختياري) — يظهر في التقرير الشهري والسنوي
+    final oldSalary = user?.id == null ? null : await EmployeeSalary.of(user!.id!);
+    if (!mounted) return;
+    final salaryCtrl = TextEditingController(
+        text: oldSalary == null || oldSalary <= 0 ? '' : NumberFormat('#,##0.##', 'en_US').format(oldSalary));
+    // الموظف القديم الذي يملك «التقارير» فقط: تظهر كل التقارير مختارة صراحةً
+    final perms = AppPermissions.expandLegacy(user?.permissions ?? AppPermissions.roleTemplates['كاشير']!);
+    // «التقارير» تفتح الشاشة، والتقارير المحددة تحدد ما يظهر داخلها
+    void normalizeReports(String changed, bool on) {
+      if (AppPermissions.isReportKey(changed) && on) perms.add(AppPermissions.reports);
+      if (changed == AppPermissions.reports) {
+        if (on && !perms.any(AppPermissions.isReportKey)) perms.addAll(AppPermissions.reportKeys);
+        if (!on) perms.removeWhere(AppPermissions.isReportKey);
+      }
+      if (AppPermissions.isReportKey(changed) && !on && !perms.any(AppPermissions.isReportKey)) {
+        perms.remove(AppPermissions.reports);
+      }
+    }
     String? err;
+    bool busy = false;
+    bool showPass = false;
 
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) => Dialog(
-          insetPadding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760, maxHeight: 720),
-            child: Column(children: [
-              Container(
-                padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
-                color: const Color(0xFF0F3460),
-                child: Row(children: [
-                  Icon(isNew ? Icons.person_add : Icons.manage_accounts, color: Colors.white),
-                  const SizedBox(width: 8),
-                  Text(isNew ? 'موظف جديد' : 'تعديل الموظف ${user.shownName}',
-                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                  const Spacer(),
-                  IconButton(onPressed: () => Navigator.pop(ctx, false), icon: const Icon(Icons.close, color: Colors.white)),
-                ]),
+        builder: (ctx, setD) {
+          Future<void> save() async {
+            final uname = userCtrl.text.trim();
+            if (isNew && (uname.isEmpty || passCtrl.text.isEmpty)) {
+              setD(() => err = 'اكتب اسم الدخول وكلمة السر');
+              return;
+            }
+            if (passCtrl.text.isNotEmpty && passCtrl.text.length < 4) {
+              setD(() => err = 'كلمة السر قصيرة — 4 أحرف على الأقل');
+              return;
+            }
+            if (perms.isEmpty) {
+              setD(() => err = 'اختر صلاحية واحدة على الأقل');
+              return;
+            }
+            final salaryText = salaryCtrl.text.trim().replaceAll(',', '');
+            final salary = salaryText.isEmpty ? null : double.tryParse(salaryText);
+            if (salaryText.isNotEmpty && (salary == null || salary < 0)) {
+              setD(() => err = 'الراتب يُكتب رقماً، مثل 750000');
+              return;
+            }
+            // منع الضغط المزدوج: كان يمكن أن يُنشئ الضغط الثاني خطأ «الاسم موجود» بعد نجاح الأول.
+            setD(() {
+              busy = true;
+              err = null;
+            });
+            try {
+              if (isNew) {
+                final created = await _auth.createAccountant(uname, passCtrl.text, perms.toList());
+                if (created == null) {
+                  if (ctx.mounted) {
+                    setD(() {
+                      busy = false;
+                      err = 'اسم الدخول موجود مسبقاً';
+                    });
+                  }
+                  return;
+                }
+                await EmployeeSalary.set(created.id!, salary);
+                await _setDisplayName(created.id!, nameCtrl.text.trim());
+                await _setJobTitle(created.id!, titleCtrl.text.trim());
+              } else {
+                final id = user.id!;
+                await _auth.updateUserPermissions(id, perms.toList());
+                await EmployeeSalary.set(id, salary);
+                await _setDisplayName(id, nameCtrl.text.trim());
+                await _setJobTitle(id, titleCtrl.text.trim());
+                if (passCtrl.text.isNotEmpty) await _auth.setPassword(id, passCtrl.text);
+              }
+              if (ctx.mounted) Navigator.pop(ctx, true);
+            } catch (e) {
+              if (ctx.mounted) {
+                setD(() {
+                  busy = false;
+                  err = 'تعذّر الحفظ: $e';
+                });
+              }
+            }
+          }
+
+          final fields = [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'اسم الموظف', hintText: 'مثال: محمد أحمد', prefixIcon: Icon(Icons.badge_outlined)),
+            ),
+            // 👷 المسمى الوظيفي: يظهر في اختيار «المجهز/المحاسب» في الفاتورة
+            TextField(
+              controller: titleCtrl,
+              decoration: InputDecoration(
+                labelText: 'المسمى الوظيفي',
+                hintText: 'محاسب، مجهز، مدقق...',
+                prefixIcon: const Icon(Icons.work_outline_rounded),
+                suffixIcon: PopupMenuButton<String>(
+                  tooltip: 'اختيار مسمى',
+                  icon: const Icon(Icons.arrow_drop_down_rounded),
+                  itemBuilder: (_) => [
+                    for (final t in InvoiceStaff.jobTitles) PopupMenuItem<String>(value: t, child: Text(t)),
+                  ],
+                  onSelected: (t) => setD(() => titleCtrl.text = t),
+                ),
               ),
-              Expanded(
-                child: ListView(padding: const EdgeInsets.all(20), children: [
-                  Row(children: [
-                    Expanded(
-                      child: TextField(
-                        controller: nameCtrl,
-                        decoration: const InputDecoration(labelText: 'اسم الموظف', hintText: 'مثال: محمد أحمد', prefixIcon: Icon(Icons.badge)),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: userCtrl,
-                        enabled: isNew,
-                        decoration: const InputDecoration(labelText: 'اسم الدخول', prefixIcon: Icon(Icons.person)),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: passCtrl,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: isNew ? 'كلمة السر' : 'كلمة سر جديدة (اتركها فارغة للإبقاء)',
-                          prefixIcon: const Icon(Icons.lock),
-                        ),
-                      ),
-                    ),
-                  ]),
-                  if (err != null)
-                    Padding(padding: const EdgeInsets.only(top: 8), child: Text(err!, style: const TextStyle(color: Colors.red))),
-                  const SizedBox(height: 18),
-                  Row(children: [
-                    const Text('قالب جاهز:', style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Wrap(spacing: 6, runSpacing: 6, children: [
-                        for (final t in AppPermissions.roleTemplates.entries)
-                          ChoiceChip(
-                            label: Text(t.key),
-                            selected: perms.length == t.value.length && perms.containsAll(t.value),
-                            onSelected: (_) => setD(() => perms
-                              ..clear()
-                              ..addAll(t.value)),
-                          ),
-                      ]),
-                    ),
-                  ]),
-                  const SizedBox(height: 6),
-                  Text('${perms.length} صلاحية مختارة — عدّلها كما تريد:',
-                      style: const TextStyle(color: Colors.black54, fontSize: 12)),
-                  const SizedBox(height: 8),
-                  for (final g in _permissionGroups)
-                    Card(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                          side: BorderSide(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Row(children: [
-                            Icon(g.$2, size: 18, color: const Color(0xFF0F3460)),
-                            const SizedBox(width: 6),
-                            Text(g.$1, style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0F3460))),
-                            const Spacer(),
-                            TextButton(
-                              onPressed: () => setD(() {
-                                if (g.$3.every(perms.contains)) {
-                                  perms.removeAll(g.$3);
-                                } else {
-                                  perms.addAll(g.$3);
-                                }
-                              }),
-                              child: Text(g.$3.every(perms.contains) ? 'إلغاء الكل' : 'تحديد الكل'),
-                            ),
-                          ]),
-                          Wrap(spacing: 4, runSpacing: 0, children: [
-                            for (final k in g.$3)
-                              SizedBox(
-                                width: 330,
-                                child: CheckboxListTile(
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  controlAffinity: ListTileControlAffinity.leading,
-                                  value: perms.contains(k),
-                                  title: Text(AppPermissions.allPermissions[k] ?? k, style: const TextStyle(fontSize: 13)),
-                                  onChanged: (v) => setD(() {
-                                    if (v == true) {
-                                      perms.add(k);
-                                    } else {
-                                      perms.remove(k);
-                                    }
-                                  }),
-                                ),
-                              ),
-                          ]),
-                        ]),
-                      ),
-                    ),
-                ]),
+            ),
+            TextField(
+              controller: salaryCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'الراتب الشهري (اختياري)',
+                hintText: 'مثال: 750,000',
+                helperText: 'يُطرح من الربح في التقرير الشهري والسنوي',
+                suffixText: 'دينار',
+                prefixIcon: Icon(Icons.payments_outlined),
               ),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(children: [
-                  const Spacer(),
-                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-                  const SizedBox(width: 8),
-                  FilledButton.icon(
-                    icon: const Icon(Icons.save),
-                    label: Text(isNew ? 'إضافة الموظف' : 'حفظ التعديل'),
-                    onPressed: () async {
-                      final uname = userCtrl.text.trim();
-                      if (isNew && (uname.isEmpty || passCtrl.text.isEmpty)) {
-                        setD(() => err = 'اكتب اسم الدخول وكلمة السر');
-                        return;
-                      }
-                      if (perms.isEmpty) {
-                        setD(() => err = 'اختر صلاحية واحدة على الأقل');
-                        return;
-                      }
-                      if (isNew) {
-                        final created = await _auth.createAccountant(uname, passCtrl.text, perms.toList());
-                        if (created == null) {
-                          setD(() => err = 'اسم الدخول موجود مسبقاً');
-                          return;
-                        }
-                        await _setDisplayName(created.id!, nameCtrl.text.trim());
-                      } else {
-                        final id = user.id!;
-                        await _auth.updateUserPermissions(id, perms.toList());
-                        await _setDisplayName(id, nameCtrl.text.trim());
-                        if (passCtrl.text.isNotEmpty) await _auth.setPassword(id, passCtrl.text);
-                      }
-                      if (ctx.mounted) Navigator.pop(ctx, true);
-                    },
+            ),
+            TextField(
+              controller: userCtrl,
+              enabled: isNew,
+              decoration: InputDecoration(
+                labelText: 'اسم الدخول',
+                prefixIcon: const Icon(Icons.person_outline_rounded),
+                helperText: isNew ? null : 'لا يُغيَّر بعد الإنشاء',
+              ),
+            ),
+            TextField(
+              controller: passCtrl,
+              obscureText: !showPass,
+              decoration: InputDecoration(
+                labelText: isNew ? 'كلمة السر' : 'كلمة سر جديدة',
+                helperText: isNew ? null : 'اتركها فارغة للإبقاء على القديمة',
+                prefixIcon: const Icon(Icons.lock_outline_rounded),
+                suffixIcon: IconButton(
+                  tooltip: showPass ? 'إخفاء' : 'إظهار',
+                  icon: Icon(showPass ? Icons.visibility_off_rounded : Icons.visibility_rounded),
+                  onPressed: () => setD(() => showPass = !showPass),
+                ),
+              ),
+            ),
+          ];
+
+          return ErpDialog(
+            width: 820,
+            title: isNew ? 'موظف جديد' : 'تعديل الموظف',
+            subtitle: isNew ? 'اسم دخول وكلمة سر وصلاحيات' : user.shownName,
+            icon: isNew ? Icons.person_add_alt_1_rounded : Icons.manage_accounts_rounded,
+            content: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+              LayoutBuilder(builder: (context, c) {
+                final cols = c.maxWidth >= 640 ? 3 : 1;
+                final w = (c.maxWidth - (cols - 1) * 12) / cols;
+                return Wrap(spacing: 12, runSpacing: 12, children: [
+                  for (final f in fields) SizedBox(width: w, child: f),
+                ]);
+              }),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: err == null
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        key: ValueKey(err),
+                        padding: const EdgeInsets.only(top: 12),
+                        child: SetBanner(err!, kind: SetBannerKind.error),
+                      ),
+              ),
+              const SizedBox(height: 18),
+              const Text('قالب جاهز', style: TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final t in AppPermissions.roleTemplates.entries)
+                  _TemplateChip(
+                    name: t.key,
+                    selected: perms.length == t.value.length && perms.containsAll(t.value),
+                    onTap: () => setD(() => perms
+                      ..clear()
+                      ..addAll(t.value)),
                   ),
-                ]),
-              ),
+              ]),
+              const SizedBox(height: 14),
+              Row(children: [
+                const Text('الصلاحيات', style: TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFFEFF4FF), borderRadius: BorderRadius.circular(10)),
+                  child: Text('${perms.length} مختارة',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: kSetNavy)),
+                ),
+                const Spacer(),
+                const Text('عدّلها كما تريد', style: TextStyle(fontSize: 12, color: kSetMuted)),
+              ]),
+              const SizedBox(height: 10),
+              for (final g in _permissionGroups)
+                _PermGroup(
+                  title: g.$1,
+                  icon: g.$2,
+                  keys: g.$3,
+                  selected: perms,
+                  onToggle: (k, on) => setD(() {
+                    if (on) {
+                      perms.add(k);
+                    } else {
+                      perms.remove(k);
+                    }
+                    normalizeReports(k, on);
+                  }),
+                  onToggleAll: (on) => setD(() {
+                    if (on) {
+                      perms.addAll(g.$3);
+                    } else {
+                      perms.removeAll(g.$3);
+                    }
+                    for (final k in g.$3) {
+                      normalizeReports(k, on);
+                    }
+                  }),
+                ),
             ]),
-          ),
-        ),
+            actions: [
+              TextButton(onPressed: busy ? null : () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+              FilledButton.icon(
+                icon: busy
+                    ? const SizedBox(
+                        width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save_rounded, size: 19),
+                label: Text(isNew ? 'إضافة الموظف' : 'حفظ التعديل'),
+                onPressed: busy ? null : save,
+              ),
+            ],
+          );
+        },
       ),
     );
     if (saved == true) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(isNew ? 'أُضيف الموظف. يدخل باسمه وكلمة سره من شاشة الدخول.' : 'حُفظ التعديل'),
-        backgroundColor: Colors.green,
-      ));
+      setToast(context, isNew ? 'أُضيف الموظف. يدخل باسمه وكلمة سره من شاشة الدخول.' : 'حُفظ التعديل');
       _load();
     }
   }
 
   /// ✏️ المدير يغيّر اسم دخوله (مثلاً: أُنشئ قديماً باسم حساب الترخيص).
   Future<void> _renameSelf(AppUser user) async {
+    // لا نتخلّص من المتحكم بعد إغلاق النافذة مباشرة: حركة الإغلاق ما زالت تستعمله.
     final ctrl = TextEditingController(text: user.username);
     String? err;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) => AlertDialog(
-          title: const Text('تغيير اسم الدخول'),
-          content: SizedBox(
-            width: 380,
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('الاسم الذي تكتبه في شاشة الدخول. العمليات السابقة تبقى مسجّلة بالاسم القديم.',
-                  style: TextStyle(color: Colors.black54, height: 1.5)),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                decoration: InputDecoration(labelText: 'اسم الدخول الجديد', errorText: err, border: const OutlineInputBorder()),
+        builder: (ctx, setD) => ErpDialog(
+          title: 'تغيير اسم الدخول',
+          subtitle: 'الاسم الذي تكتبه في شاشة الدخول',
+          icon: Icons.drive_file_rename_outline_rounded,
+          width: 440,
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SetBanner('العمليات السابقة تبقى مسجّلة بالاسم القديم.'),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'اسم الدخول الجديد',
+                errorText: err,
+                prefixIcon: const Icon(Icons.person_outline_rounded),
               ),
-            ]),
-          ),
+            ),
+          ]),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-            FilledButton(
+            FilledButton.icon(
+              icon: const Icon(Icons.check_rounded, size: 19),
               onPressed: () async {
                 final name = ctrl.text.trim();
                 if (name.isEmpty) {
@@ -322,25 +409,31 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 }
                 final done = await _auth.renameUser(user.id!, name);
                 if (!done) {
-                  setD(() => err = 'هذا الاسم مستعمل لمستخدم آخر');
+                  if (ctx.mounted) setD(() => err = 'هذا الاسم مستعمل لمستخدم آخر');
                   return;
                 }
                 if (ctx.mounted) Navigator.pop(ctx, true);
               },
-              child: const Text('حفظ'),
+              label: const Text('حفظ'),
             ),
           ],
         ),
       ),
     );
-    ctrl.dispose();
     if (ok == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('تم تغيير اسم الدخول — استعمله في المرة القادمة'),
-        backgroundColor: Colors.green,
-      ));
+      setToast(context, 'تم تغيير اسم الدخول — استعمله في المرة القادمة');
       _load();
     }
+  }
+
+  Future<void> _setJobTitle(int userId, String title) async {
+    try {
+      final db = await DatabaseService().database;
+      final cols = (await db.rawQuery('PRAGMA table_info(users)')).map((r) => '${r['name']}').toSet();
+      if (!cols.contains('job_title')) await db.execute('ALTER TABLE users ADD COLUMN job_title TEXT');
+      await db.update('users', {'job_title': title.isEmpty ? null : title}, where: 'id = ?', whereArgs: [userId]);
+      await UsersSyncService.instance.markChanged(userId);
+    } catch (_) {}
   }
 
   Future<void> _setDisplayName(int userId, String name) async {
@@ -354,21 +447,31 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _deleteUser(AppUser user) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('حذف الموظف'),
-        content: Text('حذف «${user.shownName}» يمنعه من الدخول. عملياته السابقة تبقى مسجّلة باسمه. متابعة؟'),
+      builder: (ctx) => ErpDialog(
+        title: 'حذف الموظف',
+        subtitle: user.shownName,
+        icon: Icons.person_remove_rounded,
+        color: kSetRed,
+        width: 440,
+        content: const SetBanner(
+          'حذف الموظف يمنعه من الدخول على كل الأجهزة. عملياته السابقة تبقى مسجّلة باسمه.',
+          kind: SetBannerKind.warn,
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: kSetRed),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('حذف'),
+            icon: const Icon(Icons.delete_outline_rounded, size: 19),
+            label: const Text('حذف'),
           ),
         ],
       ),
     );
     if (confirmed == true && user.id != null) {
-      await _auth.deleteUser(user.id!);
+      final done = await _auth.deleteUser(user.id!);
+      if (!mounted) return;
+      setToast(context, done ? 'حُذف الموظف' : 'تعذّر الحذف', error: !done);
       _load();
     }
   }
@@ -378,107 +481,335 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   @override
   Widget build(BuildContext context) {
     if (!_auth.hasPermission(AppPermissions.manageUsers)) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('الموظفون والصلاحيات')),
-        body: const Center(child: Text('هذه الشاشة للمدير أو لمن يملك صلاحية «إدارة المستخدمين»')),
+      return const SettingsScaffold(
+        title: 'الموظفون والصلاحيات',
+        icon: Icons.groups_rounded,
+        children: [
+          SetBanner('هذه الشاشة للمدير أو لمن يملك صلاحية «إدارة المستخدمين».', kind: SetBannerKind.warn),
+        ],
       );
     }
     final me = _auth.currentUser;
     final df = DateFormat('yyyy/MM/dd HH:mm');
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F6FA),
-      appBar: AppBar(
-        title: const Text('الموظفون والصلاحيات'),
-        backgroundColor: const Color(0xFF0F3460),
-        foregroundColor: Colors.white,
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _editEmployee(),
-        icon: const Icon(Icons.person_add),
-        label: const Text('موظف جديد'),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    'كل من يستخدم البرنامج يدخل باسمه. المدير يملك كل الصلاحيات، وحسابه منفصل عن حساب الترخيص. '
-                    'الموظف يرى الأزرار والشاشات التي تسمح بها صلاحياته فقط، وتُسجَّل عملياته باسمه.',
-                    style: TextStyle(color: Colors.black54, height: 1.5),
-                  ),
-                ),
-                for (final u in _users)
-                  Card(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                      leading: CircleAvatar(
-                        backgroundColor: u.isAdmin ? const Color(0xFF0F3460) : Colors.blue.shade50,
-                        child: Icon(u.isAdmin ? Icons.admin_panel_settings : Icons.person,
-                            color: u.isAdmin ? Colors.white : Colors.blue),
-                      ),
-                      title: Row(children: [
-                        Text(u.shownName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(width: 8),
-                        _chip(u.isAdmin ? 'مدير' : (_templateOf(u) ?? 'موظف'),
-                            u.isAdmin ? const Color(0xFF0F3460) : Colors.teal),
-                        if (me?.id == u.id) ...[const SizedBox(width: 6), _chip('أنت', Colors.green)],
-                      ]),
-                      subtitle: Text(
-                        'اسم الدخول: ${u.username}'
-                        '${u.isAdmin ? ' • كل الصلاحيات' : ' • ${u.permissions.length} صلاحية'}'
-                        '${u.lastLoginAt != null ? ' • آخر دخول ${df.format(u.lastLoginAt!)}' : ''}',
-                      ),
-                      trailing: u.isAdmin
-                          ? (me?.id == u.id
-                              ? Row(mainAxisSize: MainAxisSize.min, children: [
-                                  TextButton.icon(
-                                    onPressed: () => _renameSelf(u),
-                                    icon: const Icon(Icons.drive_file_rename_outline),
-                                    label: const Text('تغيير اسم الدخول'),
-                                  ),
-                                  TextButton.icon(
-                                    onPressed: () => showChangeOwnPasswordDialog(context),
-                                    icon: const Icon(Icons.password),
-                                    label: const Text('تغيير كلمة السر'),
-                                  ),
-                                ])
-                              : null)
-                          : Row(mainAxisSize: MainAxisSize.min, children: [
-                              TextButton.icon(
-                                onPressed: () => _editEmployee(user: u),
-                                icon: const Icon(Icons.edit),
-                                label: const Text('تعديل'),
-                              ),
-                              if (me?.id != u.id)
-                                IconButton(
-                                  tooltip: 'حذف',
-                                  icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                  onPressed: () => _deleteUser(u),
-                                ),
-                            ]),
-                    ),
-                  ),
-                if (_users.where((u) => !u.isAdmin).isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Center(
-                      child: Text('لا يوجد موظفون بعد — اضغط «موظف جديد» واختر قالباً مثل «كاشير».',
-                          style: TextStyle(color: Colors.grey)),
-                    ),
-                  ),
-              ],
+    final staff = _users.where((u) => !u.isAdmin).toList();
+    final admins = _users.where((u) => u.isAdmin).toList();
+
+    return SettingsScaffold(
+      title: 'الموظفون والصلاحيات',
+      subtitle: 'حسابات الدخول اليومية وصلاحيات كل موظف',
+      icon: Icons.groups_rounded,
+      loading: _isLoading,
+      floatingActionButton: _isLoading
+          ? null
+          : FloatingActionButton.extended(
+              backgroundColor: kSetNavy,
+              foregroundColor: Colors.white,
+              onPressed: () => _editEmployee(),
+              icon: const Icon(Icons.person_add_alt_1_rounded),
+              label: const Text('موظف جديد', style: TextStyle(fontWeight: FontWeight.w700)),
             ),
+      children: _isLoading
+          ? null
+          : [
+              SetHero(
+                icon: Icons.groups_rounded,
+                title: 'كل من يستخدم البرنامج يدخل باسمه',
+                text: 'المدير يملك كل الصلاحيات، وحسابه منفصل عن حساب الترخيص. الموظف يرى الأزرار والشاشات '
+                    'التي تسمح بها صلاحياته فقط، وتُسجَّل عملياته باسمه.',
+                status: Wrap(spacing: 8, runSpacing: 6, children: [
+                  SetStatusPill('${admins.length} مدير', ok: true, icon: Icons.admin_panel_settings_rounded),
+                  SetStatusPill('${staff.length} موظف', ok: staff.isNotEmpty, icon: Icons.person_rounded),
+                ]),
+              ),
+              if (admins.isNotEmpty)
+                SetCard(
+                  title: 'المدير',
+                  icon: Icons.admin_panel_settings_rounded,
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                  child: Column(children: [for (final u in admins) _userTile(u, me, df)]),
+                ),
+              SetCard(
+                title: 'الموظفون',
+                subtitle: staff.isEmpty ? null : '${staff.length} حساب',
+                icon: Icons.badge_rounded,
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                trailing: TextButton.icon(
+                  onPressed: () => _editEmployee(),
+                  icon: const Icon(Icons.add_rounded, size: 19),
+                  label: const Text('إضافة'),
+                ),
+                child: staff.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 26, horizontal: 8),
+                        child: Column(children: [
+                          Icon(Icons.person_add_alt_1_rounded, size: 44, color: Color(0xFFB8C2CF)),
+                          SizedBox(height: 10),
+                          Text('لا يوجد موظفون بعد',
+                              style: TextStyle(fontWeight: FontWeight.w800, color: kSetText, fontSize: 15)),
+                          SizedBox(height: 4),
+                          Text('اضغط «موظف جديد» واختر قالباً مثل «كاشير» ثم عدّل الصلاحيات.',
+                              textAlign: TextAlign.center, style: TextStyle(color: kSetMuted)),
+                        ]),
+                      )
+                    : Column(children: [for (final u in staff) _userTile(u, me, df)]),
+              ),
+              const SizedBox(height: 70), // مساحة للزر العائم
+            ],
     );
   }
 
+  Widget _userTile(AppUser u, AppUser? me, DateFormat df) {
+    final isMe = me?.id == u.id;
+    final tpl = _templateOf(u);
+    final (IconData roleIcon, Color c) =
+        u.isAdmin ? (Icons.admin_panel_settings_rounded, kSetNavy) : _templateLook(tpl ?? '');
+    final initial = u.shownName.trim().isEmpty ? '?' : u.shownName.trim().characters.first;
+
+    final actions = <Widget>[
+      if (u.isAdmin && isMe) ...[
+        OutlinedButton.icon(
+          onPressed: () => _renameSelf(u),
+          icon: const Icon(Icons.drive_file_rename_outline_rounded, size: 18),
+          label: const Text('اسم الدخول'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => showChangeOwnPasswordDialog(context),
+          icon: const Icon(Icons.password_rounded, size: 18),
+          label: const Text('كلمة السر'),
+        ),
+      ],
+      if (!u.isAdmin) ...[
+        OutlinedButton.icon(
+          onPressed: () => _editEmployee(user: u),
+          icon: const Icon(Icons.edit_rounded, size: 18),
+          label: const Text('تعديل'),
+        ),
+        if (!isMe)
+          IconButton(
+            tooltip: 'حذف',
+            style: IconButton.styleFrom(backgroundColor: const Color(0xFFFEF2F2)),
+            icon: const Icon(Icons.delete_outline_rounded, color: kSetRed),
+            onPressed: () => _deleteUser(u),
+          ),
+      ],
+    ];
+
+    final info = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text(u.shownName, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: kSetText)),
+        _chip(u.isAdmin ? 'مدير' : (tpl ?? 'صلاحيات مخصّصة'), c),
+        if ((u.jobTitle ?? '').trim().isNotEmpty) _chip(u.jobTitle!.trim(), const Color(0xFF7C3AED)),
+        if ((_salaries[u.id] ?? 0) > 0)
+          _chip('راتب ${NumberFormat('#,##0', 'en_US').format(_salaries[u.id])}', const Color(0xFF0E7490)),
+        if (isMe) _chip('أنت', kSetGreen),
+      ]),
+      const SizedBox(height: 4),
+      Wrap(spacing: 14, runSpacing: 2, children: [
+        _meta(Icons.alternate_email_rounded, u.username),
+        _meta(Icons.key_rounded, u.isAdmin ? 'كل الصلاحيات' : '${u.permissions.length} صلاحية'),
+        if (u.lastLoginAt != null) _meta(Icons.schedule_rounded, 'آخر دخول ${df.format(u.lastLoginAt!)}'),
+      ]),
+    ]);
+
+    final avatar = Stack(clipBehavior: Clip.none, children: [
+      Container(
+        width: 48,
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: [c, Color.alphaBlend(Colors.white24, c)]),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+      ),
+      PositionedDirectional(
+        bottom: -4,
+        end: -4,
+        child: Container(
+          padding: const EdgeInsets.all(3),
+          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+          child: Icon(roleIcon, size: 14, color: c),
+        ),
+      ),
+    ]);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isMe ? const Color(0xFFF8FBFF) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: isMe ? kSetNavy.withValues(alpha: 0.25) : kSetBorder),
+      ),
+      child: LayoutBuilder(builder: (context, box) {
+        final wide = box.maxWidth >= 620;
+        if (wide) {
+          return Row(children: [
+            avatar,
+            const SizedBox(width: 14),
+            Expanded(child: info),
+            if (actions.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+            ],
+          ]);
+        }
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            avatar,
+            const SizedBox(width: 12),
+            Expanded(child: info),
+          ]),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.end, children: actions),
+          ],
+        ]);
+      }),
+    );
+  }
+
+  static Widget _meta(IconData i, String t) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(i, size: 14, color: kSetMuted),
+        const SizedBox(width: 4),
+        Text(t, style: const TextStyle(fontSize: 12.5, color: kSetMuted)),
+      ]);
+
   static Widget _chip(String t, Color c) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-        child: Text(t, style: TextStyle(fontSize: 11, color: c, fontWeight: FontWeight.bold)),
+        decoration: BoxDecoration(color: c.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10)),
+        child: Text(t, style: TextStyle(fontSize: 11, color: c, fontWeight: FontWeight.w800)),
       );
+}
+
+/// شريحة قالب جاهز (كاشير، أمين مخزن…).
+class _TemplateChip extends StatelessWidget {
+  const _TemplateChip({required this.name, required this.selected, required this.onTap});
+  final String name;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, c) = _templateLook(name);
+    return Material(
+      color: selected ? c : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: selected ? c : kSetBorder),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 18, color: selected ? Colors.white : c),
+            const SizedBox(width: 6),
+            Text(name, style: TextStyle(fontWeight: FontWeight.w700, color: selected ? Colors.white : kSetText)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// مجموعة صلاحيات: عنوان + عدّاد + «تحديد الكل» + شرائح قابلة للتبديل.
+class _PermGroup extends StatelessWidget {
+  const _PermGroup({
+    required this.title,
+    required this.icon,
+    required this.keys,
+    required this.selected,
+    required this.onToggle,
+    required this.onToggleAll,
+  });
+  final String title;
+  final IconData icon;
+  final List<String> keys;
+  final Set<String> selected;
+  final void Function(String key, bool on) onToggle;
+  final ValueChanged<bool> onToggleAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final n = keys.where(selected.contains).length;
+    final all = n == keys.length;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kSetBorder),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Icon(icon, size: 19, color: kSetNavy),
+          const SizedBox(width: 8),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w800, color: kSetNavy)),
+          const SizedBox(width: 8),
+          Text('$n/${keys.length}', style: const TextStyle(fontSize: 12, color: kSetMuted, fontWeight: FontWeight.w700)),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: () => onToggleAll(!all),
+            icon: Icon(all ? Icons.remove_done_rounded : Icons.done_all_rounded, size: 18),
+            label: Text(all ? 'إلغاء الكل' : 'تحديد الكل'),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final k in keys)
+            _PermToggle(
+              label: AppPermissions.allPermissions[k] ?? k,
+              on: selected.contains(k),
+              onTap: () => onToggle(k, !selected.contains(k)),
+            ),
+        ]),
+      ]),
+    );
+  }
+}
+
+class _PermToggle extends StatelessWidget {
+  const _PermToggle({required this.label, required this.on, required this.onTap});
+  final String label;
+  final bool on;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: on ? kSetNavy.withValues(alpha: 0.08) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: on ? kSetNavy.withValues(alpha: 0.55) : kSetBorder),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                color: on ? kSetNavy : Colors.white,
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: on ? kSetNavy : const Color(0xFFB8C2CF), width: 1.4),
+              ),
+              child: on ? const Icon(Icons.check_rounded, size: 13, color: Colors.white) : null,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(label,
+                  style: TextStyle(fontSize: 13, color: on ? kSetNavy : kSetText, fontWeight: on ? FontWeight.w700 : null)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
 }

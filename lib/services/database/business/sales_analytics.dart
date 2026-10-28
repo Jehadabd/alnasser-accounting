@@ -1,7 +1,6 @@
 // lib/services/database/business/sales_analytics.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
-import '../../../models/analytics_data.dart';
-import '../../../models/invoice.dart';
 import '../../../models/monthly_overview.dart'; // ✅ Added
 import '../../../models/person_data.dart'; // ✅ Added for PersonYearData
 import '../../settings_manager.dart';
@@ -395,7 +394,7 @@ class SalesAnalytics {
             );
         }
     } catch (e) {
-        print('Error getting monthly summary: $e');
+        debugPrint('Error getting monthly summary: $e');
     }
     
     return summary;

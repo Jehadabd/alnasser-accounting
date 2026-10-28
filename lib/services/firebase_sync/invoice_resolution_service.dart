@@ -1,8 +1,8 @@
 // lib/services/firebase_sync/invoice_resolution_service.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../database_service.dart';
 import 'firebase_sync_config.dart';
-import 'invoice_sync_service.dart';
 
 class InvoiceResolutionService {
   static final InvoiceResolutionService _instance = InvoiceResolutionService._internal();
@@ -15,7 +15,7 @@ class InvoiceResolutionService {
   /// فرض مزامنة الفواتير (من الحاسوب الصحيح إلى بقية الأجهزة)
   /// يقوم بجلب الفواتير المحددة (أو كل الفواتير) وإعادة رفعها إلى Firebase
   Future<void> forceSyncInvoices(List<String> invoiceUuidsToForce) async {
-    print('🔄 بدء عملية فرض المزامنة من الحاسوب الصحيح...');
+    debugPrint('🔄 بدء عملية فرض المزامنة من الحاسوب الصحيح...');
     
     final db = await _db.database;
     final groupId = await FirebaseSyncConfig.getSyncGroupId();
@@ -63,9 +63,9 @@ class InvoiceResolutionService {
 
     if (uploadedCount > 0) {
       await batch.commit();
-      print('✅ تم فرض مزامنة $uploadedCount فاتورة بنجاح!');
+      debugPrint('✅ تم فرض مزامنة $uploadedCount فاتورة بنجاح!');
     } else {
-      print('ℹ️ لم يتم العثور على أي فواتير لفرض مزامنتها.');
+      debugPrint('ℹ️ لم يتم العثور على أي فواتير لفرض مزامنتها.');
     }
   }
 

@@ -27,13 +27,16 @@ class LicenseApi {
     if (!LicenseConfig.isConfigured) {
       return {'ok': false, 'error': 'NOT_CONFIGURED', 'message': 'سيرفر التراخيص غير مضبوط في هذه النسخة'};
     }
+    // 🏷️ كل طلب يحمل اسم البرنامج: السيرفر الموحّد يرفض حساب برنامج آخر
+    body = {...body, 'app': LicenseConfig.appId};
     // الرابط المعتمد أولاً؛ إن لم يُجب (نشر معطّل) أو لم يعرف العملية، فالرابط الاحتياطي
     Map<String, dynamic>? first;
     for (final url in LicenseConfig.serverUrls) {
       final r = await _callUrl(url, body);
       first ??= r;
       final err = r['error'];
-      if (err != 'NETWORK_ERROR' && err != 'UNKNOWN_ACTION') return r;
+      // نشر غير مهيّأ (مشروع سكربت آخر بلا مفاتيح) لا يُعتمد: نجرّب الرابط التالي
+      if (err != 'NETWORK_ERROR' && err != 'UNKNOWN_ACTION' && err != 'NOT_SETUP') return r;
     }
     return first ?? networkError();
   }

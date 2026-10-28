@@ -15,6 +15,7 @@ import 'package:alnaser/controllers/invoice_controller.dart';
 import 'package:alnaser/erp/debts/customer_money.dart';
 import 'package:alnaser/erp/erp_common.dart' show PeriodLock;
 import 'package:alnaser/erp/purchases/purchase_return_service.dart';
+import 'package:alnaser/erp/debts/receipts_service.dart';
 import 'package:alnaser/erp/sales/sales_return_service.dart';
 import 'package:alnaser/erp/stock_helpers.dart';
 import 'package:alnaser/models/customer.dart';
@@ -811,6 +812,142 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       } catch (e) {
         return {'ok': false, 'err': '$e'};
       }
+
+    case 'supplierFlows':
+      // 🏭 سيناريو الموردين كاملاً عبر الخدمات الحقيقية — يعيد قائمة الإخفاقات (فارغة = نجاح):
+      // فاتورة آجلة، دفعة وإلغاؤها، رصيد افتتاحي (يستبدل ولا يتراكم)، مرتجع يمنع
+      // إلغاء الفاتورة وتحويلها لمسودة وإنقاص كميتها، إلغاء الفاتورة بعد إلغاء المرتجع، والحذف.
+      final fails = <String>[];
+      void expectEq(String label, num actual, num expected) {
+        if ((actual - expected).abs() > 0.01) fails.add('$label: المتوقع $expected والفعلي $actual');
+      }
+
+      Future<void> expectThrows(String label, Future<void> Function() f) async {
+        try {
+          await f();
+          fails.add('$label: كان يجب أن يُرفض');
+        } catch (_) {}
+      }
+
+      final db = await DatabaseService().database;
+      final ps = PurchaseService();
+      Future<Map<String, double>> bal(int id) async {
+        final r = await db.query('suppliers',
+            columns: ['total_debt_iqd', 'total_debt_usd', 'total_payments'], where: 'id = ?', whereArgs: [id]);
+        return {
+          'iqd': (r.first['total_debt_iqd'] as num?)?.toDouble() ?? 0,
+          'usd': (r.first['total_debt_usd'] as num?)?.toDouble() ?? 0,
+          'pays': (r.first['total_payments'] as num?)?.toDouble() ?? 0,
+        };
+      }
+
+      final pr = await db.query('products', columns: ['id'], where: 'sync_uuid = ?', whereArgs: [a['prod']], limit: 1);
+      if (pr.isEmpty) throw StateError('product not on device');
+      final pid = pr.first['id'] as int;
+      Future<double> stock() async {
+        final r = await db.query('products', columns: ['stock_quantity'], where: 'id = ?', whereArgs: [pid]);
+        return (r.first['stock_quantity'] as num?)?.toDouble() ?? 0;
+      }
+
+      final stock0 = await stock();
+      final now = DateTime.now();
+      final sid = await ps.addSupplier(Supplier(name: 'مورد السيناريو', createdAt: now, updatedAt: now));
+
+      // 1) فاتورة آجلة مؤكدة 10 × 1000
+      await ps.savePurchaseInvoice(
+          PurchaseInvoice(invoiceNumber: 'S-1', supplierId: sid, totalAmount: 10000, status: 'confirmed', date: now),
+          [PurchaseInvoiceItem(productId: pid, unitName: 'قطعة', quantity: 10, unitPrice: 1000, totalPrice: 10000)]);
+      final inv = (await ps.getInvoicesForSupplier(sid)).first;
+      expectEq('دين بعد الفاتورة', (await bal(sid))['iqd']!, 10000);
+      expectEq('المخزون بعد الشراء', await stock(), stock0 + 10);
+
+      // 2) دفعة 4,000 نقداً من صندوق
+      final box = await db.rawQuery('SELECT id FROM cash_boxes ORDER BY is_default DESC, id LIMIT 1');
+      await ReceiptsService().supplierPayment(
+          supplierId: sid,
+          amount: 4000,
+          currency: 'IQD',
+          method: 'cash',
+          date: now,
+          cashBoxId: box.isEmpty ? null : box.first['id'] as int);
+      expectEq('دين بعد الدفعة', (await bal(sid))['iqd']!, 6000);
+      final pay = (await ps.getPaymentsForSupplier(sid)).first;
+
+      // 3) إلغاء السند: يعود الدين، والسند يبقى «ملغى»، ولا يُلغى مرتين
+      await ps.voidPayment(pay.id!, reason: 'اختبار');
+      var b = await bal(sid);
+      expectEq('دين بعد إلغاء السند', b['iqd']!, 10000);
+      expectEq('عدد الدفعات بعد الإلغاء', b['pays']!, 0);
+      if (!(await ps.getPaymentsForSupplier(sid)).first.isVoid) fails.add('السند الملغى لا يظهر «ملغى»');
+      await expectThrows('إلغاء السند مرتين', () => ps.voidPayment(pay.id!));
+
+      // 4) الرصيد الافتتاحي: يستبدل ولا يتراكم، والصفر يحذفه
+      final od = now.subtract(const Duration(days: 30));
+      await ps.setOpeningBalance(sid, amount: 2500, currency: 'IQD', date: od);
+      expectEq('بعد رصيد افتتاحي 2,500', (await bal(sid))['iqd']!, 12500);
+      await ps.setOpeningBalance(sid, amount: 1500, currency: 'IQD', date: od);
+      expectEq('بعد تعديله إلى 1,500', (await bal(sid))['iqd']!, 11500);
+      await ps.setOpeningBalance(sid, amount: -500, currency: 'USD', date: od);
+      expectEq('رصيد دولار لنا عنده', (await bal(sid))['usd']!, -500);
+      await ps.setOpeningBalance(sid, amount: 0, currency: 'USD', date: od);
+      await ps.setOpeningBalance(sid, amount: 0, currency: 'IQD', date: od);
+      b = await bal(sid);
+      expectEq('بعد حذف الافتتاحي (دينار)', b['iqd']!, 10000);
+      expectEq('بعد حذف الافتتاحي (دولار)', b['usd']!, 0);
+
+      // 5) مرتجع على الفاتورة يمنع إلغاءها وتحويلها لمسودة وإنقاص كميتها تحت المُرجع
+      final p = await ErpStock.byId(db, pid);
+      final retId = await PurchaseReturnService().create(
+        supplierId: sid,
+        supplierName: 'مورد السيناريو',
+        originalInvoiceId: inv.id,
+        currency: 'IQD',
+        refundMode: 'debt',
+        date: now,
+        allowNegative: true,
+        lines: [PurchaseReturnLine(product: p!, unit: p.units.first, quantity: 2, price: 1000)],
+      );
+      expectEq('دين بعد مرتجع 2', (await bal(sid))['iqd']!, 8000);
+      await expectThrows('إلغاء فاتورة عليها مرتجع', () => ps.cancelPurchaseInvoice(inv.id!));
+      final items = await ps.getInvoiceItems(inv.id!);
+      await expectThrows(
+          'تحويل فاتورة عليها مرتجع إلى مسودة',
+          () => ps.updatePurchaseInvoiceWithReversal(
+              inv,
+              PurchaseInvoice(invoiceNumber: 'S-1', supplierId: sid, totalAmount: 10000, status: 'draft', date: now),
+              items,
+              items));
+      await expectThrows(
+          'إنقاص الكمية تحت المُرجع',
+          () => ps.updatePurchaseInvoiceWithReversal(
+                inv,
+                PurchaseInvoice(invoiceNumber: 'S-1', supplierId: sid, totalAmount: 1000, status: 'confirmed', date: now),
+                items,
+                [PurchaseInvoiceItem(productId: pid, unitName: 'قطعة', quantity: 1, unitPrice: 1000, totalPrice: 1000)],
+              ));
+      expectEq('الدين لم يتغير بالمحاولات المرفوضة', (await bal(sid))['iqd']!, 8000);
+      expectEq('المخزون لم يتغير بالمحاولات المرفوضة', await stock(), stock0 + 8);
+
+      // 6) بعد إلغاء المرتجع تُلغى الفاتورة: يسقط دينها وتخرج كمياتها
+      await PurchaseReturnService().voidReturn(retId, reason: 'اختبار');
+      expectEq('دين بعد إلغاء المرتجع', (await bal(sid))['iqd']!, 10000);
+      await ps.cancelPurchaseInvoice(inv.id!, reason: 'اختبار');
+      expectEq('دين بعد إلغاء الفاتورة', (await bal(sid))['iqd']!, 0);
+      expectEq('المخزون بعد إلغاء الفاتورة', await stock(), stock0);
+      final st = (await ps.getInvoiceById(inv.id!))?.status;
+      if (st != 'cancelled') fails.add('حالة الفاتورة بعد الإلغاء: $st');
+      await expectThrows('إلغاء الفاتورة مرتين', () => ps.cancelPurchaseInvoice(inv.id!));
+
+      // 7) الحذف: ممنوع لمن له مستندات، ومسموح لمورد بلا أثر
+      if (await ps.supplierDeleteBlocker(sid) == null) fails.add('مورد له فاتورة يُسمح بحذفه');
+      final empty = await ps.addSupplier(
+          Supplier(name: 'مورد فارغ ${now.microsecondsSinceEpoch}', createdAt: now, updatedAt: now));
+      try {
+        await ps.deleteSupplier(empty);
+      } catch (e) {
+        fails.add('حذف مورد بلا أثر فشل: $e');
+      }
+      return {'fails': fails};
 
     case 'setLock':
       final v = a['date'] as String?;

@@ -1,6 +1,7 @@
 // lib/services/database/dao/installer_dao.dart
 // عمليات CRUD للفنيين/المركبين
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import '../../../models/installer.dart';
 import '../../../utils/money_calculator.dart';
@@ -341,9 +342,9 @@ class InstallerDao {
         final id = installer['id'] as int;
         await updateInstallerBilledAmount(id);
       }
-      print('✅ تم إعادة حساب المبلغ المفوتر لـ ${installers.length} فني');
+      debugPrint('✅ تم إعادة حساب المبلغ المفوتر لـ ${installers.length} فني');
     } catch (e) {
-      print('❌ خطأ في إعادة حساب المبلغ المفوتر: $e');
+      debugPrint('❌ خطأ في إعادة حساب المبلغ المفوتر: $e');
     }
   }
 }

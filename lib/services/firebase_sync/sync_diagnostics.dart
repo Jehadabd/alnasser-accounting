@@ -7,8 +7,7 @@ import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fauth;
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/widgets.dart' show AppLifecycleListener; // (مطلوب لتصدير الواجهات)
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 
 class DiagEvent {
   final DateTime at;
@@ -28,7 +27,7 @@ class SyncDiagnostics {
   static void log(String type, String message) {
     events.insert(0, DiagEvent(type, message));
     if (events.length > _maxEvents) events.removeLast();
-    print('🩺 [Diag/$type] $message');
+    debugPrint('🩺 [Diag/$type] $message');
   }
 
   static void logAuth(Object error) {

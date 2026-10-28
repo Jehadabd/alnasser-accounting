@@ -46,7 +46,7 @@ class UnitHierarchyWidget extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3),
+                color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.grey[300]!),
               ),
@@ -123,7 +123,7 @@ class UnitHierarchyWidget extends StatelessWidget {
                     Expanded(
                       flex: 2,
                       child: DropdownButtonFormField<String>(
-                        value: item['unit_name'],
+                        initialValue: item['unit_name'],
                         decoration: const InputDecoration(labelText: 'اسم الوحدة', isDense: true),
                         items: ['باكيت', 'كرتون', 'صندوق', 'كيس', 'ربطة', 'سيت']
                             .map((u) => DropdownMenuItem(value: u, child: Text(u)))
@@ -166,12 +166,12 @@ class UnitHierarchyWidget extends StatelessWidget {
                  padding: const EdgeInsets.only(top: 16.0),
                  child: Container(
                    padding: const EdgeInsets.all(12),
-                   color: Colors.blue.withOpacity(0.05),
-                   child: Row(
+                   color: Colors.blue.withValues(alpha: 0.05),
+                   child: const Row(
                      children: [
-                       const Icon(Icons.info_outline, color: Colors.blue),
-                       const SizedBox(width: 8),
-                       const Expanded(child: Text('سيقوم النظام بحساب الوزن الإجمالي لكل وحدة تلقائياً بناءً على وزن القطعة الأساسية.')),
+                       Icon(Icons.info_outline, color: Colors.blue),
+                       SizedBox(width: 8),
+                       Expanded(child: Text('سيقوم النظام بحساب الوزن الإجمالي لكل وحدة تلقائياً بناءً على وزن القطعة الأساسية.')),
                      ],
                    ),
                  ),

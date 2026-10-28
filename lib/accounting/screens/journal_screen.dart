@@ -12,6 +12,7 @@ import '../../widgets/formatters.dart';
 
 const Map<String, String> sourceTypeLabels = {
   'invoice': 'فاتورة بيع',
+  'invoice_edit': 'تعديل فاتورة',
   'customer_tx': 'دين عميل',
   'purchase_invoice': 'فاتورة مشتريات',
   'supplier_tx': 'حساب مورد',
@@ -186,7 +187,7 @@ class _JournalScreenState extends State<JournalScreen> {
                     return ListTile(
                       tileColor: Colors.white,
                       leading: CircleAvatar(
-                        backgroundColor: AccColors.navy.withOpacity(0.1),
+                        backgroundColor: AccColors.navy.withValues(alpha: 0.1),
                         child: Text('${e['entry_number']}',
                             style: const TextStyle(fontSize: 11, color: AccColors.navy)),
                       ),
@@ -289,14 +290,11 @@ class _ManualEntryScreenState extends State<ManualEntryScreen> {
                 decoration: const InputDecoration(labelText: 'البيان', filled: true, fillColor: Colors.white)),
           ),
           const SizedBox(width: 8),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.event),
-            label: Text(fmtDate(_date)),
-            onPressed: () async {
-              final d = await showDatePicker(
-                  context: context, initialDate: _date, firstDate: DateTime(2015), lastDate: DateTime(2100));
-              if (d != null) setState(() => _date = d);
-            },
+          DatePill(
+            label: 'التاريخ',
+            value: _date,
+            help: 'تاريخ القيد',
+            onPicked: (d) => setState(() => _date = d),
           ),
         ]),
         const SizedBox(height: 12),

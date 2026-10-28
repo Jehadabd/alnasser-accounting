@@ -1,17 +1,21 @@
-import 'dart:html' as html;
+import 'dart:js_interop';
 import 'dart:typed_data';
 
+import 'package:web/web.dart' as web;
+
 void downloadFileInBrowser(Uint8List bytes, String fileName, {String mimeType = 'application/octet-stream'}) {
-  final blob = html.Blob([bytes], mimeType);
-  final url = html.Url.createObjectUrlFromBlob(blob);
-  final anchor = html.AnchorElement(href: url)
-    ..setAttribute('download', fileName)
+  final blob = web.Blob(<JSAny>[bytes.toJS].toJS, web.BlobPropertyBag(type: mimeType));
+  final url = web.URL.createObjectURL(blob);
+  web.HTMLAnchorElement()
+    ..href = url
+    ..download = fileName
     ..click();
-  html.Url.revokeObjectUrl(url);
+  web.URL.revokeObjectURL(url);
 }
 
 void downloadUrlInBrowser(String url, String fileName) {
-  final anchor = html.AnchorElement(href: url)
-    ..setAttribute('download', fileName)
+  web.HTMLAnchorElement()
+    ..href = url
+    ..download = fileName
     ..click();
 }

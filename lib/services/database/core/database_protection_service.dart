@@ -1,6 +1,7 @@
 // lib/services/database/core/database_protection_service.dart
 // 🛡️ خدمة حماية قاعدة البيانات - ضمان عدم فقدان البيانات المالية
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -31,7 +32,7 @@ class DatabaseProtectionService {
       await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
       return true;
     } catch (e) {
-      print('❌ فشل WAL Checkpoint: $e');
+      debugPrint('❌ فشل WAL Checkpoint: $e');
       return false;
     }
   }
@@ -49,7 +50,7 @@ class DatabaseProtectionService {
       await db.rawQuery('PRAGMA synchronous = NORMAL');
       return true;
     } catch (e) {
-      print('❌ فشل المزامنة القوية: $e');
+      debugPrint('❌ فشل المزامنة القوية: $e');
       return false;
     }
   }
@@ -402,7 +403,7 @@ class DatabaseProtectionService {
       
       return true;
     } catch (e) {
-      print('❌ فشل النسخ الاحتياطي للمعاملة: $e');
+      debugPrint('❌ فشل النسخ الاحتياطي للمعاملة: $e');
       return false;
     }
   }
@@ -446,7 +447,7 @@ class DatabaseProtectionService {
       
       return true;
     } catch (e) {
-      print('❌ فشل النسخ الاحتياطي للفاتورة: $e');
+      debugPrint('❌ فشل النسخ الاحتياطي للفاتورة: $e');
       return false;
     }
   }
@@ -638,7 +639,7 @@ class DatabaseProtectionService {
       final now = DateTime.now();
       final dateStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       final timeStr = '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}';
-      final backupFileName = 'backup_$dateStr\_$timeStr.db';
+      final backupFileName = 'backup_${dateStr}_$timeStr.db';
       final backupPath = p.join(backupDir.path, backupFileName);
       
       // 5. نسخ ملف قاعدة البيانات

@@ -129,7 +129,7 @@ class BarcodeLabels {
               ),
               if (o.showPrice)
                 DropdownButtonFormField<int>(
-                  value: o.priceLevel,
+                  initialValue: o.priceLevel,
                   decoration: const InputDecoration(labelText: 'مستوى السعر', border: OutlineInputBorder()),
                   items: [
                     for (var i = 0; i < priceLevelNames.length; i++)

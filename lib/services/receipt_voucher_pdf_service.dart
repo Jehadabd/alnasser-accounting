@@ -2,11 +2,10 @@
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'dart:io';
 import 'pdf_header.dart';
 import 'package:alnaser/services/settings_manager.dart';
-import 'package:alnaser/models/app_settings.dart';
 import 'package:intl/intl.dart';
+import 'voucher_print.dart'; // 🧾 تصميم سند القبض
 
 class ReceiptVoucherPdfService {
   // دالة تنسيق الأرقام مع فاصلة كل 3 خانات
@@ -24,7 +23,29 @@ class ReceiptVoucherPdfService {
     required pw.Font alnaserFont,
     required pw.MemoryImage? logoImage,
     int? receiptNumber, // رقم سند القبض (اختياري)
+    String? recordedBy, // 👤 من سجّل التسديد (المحاسب)
   }) async {
+    // 🎨 تصميم «سند قبض» من مصمم السندات إن اختير
+    try {
+      final layout = await VoucherPrint.designFor(VoucherKinds.receipt);
+      if (layout != null) {
+        final data = await VoucherPrint.receiptData(
+          number: receiptNumber ?? 0,
+          date: dateTime,
+          lines: [
+            {
+              'customer_name': customerName,
+              'amount': paidAmount,
+              'discount': 0,
+              'balance_before': beforePayment,
+              'balance_after': afterPayment,
+            }
+          ],
+          recordedBy: recordedBy,
+        );
+        return VoucherPrint.renderVoucher(layout, data); // 🔢 مع رقم السند دائماً
+      }
+    } catch (_) {}
     // تحميل الإعدادات العامة
     final appSettings = await SettingsManager.getAppSettings();
     
@@ -36,7 +57,7 @@ class ReceiptVoucherPdfService {
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
-        margin: pw.EdgeInsets.only(top: 0, bottom: 10, left: 10, right: 10),
+        margin: const pw.EdgeInsets.only(top: 0, bottom: 10, left: 10, right: 10),
         build: (pw.Context context) {
           return pw.Directionality(
             textDirection: pw.TextDirection.rtl,
@@ -68,7 +89,7 @@ class ReceiptVoucherPdfService {
                 // عنوان سند القبض
                 pw.Center(
                   child: pw.Container(
-                    padding: pw.EdgeInsets.symmetric(horizontal: 30, vertical: 10),
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 30, vertical: 10),
                     decoration: pw.BoxDecoration(
                       border: pw.Border.all(color: PdfColors.black, width: 2),
                       borderRadius: pw.BorderRadius.circular(8),
@@ -85,7 +106,7 @@ class ReceiptVoucherPdfService {
                 pw.SizedBox(height: 30),
                 // جدول المبالغ
                 pw.Container(
-                  padding: pw.EdgeInsets.all(16),
+                  padding: const pw.EdgeInsets.all(16),
                   decoration: pw.BoxDecoration(
                     border: pw.Border.all(color: PdfColors.grey400, width: 1),
                     borderRadius: pw.BorderRadius.circular(8),
@@ -143,7 +164,7 @@ class ReceiptVoucherPdfService {
                 // تنبيه
                 pw.Center(
                   child: pw.Container(
-                    padding: pw.EdgeInsets.all(10),
+                    padding: const pw.EdgeInsets.all(10),
                     decoration: pw.BoxDecoration(
                       color: PdfColors.red50,
                       border: pw.Border.all(color: PdfColors.red),

@@ -5,7 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint; // 🌐 حراسة الويب
 import '../../demo_mode.dart';
 
 /// إعدادات قاعدة البيانات
@@ -22,6 +22,9 @@ class DatabaseConfig {
     // 🧪 الوضع التجريبي: قاعدة منفصلة تماماً — الحقيقية لا تُفتح
     return join(dir.path, DemoMode.isOn ? DemoMode.demoDatabaseName : databaseName);
   }
+
+  /// 📂 المجلد الوحيد الذي فيه قاعدة البيانات (يُعرض في الإعدادات)
+  static Future<String> getDatabaseFolder() async => dirname(await getDatabasePath());
 
   /// ترحيل قاعدة البيانات من المسار القديم إذا لزم الأمر
   static Future<void> migrateFromOldPath() async {
@@ -101,6 +104,6 @@ class DatabaseConfig {
   /// استعادة من النسخة الاحتياطية
   static Future<void> restoreFromBackup() async {
     // Stub implementation
-    print('Restore from backup called');
+    debugPrint('Restore from backup called');
   }
 }

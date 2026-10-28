@@ -1,17 +1,16 @@
 // services/thermal_receipt_service.dart
 // خدمة إنشاء وطباعة الإيصالات الحرارية باستخدام PDF للنص العربي
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../invoice_designer/designed_rows.dart';
 import '../invoice_designer/invoice_layout_store.dart';
 import '../invoice_designer/invoice_print_data.dart';
 import '../invoice_designer/layout_pdf_renderer.dart';
-import 'dart:typed_data';
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:flutter/services.dart';
-import 'package:alnaser/models/printer_device.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:intl/intl.dart';
 
@@ -119,7 +118,7 @@ class ThermalReceiptService {
             _logoImage = pw.MemoryImage(bytes);
           }
         } catch (e) {
-          print('تعذر تحميل اللوجو المخصص: $e');
+          debugPrint('تعذر تحميل اللوجو المخصص: $e');
         }
       }
       
@@ -129,11 +128,11 @@ class ThermalReceiptService {
           final logoData = await rootBundle.load('assets/icon/alnasser.jpg');
           _logoImage = pw.MemoryImage(logoData.buffer.asUint8List());
         } catch (e) {
-          print('تعذر تحميل اللوجو الافتراضي: $e');
+          debugPrint('تعذر تحميل اللوجو الافتراضي: $e');
         }
       }
     } catch (e) {
-      print('خطأ في تحميل الأصول: $e');
+      debugPrint('خطأ في تحميل الأصول: $e');
     }
   }
 
@@ -143,7 +142,7 @@ class ThermalReceiptService {
       // جلب الطابعة الحرارية المحفوظة
       final printer = await SettingsManager.getPosThermalPrinter();
       if (printer == null) {
-        print('🖨️ لم يتم تحديد طابعة حرارية');
+        debugPrint('🖨️ لم يتم تحديد طابعة حرارية');
         return false;
       }
 
@@ -184,11 +183,11 @@ class ThermalReceiptService {
         name: 'فاتورة #${receipt.invoiceId}',
       );
       
-      print('🖨️ تم طباعة الإيصال بنجاح - فاتورة #${receipt.invoiceId}');
+      debugPrint('🖨️ تم طباعة الإيصال بنجاح - فاتورة #${receipt.invoiceId}');
       return true;
       
     } catch (e) {
-      print('❌ خطأ في طباعة الإيصال: $e');
+      debugPrint('❌ خطأ في طباعة الإيصال: $e');
       return false;
     }
   }
@@ -230,7 +229,7 @@ class ThermalReceiptService {
 
     pdf.addPage(
       pw.Page(
-        pageFormat: PdfPageFormat(receiptWidth, double.infinity, marginAll: 0.5), // هوامش شبه معدومة (0.5mm)
+        pageFormat: const PdfPageFormat(receiptWidth, double.infinity, marginAll: 0.5), // هوامش شبه معدومة (0.5mm)
         textDirection: pw.TextDirection.rtl,
         build: (context) {
           return pw.Column(
@@ -320,7 +319,7 @@ class ThermalReceiptService {
               // ═══════════════════════════════════════════════════════════
               pw.Container(
                 padding: const pw.EdgeInsets.symmetric(vertical: 2),
-                decoration: pw.BoxDecoration(
+                decoration: const pw.BoxDecoration(
                   border: pw.Border(bottom: pw.BorderSide(width: 0.5)),
                 ),
                 child: pw.Row(
@@ -401,7 +400,7 @@ class ThermalReceiptService {
               pw.SizedBox(height: 4),
               pw.Container(
                 padding: const pw.EdgeInsets.symmetric(vertical: 2),
-                decoration: pw.BoxDecoration(
+                decoration: const pw.BoxDecoration(
                   color: PdfColors.grey200,
                 ),
                 child: pw.Row(

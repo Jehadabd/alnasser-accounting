@@ -8,15 +8,14 @@
 //
 // قاعدة حديدية: طابور إعادة الرفع لا يقبل إلا معاملات أنشأها هذا الجهاز.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart' show NumberFormat;
 
-import '../../utils/uuid_helper.dart';
 import '../database_service.dart';
-import '../sync/sync_security.dart';
 import 'firebase_sync_service.dart';
 import 'reconciliation_service.dart' show ReconciliationService;
 
@@ -261,7 +260,7 @@ class LiveMatchService {
         .collection(_sessionsCol)
         .where('status', whereIn: ['requesting', 'active'])
         .snapshots()
-        .listen(_onSessions, onError: (e) => print('❌ جلسات المطابقة الحية: $e'));
+        .listen(_onSessions, onError: (e) => debugPrint('❌ جلسات المطابقة الحية: $e'));
 
     _startCommandsListener();
 
@@ -270,7 +269,7 @@ class LiveMatchService {
         Timer.periodic(const Duration(seconds: 4), (_) => recompute());
 
     unawaited(recompute());
-    print('📡 جاهز لطلبات المطابقة الحية بين الأجهزة');
+    debugPrint('📡 جاهز لطلبات المطابقة الحية بين الأجهزة');
   }
 
   void stop() {
@@ -322,7 +321,7 @@ class LiveMatchService {
     try {
       return await _devices.getOnlineDevices();
     } catch (e) {
-      print('⚠️ المطابقة الحية: تعذّرت قراءة الأجهزة المتصلة: $e');
+      debugPrint('⚠️ المطابقة الحية: تعذّرت قراءة الأجهزة المتصلة: $e');
       final myId = _myId;
       return [
         if (myId != null)
@@ -537,7 +536,7 @@ class LiveMatchService {
         .collection(_peerStateCol)
         .doc(_selectedPeerId)
         .snapshots()
-        .listen(_onPeerState, onError: (e) => print('❌ بث النظير: $e'));
+        .listen(_onPeerState, onError: (e) => debugPrint('❌ بث النظير: $e'));
 
     // إظهار شاشة المطابقة فقط إذا تم بدء الجلسة أو قبولها محلياً في هذا التطبيق
     if (_handledSessions.contains('accepted_$sessionId') && !_showMatchScreenController.isClosed) {
@@ -652,7 +651,7 @@ class LiveMatchService {
         'customers': customersMap,
       });
     } catch (e) {
-      print('⚠️ فشل نشر حالة المطابقة الحية: $e');
+      debugPrint('⚠️ فشل نشر حالة المطابقة الحية: $e');
     }
   }
 
@@ -1032,7 +1031,7 @@ class LiveMatchService {
     try {
       await _sync.performFullCatchUp();
     } catch (e) {
-      print('⚠️ [LiveMatchService] تعذّر السحب الكامل: $e');
+      debugPrint('⚠️ [LiveMatchService] تعذّر السحب الكامل: $e');
     }
     await requestPeerToUploadCustomers(customerSyncUuids);
     await _publishLocalState();
@@ -1080,7 +1079,7 @@ class LiveMatchService {
           if (customerSyncUuid == null) continue;
 
           if (command == 'request_customer_data' || command == 'reupload_customer') {
-            print('📩 [LiveMatchService] الجهاز ($senderDeviceId) يطلب رفع معاملات العميل $customerSyncUuid...');
+            debugPrint('📩 [LiveMatchService] الجهاز ($senderDeviceId) يطلب رفع معاملات العميل $customerSyncUuid...');
             await reuploadLocalCustomerTransactionsToPeer(customerSyncUuid, targetPeerId: senderDeviceId);
             unawaited(change.doc.reference.delete());
           } else if (command == 'push_customer_notify') {
@@ -1097,7 +1096,7 @@ class LiveMatchService {
           }
         }
       }
-    }, onError: (e) => print('⚠️ [LiveMatchService] خطأ استماع أوامر المطابقة: $e'));
+    }, onError: (e) => debugPrint('⚠️ [LiveMatchService] خطأ استماع أوامر المطابقة: $e'));
   }
 
   /// 📤 إرسال طلب للجهاز الآخر لإعادة رفع معاملات عملاء محددين لكون بياناته هي الصحيحة
@@ -1161,9 +1160,9 @@ class LiveMatchService {
       await notifyPeerOfPushedCustomer(customerSyncUuid);
       await _publishLocalState();
       await recompute();
-      print('✅ [LiveMatchService] تم بث معاملات العميل ($customerName) للجهاز النظير بنجاح!');
+      debugPrint('✅ [LiveMatchService] تم بث معاملات العميل ($customerName) للجهاز النظير بنجاح!');
     } catch (e) {
-      print('❌ [LiveMatchService] خطأ في إعادة بث معاملات العميل للجهاز النظير: $e');
+      debugPrint('❌ [LiveMatchService] خطأ في إعادة بث معاملات العميل للجهاز النظير: $e');
     }
   }
 

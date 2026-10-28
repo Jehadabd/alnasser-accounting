@@ -55,7 +55,7 @@ class ReceiptsService {
     String? notes,
   }) async {
     final valid = lines.where((l) => l.amountFc > 0 || l.discount > 0).toList();
-    if (valid.isEmpty) throw ErpException('أدخل مبلغاً أو حسماً لعميل واحد على الأقل');
+    if (valid.isEmpty) throw ErpException('أدخل مبلغاً أو خصماً لعميل واحد على الأقل');
     if (fxRate <= 0) throw ErpException('سعر التعادل غير صحيح');
     for (final l in valid) {
       if (l.amountFc < 0 || l.discount < 0) throw ErpException('لا يجوز مبلغ سالب');
@@ -92,6 +92,10 @@ class ReceiptsService {
       }
       try {
         final before = await CustomerMoney.balance(db, l.customerId);
+        if (!context.mounted) {
+          errors.add('أُغلقت الشاشة قبل إكمال الوصل');
+          break;
+        }
         String? payUuid;
         String? discUuid;
         final amountBase = isBase ? roundMoney(l.amountFc) : roundMoney(l.amountFc * fxRate);
@@ -121,7 +125,7 @@ class ReceiptsService {
             customerId: l.customerId,
             amount: -roundMoney(l.discount),
             kind: CustomerTxKind.discount,
-            note: 'حسم مع وصل القبض رقم $receiptNo',
+            note: 'خصم مع وصل القبض رقم $receiptNo',
             date: date,
             docNo: docNo,
             receiptId: receiptId,
@@ -228,9 +232,8 @@ class ReceiptsService {
     if (amount <= 0) throw ErpException('المبلغ يجب أن يكون أكبر من صفر');
     await PeriodLock.assertOpen(date);
     final db = await erpDb();
-    final before = await db.rawQuery('SELECT COALESCE(MAX(id), 0) AS m FROM supplier_payments');
-    final maxBefore = ((before.first['m'] as num?) ?? 0).toInt();
-    await PurchaseService().registerPayment(SupplierPayment(
+    // المعرّف يعود من التسجيل نفسه (كان يُخمَّن بـ «أكبر معرّف بعد» — يخطئ لو سجّلت طرفية أخرى دفعة في اللحظة نفسها)
+    final paymentId = await PurchaseService().registerPayment(SupplierPayment(
       supplierId: supplierId,
       amount: roundMoney(amount),
       currency: currency,
@@ -245,12 +248,9 @@ class ReceiptsService {
       createdByUserId: currentUserId(),
     ));
     // ربط الدفعة بصندوقها وسعر صرفها (للقيد)
-    final after = await db.rawQuery(
-        'SELECT id FROM supplier_payments WHERE id > ? AND supplier_id = ? ORDER BY id DESC LIMIT 1',
-        [maxBefore, supplierId]);
-    if (after.isNotEmpty && (cashBoxId != null || fxRate != null || docNo != null)) {
+    if (cashBoxId != null || fxRate != null || docNo != null) {
       await db.insert('supplier_payment_ext', {
-        'payment_id': after.first['id'],
+        'payment_id': paymentId,
         'cash_box_id': (method == 'discount' || method == 'cheque') ? null : cashBoxId,
         'fx_rate': currency == 'IQD' ? null : fxRate,
         'doc_no': docNo,

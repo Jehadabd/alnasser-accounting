@@ -23,7 +23,9 @@ class PriceToolsScreen extends StatefulWidget {
 }
 
 class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+  // يُنشأ في initState: الإنشاء الكسول كان يحدث أول مرة داخل dispose (حين لا تُستعمل
+  // التبويبات في التخطيط العريض) ⇒ «Looking up a deactivated widget's ancestor is unsafe»
+  late final TabController _tabs;
   final _tools = PriceTools();
 
   // اختيار المواد
@@ -52,6 +54,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
   @override
   void initState() {
     super.initState();
+    _tabs = TabController(length: 2, vsync: this);
     _init();
   }
 
@@ -247,7 +250,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
     final list = _productsPanel();
     if (wide) {
       return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 440, child: ListView(children: [params])),
+        SizedBox(width: 480, child: ListView(padding: const EdgeInsets.only(bottom: 16), children: [params])),
         Expanded(child: list),
       ]);
     }
@@ -294,104 +297,157 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
       ),
       ErpSection(
         title: 'طريقة التعديل',
-        icon: Icons.functions_rounded,
+        icon: Icons.tune_rounded,
         color: ErpColors.purple,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('السعر المنطلق', style: TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            ChoiceChip(label: const Text('الكلفة'), selected: _source == 0, onSelected: (_) => setState(() => _source = 0)),
-            for (final l in levels)
-              ChoiceChip(
-                  label: Text(priceFieldNames[l - 1]),
-                  selected: _source == l,
-                  onSelected: (_) => setState(() => _source = l)),
-          ]),
-          const SizedBox(height: 12),
-          const Text('الأسعار الهدف', style: TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final l in levels)
-              FilterChip(
-                label: Text(priceFieldNames[l - 1]),
-                selected: _targets.contains(l),
-                onSelected: (v) => setState(() => v ? _targets.add(l) : _targets.remove(l)),
+        child: LayoutBuilder(builder: (context, box) {
+          final w3 = (box.maxWidth - 16) / 3;
+          final w2 = (box.maxWidth - 8) / 2;
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const StepTitle(1, 'من أي سعر نحسب؟', subtitle: 'السعر الذي تُطبَّق عليه النسبة أو المبلغ', color: ErpColors.purple),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              ChoiceTile(
+                  title: 'الكلفة',
+                  icon: Icons.calculate_outlined,
+                  dense: true,
+                  width: w3,
+                  color: ErpColors.purple,
+                  selected: _source == 0,
+                  onTap: () => setState(() => _source = 0)),
+              for (final l in levels)
+                ChoiceTile(
+                    title: priceFieldNames[l - 1],
+                    icon: Icons.sell_outlined,
+                    dense: true,
+                    width: w3,
+                    color: ErpColors.purple,
+                    selected: _source == l,
+                    onTap: () => setState(() => _source = l)),
+            ]),
+            const SizedBox(height: 18),
+            const StepTitle(2, 'أي الأسعار تتغير؟', subtitle: 'يمكن اختيار أكثر من سعر', color: ErpColors.purple),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final l in levels)
+                ChoiceTile(
+                  title: priceFieldNames[l - 1],
+                  icon: _targets.contains(l) ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+                  dense: true,
+                  width: w3,
+                  color: ErpColors.green,
+                  selected: _targets.contains(l),
+                  onTap: () => setState(() => _targets.contains(l) ? _targets.remove(l) : _targets.add(l)),
+                ),
+            ]),
+            const SizedBox(height: 18),
+            const StepTitle(3, 'كيف يتغير؟', color: ErpColors.purple),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final m in const [
+                ('percent', 'نسبة مئوية', 'رفع أو خفض بنسبة %', Icons.percent_rounded),
+                ('amount', 'مبلغ ثابت', 'إضافة أو طرح مبلغ', Icons.add_card_rounded),
+                ('set', 'توحيد', 'سعر واحد لكل المواد', Icons.drag_handle_rounded),
+                ('clear', 'مسح', 'إفراغ السعر', Icons.backspace_outlined),
+              ])
+                ChoiceTile(
+                  title: m.$2,
+                  subtitle: m.$3,
+                  icon: m.$4,
+                  width: w2,
+                  color: ErpColors.blue,
+                  selected: _method == m.$1,
+                  onTap: () => setState(() => _method = m.$1),
+                ),
+            ]),
+            const SizedBox(height: 12),
+            if (_method == 'percent' || _method == 'amount')
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: true, label: Text('زيادة'), icon: Icon(Icons.trending_up_rounded)),
+                  ButtonSegment(value: false, label: Text('نقصان'), icon: Icon(Icons.trending_down_rounded)),
+                ],
+                selected: {_increase},
+                onSelectionChanged: (s) => setState(() => _increase = s.first),
               ),
-          ]),
-          const SizedBox(height: 12),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'percent', label: Text('نسبة %'), icon: Icon(Icons.percent)),
-              ButtonSegment(value: 'amount', label: Text('مبلغ'), icon: Icon(Icons.attach_money)),
-              ButtonSegment(value: 'set', label: Text('توحيد'), icon: Icon(Icons.drag_handle)),
-              ButtonSegment(value: 'clear', label: Text('مسح'), icon: Icon(Icons.backspace_outlined)),
+            if (_method != 'clear') ...[
+              const SizedBox(height: 10),
+              MoneyField(
+                controller: _value,
+                label: _method == 'percent' ? 'النسبة %' : (_method == 'set' ? 'السعر الموحّد' : 'المبلغ'),
+                onChanged: (_) => setState(() {}),
+              ),
             ],
-            selected: {_method},
-            onSelectionChanged: (s) => setState(() => _method = s.first),
-          ),
-          const SizedBox(height: 10),
-          if (_method == 'percent' || _method == 'amount')
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: true, label: Text('زيادة'), icon: Icon(Icons.arrow_upward)),
-                ButtonSegment(value: false, label: Text('نقصان'), icon: Icon(Icons.arrow_downward)),
-              ],
-              selected: {_increase},
-              onSelectionChanged: (s) => setState(() => _increase = s.first),
+            const SizedBox(height: 18),
+            const StepTitle(4, 'تقريب وتصفية', color: ErpColors.purple),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final r in const [0.0, 50.0, 100.0, 250.0, 500.0, 1000.0])
+                ChoiceChip(
+                  label: Text(r == 0 ? 'بلا تقريب' : 'لأقرب ${fmtQty(r)}'),
+                  selected: _rounding == r,
+                  onSelected: (_) => setState(() => _rounding = r),
+                ),
+            ]),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _onlyZero,
+              onChanged: (v) => setState(() => _onlyZero = v),
+              title: const Text('الأسعار الفارغة فقط', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('تعبئة المواد التي ليس لها سعر بعد، دون لمس الأسعار الموجودة',
+                  style: TextStyle(fontSize: 12)),
             ),
-          const SizedBox(height: 10),
-          if (_method != 'clear')
-            MoneyField(
-              controller: _value,
-              label: _method == 'percent' ? 'النسبة %' : (_method == 'set' ? 'السعر الموحد' : 'المبلغ'),
-              width: 200,
-            ),
-          const SizedBox(height: 10),
-          Row(children: [
-            const Text('التقريب إلى: '),
-            const SizedBox(width: 6),
-            DropdownButton<double>(
-              value: _rounding,
-              items: const [
-                DropdownMenuItem(value: 0, child: Text('بدون')),
-                DropdownMenuItem(value: 50, child: Text('50')),
-                DropdownMenuItem(value: 100, child: Text('100')),
-                DropdownMenuItem(value: 250, child: Text('250')),
-                DropdownMenuItem(value: 500, child: Text('500')),
-                DropdownMenuItem(value: 1000, child: Text('1000')),
-              ],
-              onChanged: (v) => setState(() => _rounding = v ?? 0),
-            ),
-          ]),
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _onlyZero,
-            onChanged: (v) => setState(() => _onlyZero = v ?? false),
-            title: const Text('الأسعار الصفرية فقط (تعبئة الفارغ)'),
-          ),
-          const SizedBox(height: 6),
-          Row(children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _busy ? null : _doPreview,
-                icon: const Icon(Icons.visibility_rounded),
-                label: const Text('معاينة'),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: ErpColors.purple.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: ErpColors.purple.withValues(alpha: 0.25)),
               ),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.summarize_outlined, size: 19, color: ErpColors.purple),
+                const SizedBox(width: 8),
+                Expanded(child: Text(_summary(), style: const TextStyle(fontSize: 13.5, height: 1.55, fontWeight: FontWeight.w600))),
+              ]),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: PrimaryButton(
-                label: 'تنفيذ (${fmtQty(_preview.length)})',
-                icon: Icons.done_all_rounded,
-                color: ErpColors.green,
-                busy: _busy,
-                onPressed: _preview.isEmpty ? null : _apply,
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _doPreview,
+                  icon: const Icon(Icons.visibility_rounded),
+                  label: const Text('معاينة الفروقات'),
+                ),
               ),
-            ),
-          ]),
-        ]),
+              const SizedBox(width: 8),
+              Expanded(
+                child: PrimaryButton(
+                  label: 'تنفيذ (${fmtQty(_preview.length)})',
+                  icon: Icons.done_all_rounded,
+                  color: ErpColors.green,
+                  busy: _busy,
+                  onPressed: _preview.isEmpty ? null : _apply,
+                ),
+              ),
+            ]),
+          ]);
+        }),
       ),
     ]);
+  }
+
+  /// جملة تشرح ما سيحدث بلغة بسيطة
+  String _summary() {
+    if (_targets.isEmpty) return 'اختر سعراً واحداً على الأقل في الخطوة 2.';
+    final targets = (_targets.toList()..sort()).map((l) => priceFieldNames[l - 1]).join('، ');
+    final src = _source == 0 ? 'الكلفة' : priceFieldNames[_source - 1];
+    final v = _value.text.trim().isEmpty ? '…' : _value.text.trim();
+    final what = switch (_method) {
+      'percent' => '${_increase ? 'رفع' : 'خفض'} $targets بنسبة $v% محسوبة من $src',
+      'amount' => '${_increase ? 'زيادة' : 'إنقاص'} $targets بمبلغ $v عن $src',
+      'set' => 'جعل $targets = $v',
+      _ => 'مسح $targets (تصبح بلا سعر)',
+    };
+    final count = _selected.isEmpty ? _products.length : _selected.length;
+    final round = _rounding > 0 && _method != 'clear' ? '، مع التقريب لأقرب ${fmtQty(_rounding)}' : '';
+    final zero = _onlyZero ? '، للأسعار الفارغة فقط' : '';
+    return '$what$round$zero — على ${fmtQty(count)} مادة.';
   }
 
   Widget _productsPanel() {
@@ -512,7 +568,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: const BorderSide(color: ErpColors.border)),
           child: ExpansionTile(
             leading: CircleAvatar(
-              backgroundColor: ErpColors.purple.withOpacity(.12),
+              backgroundColor: ErpColors.purple.withValues(alpha: .12),
               child: Text('$no', style: const TextStyle(color: ErpColors.purple, fontWeight: FontWeight.bold)),
             ),
             title: Text('دفعة #$no — ${fmtQty(d0(b['n']))} تغيير'),

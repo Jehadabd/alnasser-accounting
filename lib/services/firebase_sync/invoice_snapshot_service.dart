@@ -1,7 +1,7 @@
 // lib/services/firebase_sync/invoice_snapshot_service.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../database_service.dart';
-import '../invoice_settings_service.dart';
 import 'firebase_sync_config.dart';
 
 class InvoiceSnapshot {
@@ -72,7 +72,7 @@ class InvoiceSnapshotService {
       }
     }
 
-    print('📸 تم إنشاء لقطة الفواتير: $totalInvoices فاتورة، $totalAmount إجمالي');
+    debugPrint('📸 تم إنشاء لقطة الفواتير: $totalInvoices فاتورة، $totalAmount إجمالي');
 
     return InvoiceSnapshot(
       deviceId: deviceId,
@@ -97,9 +97,9 @@ class InvoiceSnapshotService {
           .doc(snapshot.deviceId)
           .set(snapshot.toMap());
           
-      print('☁️ ✅ تم رفع لقطة الفواتير بنجاح (الجهاز ${snapshot.deviceId})');
+      debugPrint('☁️ ✅ تم رفع لقطة الفواتير بنجاح (الجهاز ${snapshot.deviceId})');
     } catch (e) {
-      print('⚠️ فشل رفع لقطة الفواتير: $e');
+      debugPrint('⚠️ فشل رفع لقطة الفواتير: $e');
       rethrow;
     }
   }
@@ -138,7 +138,7 @@ class InvoiceSnapshotService {
           })
           .toList();
     } catch (e) {
-      print('⚠️ فشل تحميل لقطات فواتير الأجهزة: $e');
+      debugPrint('⚠️ فشل تحميل لقطات فواتير الأجهزة: $e');
       return [];
     }
   }

@@ -137,7 +137,7 @@ class FirebaseSyncConfig {
   static const String _deviceIdKey = 'firebase_sync_device_id';
   static const String _lastSyncKey = 'firebase_sync_last_sync';
   
-  static final _secureStorage = FlutterSecureStorage();
+  static const _secureStorage = FlutterSecureStorage();
   
   /// في النظام الجديد (كل مستخدم لديه مشروع فايربيس خاص به)، لا نحتاج لمجموعات
   /// نستخدم معرف ثابت لجميع الأجهزة التي تتصل بنفس المشروع

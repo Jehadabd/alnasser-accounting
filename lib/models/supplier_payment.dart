@@ -12,6 +12,10 @@ class SupplierPayment {
   final String? notes;
   final int? createdByUserId;
 
+  /// سند ملغى: يبقى ظاهراً في السجل بلا أثر على الرصيد.
+  final bool isVoid;
+  final String? voidReason;
+
   SupplierPayment({
     this.id,
     required this.supplierId,
@@ -24,6 +28,8 @@ class SupplierPayment {
     this.receiptNumber,
     this.notes,
     this.createdByUserId,
+    this.isVoid = false,
+    this.voidReason,
   });
 
   /// اسم طريقة الدفع بالعربي
@@ -65,6 +71,8 @@ class SupplierPayment {
       receiptNumber: map['receipt_number'],
       notes: map['notes'],
       createdByUserId: map['created_by_user_id'],
+      isVoid: ((map['is_void'] as num?)?.toInt() ?? 0) == 1,
+      voidReason: map['void_reason'] as String?,
     );
   }
 
@@ -79,6 +87,8 @@ class SupplierPayment {
     int? receiptNumber,
     String? notes,
     int? createdByUserId,
+    bool? isVoid,
+    String? voidReason,
   }) {
     return SupplierPayment(
       id: id ?? this.id,
@@ -91,6 +101,8 @@ class SupplierPayment {
       receiptNumber: receiptNumber ?? this.receiptNumber,
       notes: notes ?? this.notes,
       createdByUserId: createdByUserId ?? this.createdByUserId,
+      isVoid: isVoid ?? this.isVoid,
+      voidReason: voidReason ?? this.voidReason,
     );
   }
 }

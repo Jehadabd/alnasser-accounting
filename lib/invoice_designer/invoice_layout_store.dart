@@ -12,10 +12,13 @@ import 'invoice_layout.dart';
 
 /// أنواع الطباعة التي يمكن ربط تصميم بها
 class PrintTarget {
-  const PrintTarget(this.key, this.label, this.hint, this.roll);
+  const PrintTarget(this.key, this.label, this.hint, this.roll, {this.kind = 'invoice'});
   final String key;
   final String label;
   final String hint;
+
+  /// نوع التصاميم التي يقبلها ('invoice' أو نوع سند)
+  final String kind;
 
   /// يقبل تصاميم الإيصال (80/58) لا A4
   final bool roll;
@@ -27,9 +30,30 @@ class PrintTarget {
   static const posReceipt = PrintTarget('pos_receipt', 'إيصال الكاشير — نقطة البيع',
       'الإيصال الذي يُطبع من شاشة نقطة البيع (الكاشير)', true);
 
-  static const all = [invoiceA4, invoiceRoll, posReceipt];
+  static const adjustmentVoucher = PrintTarget('adjustment_voucher', 'إشعار مدين / دائن — A4',
+      'السند الذي يُطبع بعد إضافة أو إرجاع على فاتورة محفوظة', false);
 
-  bool accepts(InvoiceLayout l) => roll ? l.paper.isRoll : l.paper == LayoutPaper.a4;
+  static const all = [invoiceA4, invoiceRoll, posReceipt, adjustmentVoucher];
+
+  // 🧾 مصمم السندات — لكل نوع سند نوع طباعة (ورق A4)
+  static const vReceipt = PrintTarget('voucher_receipt', 'سند قبض — تسديد دين',
+      'بعد تسديد دين من سجل الديون، ووصل القبض لعدة عملاء', false, kind: 'receipt');
+  static const vCashReceipt = PrintTarget('voucher_cash_receipt', 'سند قبض — إضافة على فاتورة نقدية',
+      'تعديل فاتورة نقدية بالقلم وزاد مجموعها', false, kind: 'cash_receipt');
+  static const vCashRefund = PrintTarget('voucher_cash_refund', 'سند صرف — مرتجع من فاتورة نقدية',
+      'تعديل فاتورة نقدية بالقلم ونقص مجموعها', false, kind: 'cash_refund');
+  static const vDebitNote = PrintTarget('voucher_debit_note', 'إشعار مدين — إضافة على فاتورة آجلة',
+      'تعديل فاتورة آجلة بالقلم وزاد مجموعها', false, kind: 'debit_note');
+  static const vCreditNote = PrintTarget('voucher_credit_note', 'إشعار دائن — مرتجع من فاتورة آجلة',
+      'تعديل فاتورة آجلة بالقلم ونقص مجموعها', false, kind: 'credit_note');
+  static const vouchers = [vReceipt, vCashReceipt, vCashRefund, vDebitNote, vCreditNote];
+  static const everything = [...all, ...vouchers];
+
+  /// أنواع الطباعة لمصمم نوع مستند واحد
+  static List<PrintTarget> forKind(String kind) =>
+      kind == 'invoice' ? all : [for (final t in vouchers) if (t.kind == kind) t];
+
+  bool accepts(InvoiceLayout l) => l.kind == kind && (roll ? l.paper.isRoll : l.paper == LayoutPaper.a4);
 }
 
 class InvoiceLayoutStore {
@@ -45,14 +69,39 @@ class InvoiceLayoutStore {
       if (raw == null || raw.isEmpty) return <InvoiceLayout>[];
       final list = jsonDecode(raw);
       if (list is! List) return <InvoiceLayout>[];
-      return list
+      final layouts = list
           .whereType<Map>()
           .map((m) => InvoiceLayout.fromJson(Map<String, dynamic>.from(m)))
           .where((l) => l.id.isNotEmpty)
           .toList();
+      await _migrateQrInvoiceInfoOnce(layouts);
+      return layouts;
     } catch (_) {
       return <InvoiceLayout>[];
     }
+  }
+
+  static const _kQrInfoMigrated = 'invoice_layouts_qr_info_v1';
+
+  /// مرة واحدة: رمز QR في التصاميم المحفوظة كان يحمل رقم الفاتورة وحده (افتراضي
+  /// النماذج) — صار يحمل كل بيانات الفاتورة (الرقم، التاريخ والوقت، السيد، الهاتف).
+  /// الباركود العادي وما اختاره المستخدم غير رقم الفاتورة لا يُمسّ.
+  static Future<void> _migrateQrInvoiceInfoOnce(List<InvoiceLayout> layouts) async {
+    final db = await erpDb();
+    if ((await Ledger.getSetting(db, _kQrInfoMigrated)) == '1') return;
+    var changed = false;
+    for (final l in layouts) {
+      for (final e in l.elements) {
+        if (e.type == ElType.barcode &&
+            (e.props['kind'] ?? 'qr') == 'qr' &&
+            (e.props['data'] ?? 'invoiceNo') == 'invoiceNo') {
+          e.props['data'] = 'invoiceInfo';
+          changed = true;
+        }
+      }
+    }
+    if (changed) await saveAll(layouts);
+    await Ledger.setSetting(db, _kQrInfoMigrated, '1');
   }
 
   static Future<void> saveAll(List<InvoiceLayout> layouts) async {
@@ -80,7 +129,7 @@ class InvoiceLayoutStore {
     try {
       final id = await target(targetKey);
       if (id.isEmpty) return null;
-      final t = PrintTarget.all.firstWhere((x) => x.key == targetKey, orElse: () => PrintTarget.invoiceA4);
+      final t = PrintTarget.everything.firstWhere((x) => x.key == targetKey, orElse: () => PrintTarget.invoiceA4);
       for (final l in await loadAll()) {
         if (l.id == id && t.accepts(l)) return l;
       }

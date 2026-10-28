@@ -93,13 +93,6 @@ class _InvoiceItemsTableState extends State<InvoiceItemsTable> {
 
   String _fmt(num v) => NumberFormat('#,##0.##', 'en_US').format(v);
 
-  bool _canEditRow(int index) {
-    if (index == 0) return true;
-    if (index == items.length - 1) {
-      return items[index - 1].isComplete;
-    }
-    return true;
-  }
 
   List<String> _getUnitsForProduct(Product? product) {
     if (product == null) return [];
@@ -111,7 +104,9 @@ class _InvoiceItemsTableState extends State<InvoiceItemsTable> {
               json.decode(product.unitHierarchy!.replaceAll("'", '"'));
           units.addAll(parsed
               .map((e) => (e['unit_name'] ?? e['name'] ?? '').toString()));
-        } catch (e) {}
+        } catch (_) {
+          // هرمية وحدات تالفة: نكتفي بالوحدة الأساسية
+        }
       }
       return units;
     } else if (product.unit == 'meter') {
@@ -163,7 +158,7 @@ class _InvoiceItemsTableState extends State<InvoiceItemsTable> {
   @override
   Widget build(BuildContext context) {
     final completedItems = _getCompletedItems();
-    return Container(
+    return SizedBox(
       width: double.infinity,
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
@@ -175,7 +170,8 @@ class _InvoiceItemsTableState extends State<InvoiceItemsTable> {
               DataTable(
                 columnSpacing: 8,
                 headingRowHeight: 38,
-                dataRowHeight: 44,
+                dataRowMinHeight: 44,
+                dataRowMaxHeight: 44,
                 columns: const [
                   DataColumn(label: SizedBox(width: 28)), // الترقيم
                   DataColumn(label: SizedBox(width: 32)), // زر الحذف
@@ -238,10 +234,10 @@ class _InvoiceItemsTableState extends State<InvoiceItemsTable> {
                   }),
                   // صف الإدخال الفارغ الدائم
                   DataRow(
-                    color: MaterialStateProperty.all(Colors.grey[100]),
+                    color: WidgetStateProperty.all(Colors.grey[100]),
                     cells: [
-                      DataCell(SizedBox(width: 28)),
-                      DataCell(const SizedBox(width: 32)),
+                      const DataCell(SizedBox(width: 28)),
+                      const DataCell(SizedBox(width: 32)),
                       DataCell(
                         SafeAutocomplete<String>(
                           optionsBuilder: (textEditingValue) {
@@ -332,7 +328,7 @@ class _InvoiceItemsTableState extends State<InvoiceItemsTable> {
                       DataCell(TextField(
                         controller: priceControllers.last,
                         keyboardType:
-                            TextInputType.numberWithOptions(decimal: true),
+                            const TextInputType.numberWithOptions(decimal: true),
                         decoration:
                             const InputDecoration(border: InputBorder.none),
                         style: const TextStyle(fontSize: 15),
@@ -369,8 +365,8 @@ class _InvoiceItemsTableState extends State<InvoiceItemsTable> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  Text('الإجمالي: ',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const Text('الإجمالي: ',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
                   Text(_fmt(totalSum),
                       style: const TextStyle(fontWeight: FontWeight.bold)),
                 ],

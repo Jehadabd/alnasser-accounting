@@ -1,4 +1,5 @@
 // services/gemini_service.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
@@ -17,7 +18,7 @@ class GeminiService {
     _apiKeys = [apiKey];
     if (apiKey2 != null && apiKey2!.isNotEmpty) _apiKeys.add(apiKey2!);
     if (apiKey3 != null && apiKey3!.isNotEmpty) _apiKeys.add(apiKey3!);
-    print('🔑 Gemini: تم تحميل ${_apiKeys.length} مفتاح/مفاتيح API');
+    debugPrint('🔑 Gemini: تم تحميل ${_apiKeys.length} مفتاح/مفاتيح API');
   }
 
   final String apiKey;
@@ -36,10 +37,10 @@ class GeminiService {
   bool _switchToNextKey() {
     if (_currentKeyIndex < _apiKeys.length - 1) {
       _currentKeyIndex++;
-      print('🔄 Gemini: التبديل للمفتاح ${_currentKeyIndex + 1} من ${_apiKeys.length}');
+      debugPrint('🔄 Gemini: التبديل للمفتاح ${_currentKeyIndex + 1} من ${_apiKeys.length}');
       return true;
     }
-    print('❌ Gemini: لا توجد مفاتيح إضافية للتبديل');
+    debugPrint('❌ Gemini: لا توجد مفاتيح إضافية للتبديل');
     return false;
   }
 
@@ -60,7 +61,7 @@ class GeminiService {
       while (attempt < maxAttemptsPerKey) {
         attempt++;
         try {
-          print('🔑 Gemini: استخدام المفتاح ${_currentKeyIndex + 1}/${_apiKeys.length} (محاولة $attempt)');
+          debugPrint('🔑 Gemini: استخدام المفتاح ${_currentKeyIndex + 1}/${_apiKeys.length} (محاولة $attempt)');
           
           final response = await http
               .post(
@@ -75,7 +76,7 @@ class GeminiService {
 
           // خطأ 429 (تجاوز الحصة) - تبديل فوري للمفتاح التالي
           if (response.statusCode == 429) {
-            print('⚠️ Gemini: تجاوز الحصة (429) للمفتاح ${_currentKeyIndex + 1}');
+            debugPrint('⚠️ Gemini: تجاوز الحصة (429) للمفتاح ${_currentKeyIndex + 1}');
             if (_switchToNextKey()) {
               attempt = 0; // إعادة تعيين المحاولات للمفتاح الجديد
               continue;
@@ -85,7 +86,7 @@ class GeminiService {
           
           // خطأ في المفتاح - تبديل فوري
           if (response.statusCode == 401 || response.statusCode == 403) {
-            print('🔑 Gemini: مفتاح غير صالح (${response.statusCode}) للمفتاح ${_currentKeyIndex + 1}');
+            debugPrint('🔑 Gemini: مفتاح غير صالح (${response.statusCode}) للمفتاح ${_currentKeyIndex + 1}');
             if (_switchToNextKey()) {
               attempt = 0;
               continue;
@@ -109,7 +110,7 @@ class GeminiService {
             return response; // نجاح
           } else {
             // أي خطأ آخر (400, 404, etc) - تبديل فوري
-            print('⚠️ Gemini: خطأ عام (${response.statusCode}) للمفتاح ${_currentKeyIndex + 1}');
+            debugPrint('⚠️ Gemini: خطأ عام (${response.statusCode}) للمفتاح ${_currentKeyIndex + 1}');
             if (_switchToNextKey()) {
               attempt = 0;
               continue;
@@ -117,13 +118,13 @@ class GeminiService {
             return response;
           }
         } on TimeoutException catch (_) {
-          print('⏱️ Gemini: انتهت المهلة للمفتاح ${_currentKeyIndex + 1}');
+          debugPrint('⏱️ Gemini: انتهت المهلة للمفتاح ${_currentKeyIndex + 1}');
           if (attempt >= maxAttemptsPerKey) {
             if (!_switchToNextKey()) rethrow;
             attempt = 0;
           }
         } on SocketException catch (_) {
-          print('🌐 Gemini: خطأ في الاتصال');
+          debugPrint('🌐 Gemini: خطأ في الاتصال');
           if (attempt >= maxAttemptsPerKey) {
             if (!_switchToNextKey()) rethrow;
             attempt = 0;
@@ -131,14 +132,14 @@ class GeminiService {
         }
 
         // تراجع أسي
-        final delayMs = (math.pow(2, attempt) as num).toInt() * 300;
+        final delayMs = math.pow(2, attempt).toInt() * 300;
         final jitter = math.Random().nextInt(200);
         await Future.delayed(Duration(milliseconds: delayMs + jitter));
       }
       
       // إذا وصلنا هنا، فشلت كل المحاولات مع المفتاح الحالي
       if (!_switchToNextKey()) {
-        throw HttpException('فشلت جميع مفاتيح Gemini API');
+        throw const HttpException('فشلت جميع مفاتيح Gemini API');
       }
     }
   }
@@ -156,7 +157,7 @@ class GeminiService {
 
   /// إرسال رسالة نصية إلى Gemini والحصول على رد
   Future<String> sendMessage(String message, {List<String>? conversationHistory}) async {
-    print('🤖 Gemini: إرسال رسالة...');
+    debugPrint('🤖 Gemini: إرسال رسالة...');
     
     final contents = <Map<String, dynamic>>[];
     
@@ -187,25 +188,25 @@ class GeminiService {
     final response = await _postWithRetry(body: requestBody);
 
     if (response.statusCode != 200) {
-      print('❌ Gemini: خطأ ${response.statusCode}');
+      debugPrint('❌ Gemini: خطأ ${response.statusCode}');
       throw HttpException('Gemini error: ${response.statusCode} ${response.body}');
     }
 
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
     final candidates = decoded['candidates'] as List?;
     if (candidates == null || candidates.isEmpty) {
-      print('❌ Gemini: لا توجد نتائج');
+      debugPrint('❌ Gemini: لا توجد نتائج');
       return '';
     }
     final content = candidates.first['content'] as Map<String, dynamic>? ?? const {};
     final parts = content['parts'] as List? ?? [];
     if (parts.isEmpty) {
-      print('❌ Gemini: رد فارغ');
+      debugPrint('❌ Gemini: رد فارغ');
       return '';
     }
     final text = parts.first['text'] as String? ?? '';
     
-    print('✅ Gemini: تم استلام الرد (${text.length} حرف)');
+    debugPrint('✅ Gemini: تم استلام الرد (${text.length} حرف)');
     return text;
   }
 
@@ -399,19 +400,19 @@ $productsJson
     
     final text = parts.first['text'] as String? ?? '{}';
     
-    print('📄 Gemini Raw Response:');
-    print(text);
-    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    debugPrint('📄 Gemini Raw Response:');
+    debugPrint(text);
+    debugPrint('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     try {
       final extracted = jsonDecode(text) as Map<String, dynamic>;
       if (extractType == 'invoice') {
         final items = extracted['line_items'] ?? extracted['items'] ?? [];
-        print('📦 عدد العناصر المستخرجة: ${items is List ? items.length : 0}');
+        debugPrint('📦 عدد العناصر المستخرجة: ${items is List ? items.length : 0}');
       }
       return extracted;
     } catch (e) {
-      print('⚠️ فشل تحليل JSON من Gemini: $e');
+      debugPrint('⚠️ فشل تحليل JSON من Gemini: $e');
       return {'raw': text};
     }
   }

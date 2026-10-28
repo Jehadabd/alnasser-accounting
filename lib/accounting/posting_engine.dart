@@ -79,6 +79,8 @@ class PostingEngine {
       final db = await _getDb();
       progress?.call('فواتير البيع...');
       await _syncSalesInvoices(db, summary);
+      progress?.call('تعديلات الفواتير...');
+      await _syncInvoiceEditEvents(db, summary);
       progress?.call('ديون العملاء...');
       await _syncCustomerTransactions(db, summary);
       if (await _tableExists(db, 'purchase_invoices')) {
@@ -190,9 +192,13 @@ class PostingEngine {
     final hasAdj = await _tableExists(db, 'invoice_adjustments');
     final hasCashBoxCol = await _columnExists(db, 'invoices', 'cash_box_id');
     final hasBranchCol = await _columnExists(db, 'invoices', 'branch_id');
+    // ✏️ تعديلات بالقلم: فروقها تُرحَّل بتاريخها (_syncInvoiceEditEvents) فتُطرح من هنا
+    final hasEv = await _tableExists(db, 'invoice_edit_events');
 
     final rows = await db.rawQuery('''
       SELECT i.id, i.invoice_date, i.payment_type, i.total_amount,
+             ${hasEv ? 'COALESCE((SELECT SUM(e.cash_after - e.cash_before) FROM invoice_edit_events e WHERE e.invoice_id = i.id), 0)' : '0'} AS ev_cash,
+             ${hasEv ? 'COALESCE((SELECT SUM(e.cost_after - e.cost_before) FROM invoice_edit_events e WHERE e.invoice_id = i.id), 0)' : '0'} AS ev_cost,
              i.amount_paid_on_invoice, i.customer_id, i.customer_name,
              ${hasCashBoxCol ? 'i.cash_box_id' : 'NULL'} AS cash_box_id,
              ${hasBranchCol ? 'i.branch_id' : 'NULL'} AS branch_id,
@@ -217,6 +223,8 @@ class PostingEngine {
         r['items_sig'],
         r['cash_box_id'],
         r['branch_id'],
+        _d(r['ev_cash']).toStringAsFixed(2),
+        _d(r['ev_cost']).toStringAsFixed(2),
       ].join('|');
       sources.add(_Source(r['id'] as int, hash, r));
     }
@@ -236,8 +244,10 @@ class PostingEngine {
       if (cashPart > total) cashPart = total;
       if (cashPart < 0) cashPart = 0;
       cashPart += _d(r['adj_cash']);
+      // ✏️ الحال الأصلية: ما أضافه/أنقصه التعديل بالقلم يُقيَّد بتاريخ التعديل
+      cashPart = roundMoney(cashPart - _d(r['ev_cash']));
 
-      final cost = await _invoiceCost(txn, s.id, adHocMargin);
+      final cost = roundMoney(await _invoiceCost(txn, s.id, adHocMargin) - _d(r['ev_cost']));
       final cashAcc = await _cashAccountFor(txn, r['cash_box_id'] as int?, cashMain);
 
       final lines = <JournalLineInput>[
@@ -252,6 +262,10 @@ class PostingEngine {
         if (cost > 0) ...[
           JournalLineInput(accountId: cogs, debit: cost),
           JournalLineInput(accountId: inventory, credit: cost),
+        ],
+        if (cost < 0) ...[
+          JournalLineInput(accountId: inventory, debit: -cost),
+          JournalLineInput(accountId: cogs, credit: -cost),
         ],
       ];
       final desc = 'فاتورة بيع #${s.id} — ${r['customer_name'] ?? ''}'.trim();
@@ -280,6 +294,85 @@ class PostingEngine {
           branchId: (r['branch_id'] as int?) ?? 1);
     });
   }
+
+  // ═══════════════════════ ✏️ تعديلات الفواتير بالقلم ═══════════════════════
+  //
+  // كل حدث تعديل = قيد بتاريخ التعديل بفرقه فقط:
+  //   زاد المقبوض نقداً ⇒ مدين الصندوق / دائن المبيعات (والعكس عند الإرجاع)
+  //   زادت الكلفة     ⇒ مدين كلفة البضاعة / دائن المخزون (والعكس عند الإرجاع)
+  // الجزء الآجل يُقيَّد من حركة دين العميل (بتاريخ التعديل أصلاً).
+  // قيد الفاتورة نفسها يطرح مجموع هذه الفروق، فالمجموع = حال الفاتورة الآن.
+
+  Future<void> _syncInvoiceEditEvents(Database db, PostingSummary summary) async {
+    final hasEv = await _tableExists(db, 'invoice_edit_events');
+    final hasDeleted = await _columnExists(db, 'invoices', 'is_deleted');
+    final hasCashBoxCol = await _columnExists(db, 'invoices', 'cash_box_id');
+    final hasBranchCol = await _columnExists(db, 'invoices', 'branch_id');
+    final sources = <_Source>[];
+    if (hasEv) {
+      final rows = await db.rawQuery('''
+        SELECT e.id, e.invoice_id, e.event_date, e.doc_kind,
+               (e.cash_after - e.cash_before) AS d_cash, (e.cost_after - e.cost_before) AS d_cost,
+               i.customer_name,
+               ${hasCashBoxCol ? 'i.cash_box_id' : 'NULL'} AS cash_box_id,
+               ${hasBranchCol ? 'i.branch_id' : 'NULL'} AS branch_id
+        FROM invoice_edit_events e
+        JOIN invoices i ON i.id = e.invoice_id
+        WHERE i.status = 'محفوظة'
+          ${hasDeleted ? 'AND COALESCE(i.is_deleted, 0) = 0' : ''}
+      ''');
+      for (final r in rows) {
+        final dc = roundMoney(_d(r['d_cash']));
+        final dk = roundMoney(_d(r['d_cost']));
+        if (dc.abs() < kMoneyEpsilon && dk.abs() < kMoneyEpsilon) continue; // لا أثر في الدفتر
+        final hash = [r['event_date'], dc.toStringAsFixed(2), dk.toStringAsFixed(2), r['cash_box_id'], r['branch_id']].join('|');
+        sources.add(_Source(r['id'] as int, hash, r));
+      }
+    }
+
+    final cashMain = await _defaultCashAccount(db);
+    final sales = await Ledger.systemAccountId(db, 'sales');
+    final cogs = await Ledger.systemAccountId(db, 'cogs');
+    final inventory = await Ledger.systemAccountId(db, 'inventory');
+
+    await _reconcile(db, 'invoice_edit', sources, summary, (txn, s) async {
+      final r = s.row;
+      final dc = roundMoney(_d(r['d_cash']));
+      final dk = roundMoney(_d(r['d_cost']));
+      final cashAcc = await _cashAccountFor(txn, r['cash_box_id'] as int?, cashMain);
+      final lines = <JournalLineInput>[
+        if (dc > 0) ...[
+          JournalLineInput(accountId: cashAcc, debit: dc, memo: 'مقبوض إضافة على فاتورة'),
+          JournalLineInput(accountId: sales, credit: dc),
+        ],
+        if (dc < 0) ...[
+          JournalLineInput(accountId: sales, debit: -dc, memo: 'مرتجع من فاتورة'),
+          JournalLineInput(accountId: cashAcc, credit: -dc),
+        ],
+        if (dk > 0) ...[
+          JournalLineInput(accountId: cogs, debit: dk),
+          JournalLineInput(accountId: inventory, credit: dk),
+        ],
+        if (dk < 0) ...[
+          JournalLineInput(accountId: inventory, debit: -dk),
+          JournalLineInput(accountId: cogs, credit: -dk),
+        ],
+      ];
+      final what = (dc > 0 || (dc == 0 && dk > 0)) ? 'إضافة على' : 'مرتجع من';
+      await Ledger.writeEntry(txn,
+          sourceType: 'invoice_edit',
+          sourceId: s.id,
+          sourceHash: s.hash,
+          date: _date(r['event_date']),
+          description: 'تعديل فاتورة #${r['invoice_id']}: $what الفاتورة — ${r['customer_name'] ?? ''}'.trim(),
+          lines: lines,
+          branchId: (r['branch_id'] as int?) ?? 1);
+    });
+  }
+
+  /// كلفة فاتورة كما يحسبها المحرك — لأحداث التعديل (تُقرأ داخل معاملة الحفظ).
+  static Future<double> invoiceCostOf(DatabaseExecutor db, int invoiceId, double adHocMargin) =>
+      _invoiceCost(db, invoiceId, adHocMargin);
 
   /// كلفة الفاتورة — نفس منطق ProfitCalculator حرفياً حتى تطابق أرباح
   /// الدفتر أرباحَ التقارير القديمة.

@@ -11,6 +11,11 @@ import '../services/settings_manager.dart';
 import '../services/database/business/supplier_debt_reconciler.dart';
 import '../services/database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 import '../erp/activity/activity_log.dart';
+import '../erp/erp_common.dart' show PeriodLock;
+import '../erp/inventory/usd_cost_service.dart' show UsdCostService;
+import '../accounting/ledger.dart' show roundMoney;
+import 'database/supplier_compat.dart';
+import 'name_search.dart'; // 🔤 الأسماء بلا مسافات
 
 /// خدمة المشتريات والموردين (Odoo-Style)
 class PurchaseService with ChangeNotifier {
@@ -22,13 +27,17 @@ class PurchaseService with ChangeNotifier {
     String whereClause = '';
     List<dynamic> args = [];
 
-    if (query.isNotEmpty) {
-      whereClause = 'WHERE name LIKE ? OR phone LIKE ?';
-      args = ['%$query%', '%$query%'];
+    var orderBy = 'name ASC';
+    final w = NameSearch.where('name', query, phoneCol: 'phone');
+    if (w != null) {
+      final o = NameSearch.order('name', query);
+      whereClause = 'WHERE ${w.sql}';
+      orderBy = o.sql;
+      args = [...w.args, ...o.args];
     }
 
     final List<Map<String, dynamic>> maps = await db.rawQuery(
-      'SELECT * FROM suppliers $whereClause ORDER BY name ASC',
+      'SELECT * FROM suppliers $whereClause ORDER BY $orderBy',
       args,
     );
 
@@ -50,7 +59,7 @@ class PurchaseService with ChangeNotifier {
     final db = await _db.database;
     final supplierMap = supplier.toMap();
     supplierMap.remove('id');
-    final id = await db.insert('suppliers', supplierMap);
+    final id = await db.insert('suppliers', await supplierInsertCompat(db, supplierMap));
     notifyListeners();
     return id;
   }
@@ -82,7 +91,7 @@ class PurchaseService with ChangeNotifier {
     map['updated_at'] = DateTime.now().toIso8601String();
     await db.update(
       'suppliers',
-      map,
+      await supplierUpdateCompat(db, map),
       where: 'id = ?',
       whereArgs: [supplier.id],
     );
@@ -245,6 +254,7 @@ class PurchaseService with ChangeNotifier {
 
   Future<List<SupplierPayment>> getPaymentsForSupplier(int supplierId) async {
     final db = await _db.database;
+    await _ensurePaymentColumns(db);
     final List<Map<String, dynamic>> maps = await db.query(
       'supplier_payments',
       where: 'supplier_id = ?',
@@ -267,7 +277,10 @@ class PurchaseService with ChangeNotifier {
   /// 🛡️ قاعدة جديدة تُنشئ supplier_payments من createTables بلا عمودي
   /// receipt_number و delegate_id (وبـ payment_number NOT NULL)، فكان تسجيل أي
   /// دفعة لمورد يفشل بـ «no such column». نكمّل الأعمدة الناقصة قبل الكتابة.
-  static bool _paymentColumnsEnsured = false;
+  // مرتبط بالقاعدة المفتوحة: قاعدة مستعادة تُجهَّز جداولها من جديد
+  static int _paymentColumnsEnsuredGen = -1;
+  static bool get _paymentColumnsEnsured => _paymentColumnsEnsuredGen == DatabaseService.openGeneration;
+  static set _paymentColumnsEnsured(bool v) => _paymentColumnsEnsuredGen = v ? DatabaseService.openGeneration : -1;
   Future<Set<String>> _ensurePaymentColumns(DatabaseExecutor d) async {
     Future<Set<String>> cols() async => {
           for (final c in await d.rawQuery('PRAGMA table_info(supplier_payments)'))
@@ -281,22 +294,22 @@ class PurchaseService with ChangeNotifier {
       if (!have.contains('delegate_id')) {
         await d.execute('ALTER TABLE supplier_payments ADD COLUMN delegate_id INTEGER');
       }
+      // 🚫 إلغاء سند الدفع (يبقى في السجل «ملغى» بلا أثر على الرصيد)
+      if (!have.contains('is_void')) {
+        await d.execute('ALTER TABLE supplier_payments ADD COLUMN is_void INTEGER DEFAULT 0');
+      }
+      if (!have.contains('void_reason')) {
+        await d.execute('ALTER TABLE supplier_payments ADD COLUMN void_reason TEXT');
+      }
+      if (!have.contains('voided_at')) {
+        await d.execute('ALTER TABLE supplier_payments ADD COLUMN voided_at TEXT');
+      }
       _paymentColumnsEnsured = true;
       have = await cols();
     }
     return have;
   }
 
-  Future<int> _getNextReceiptNumber() async {
-    final db = await _db.database;
-    await _ensurePaymentColumns(db);
-    // 🛡️ receipt_number عمود نصّي؛ قراءته مباشرةً كـ int كانت ترمي استثناءً
-    // عند أول سند. نحوّله صراحةً قبل أخذ الأكبر.
-    final result = await db.rawQuery(
-        'SELECT MAX(CAST(receipt_number AS INTEGER)) as max_num FROM supplier_payments');
-    final maxNum = (result.first['max_num'] as num?)?.toInt();
-    return (maxNum ?? 0) + 1;
-  }
 
   // --- Invoice Actions ---
   
@@ -310,7 +323,7 @@ class PurchaseService with ChangeNotifier {
       final settings = await SettingsManager.getAppSettings();
       costingMethod = settings.costingMethod;
     } catch (e) {
-      print('Warning: Could not load costingMethod: $e');
+      debugPrint('Warning: Could not load costingMethod: $e');
     }
     
     await db.transaction((txn) async {
@@ -321,6 +334,12 @@ class PurchaseService with ChangeNotifier {
           columns: ['status'], where: 'id = ?', whereArgs: [oldInvoice.id], limit: 1);
       final String oldStatus =
           oldRows.isEmpty ? 'draft' : ((oldRows.first['status'] as String?) ?? 'draft');
+
+      // 🛡️ مرتجعات مُرحَّلة على الفاتورة تقيّد تعديلها
+      if (oldStatus == 'confirmed') {
+        await _assertReturnsAllow(txn, oldInvoice.id!,
+            keepsConfirmed: newInvoice.status == 'confirmed', newItems: newItems);
+      }
 
       // 🏬 المخزن القديم للفاتورة (العكس يعود إليه نفسه)
       final oldExt = await PurchaseExt.read(txn, oldInvoice.id!);
@@ -351,7 +370,7 @@ class PurchaseService with ChangeNotifier {
       // 5. Apply New Effects (if new invoice is confirmed)
       if (newInvoice.status == 'confirmed') {
         for (var item in newItems) {
-          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId);
+          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId, currency: newInvoice.currency);
         }
       }
 
@@ -374,9 +393,9 @@ class PurchaseService with ChangeNotifier {
     try {
       final settings = await SettingsManager.getAppSettings();
       costingMethod = settings.costingMethod;
-      print('📊 Loaded costingMethod from settings: $costingMethod');
+      debugPrint('📊 Loaded costingMethod from settings: $costingMethod');
     } catch (e) {
-      print('Warning: Could not load costingMethod from settings: $e');
+      debugPrint('Warning: Could not load costingMethod from settings: $e');
     }
     
     // الحالة المؤكدة تُحسم هنا مرة واحدة، ويُكتب أثرها في الصف نفسه، كي
@@ -403,6 +422,7 @@ class PurchaseService with ChangeNotifier {
             : ((oldRows.first['status'] as String?) ?? 'draft');
 
         if (oldStatus == 'confirmed') {
+          await _assertReturnsAllow(txn, invoiceId, keepsConfirmed: nowConfirmed, newItems: items);
           final oldExt = await PurchaseExt.read(txn, invoiceId);
           final oldItemRows = await txn.query('purchase_invoice_items',
               where: 'invoice_id = ?', whereArgs: [invoiceId]);
@@ -433,7 +453,7 @@ class PurchaseService with ChangeNotifier {
       // 3. If Confirmed, Update Stock and Cost
       if (nowConfirmed) {
         for (var item in items) {
-          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId);
+          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId, currency: invoice.currency);
         }
       }
 
@@ -449,15 +469,19 @@ class PurchaseService with ChangeNotifier {
     notifyListeners();
   }
 
+  /// 💱 [currency] عملة فاتورة الشراء. كلفة المادة تُحفظ بالدينار دائماً، وفاتورة
+  /// الدولار تجعل المادة «دولارية»: تُحفظ كلفتها بالدولار وتتبع آخر سعر للدولار
+  /// (UsdCostService). كانت فاتورة الدولار تكتب السعر الدولاري كما هو (5$ ← كلفة
+  /// 5 دنانير) فيتضخم الربح في التقارير. وقبل تغيير الكلفة تُثبَّت كلفة ما بيع سابقاً.
   Future<void> _updateProductStockAndCost(Transaction txn, PurchaseInvoiceItem item, String costingMethod,
-      {int? warehouseId}) async {
-    print('💾 DB_UPDATE: Starting stock/cost update for product ID: ${item.productId}');
-    print('💾 DB_UPDATE: Item baseQuantity: ${item.baseQuantity}, baseUnitCost: ${item.baseUnitCost}');
-    print('💾 DB_UPDATE: Costing method: $costingMethod');
+      {int? warehouseId, String currency = 'IQD'}) async {
+    debugPrint('💾 DB_UPDATE: Starting stock/cost update for product ID: ${item.productId}');
+    debugPrint('💾 DB_UPDATE: Item baseQuantity: ${item.baseQuantity}, baseUnitCost: ${item.baseUnitCost}');
+    debugPrint('💾 DB_UPDATE: Costing method: $costingMethod');
     
     final List<Map<String, dynamic>> products = await txn.query('products', where: 'id = ?', whereArgs: [item.productId]);
     if (products.isEmpty) {
-      print('💾 DB_UPDATE: ❌ Product not found!');
+      debugPrint('💾 DB_UPDATE: ❌ Product not found!');
       return;
     }
     
@@ -467,18 +491,37 @@ class PurchaseService with ChangeNotifier {
     String? currentUnitCosts = product['unit_costs'] as String?;
     String baseUnit = product['unit'] as String? ?? 'piece';
 
-    print('💾 DB_UPDATE: Current stock: $currentStock, Current cost: $currentCost');
+    debugPrint('💾 DB_UPDATE: Current stock: $currentStock, Current cost: $currentCost');
 
     // Calculate new quantity in base units (e.g., pieces)
     double newQty = item.baseQuantity;
     
     // Calculate new cost per base unit from this purchase
+    final bool isUsd = currency == 'USD';
     double newUnitCost = item.baseUnitCost;
 
     double totalQty = currentStock + newQty;
     double finalCost;
+    double? finalUsd;
 
-    if (costingMethod == 'avco') {
+    if (isUsd) {
+      // كلفة الوحدة الأساسية بالدولار (متوسط مرجّح بالدولار لطريقة المتوسط)، ثم بالدينار بآخر سعر
+      final rate = await UsdCostService.currentRate(txn);
+      final newUsd = item.baseUnitCost;
+      double usdCost = newUsd;
+      if (costingMethod == 'avco') {
+        final cur = await UsdCostService.read(txn, item.productId);
+        final oldUsd = (cur.currency == 'USD' && (cur.usd ?? 0) > 0)
+            ? cur.usd!
+            : (rate > 1 ? currentCost / rate : 0.0);
+        final basisQty = currentStock > 0 ? currentStock : 0.0;
+        final basisTotal = basisQty + newQty;
+        if (basisTotal > 0) usdCost = (basisQty * oldUsd + newQty * newUsd) / basisTotal;
+      }
+      finalUsd = usdCost;
+      finalCost = rate > 1 ? roundMoney(usdCost * rate) : usdCost;
+      if (rate <= 1) debugPrint('⚠️ لا يوجد سعر دولار — كلفة فاتورة الدولار حُفظت بلا تحويل');
+    } else if (costingMethod == 'avco') {
       // Weighted Average Cost Formula (AVCO):
       // ((OldStock * OldCost) + (NewQty * NewCost)) / (OldStock + NewQty)
       // 🛡️ المخزون السالب (بيع متزامن على جهازين) بِيع فعلاً بالكلفة القديمة:
@@ -489,11 +532,11 @@ class PurchaseService with ChangeNotifier {
       double totalNewValue = newQty * newUnitCost;
       final basisTotal = costBasisQty + newQty;
       finalCost = basisTotal > 0 ? (totalOldValue + totalNewValue) / basisTotal : newUnitCost;
-      print('💾 DB_UPDATE: Using AVCO - New stock: $totalQty, New avg cost: $finalCost');
+      debugPrint('💾 DB_UPDATE: Using AVCO - New stock: $totalQty, New avg cost: $finalCost');
     } else {
       // Last Purchase Price - simply use the new unit cost
       finalCost = newUnitCost;
-      print('💾 DB_UPDATE: Using Last Purchase Price - New stock: $totalQty, New cost: $finalCost');
+      debugPrint('💾 DB_UPDATE: Using Last Purchase Price - New stock: $totalQty, New cost: $finalCost');
     }
 
     // ✅ Also update unitCosts to keep in sync with cost_price
@@ -503,10 +546,20 @@ class PurchaseService with ChangeNotifier {
       try {
         updatedUnitCosts = Map<String, dynamic>.from(json.decode(currentUnitCosts));
       } catch (e) {
-        print('💾 DB_UPDATE: Could not parse existing unitCosts: $e');
+        debugPrint('💾 DB_UPDATE: Could not parse existing unitCosts: $e');
       }
     }
     
+    // كلفة الوحدات الأكبر (كرتون…) تتبع الوحدة الأساسية بالنسبة نفسها؛ كانت تبقى
+    // قديمة فيُكلَّف بيع الكرتون بكلفة ما قبل الشراء.
+    if (currentCost > 0 && updatedUnitCosts.isNotEmpty) {
+      final ratio = finalCost / currentCost;
+      updatedUnitCosts = {
+        for (final e in updatedUnitCosts.entries)
+          e.key: e.value is num ? roundMoney((e.value as num).toDouble() * ratio) : e.value,
+      };
+    }
+
     // Update base unit cost in unitCosts
     String baseUnitKey = baseUnit == 'piece' ? 'قطعة' : (baseUnit == 'meter' ? 'متر' : baseUnit);
     updatedUnitCosts[baseUnitKey] = finalCost;
@@ -514,7 +567,12 @@ class PurchaseService with ChangeNotifier {
     // Encode back to JSON
     String unitCostsJson = json.encode(updatedUnitCosts);
     
-    print('💾 DB_UPDATE: Updated unitCosts: $unitCostsJson');
+    debugPrint('💾 DB_UPDATE: Updated unitCosts: $unitCostsJson');
+
+    // أرباح ما بيع سابقاً لا تتغير بتغيّر الكلفة (بنود بلا كلفة محفوظة تُثبَّت أولاً)
+    if ((finalCost - currentCost).abs() >= 0.005) {
+      await UsdCostService.freezePastCosts(txn, {item.productId});
+    }
 
     await txn.update(
       'products',
@@ -526,6 +584,13 @@ class PurchaseService with ChangeNotifier {
       whereArgs: [item.productId],
     );
 
+    // عملة الكلفة = عملة آخر شراء
+    try {
+      await UsdCostService.writeCurrency(txn, item.productId, currency: isUsd ? 'USD' : 'IQD', usd: finalUsd);
+    } catch (e) {
+      debugPrint('⚠️ تعذّر حفظ عملة الكلفة: $e');
+    }
+
     // 📦 الكمية: حركة شراء في دفتر المخزون المشترك (تصل لكل الأجهزة؛ بيانات
     //    المورد نفسها تبقى محلية). كانت تُكتب رقماً مطلقاً على هذا الجهاز وحده.
     final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
@@ -535,7 +600,7 @@ class PurchaseService with ChangeNotifier {
       await PurchaseExt.stampWarehouse(txn, mv, warehouseId);
     }
 
-    print('💾 DB_UPDATE: ✅ Product updated successfully!');
+    debugPrint('💾 DB_UPDATE: ✅ Product updated successfully!');
   }
 
   Future<void> _reverseProductStock(Transaction txn, PurchaseInvoiceItem item, {int? warehouseId}) async {
@@ -575,7 +640,7 @@ class PurchaseService with ChangeNotifier {
             reason: 'عرض كشف الحساب');
       });
     } catch (e) {
-      print('⚠️ تعذّرت تسوية دفتر المورد قبل العرض: $e');
+      debugPrint('⚠️ تعذّرت تسوية دفتر المورد قبل العرض: $e');
     }
     return db.query(
       'supplier_transactions',
@@ -606,11 +671,16 @@ class PurchaseService with ChangeNotifier {
   }
 
   // --- Payment Actions ---
-  Future<void> registerPayment(SupplierPayment payment) async {
+  /// يسجّل سند دفع لمورد ويعيد معرّفه.
+  Future<int> registerPayment(SupplierPayment payment) async {
     final db = await _db.database;
-    final receiptNumber = await _getNextReceiptNumber();
-    
-    await db.transaction((txn) async {
+    await _ensurePaymentColumns(db);
+
+    final newId = await db.transaction((txn) async {
+      // 🛡️ الرقم يُحسب داخل المعاملة نفسها: حسابه قبلها كان يسمح بسندين بالرقم نفسه
+      final mx = await txn.rawQuery(
+          'SELECT MAX(CAST(receipt_number AS INTEGER)) AS max_num FROM supplier_payments');
+      final receiptNumber = ((mx.first['max_num'] as num?)?.toInt() ?? 0) + 1;
       // 1. Insert Payment with receipt number
       final cols = await _ensurePaymentColumns(txn);
       final paymentMap = payment.toMap();
@@ -636,10 +706,231 @@ class PurchaseService with ChangeNotifier {
             : 'سند دفع رقم $receiptNumber — ${payment.notes}',
         date: payment.date.toIso8601String(),
       );
+      return paymentId;
     });
 
     notifyListeners();
+    return newId;
   }
+
+  // ═══════════════════════════ إلغاء سند دفع ═══════════════════════════
+
+  /// يلغي سند دفع لمورد: يبقى في السجل «ملغى» (برقمه وسببه) ويُحذف أثره من
+  /// دفتر المورد، فيعود الدين كما كان، ويحذف محرك الترحيل قيده تلقائياً.
+  /// ممنوع داخل فترة مثبّتة، ولا يُلغى السند مرتين.
+  Future<void> voidPayment(int paymentId, {String? reason}) async {
+    final db = await _db.database;
+    await _ensurePaymentColumns(db);
+    final rows = await db.query('supplier_payments', where: 'id = ?', whereArgs: [paymentId], limit: 1);
+    if (rows.isEmpty) throw SupplierActionBlocked('سند الدفع غير موجود');
+    final row = rows.first;
+    if (((row['is_void'] as num?)?.toInt() ?? 0) == 1) {
+      throw SupplierActionBlocked('هذا السند ملغى مسبقاً');
+    }
+    final date = DateTime.tryParse('${row['date']}') ?? DateTime.now();
+    await PeriodLock.assertOpen(date, db);
+    final supplierId = row['supplier_id'] as int;
+    await db.transaction((txn) async {
+      await txn.update(
+        'supplier_payments',
+        {
+          'is_void': 1,
+          'void_reason': (reason ?? '').trim().isEmpty ? null : reason!.trim(),
+          'voided_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [paymentId],
+      );
+      // أثر السند في دفتر المورد (حذف منطقي يحفظه للتدقيق)
+      var n = await txn.update('supplier_transactions', {'is_deleted': 1},
+          where: 'transaction_uuid = ? AND COALESCE(is_deleted, 0) = 0',
+          whereArgs: [SupplierDebtReconciler.paymentUuid(paymentId)]);
+      if (n == 0) {
+        try {
+          n = await txn.update('supplier_transactions', {'is_deleted': 1},
+              where: "payment_id = ? AND transaction_type = 'supplier_payment' AND COALESCE(is_deleted, 0) = 0",
+              whereArgs: [paymentId]);
+        } catch (_) {}
+      }
+      // 🛡️ بلا أثر في الدفتر = إلغاؤه لن يغيّر الرصيد؛ نتراجع بدل إلغاء شكلي صامت
+      if (n == 0) {
+        throw SupplierActionBlocked('لم يُعثر على أثر هذا السند في دفتر المورد، فلم يُلغَ (الرصيد لم يتغير)');
+      }
+      await SupplierDebtReconciler.rebuildSupplierBalances(txn, supplierId);
+    });
+    ActivityLog.log('إلغاء', 'دفعة لمورد',
+        'إلغاء سند دفع رقم ${row['receipt_number'] ?? paymentId} للمورد #$supplierId — ${row['amount']} ${row['currency'] ?? ''}'
+        '${(reason ?? '').trim().isEmpty ? '' : ' — السبب: ${reason!.trim()}'}');
+    notifyListeners();
+  }
+
+  // ═══════════════════════════ الرصيد الافتتاحي ═══════════════════════════
+
+  /// الرصيد الافتتاحي الحالي للمورد لكل عملة.
+  Future<Map<String, double>> getOpeningBalances(int supplierId) async {
+    final db = await _db.database;
+    return {
+      for (final c in const ['IQD', 'USD']) c: await SupplierDebtReconciler.openingBalance(db, supplierId, c),
+    };
+  }
+
+  /// أقدم تاريخ حركة للمورد (اقتراح لتاريخ الرصيد الافتتاحي).
+  Future<DateTime?> getFirstActivityDate(int supplierId) async {
+    final db = await _db.database;
+    final r = await db.rawQuery(
+        'SELECT MIN(transaction_date) AS d FROM supplier_transactions WHERE supplier_id = ? AND COALESCE(is_deleted, 0) = 0',
+        [supplierId]);
+    final v = r.isEmpty ? null : r.first['d'];
+    return v == null ? null : DateTime.tryParse('$v');
+  }
+
+  /// يضبط رصيد المورد الافتتاحي بعملة: موجب = له علينا، سالب = لنا عنده، صفر = إلغاء.
+  /// يستبدل القيمة السابقة (لا يُراكم)، ويُرحَّل على «الأرصدة الافتتاحية».
+  Future<void> setOpeningBalance(
+    int supplierId, {
+    required double amount,
+    required String currency,
+    required DateTime date,
+    String? note,
+  }) async {
+    final db = await _db.database;
+    await PeriodLock.assertOpen(date, db);
+    final old = await db.query('supplier_transactions',
+        columns: ['transaction_date'],
+        where: 'transaction_uuid = ? AND COALESCE(is_deleted, 0) = 0',
+        whereArgs: [SupplierDebtReconciler.openingUuid(supplierId, currency)],
+        limit: 1);
+    if (old.isNotEmpty) {
+      final d = DateTime.tryParse('${old.first['transaction_date']}');
+      if (d != null) await PeriodLock.assertOpen(d, db);
+    }
+    await db.transaction((txn) async {
+      await SupplierDebtReconciler.setOpeningBalance(txn,
+          supplierId: supplierId, amount: amount, currency: currency, date: date, description: note);
+    });
+    ActivityLog.log('تعديل', 'الموردون', 'رصيد افتتاحي للمورد #$supplierId: $amount $currency');
+    notifyListeners();
+  }
+
+  // ═══════════════════════════ إلغاء فاتورة شراء ═══════════════════════════
+
+  /// يلغي فاتورة شراء (مؤكدة أو مسودة): تُخرج كمياتها من المخزون إن كانت مؤكدة،
+  /// وتصير «ملغاة» فيسقط دينها على المورد وقيدها من الدفتر. تبقى في السجل للمراجعة.
+  /// ممنوع إن كان عليها مرتجعات مُرحَّلة أو كانت داخل فترة مثبّتة.
+  Future<void> cancelPurchaseInvoice(int invoiceId, {String? reason}) async {
+    final db = await _db.database;
+    final rows = await db.query('purchase_invoices',
+        columns: ['date', 'status', 'invoice_number', 'notes', 'total_amount', 'currency'],
+        where: 'id = ?',
+        whereArgs: [invoiceId],
+        limit: 1);
+    if (rows.isEmpty) throw SupplierActionBlocked('الفاتورة غير موجودة');
+    final row = rows.first;
+    final status = (row['status'] as String?) ?? 'draft';
+    if (status == 'cancelled') throw SupplierActionBlocked('الفاتورة ملغاة مسبقاً');
+    final date = DateTime.tryParse('${row['date']}') ?? DateTime.now();
+    await PeriodLock.assertOpen(date, db);
+    final why = (reason ?? '').trim();
+    await db.transaction((txn) async {
+      await _assertReturnsAllow(txn, invoiceId, keepsConfirmed: false);
+      if (status == 'confirmed') {
+        final ext = await PurchaseExt.read(txn, invoiceId);
+        final items = await txn.query('purchase_invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
+        for (final m in items) {
+          await _reverseProductStock(txn, PurchaseInvoiceItem.fromMap(m), warehouseId: ext.warehouseId);
+        }
+      }
+      final oldNotes = ((row['notes'] as String?) ?? '').trim();
+      await txn.update(
+        'purchase_invoices',
+        {
+          'status': 'cancelled',
+          'notes': [if (oldNotes.isNotEmpty) oldNotes, why.isEmpty ? '[ملغاة]' : '[ملغاة: $why]'].join(' '),
+          'last_modified_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [invoiceId],
+      );
+      await SupplierDebtReconciler.reconcileInvoice(txn, invoiceId, reason: 'إلغاء');
+    });
+    ActivityLog.log('إلغاء', 'فواتير الشراء',
+        'إلغاء فاتورة شراء ${row['invoice_number']} — ${row['total_amount']} ${row['currency'] ?? ''}${why.isEmpty ? '' : ' — $why'}');
+    notifyListeners();
+  }
+
+  /// 🛡️ مرتجعات مُرحَّلة على فاتورة شراء: لا تُلغى الفاتورة ولا تصير مسودة،
+  /// ولا تُنقص كمية مادة تحت ما أُرجع منها — وإلا خرجت البضاعة المرتجعة من
+  /// المخزون مرتين وصار للمورد رصيد دائن بلا أساس.
+  static Future<void> _assertReturnsAllow(
+    DatabaseExecutor d,
+    int invoiceId, {
+    required bool keepsConfirmed,
+    List<PurchaseInvoiceItem>? newItems,
+  }) async {
+    if (!await _tableExists(d, 'purchase_returns') || !await _tableExists(d, 'purchase_return_items')) return;
+    final ret = await d.rawQuery('''
+      SELECT i.product_id AS pid, SUM(i.base_qty) AS q
+      FROM purchase_return_items i JOIN purchase_returns r ON r.id = i.return_id
+      WHERE r.original_invoice_id = ? AND r.status = 'posted' GROUP BY i.product_id''', [invoiceId]);
+    if (ret.isEmpty) return;
+    if (!keepsConfirmed) {
+      throw SupplierActionBlocked(
+          'على هذه الفاتورة مرتجعات مشتريات مُرحَّلة — ألغِ المرتجعات أولاً من «سجل مرتجعات المشتريات» ثم أعد المحاولة');
+    }
+    final newQty = <int, double>{};
+    for (final it in newItems ?? const <PurchaseInvoiceItem>[]) {
+      newQty[it.productId] = (newQty[it.productId] ?? 0) + it.baseQuantity;
+    }
+    for (final r in ret) {
+      final pid = r['pid'] as int;
+      final q = (r['q'] as num?)?.toDouble() ?? 0;
+      if ((newQty[pid] ?? 0) + 1e-6 < q) {
+        throw SupplierActionBlocked(
+            'لا يمكن إنقاص كمية مادة في الفاتورة تحت ما أُرجع منها (${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 2)}) — ألغِ المرتجع أولاً');
+      }
+    }
+  }
+
+  // ═══════════════════════════ سجل فواتير الشراء ═══════════════════════════
+
+  /// فواتير الشراء لكل الموردين (للسجل العام) مع اسم المورد.
+  Future<List<Map<String, Object?>>> getAllPurchaseInvoices({DateTime? from, DateTime? to}) async {
+    final db = await _db.database;
+    final where = <String>[];
+    final args = <Object?>[];
+    if (from != null) {
+      where.add('p.date >= ?');
+      args.add(DateTime(from.year, from.month, from.day).toIso8601String());
+    }
+    if (to != null) {
+      where.add('p.date < ?');
+      args.add(DateTime(to.year, to.month, to.day).add(const Duration(days: 1)).toIso8601String());
+    }
+    return db.rawQuery('''
+      SELECT p.*, s.name AS supplier_name
+      FROM purchase_invoices p LEFT JOIN suppliers s ON s.id = p.supplier_id
+      ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}
+      ORDER BY p.date DESC, p.id DESC
+      LIMIT 5000''', args);
+  }
+
+  // ═══════════════════════════ المندوبون ═══════════════════════════
+
+  /// سبب منع حذف مندوب (فواتير مرتبطة به)، أو null.
+  Future<String?> delegateDeleteBlocker(int delegateId) async {
+    final db = await _db.database;
+    final r = await db.rawQuery('SELECT COUNT(*) AS c FROM purchase_invoices WHERE delegate_id = ?', [delegateId]);
+    final n = (r.first['c'] as num?)?.toInt() ?? 0;
+    return n == 0 ? null : 'المندوب مرتبط بـ $n فاتورة شراء — عدّل اسمه بدلاً من حذفه';
+  }
+}
+
+/// يُرمى عند منع عملية على مورد أو مستنداته؛ [message] جاهزة للعرض.
+class SupplierActionBlocked implements Exception {
+  SupplierActionBlocked(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }
 
 

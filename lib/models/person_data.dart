@@ -92,6 +92,14 @@ class InvoiceWithProductData {
   final double profit;
   final List<InvoiceItemData> items;
 
+  // حقول إضافية (اختيارية) من محرك التقارير الموحّد
+  final String? invoiceNumber; // الرقم التجاري للفاتورة (لا المعرّف الداخلي)
+  final String paymentType;
+  final double returnAmount;
+  final double loadingFee;
+  final double cost;
+  final double paid;
+
   InvoiceWithProductData({
     required this.invoiceId,
     required this.invoiceDate,
@@ -100,7 +108,16 @@ class InvoiceWithProductData {
     required this.discount,
     required this.profit,
     required this.items,
+    this.invoiceNumber,
+    this.paymentType = '',
+    this.returnAmount = 0,
+    this.loadingFee = 0,
+    this.cost = 0,
+    this.paid = 0,
   });
+
+  String get displayNumber => (invoiceNumber != null && invoiceNumber!.isNotEmpty) ? invoiceNumber! : '#$invoiceId';
+  bool get isCash => paymentType == 'نقد';
 
   factory InvoiceWithProductData.fromMap(Map<String, dynamic> map) {
     return InvoiceWithProductData(

@@ -201,7 +201,7 @@ class _ErpSettingsScreenState extends State<ErpSettingsScreen> {
         width: 200,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: sel ? ErpColors.navy.withOpacity(.08) : Colors.white,
+          color: sel ? ErpColors.navy.withValues(alpha: .08) : Colors.white,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: sel ? ErpColors.navy : ErpColors.border, width: sel ? 2 : 1),
         ),

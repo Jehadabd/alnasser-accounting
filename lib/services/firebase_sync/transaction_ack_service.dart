@@ -2,6 +2,7 @@
 // خدمة تأكيد استلام المعاملات (ACK System)
 // لضمان وصول المعاملات للأجهزة الأخرى
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../database_service.dart';
@@ -103,7 +104,7 @@ class TransactionAckService {
     // بدء الاستماع لتأكيدات الاستلام
     _startListeningForAcks();
 
-    print('✅ تم تهيئة TransactionAckService');
+    debugPrint('✅ تم تهيئة TransactionAckService');
   }
 
   /// إيقاف الخدمة
@@ -139,7 +140,7 @@ class TransactionAckService {
         await db.execute('ALTER TABLE transaction_acks RENAME COLUMN transaction_sync_uuid TO transaction_uuid');
       }
     } catch (e) {
-      print('Error migrating transaction_acks table: $e');
+      debugPrint('Error migrating transaction_acks table: $e');
     }
 
     // فهرس للبحث السريع
@@ -184,10 +185,10 @@ class TransactionAckService {
         'createdAt': DateTime.now().toIso8601String(),
       }, SetOptions(merge: true));
 
-      print('✅ تم قراءة البيانات في هذا الحاسوب بنجاح! (جاري إعلام المرسل...)');
-      print('📤 تم إرسال تأكيد استلام (ACK) للمعاملة: $transactionUuid');
+      debugPrint('✅ تم قراءة البيانات في هذا الحاسوب بنجاح! (جاري إعلام المرسل...)');
+      debugPrint('📤 تم إرسال تأكيد استلام (ACK) للمعاملة: $transactionUuid');
     } catch (e) {
-      print('❌ فشل إرسال ACK: $e');
+      debugPrint('❌ فشل إرسال ACK: $e');
     }
   }
 
@@ -210,7 +211,7 @@ class TransactionAckService {
       // 🔧 تجاهل التحميل الأول (الرسائل القديمة)
       if (_isFirstLoad) {
         _isFirstLoad = false;
-        print('📬 تم تحميل ${snapshot.docs.length} ACK قديم (تم تجاهلهم)');
+        debugPrint('📬 تم تحميل ${snapshot.docs.length} ACK قديم (تم تجاهلهم)');
         return;
       }
       
@@ -219,7 +220,7 @@ class TransactionAckService {
         if (change.type == DocumentChangeType.added) {
           // 🔧 التحقق من الحد الأقصى
           if (_receivedAcksCount >= _maxAcksPerSession) {
-            print('⚠️ تم تجاوز الحد الأقصى للـ ACKs في هذه الجلسة');
+            debugPrint('⚠️ تم تجاوز الحد الأقصى للـ ACKs في هذه الجلسة');
             continue;
           }
           
@@ -231,10 +232,10 @@ class TransactionAckService {
             _receivedAcksCount++;
             // 🔧 طباعة مختصرة
             if (_receivedAcksCount <= 10) {
-              print('📩 الحاسوب الآخر (${ack.receiverDeviceName}) قرأ البيانات بنجاح! ✅');
-              print('   - المعاملة: ${ack.transactionUuid}');
+              debugPrint('📩 الحاسوب الآخر (${ack.receiverDeviceName}) قرأ البيانات بنجاح! ✅');
+              debugPrint('   - المعاملة: ${ack.transactionUuid}');
             } else if (_receivedAcksCount == 6) {
-              print('📬 ... وأكثر (تم إيقاف الطباعة)');
+              debugPrint('📬 ... وأكثر (تم إيقاف الطباعة)');
             }
           }
         }
@@ -284,7 +285,7 @@ class TransactionAckService {
           .map((doc) => TransactionAck.fromMap(doc.data()))
           .toList();
     } catch (e) {
-      print('❌ خطأ في جلب ACKs: $e');
+      debugPrint('❌ خطأ في جلب ACKs: $e');
       return [];
     }
   }
@@ -332,7 +333,7 @@ class TransactionAckService {
 
       return pendingTxIds;
     } catch (e) {
-      print('❌ خطأ في جلب المعاملات المعلقة: $e');
+      debugPrint('❌ خطأ في جلب المعاملات المعلقة: $e');
       return [];
     }
   }
@@ -400,10 +401,10 @@ class TransactionAckService {
         whereArgs: [cutoffStr],
       );
 
-      print('🧹 تم حذف $deletedCount تأكيد قديم');
+      debugPrint('🧹 تم حذف $deletedCount تأكيد قديم');
       return deletedCount;
     } catch (e) {
-      print('❌ خطأ في تنظيف التأكيدات: $e');
+      debugPrint('❌ خطأ في تنظيف التأكيدات: $e');
       return 0;
     }
   }

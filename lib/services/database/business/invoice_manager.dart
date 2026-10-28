@@ -1,4 +1,5 @@
 // lib/services/database/business/invoice_manager.dart
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import 'customer_locking.dart';
@@ -11,6 +12,7 @@ import '../../../models/transaction.dart';
 import '../../../utils/uuid_helper.dart';
 import '../../invoice_settings_service.dart';
 import 'invoice_numbering.dart';
+import 'tx_author.dart';
 import 'financial_integrity_guard.dart';
 
 class InvoiceManager {
@@ -193,7 +195,7 @@ class InvoiceManager {
               final txMap = transaction.toMap();
               txMap.remove('id');
               
-              await txn.insert('transactions', txMap);
+              await txn.insert('transactions', await TxAuthor.stamped(txn, txMap));
               
               // 3. تحديث رصيد العميل
               await txn.update(
@@ -233,7 +235,7 @@ class InvoiceManager {
             items: items,
           );
         } catch (guardError) {
-          print('⚠️ Post-save guard error (non-blocking): $guardError');
+          debugPrint('⚠️ Post-save guard error (non-blocking): $guardError');
         }
       }
 

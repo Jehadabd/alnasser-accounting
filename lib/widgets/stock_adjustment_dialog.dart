@@ -3,11 +3,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:convert';
 import 'package:intl/intl.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
-import '../widgets/formatters.dart';
 
 /// نافذة تعديل المخزون للمنتج
 /// تعرض الوحدات الهرمية وتسمح بإضافة أو طرح الكمية
@@ -156,7 +154,7 @@ class _StockAdjustmentDialogState extends State<StockAdjustmentDialog> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: const Color(0xFF4CAF50).withOpacity(0.1),
+              color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(Icons.inventory_2, color: Color(0xFF4CAF50)),
@@ -188,9 +186,9 @@ class _StockAdjustmentDialogState extends State<StockAdjustmentDialog> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2196F3).withOpacity(0.1),
+                  color: const Color(0xFF2196F3).withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF2196F3).withOpacity(0.3)),
+                  border: Border.all(color: const Color(0xFF2196F3).withValues(alpha: 0.3)),
                 ),
                 child: Row(
                   children: [
@@ -295,7 +293,7 @@ class _StockAdjustmentDialogState extends State<StockAdjustmentDialog> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.1),
+                    color: Colors.amber.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -335,13 +333,13 @@ class _StockAdjustmentDialogState extends State<StockAdjustmentDialog> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: newStock >= 0 
-                        ? const Color(0xFF4CAF50).withOpacity(0.1)
-                        : Colors.red.withOpacity(0.1),
+                        ? const Color(0xFF4CAF50).withValues(alpha: 0.1)
+                        : Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
                       color: newStock >= 0 
-                          ? const Color(0xFF4CAF50).withOpacity(0.3)
-                          : Colors.red.withOpacity(0.3),
+                          ? const Color(0xFF4CAF50).withValues(alpha: 0.3)
+                          : Colors.red.withValues(alpha: 0.3),
                     ),
                   ),
                   child: Row(
@@ -406,7 +404,7 @@ class _StockAdjustmentDialogState extends State<StockAdjustmentDialog> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: isSelected ? color.withOpacity(0.15) : Colors.grey[100],
+          color: isSelected ? color.withValues(alpha: 0.15) : Colors.grey[100],
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected ? color : Colors.grey[300]!,

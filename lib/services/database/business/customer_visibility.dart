@@ -22,15 +22,14 @@ import 'invoice_debt_reconciler.dart';
 
 class CustomerVisibility {
   static Future<void> apply(DatabaseExecutor db, int customerId) async {
-    final r = await db.rawQuery('''
-      SELECT c.tombstoned AS tomb, c.is_deleted AS del
-      FROM customers c WHERE c.id = ?
-    ''', [customerId]);
+    final r = await db.rawQuery('SELECT * FROM customers c WHERE c.id = ?', [customerId]);
     if (r.isEmpty) return;
-    final tomb = (r.first['tomb'] as num?)?.toInt() ?? 0;
+    final tomb = (r.first['tombstoned'] as num?)?.toInt() ?? 0;
     final tombstoned = tomb == 1 || tomb == 2;
-    final hidden = (tombstoned && await _activeCount(db, customerId) == 0) ? 1 : 0;
-    final del = (r.first['del'] as num?)?.toInt() ?? 0;
+    // حساب مدموج في غيره (سجل الديون: الاسم فريد) يبقى مخفياً دائماً
+    final merged = r.first['merged_into_id'] != null;
+    final hidden = (merged || (tombstoned && await _activeCount(db, customerId) == 0)) ? 1 : 0;
+    final del = (r.first['is_deleted'] as num?)?.toInt() ?? 0;
     if (del != hidden) {
       await db.update('customers', {'is_deleted': hidden},
           where: 'id = ?', whereArgs: [customerId]);

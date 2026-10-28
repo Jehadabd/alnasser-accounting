@@ -12,6 +12,11 @@ class IntegrityService {
   final TransactionDao transactionDao;
   final InvoiceDao invoiceDao;
 
+  /// أصغر فرق يُعدّ اختلافاً حقيقياً بين الرصيد المسجل ومجموع المعاملات.
+  /// الديون بالدينار العراقي وأصغر مبلغ فيها دينار كامل؛ ما دون الدينار بقايا
+  /// كسور فواتير قديمة (أيار–حزيران 2026) خُزّن رصيدها مقرباً، لا مال حقيقي.
+  static const double negligibleDifference = 1.0;
+
   IntegrityService({
     required this.getDatabase,
     required this.customerDao,
@@ -21,7 +26,6 @@ class IntegrityService {
 
   /// 🔒 التحقق من سلامة البيانات المالية للعميل
   Future<FinancialIntegrityReport> verifyCustomerFinancialIntegrity(int customerId) async {
-    final db = await getDatabase();
     
     // 1. جلب بيانات العميل
     final customer = await customerDao.getCustomerById(customerId);
@@ -36,36 +40,23 @@ class IntegrityService {
     // 2. التحقق من رصيد العميل مقابل المعاملات
     final transactions = await transactionDao.getCustomerTransactions(customerId, orderBy: 'transaction_date ASC, id ASC');
     
+    // المجموع يُحسب بالطريقة نفسها التي يُحسب بها الرصيد المسجل (SUM في
+    // القاعدة): جمع مباشر بلا تقريب في كل خطوة. التقريب المرحلي إلى 3 خانات
+    // كان يُنتج فروقاً وهمية (مثل 0.004) حين تحمل المبالغ أكثر من 3 خانات
+    // عشرية، رغم أن الرصيد المسجل يساوي مجموع المعاملات تماماً.
     double calculatedBalance = 0.0;
-    int transactionCount = transactions.length;
-    
+    final int transactionCount = transactions.length;
     for (final tx in transactions) {
-      // التحقق من تسلسل الرصيد
-      /*
-      if (tx.balanceBeforeTransaction != calculatedBalance) {
-         // هذا قد يكون خطأ، ولكن في بعض الأحيان قد يكون مقبولاً إذا تم التعديل
-         // لكن بشكل عام، يجب أن يكون متسلسلاً
-         warnings.add('انقطاع في تسلسل الرصيد للمعاملة ${tx.id}');
-      }
-      */
-      
-      calculatedBalance = MoneyCalculator.add(calculatedBalance, tx.amountChanged);
-      
-      // التحقق من Checksum لكل معاملة (اختياري لعدم البطء)
-      // ...
+      calculatedBalance += tx.amountChanged;
     }
     
     final recordedBalance = customer.currentTotalDebt;
     bool isHealthy = true;
     
-    if (!MoneyCalculator.areEqual(calculatedBalance, recordedBalance)) {
-       isHealthy = false;
-       final diff = (calculatedBalance - recordedBalance).abs();
-       if (diff < 0.1) {
-          warnings.add('فرق بسيط في الرصيد: ${diff.toStringAsFixed(3)}');
-       } else {
-          issues.add('الرصيد المسجل ($recordedBalance) لا يطابق مجموع المعاملات ($calculatedBalance)');
-       }
+    final diff = (calculatedBalance - recordedBalance).abs();
+    if (diff >= negligibleDifference) {
+      isHealthy = false;
+      issues.add('الرصيد المسجل ($recordedBalance) لا يطابق مجموع المعاملات ($calculatedBalance)');
     }
 
     // 3. التحقق من الفواتير (Optional, simplified)

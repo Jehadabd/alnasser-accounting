@@ -2,6 +2,7 @@
 //
 // 🧾 شاشة وصل القبض — مفرد أو مركّب، بعملة، مع حسم وعمولة تحصيل وطباعة.
 
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 
 import '../../accounting/ledger.dart';
@@ -77,7 +78,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   Future<void> _addCustomer() async {
     final c = await Pickers.customer(context);
-    if (c == null) return;
+    if (c == null || !mounted) return;
     if (_lines.any((l) => l.customer.id == c.id)) {
       showError(context, 'العميل موجود في الوصل');
       return;
@@ -85,7 +86,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     setState(() => _lines.add(_Line(c)));
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked(), message: 'جارٍ حفظ الوصل…');
+  }
+
+  Future<void> _saveUnlocked() async {
     if (_boxId == null) {
       showError(context, 'اختر الصندوق');
       return;
@@ -168,7 +174,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Widget build(BuildContext context) {
     return ErpPage(
       title: 'وصل قبض',
-      subtitle: _lines.length > 1 ? 'وصل مركّب — ${fmtQty(_lines.length)} عملاء' : 'قبض من عميل مع حسم وعمولة تحصيل',
+      subtitle: _lines.length > 1 ? 'وصل مركّب — ${fmtQty(_lines.length)} عملاء' : 'قبض من عميل مع خصم وعمولة تحصيل',
       icon: Icons.receipt_long,
       body: ListView(
         padding: const EdgeInsets.only(bottom: 90),
@@ -222,7 +228,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 StatCard(label: 'المقبوض (دينار)', value: fmtMoney(_total), icon: Icons.payments, color: ErpColors.green),
                 if (!_isBase)
                   StatCard(label: 'المقبوض ($_currency)', value: fmtMoney(_totalFc), icon: Icons.currency_exchange, color: ErpColors.blue),
-                StatCard(label: 'الحسم', value: fmtMoney(_totalDisc), icon: Icons.discount, color: ErpColors.orange),
+                StatCard(label: 'الخصم', value: fmtMoney(_totalDisc), icon: Icons.discount, color: ErpColors.orange),
                 SizedBox(
                   width: 210,
                   child: MoneyField(controller: _commission, label: 'عمولة التحصيل (من الصندوق)'),
@@ -269,7 +275,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
           CircleAvatar(
-            backgroundColor: ErpColors.blue.withOpacity(0.12),
+            backgroundColor: ErpColors.blue.withValues(alpha: 0.12),
             child: Text('${i + 1}', style: const TextStyle(color: ErpColors.blue, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(width: 10),
@@ -291,7 +297,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               width: 170,
               onChanged: (_) => setState(() {})),
           if (!_isBase) InfoTile('بالدينار', fmtMoney(base), width: 120),
-          MoneyField(controller: l.discount, label: 'حسم (دينار)', width: 140, onChanged: (_) => setState(() {})),
+          MoneyField(controller: l.discount, label: 'خصم (دينار)', width: 140, onChanged: (_) => setState(() {})),
           InfoTile('الرصيد بعد الوصل', fmtMoney(after),
               width: 150, color: after < -0.01 ? ErpColors.orange : ErpColors.green),
           TextBox(controller: l.note, label: 'ملاحظة', width: 220),
@@ -329,7 +335,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
     if (mounted) setState(() => _rows = r);
   }
 
-  List<String> get _headers => ['الرقم', 'التاريخ', 'العملاء', 'الصندوق', 'المبلغ', 'الحسم', 'العملة', 'المستند'];
+  List<String> get _headers => ['الرقم', 'التاريخ', 'العملاء', 'الصندوق', 'المبلغ', 'الخصم', 'العملة', 'المستند'];
   List<List<String>> get _data => [
         for (final r in _rows)
           [
@@ -357,6 +363,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
       docNo: r['doc_no'] as String?,
       notes: r['notes'] as String?,
       commission: d0(r['commission']),
+      recordedBy: r['created_by'] as String?, // 👤 المحاسب = من سجّل الوصل
     );
     if (mounted) await ReportExport.openPdf(context, bytes, 'وصل_قبض_${r['receipt_no']}');
   }
@@ -402,7 +409,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
                           borderRadius: BorderRadius.circular(14), side: const BorderSide(color: ErpColors.border)),
                       child: ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: ErpColors.green.withOpacity(0.12),
+                          backgroundColor: ErpColors.green.withValues(alpha: 0.12),
                           child: Text('${r['receipt_no']}',
                               style: const TextStyle(color: ErpColors.green, fontWeight: FontWeight.bold, fontSize: 12)),
                         ),
@@ -416,7 +423,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
                             children: [
                               MoneyText(d0(r['total_amount']), bold: true),
                               if (d0(r['total_discount']) > 0)
-                                Text('حسم ${fmtMoney(d0(r['total_discount']))}',
+                                Text('خصم ${fmtMoney(d0(r['total_discount']))}',
                                     style: const TextStyle(fontSize: 11, color: ErpColors.orange)),
                             ],
                           ),
@@ -466,7 +473,12 @@ class _SupplierPaymentScreenState extends State<SupplierPaymentScreen> {
     if (mounted) setState(() => _rate.text = fmtMoney(r));
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked(), message: 'جارٍ حفظ الوصل…');
+  }
+
+  Future<void> _saveUnlocked() async {
     final amt = parseMoney(_amount.text) ?? 0;
     if (_supplier == null) {
       showError(context, 'اختر المورد');

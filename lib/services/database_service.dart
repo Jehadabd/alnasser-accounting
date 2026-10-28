@@ -4,12 +4,12 @@
 
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint; // 🌐 حراسة الويب
 import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
-import 'dart:async' show unawaited;
+import 'dart:async' show Zone, runZoned, unawaited;
+import 'debt_return_service.dart' show DebtReturnService;
 import '../models/person_data.dart'; // Added import
 
 // Models
@@ -17,8 +17,6 @@ import '../models/customer.dart';
 import '../models/product.dart';
 import '../models/transaction.dart';
 import '../models/invoice.dart';
-import '../models/app_settings.dart';
-import '../models/invoice_design_settings.dart';
 import 'firebase_sync/product_sync_service.dart';
 import 'firebase_sync/firebase_sync_service.dart';
 import 'firebase_sync/invoice_sync_service.dart';
@@ -28,7 +26,6 @@ import '../models/installer.dart';
 import '../models/category.dart';
 import '../models/verification_result.dart'; // ✅ Added
 import '../models/customer_receipt_voucher.dart'; // ✅ Added
-import '../models/person_data.dart'; // ✅ Standard import
 import '../models/analytics_data.dart';
 import '../models/account_statement_item.dart'; // ✅ Added import
 import '../models/smart_pricing_models.dart';
@@ -41,10 +38,14 @@ import '../lan/lan_settings.dart'; // 🖧 وضع الشبكة (مستقل/سي�
 import '../lan/lan_codec.dart' show LanConnectionException;
 import '../accounting/accounting_schema.dart'; // 🏛️ مخطط النسخة المحاسبية
 import '../erp/erp_schema.dart'; // 🧱 ميزات الإداري وسهل
+import '../owner/cost_stamp.dart';
 import '../erp/erp_common.dart' show PeriodLock;
 import '../erp/device_defaults.dart';
 import 'database/core/database_helpers.dart';
 import 'database/core/database_migrations.dart';
+import 'database/core/migration_guard.dart'; // 🛡️ حارس الهجرة
+import 'database/core/database_doctor.dart'; // 🩺 صيانة تلقائية + فحص مالي بلا تعديل
+import 'seat_service.dart' show SeatService;
 
 // Business Logic
 import 'database/business/customer_locking.dart';
@@ -53,6 +54,7 @@ import 'database/business/debt_calculator.dart';
 import 'database/business/invoice_manager.dart';
 import 'database/business/invoice_debt_reconciler.dart'; // 🛡️ الحارس المحاسبي
 import 'database/business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
+import 'database/business/customer_name_rule.dart'; // 🛡️ الاسم فريد في سجل الديون
 import 'database/business/invoice_verification.dart'; // ✅ Added
 import 'database/business/integrity_service.dart'; // ✅ Added
 import 'database/business/financial_integrity_guard.dart'; // ✅ Added - 9-layer guard
@@ -68,8 +70,6 @@ import 'database/dao/invoice_dao.dart'; // ✅ Added
 import 'database/dao/transaction_dao.dart'; // ✅ Added
 import 'database/dao/product_dao.dart'; // ✅ Added
 import 'database/dao/customer_dao.dart'; // ✅ Added
-import '../models/analytics_data.dart'; // ✅ Added
-import '../models/analytics_data.dart' as ad; // Alias if collision
 import '../models/grouped_transaction.dart'; // ✅ Added
 import '../models/monthly_overview.dart'; // ✅ Added
 // 🔥 المزامنة: أمان + إعدادات الفاتورة + UUID
@@ -78,6 +78,8 @@ import 'invoice_settings_service.dart';
 import 'database/business/invoice_numbering.dart';
 import '../utils/uuid_helper.dart';
 import 'firebase_sync/firebase_sync_config.dart';
+import 'firebase_sync/firebase_custom_config.dart';
+import 'invoice_upload_tracker.dart';
 
 
 // ... imports ...
@@ -183,7 +185,7 @@ class DatabaseService {
 
   DatabaseService._internal() {
       // Initialize DAOs with lazy db getter
-      final getDb = () => database;
+      Future<Database> getDb() => database;
       
       // Initialize Services first
       lockingService = LockService(getDatabase: getDb);
@@ -243,15 +245,42 @@ class DatabaseService {
   }
 
   /// الحصول على كائن قاعدة البيانات (Singleton)
+  /// فتح جارٍ: من يطلب القاعدة أثناءه ينتظره بدل أن يفتح نسخة ثانية تتسابق
+  /// معها الهجرات (كان «حارس الهجرة» وإضافة الأعمدة يعملان مرتين معاً).
+  static Future<Database>? _opening;
+  static final Object _openingZone = Object();
+
+  /// يزيد مع كل فتح لقاعدة (أول تشغيل، استعادة نسخة…). من يحفظ «الجداول
+  /// جاهزة» يقارن به، فلا يظن قاعدة مستعادة جاهزة.
+  static int openGeneration = 0;
+
   Future<Database> get database async {
     if (_database != null) return _database!;
+    // 🛡️ حارس الهجرة رفض هذه القاعدة في هذه الجلسة: لا إعادة محاولة صامتة
+    if (MigrationGuard.blocked != null) throw MigrationGuard.blocked!;
+    final pending = _opening;
+    // طلب من داخل الفتح نفسه (إن وُجد) لا ينتظر نفسه
+    if (pending != null && Zone.current[_openingZone] != true) return pending;
+    if (pending != null) return _openOnce();
+    final f = runZoned(_openOnce, zoneValues: {_openingZone: true});
+    _opening = f;
+    try {
+      final db = await f;
+      openGeneration++;
+      return db;
+    } finally {
+      if (identical(_opening, f)) _opening = null;
+    }
+  }
+
+  Future<Database> _openOnce() async {
     try {
       _database = await _initDatabase();
+    } on MigrationGuardException catch (e) {
+      MigrationGuard.blocked = e;
+      rethrow;
     } catch (e) {
-      // 🛡️ حماية من قاعدة بيانات تالفة/مقفولة: عند فشل الفتح، نحاول استعادة
-      // النسخة الاحتياطية إن وُجدت، وإلا نحذف الملف التالف وننشئ قاعدة جديدة.
-      // هذا يمنع التطبيق من التعليق صامتاً (لا شاشة) عند تلف الـ DB.
-      print('⚠️ فشل فتح قاعدة البيانات: $e');
+      debugPrint('⚠️ فشل فتح قاعدة البيانات: $e');
       // 🖧 الطرفية لا تملك ملف القاعدة — لا حذف ولا استعادة، الخطأ يظهر كما هو
       if (AppNetworkMode.isClient) rethrow;
       // 🌐 الويب: لا ملفات نظام ولا نسخ احتياطية ملفية — أعد المحاولة مباشرة
@@ -260,33 +289,52 @@ class DatabaseService {
         _database = await _initDatabase();
         return _database!;
       }
-      print('🔄 محاولة الاستعادة من النسخة الاحتياطية أو إنشاء قاعدة جديدة...');
-      try {
-        final path = await DatabaseConfig.getDatabasePath();
-        final backupPath = join(dirname(path), '.dart_tool',
-            'sqflite_common_ffi', 'databases', 'debt_book_backup.db');
-        // احذف الملفات التالفة (الأساسي + WAL + SHM)
-        for (final suffix in ['', '-wal', '-shm']) {
-          try {
-            await File('$path$suffix').delete();
-          } catch (_) {}
-        }
-        // حاول استعادة النسخة الاحتياطية إن وُجدت سليمة
-        final backupFile = File(backupPath);
-        if (await backupFile.exists()) {
-          await backupFile.copy(path);
-          print('✅ تمت استعادة قاعدة البيانات من النسخة الاحتياطية');
-        } else {
-          print('🆕 لا نسخة احتياطية — سيُنشأ قاعدة بيانات جديدة');
-        }
-        _database = await _initDatabase();
-      } catch (e2) {
-        print('❌ فشلت الاستعادة أيضاً: $e2');
-        rethrow;
+      // 🛡️ لا حذف أبداً. كان أي فشل فتح — ملف مقفول من نسخة أخرى، صلاحيات،
+      //    قرص ممتلئ، هجرة متعثرة — يحذف القاعدة وينشئ قاعدة فارغة: ضياع كل
+      //    الديون بخطأ عابر. الآن: إن لم يكن الملف تالفاً فعلاً يظهر الخطأ كما
+      //    هو والملف سليم في مكانه. وإن كان تالفاً يُنقل جانباً (لا يُحذف).
+      final path = await DatabaseConfig.getDatabasePath();
+      if (!await _isCorruptFile(path)) rethrow;
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      for (final suffix in ['', '-wal', '-shm']) {
+        try {
+          final f = File('$path$suffix');
+          if (await f.exists()) await f.rename('$path.damaged_$stamp$suffix');
+        } catch (_) {}
       }
+      debugPrint('🧯 القاعدة تالفة: نُقلت إلى $path.damaged_$stamp (لم تُحذف)');
+      final backupPath = join(dirname(path), '.dart_tool',
+          'sqflite_common_ffi', 'databases', 'debt_book_backup.db');
+      if (await File(backupPath).exists()) {
+        await File(backupPath).copy(path);
+        debugPrint('✅ تمت استعادة قاعدة البيانات من النسخة الاحتياطية');
+      } else {
+        debugPrint('🆕 لا نسخة احتياطية — سيُنشأ قاعدة بيانات جديدة');
+      }
+      _database = await _initDatabase();
     }
 
     return _database!;
+  }
+
+  /// تالف فعلاً؟ (ليس مقفولاً أو مشغولاً). يُفتح للقراءة فقط بمعزل.
+  static Future<bool> _isCorruptFile(String path) async {
+    if (!await File(path).exists()) return false;
+    Database? raw;
+    try {
+      raw = await openDatabase(path, readOnly: true, singleInstance: false);
+      final r = await raw.rawQuery('PRAGMA quick_check');
+      return '${r.first.values.first}' != 'ok';
+    } catch (e) {
+      final s = '$e'.toLowerCase();
+      return s.contains('not a database') ||
+          s.contains('malformed') ||
+          s.contains('corrupt');
+    } finally {
+      try {
+        await raw?.close();
+      } catch (_) {}
+    }
   }
 
   Future<Database> _initDatabase() async {
@@ -311,6 +359,13 @@ class DatabaseService {
       } catch (_) {}
     }
 
+    // 🛡️ حارس الهجرة: لقطة كل ما يصنع الدين + نسخة احتياطية قبل أي تحويل.
+    //    الشاشة الأولى وحدها (الشاشات الأخرى على نفس الحاسبة تفتح قاعدة
+    //    جاهزة؛ تراجعها عن ملف تستعمله الأولى خطر).
+    final MigrationGuard? guard = (!kIsWeb && SeatService.isPrimary)
+        ? await MigrationGuard.prepare(path)
+        : null;
+
     final db = await openDatabase(
       path,
       version: DatabaseConfig.databaseVersion,
@@ -323,13 +378,19 @@ class DatabaseService {
       onUpgrade: (db, oldVersion, newVersion) async {
         await DatabaseMigrations.upgradeDatabase(db, oldVersion, newVersion);
       },
+      // 📥 قاعدة من نسخة أحدث (أو من برنامج آخر برقم إصدار أعلى): لا تُرفض ولا يُحذف
+      // شيء — تُفتح كما هي، ثم يكمل ensureSchema/SchemaHealer أدناه ما ينقصها.
+      onDowngrade: (db, oldVersion, newVersion) async {
+        debugPrint('📥 قاعدة البيانات بإصدار أحدث ($oldVersion > $newVersion) — تُفتح كما هي وتُكمَّل');
+      },
     );
+    debugPrint('🗄️ قاعدة البيانات: $path');
 
     // 🔥 Ensure schema is up-to-date on every launch
     try {
        await DatabaseMigrations.ensureSchema(db);
     } catch (e) {
-       print('⚠️ Error running ensureSchema: $e');
+       debugPrint('⚠️ Error running ensureSchema: $e');
     }
 
     // 🩹 القواعد القديمة: إكمال ما لا يُنشأ إلا في onCreate (categories, units,
@@ -337,7 +398,7 @@ class DatabaseService {
     try {
       await SchemaHealer.heal(db, DatabaseMigrations.createTables);
     } catch (e) {
-      print('⚠️ Error running SchemaHealer: $e');
+      debugPrint('⚠️ Error running SchemaHealer: $e');
     }
 
     // 📦 دفتر المخزون: ربط البنود القديمة بمنتجاتها + رصيد افتتاحي لكل منتج
@@ -345,7 +406,7 @@ class DatabaseService {
     try {
       await StockLedger.migrate(db);
     } catch (e) {
-      print('⚠️ Error running StockLedger.migrate: $e');
+      debugPrint('⚠️ Error running StockLedger.migrate: $e');
     }
 
     // 🏛️ النسخة المحاسبية: الفروع، المخازن، شجرة الحسابات، القيود، الصناديق،
@@ -353,14 +414,30 @@ class DatabaseService {
     try {
       await AccountingSchema.ensure(db);
     } catch (e) {
-      print('⚠️ Error running AccountingSchema.ensure: $e');
+      debugPrint('⚠️ Error running AccountingSchema.ensure: $e');
     }
 
     // 🧱 ميزات الإداري وسهل: جداول ومسارات إضافية فقط (لا تعديل على القديم).
     try {
       await ErpSchema.ensure(db);
     } catch (e) {
-      print('⚠️ Error running ErpSchema.ensure: $e');
+      debugPrint('⚠️ Error running ErpSchema.ensure: $e');
+    }
+
+    // 🕒 تاريخ آخر تغيّر لكلفة كل مادة (مشغّل في القاعدة — يلتقط كل المسارات)
+    try {
+      await CostStamp.ensure(db);
+    } catch (e) {
+      debugPrint('⚠️ Error running CostStamp.ensure: $e');
+    }
+
+    // 🛡️ سجل الديون: لا حسابان بالاسم نفسه. عمود الدمج + قيد فريد في القاعدة
+    // (يُفعَّل متى خلت من التكرار؛ لا يُفرض مع المزامنة السحابية — انظر القاعدة).
+    try {
+      await CustomerNameRule.ensureSchema(db);
+      await CustomerNameRule.applyIndexForMode(db, cloudSync: await FirebaseSyncConfig.isEnabled());
+    } catch (e) {
+      debugPrint('⚠️ Error running CustomerNameRule: $e');
     }
 
     // 🗜️ تصغير قاعدة البيانات: بقايا مزامنة Drive + ضغط اللقطات القديمة.
@@ -370,20 +447,27 @@ class DatabaseService {
       final compactedRows = await DatabaseMigrations.compactInvoiceSnapshotsOnce(db);
       if (purgedRows > 0 || compactedRows > 0) {
         try {
+          final before = await DatabaseDoctor.size(db);
           await db.execute('VACUUM');
-          print('🧹 هجرة: أُعيد بناء ملف قاعدة البيانات واستُرجعت المساحة');
+          final after = await DatabaseDoctor.size(db);
+          MaintenanceLog.add('أُعيد بناء ملف القاعدة واستُرجعت المساحة: '
+              '${DatabaseDoctor.mb(before.total)} ← ${DatabaseDoctor.mb(after.total)} ميغابايت');
+          debugPrint('🧹 هجرة: أُعيد بناء ملف قاعدة البيانات واستُرجعت المساحة');
         } catch (e) {
-          print('⚠️ هجرة: تعذّر VACUUM بعد التنظيف: $e');
+          debugPrint('⚠️ هجرة: تعذّر VACUUM بعد التنظيف: $e');
         }
+      } else {
+        // 🧹 مساحة فارغة كبيرة (بعد حذف كثير مثلاً): يُعاد بناء الملف تلقائياً
+        await DatabaseDoctor.autoVacuumIfBloated(db);
       }
     } catch (e) {
-      print('⚠️ هجرة تصغير قاعدة البيانات تعذّرت: $e');
+      debugPrint('⚠️ هجرة تصغير قاعدة البيانات تعذّرت: $e');
     }
 
     try {
       await backfillMissingTransactionUuids(db);
     } catch (e) {
-      print('⚠️ backfillMissingTransactionUuids فشلت: $e');
+      debugPrint('⚠️ backfillMissingTransactionUuids فشلت: $e');
     }
 
     // 🔥 توحيد هوية المعاملات التاريخية على transaction_uuid (= sync_uuid)
@@ -391,13 +475,13 @@ class DatabaseService {
     try {
       await sanitizeLegacyTransactionUuids(db);
     } catch (e) {
-      print('⚠️ sanitizeLegacyTransactionUuids فشلت: $e');
+      debugPrint('⚠️ sanitizeLegacyTransactionUuids فشلت: $e');
     }
     
     try {
       await _installSyncIdentityGuards(db);
     } catch (e) {
-      print('⚠️ _installSyncIdentityGuards فشلت: $e');
+      debugPrint('⚠️ _installSyncIdentityGuards فشلت: $e');
     }
     
     // 🛡️ الحماية التلقائية عند بدء التطبيق (Best Practices)
@@ -405,16 +489,35 @@ class DatabaseService {
       // 1. فحص سريع للسلامة
       final quickCheck = await db.rawQuery('PRAGMA quick_check');
       if (quickCheck.first.values.first?.toString() != 'ok') {
-        print('⚠️ تحذير: تم اكتشاف مشكلة في سلامة قاعدة البيانات');
+        debugPrint('⚠️ تحذير: تم اكتشاف مشكلة في سلامة قاعدة البيانات');
       }
       
       // 2. تنفيذ WAL Checkpoint لضمان كتابة أي بيانات معلقة
       await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
       
     } catch (e) {
-      print('⚠️ تحذير في فحص بدء التشغيل: $e');
+      debugPrint('⚠️ تحذير في فحص بدء التشغيل: $e');
     }
-    
+
+    // 🛡️ حارس الهجرة: مقارنة رقماً رقماً بما قبل التحويل. أي اختلاف ⇒ تُعاد
+    //    القاعدة كما كانت حرفياً ولا يفتح البرنامج عليها.
+    if (guard != null) {
+      List<String> problems;
+      try {
+        problems = await guard.verify(db);
+      } catch (e) {
+        problems = ['تعذّر التحقق بعد التحويل: $e'];
+      }
+      if (problems.isNotEmpty) {
+        try {
+          await db.close();
+        } catch (_) {}
+        await guard.rollback();
+        throw MigrationGuardException(problems, guard.backupPath);
+      }
+    }
+    if (!kIsWeb) await MigrationGuard.writeStamp(db);
+
     return db;
   }
 
@@ -632,7 +735,7 @@ class DatabaseService {
       try {
         unawaited(FirebaseSyncService().syncCustomerDeletionNow(id));
       } catch (e) {
-        print('⚠️ تعذّر إرسال أمر حذف العميل لـ Firebase: $e');
+        debugPrint('⚠️ تعذّر إرسال أمر حذف العميل لـ Firebase: $e');
       }
     }
     
@@ -696,25 +799,10 @@ class DatabaseService {
   }
   
   Future<List<GroupedTransactionItem>> getGroupedCustomerTransactions(int customerId) async {
-    // 🛡️ شبكة أمان: قبل العرض، وفّق أي فاتورة انحرفت مساهمتها عن
-    // (الإجمالي − المسدد). هذا يُصلح التلف القديم من نفسه عند فتح سجل الديون.
-    //
-    // createMissing: false مقصودة — لا نخترع ديناً لفاتورة ليس لها أي أثر
-    // محاسبي إطلاقاً، فقد تكون سُدّدت نقداً خارج البرنامج. تلك تُعرض في تقرير
-    // منفصل ليقررها المستخدم بنفسه.
-    try {
-      final safetyDb = await database;
-      await safetyDb.transaction((txn) async {
-        await InvoiceDebtReconciler.reconcileCustomerLedger(
-          txn,
-          customerId,
-          createMissing: false,
-          reason: 'عرض سجل الديون',
-        );
-      });
-    } catch (e) {
-      print('⚠️ تعذّرت تسوية دفتر العميل $customerId قبل العرض: $e');
-    }
+    // ⛔ أُوقفت «شبكة الأمان» التي كانت تصحّح دين العميل وحدها عند فتح سجل
+    //    ديونه (توفيق مساهمة كل فاتورة مع الإجمالي − المسدد). قرار صاحب البرنامج:
+    //    لا يتغيّر أي دين إلا بعملية يقوم بها المستخدم بنفسه (حفظ فاتورة، تسديد،
+    //    تسوية، حذف). فتح السجل للعرض فقط ولا يكتب شيئاً.
 
     // 1. جلب جميع معاملات العميل
     final transactions = await _transactionDao.getCustomerTransactions(customerId);
@@ -828,7 +916,9 @@ class DatabaseService {
           
           // صافي الأثر المالي للمعاملات المرتبطة بهذه الفاتورة
           double netChange = 0;
-          for(var t in txs) netChange += t.amountChanged;
+          for (var t in txs) {
+            netChange += t.amountChanged;
+          }
           
           result.add(GroupedTransactionItem(
              type: GroupedTransactionType.invoice,
@@ -872,38 +962,62 @@ class DatabaseService {
     await _transactionDao.recalculateAndApplyCustomerDebt(customerId);
   }
   
+  /// معاملات بنوع معيّن في فترة (بالأيام كاملة) مع اسم العميل.
+  /// [unlinkedOnly]: غير المرتبطة بفاتورة فقط (الديون والتسديدات اليدوية).
+  /// [sourceFilter]: 'all' | 'this_device' | 'sync' — مثل فلتر التقارير.
   Future<List<Map<String, dynamic>>> getTransactionsWithCustomerName({
     List<String>? transactionTypes,
     DateTime? startDate,
     DateTime? endDate,
+    bool unlinkedOnly = false,
+    String sourceFilter = 'all',
+    int limit = 2000,
+    String returnsFilter = 'all', // all | exclude | only — «تسديد دين راجع» (جدول returns)
   }) async {
-    await database;
     final db = await database;
-    String whereClause = '';
-    List<dynamic> args = [];
+    final where = <String>[];
+    final args = <Object?>[];
+    if (returnsFilter != 'all') {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS returns (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          transaction_id INTEGER,
+          customer_id INTEGER NOT NULL,
+          amount REAL NOT NULL,
+          note TEXT,
+          return_date TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )''');
+      final isRet = await DebtReturnService.isReturnSqlFull(db, 't');
+      where.add('${returnsFilter == 'only' ? '' : 'NOT '}$isRet');
+    }
+    where.add('COALESCE(t.is_deleted, 0) = 0');
 
     if (transactionTypes != null && transactionTypes.isNotEmpty) {
-      whereClause = 'WHERE t.transaction_type IN (${List.filled(transactionTypes.length, '?').join(',')})';
+      where.add('t.transaction_type IN (${List.filled(transactionTypes.length, '?').join(',')})');
       args.addAll(transactionTypes);
     }
-
-    // Date filtering (Simplified)
+    String day(DateTime d) =>
+        '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
     if (startDate != null) {
-        whereClause += (whereClause.isEmpty ? 'WHERE ' : ' AND ') + 't.transaction_date >= ?';
-        args.add(startDate.toIso8601String());
+      where.add('substr(t.transaction_date, 1, 10) >= ?');
+      args.add(day(startDate));
     }
     if (endDate != null) {
-        whereClause += (whereClause.isEmpty ? 'WHERE ' : ' AND ') + 't.transaction_date <= ?';
-        args.add(endDate.toIso8601String());
+      where.add('substr(t.transaction_date, 1, 10) <= ?');
+      args.add(day(endDate));
     }
+    if (unlinkedOnly) where.add('t.invoice_id IS NULL');
+    if (sourceFilter == 'this_device') where.add('COALESCE(t.is_created_by_me, 1) = 1');
+    if (sourceFilter == 'sync') where.add('COALESCE(t.is_created_by_me, 1) = 0');
 
     return await db.rawQuery('''
       SELECT t.*, c.name as customer_name 
       FROM transactions t
       LEFT JOIN customers c ON t.customer_id = c.id
-      $whereClause
-      ORDER BY t.created_at DESC
-      LIMIT 100
+      ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}
+      ORDER BY t.transaction_date DESC, t.id DESC
+      LIMIT $limit
     ''', args);
   }
   
@@ -937,7 +1051,7 @@ class DatabaseService {
         await db.update('products', {'created_by_device_id': await FirebaseSyncConfig.getDeviceId()},
             where: 'id = ? AND created_by_device_id IS NULL', whereArgs: [id]);
       } catch (e) {
-        print('⚠️ رصيد افتتاحي للمنتج الجديد: $e');
+        debugPrint('⚠️ رصيد افتتاحي للمنتج الجديد: $e');
       }
       return id;
     });
@@ -1284,7 +1398,7 @@ class DatabaseService {
           'created_at': DateTime.now().toIso8601String(),
         });
       } catch (e) {
-        print('⚠️ تعذّر تسجيل تعديل المخزون في product_edit_history: $e');
+        debugPrint('⚠️ تعذّر تسجيل تعديل المخزون في product_edit_history: $e');
       }
     });
     invalidateProductsCache();
@@ -1320,7 +1434,7 @@ class DatabaseService {
     
     // For running balance, we need ASC order
     transactions.sort((a, b) {
-      final dateComp = a.transactionDate!.compareTo(b.transactionDate!);
+      final dateComp = a.transactionDate.compareTo(b.transactionDate);
       if (dateComp != 0) return dateComp;
       return (a.id ?? 0).compareTo(b.id ?? 0);
     });
@@ -1351,30 +1465,28 @@ class DatabaseService {
     final allTransactions = <AccountStatementItem>[];
 
     for (var transaction in transactions) {
-      if (transaction.transactionDate != null) {
-        String description = '';
-        if (transaction.amountChanged > 0) {
-          description = 'إضافة دين';
-        } else if (transaction.amountChanged < 0) {
-          description = 'تسديد دين';
-        } else {
-          description = 'معاملة مالية';
-        }
-        if (transaction.invoiceId != null) {
-          // ✅ عرض الرقم التجاري إن وُجد، وإلا الـ id احتياطاً
-          final displayNum = invoiceNumberById[transaction.invoiceId!] ?? transaction.invoiceId.toString();
-          description += ' (فاتورة #$displayNum)';
-        }
-
-        allTransactions.add(AccountStatementItem(
-          date: transaction.transactionDate!,
-          description: description,
-          amount: transaction.amountChanged,
-          type: 'transaction',
-          transaction: transaction,
-          invoice: null, // We could fetch invoice if needed, but for now null is fine as per original logic
-        ));
+      String description = '';
+      if (transaction.amountChanged > 0) {
+        description = 'إضافة دين';
+      } else if (transaction.amountChanged < 0) {
+        description = 'تسديد دين';
+      } else {
+        description = 'معاملة مالية';
       }
+      if (transaction.invoiceId != null) {
+        // ✅ عرض الرقم التجاري إن وُجد، وإلا الـ id احتياطاً
+        final displayNum = invoiceNumberById[transaction.invoiceId!] ?? transaction.invoiceId.toString();
+        description += ' (فاتورة #$displayNum)';
+      }
+
+      allTransactions.add(AccountStatementItem(
+        date: transaction.transactionDate,
+        description: description,
+        amount: transaction.amountChanged,
+        type: 'transaction',
+        transaction: transaction,
+        invoice: null, // We could fetch invoice if needed, but for now null is fine as per original logic
+      ));
     }
 
     // Calculate running balance
@@ -1576,7 +1688,7 @@ class DatabaseService {
         'created_at': DateTime.now().toIso8601String(),
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     } catch (e) {
-      print('Error adding unit: $e');
+      debugPrint('Error adding unit: $e');
     }
   }
   
@@ -1681,13 +1793,16 @@ class DatabaseService {
   }
   
   Future<void> recalculateAndApplyCustomerDebt(int customerId) async {
-    await database;
-    await _transactionDao.recalculateAndApplyCustomerDebt(customerId);
+    final db = await database;
+    // حساب مدموج ⇒ رصيده يُحسب على الحساب الذي دُمج فيه
+    final target = await CustomerNameRule.resolveMerged(db, customerId);
+    await _transactionDao.recalculateAndApplyCustomerDebt(target);
   }
   
   Future<void> recalculateCustomerTransactionBalances(int customerId) async {
-    await database;
-    await _transactionDao.recalculateCustomerTransactionBalances(customerId);
+    final db = await database;
+    final target = await CustomerNameRule.resolveMerged(db, customerId);
+    await _transactionDao.recalculateCustomerTransactionBalances(target);
   }
   
   Future<void> fixAllTransactionBalances() async {
@@ -1771,13 +1886,17 @@ class DatabaseService {
         final String name = row['customer_name'] as String;
         
         // 2. Check if a customer with this name exists
-        final List<Map<String, dynamic>> existing = await db.query(
-          'customers',
-          columns: ['id'],
-          where: 'name = ?',
-          whereArgs: [name],
-          limit: 1,
-        );
+        // 🛡️ الاسم يحدد الحساب (بتجاهل المسافات)
+        final active = await CustomerNameRule.findActive(db, name);
+        final List<Map<String, dynamic>> existing = active != null
+            ? [active]
+            : await db.query(
+                'customers',
+                columns: ['id'],
+                where: 'name = ?',
+                whereArgs: [name],
+                limit: 1,
+              );
 
         int customerId;
         if (existing.isNotEmpty) {
@@ -1804,7 +1923,7 @@ class DatabaseService {
         // but if there are any orphaned, we can't update them directly.
       }
     } catch (e) {
-      print('Error in updateOldInvoicesWithCustomerIds: $e');
+      debugPrint('Error in updateOldInvoicesWithCustomerIds: $e');
     }
   }
 
@@ -1901,6 +2020,8 @@ class DatabaseService {
     required int offset,
     String? searchName,
     String? searchId,
+    String? status,
+    String? paymentType,
   }) async {
     await database;
     return _invoiceDao.getInvoicesPaginated(
@@ -1908,6 +2029,8 @@ class DatabaseService {
       offset: offset,
       searchName: searchName,
       searchId: searchId,
+      status: status,
+      paymentType: paymentType,
     );
   }
   
@@ -2127,39 +2250,9 @@ class DatabaseService {
     return salesAnalytics.getFinancialSummary();
   }
   
+  /// ملخص آخر 24 شهراً — من المحرك الموحّد بقراءة واحدة (كان 24 ملخصاً متتالياً).
   Future<Map<String, MonthlyOverview>> getMonthlySalesSummary() async {
-    // جلب التواريخ لآخر 24 شهر
-    final now = DateTime.now();
-    Map<String, MonthlyOverview> results = {};
-    
-    for (int i = 0; i < 24; i++) {
-      final date = DateTime(now.year, now.month - i, 1);
-      final lastDay = DateTime(now.year, now.month - i + 1, 0);
-      final key = '${date.year}-${date.month.toString().padLeft(2, '0')}';
-      
-      final summary = await reportsService.getPeriodSummary(startDate: date, endDate: lastDay);
-      
-      if (summary['invoiceCount'] > 0 || summary['manualDebtCount'] > 0) {
-        results[key] = MonthlyOverview(
-          monthYear: key,
-          totalSales: summary['totalSales'],
-          netProfit: summary['netProfit'],
-          totalCost: summary['totalCost'],
-          cashSales: summary['cashSales'],
-          creditSales: summary['creditSales'],
-          totalReturns: summary['totalReturns'],
-          totalDebtPayments: summary['totalManualPayment'],
-          totalManualDebt: summary['totalManualDebt'],
-          manualDebtProfit: summary['manualDebtProfit'] ?? 0.0,
-          settlementAdditions: 0,
-          settlementReturns: 0,
-          invoiceCount: summary['invoiceCount'],
-          manualDebtCount: summary['manualDebtCount'],
-          manualPaymentCount: summary['manualPaymentCount'],
-        );
-      }
-    }
-    return results;
+    return reportsService.getMonthlyOverviews(months: 24);
   }
   
   Future<File> generateMonthlyDebtsPdf(List<Customer> customers, int year, int month) async {
@@ -2209,12 +2302,16 @@ class DatabaseService {
     int? resolvedCustomerId;
 
     if (finalCustomerName != 'عميل نقدي') {
-      final matches = await db.query(
-        'customers',
-        where: 'name = ? OR name = ?',
-        whereArgs: [finalCustomerName, DatabaseHelpers.normalizeArabic(finalCustomerName)],
-        limit: 1,
-      );
+      // 🛡️ الاسم يحدد الحساب (بتجاهل المسافات) — لا يُنشأ حساب ثانٍ بالاسم نفسه
+      final active = await CustomerNameRule.findActive(db, finalCustomerName);
+      final matches = active != null
+          ? [active]
+          : await db.query(
+              'customers',
+              where: 'name = ? OR name = ?',
+              whereArgs: [finalCustomerName, DatabaseHelpers.normalizeArabic(finalCustomerName)],
+              limit: 1,
+            );
 
       if (matches.isNotEmpty) {
         resolvedCustomerId = matches.first['id'] as int;
@@ -2272,7 +2369,12 @@ class DatabaseService {
       );
     }).toList();
 
-    return saveCompleteInvoice(inv, invoiceItems);
+    final newId = await saveCompleteInvoice(inv, invoiceItems);
+    // 🧾 علامة «إيصال كاشير» (جدول محلي منفصل) — للرفع وشاشة الإيصالات
+    try {
+      await InvoiceUploadTracker.tagPos(db, newId);
+    } catch (_) {}
+    return newId;
   }
   
   // Analytics Delegations
@@ -2352,6 +2454,21 @@ class DatabaseService {
     if (!await importedFile.exists()) {
       throw Exception('الملف المحدد غير موجود');
     }
+    MaintenanceLog.clear();
+    lastRestoreReport = null;
+    final importedSize = await DatabaseDoctor.fileSize(importedFile.path);
+    // 🛡️ قبل لمس القاعدة الحالية: الملف قاعدة SQLite فعلاً (لا أرشيف ولا ملف آخر)
+    {
+      final raf = await importedFile.open();
+      try {
+        final head = await raf.read(16);
+        if (head.length < 16 || String.fromCharCodes(head.sublist(0, 15)) != 'SQLite format 3') {
+          throw Exception('الملف ليس قاعدة بيانات (SQLite)');
+        }
+      } finally {
+        await raf.close();
+      }
+    }
 
     final targetPath = await DatabaseConfig.getDatabasePath();
     final targetDir = Directory(dirname(targetPath));
@@ -2364,6 +2481,11 @@ class DatabaseService {
     // 1. إغلاق الاتصال الحالي لضمان عدم قفل الملف
     if (_database != null) {
       if (_database!.isOpen) {
+        // كل ما في WAL يُكتب في الملف أولاً: نسخة السلامة أدناه تأخذ الملف
+        // وحده، ثم يُحذف WAL — فبدون هذا تضيع آخر العمليات من نسخة السلامة.
+        try {
+          await _database!.rawQuery('PRAGMA wal_checkpoint(TRUNCATE)');
+        } catch (_) {}
         await _database!.close();
       }
       _database = null;
@@ -2375,7 +2497,7 @@ class DatabaseService {
       try {
         await currentDbFile.copy(safetyBackupPath);
       } catch (e) {
-        print('تحذير: تعذر إنشاء نسخة سلامة احتياطية: $e');
+        debugPrint('تحذير: تعذر إنشاء نسخة سلامة احتياطية: $e');
       }
     }
 
@@ -2388,6 +2510,11 @@ class DatabaseService {
 
       // 4. نسخ واستبدال قاعدة البيانات بالملف المستورد
       await importedFile.copy(targetPath);
+      // 🛡️ حارس الهجرة يعمل على الملف المستورد مهما كان مصدره: لقطة ديونه قبل
+      //    إكماله، ثم مقارنة بعده — وأي اختلاف يرفض الاستيراد كله.
+      MigrationGuard.forceNext = true;
+      MigrationGuard.blocked = null;
+      MigrationGuard.lastReport = null;
 
       // 5. مسح ملفات WAL و SHM إذا كانت مرفقة مع الملف المستورد
       final importedWal = File('${importedFile.path}-wal');
@@ -2408,18 +2535,51 @@ class DatabaseService {
       }
 
       await markDatabaseRestored(newDb);
-      print('✅ تمت استعادة قاعدة البيانات بنجاح من الملف المستورد');
+
+      // 🩺 تقرير الاستعادة: ما فعله النظام وحده + فحص مالي (قراءة فقط)
+      try {
+        final findings = await DatabaseDoctor.scan(newDb);
+        lastRestoreReport = DatabaseDoctor.reportText(
+          done: MaintenanceLog.take(),
+          findings: findings,
+          sizeBefore: importedSize,
+          sizeAfter: (await DatabaseDoctor.size(newDb)).total,
+        );
+      } catch (e) {
+        debugPrint('⚠️ تقرير الاستعادة: $e');
+      }
+      debugPrint('✅ تمت استعادة قاعدة البيانات بنجاح من الملف المستورد');
       return true;
     } catch (e) {
-      print('❌ فشلت الاستعادة، جاري التراجع للنسخة السابقة: $e');
+      debugPrint('❌ فشلت الاستعادة، جاري التراجع للنسخة السابقة: $e');
       if (_database != null && _database!.isOpen) {
         await _database!.close();
-        _database = null;
+      }
+      _database = null;
+      MigrationGuard.forceNext = false;
+      MigrationGuard.blocked = null;
+      // ملفات WAL/SHM للقاعدة المستوردة يجب أن تزول قبل إعادة القديمة، وإلا
+      // طبّق SQLite صفحات قاعدة أخرى على القاعدة القديمة فأتلفها.
+      for (final s in ['-wal', '-shm']) {
+        try {
+          final f = File('$targetPath$s');
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
       }
       final safetyFile = File(safetyBackupPath);
       if (await safetyFile.exists()) {
         await safetyFile.copy(targetPath);
+      } else {
+        // لا قاعدة سابقة: يُنقل الملف المرفوض جانباً (لا يُحذف) فيبدأ البرنامج فارغاً
+        try {
+          await File(targetPath).rename(
+              '$targetPath.rejected_${DateTime.now().millisecondsSinceEpoch}');
+        } catch (_) {}
+      }
+      try {
         await database;
+      } catch (e2) {
+        debugPrint('⚠️ تعذّر إعادة فتح القاعدة السابقة: $e2');
       }
       rethrow;
     }
@@ -2434,6 +2594,9 @@ class DatabaseService {
   ///     حتى تُطلب البيانات من الأجهزة الأخرى وتُقارن نسخنا بالسحابة.
   /// (المحاكاة: سيناريو 26 + الفوضى القاسية)
   static const String restoredFlagKey = 'sync_db_restored_pending';
+
+  /// 🩺 تقرير آخر استعادة (ما فعله النظام تلقائياً + ما يحتاج قرار صاحب المحل).
+  static String? lastRestoreReport;
   static const String restoredRowsMarkedKey = 'sync_db_restored_rows_marked';
 
   /// يُضبط العلَم فقط (عندما يُستبدل ملف القاعدة وهي مغلقة، كاستعادة Dropbox)؛
@@ -2444,7 +2607,7 @@ class DatabaseService {
       await prefs.setBool(restoredFlagKey, true);
       await prefs.setBool(restoredRowsMarkedKey, false);
     } catch (e) {
-      print('⚠️ تعذّر ضبط علَم الاستعادة: $e');
+      debugPrint('⚠️ تعذّر ضبط علَم الاستعادة: $e');
     }
   }
 
@@ -2495,9 +2658,36 @@ class DatabaseService {
     try {
       final prefs = await SharedPreferences.getInstance();
       if (!(prefs.getBool(restoredFlagKey) ?? false)) return false;
-      return await FirebaseSyncConfig.isEnabled();
+      return await _syncUsable();
     } catch (_) {
       return false;
+    }
+  }
+
+  /// المزامنة تعمل فعلاً على هذا الجهاز: مفعّلة في الترخيص ومضبوط لها مشروع Firebase.
+  /// (كان يكفي «مفعّلة»: حساب مزامنة بلا Firebase مضبوط يبقى في وضع الاستعادة إلى الأبد
+  /// — الشريط ظاهر والسجلات القديمة مقفلة — لأن الاستعادة لا تكتمل إلا بتنزيل من السحابة.)
+  static Future<bool> _syncUsable() async {
+    if (!await FirebaseSyncConfig.isEnabled()) return false;
+    return FirebaseCustomConfig.isCustomConfigured();
+  }
+
+  /// 📥 عند الإقلاع: استُعيدت نسخة (أو فُتحت قاعدة مستوردة) والمزامنة لا تعمل على
+  /// هذا الجهاز ⇒ لا أجهزة أخرى يُنتظر منها شيء: يُمحى وضع الاستعادة فوراً، فلا شريط
+  /// ولا قفل على السجلات القديمة.
+  static Future<void> clearRestoreIfNoSync() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool(restoredFlagKey) ?? false)) return;
+      if (await _syncUsable()) return;
+      final db = await DatabaseService().database;
+      await db.rawUpdate('UPDATE transactions SET restored_mark = 0 WHERE restored_mark = 1');
+      await db.rawUpdate('UPDATE invoices SET restored_mark = 0 WHERE restored_mark = 1');
+      await prefs.remove(restoredFlagKey);
+      await prefs.remove(restoredRowsMarkedKey);
+      debugPrint('📥 القاعدة المستعادة تعمل بلا مزامنة — أُلغي وضع الاستعادة (لا قفل على السجلات)');
+    } catch (e) {
+      debugPrint('⚠️ clearRestoreIfNoSync: $e');
     }
   }
 
@@ -2512,7 +2702,7 @@ class DatabaseService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(restoredRowsMarkedKey, true);
     } catch (e) {
-      print('⚠️ تعذّر وسم صفوف النسخة المستعادة: $e');
+      debugPrint('⚠️ تعذّر وسم صفوف النسخة المستعادة: $e');
     }
   }
 
@@ -2657,7 +2847,7 @@ class DatabaseService {
       // Keep first, modify others
       for (int i = 1; i < rows.length; i++) {
         final rowId = rows[i]['id'];
-        await db.update(table, {'$column': '${idValue}_dup_$i'}, where: 'id = ?', whereArgs: [rowId]);
+        await db.update(table, {column: '${idValue}_dup_$i'}, where: 'id = ?', whereArgs: [rowId]);
       }
     }
   }
@@ -2705,7 +2895,7 @@ class DatabaseService {
   }
 
   Future<void> backfillMissingTransactionUuids(Database db) async {
-    print('🔄 Backfilling missing transaction UUIDs...');
+    debugPrint('🔄 Backfilling missing transaction UUIDs...');
     final List<Map<String, dynamic>> rows = await db.rawQuery(
       'SELECT t.id, t.sync_uuid, t.transaction_uuid, c.name as customer_name, t.amount_changed, t.transaction_date '
       'FROM transactions t '
@@ -2760,7 +2950,7 @@ class DatabaseService {
       await batch.commit(noResult: true);
     }
     
-    print('✅ Backfilled $filledCount transaction UUIDs.');
+    debugPrint('✅ Backfilled $filledCount transaction UUIDs.');
   }
 
   /// 🔥 توحيد هوية المعاملات التاريخية على transaction_uuid (= sync_uuid) وصالح
@@ -2846,10 +3036,10 @@ class DatabaseService {
         fixed++;
       }
       if (fixed > 0) {
-        print('🔧 sanitizeLegacyTransactionUuids: وُحِّدت $fixed معاملة.');
+        debugPrint('🔧 sanitizeLegacyTransactionUuids: وُحِّدت $fixed معاملة.');
       }
     } catch (e) {
-      print('❌ sanitizeLegacyTransactionUuids فشلت: $e');
+      debugPrint('❌ sanitizeLegacyTransactionUuids فشلت: $e');
     }
   }
 
