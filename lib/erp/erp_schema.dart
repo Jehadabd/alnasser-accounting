@@ -14,6 +14,7 @@
 
 import 'package:sqflite/sqflite.dart';
 
+import 'control/control_schema.dart'; // 🛡️ الرقابة والأدوات المالية
 import 'warranty/warranty_schema.dart'; // 🛠️ الضمان والصيانة
 
 class ErpSchema {
@@ -580,6 +581,8 @@ class ErpSchema {
     )''',
     // 🛠️ الضمان والصيانة (سجل متابعة — لا مال ولا مخزون)
     ...WarrantySchema.statements,
+    // 🛡️ الرقابة والأدوات المالية (عدّ الدرج، الطباعة، الموافقات، الأصول، البنك، الشحن)
+    ...ControlSchema.statements,
   ];
 
   /// أعمدة تُضاف لجداول موجودة: [جدول، عمود، تعريف].
@@ -672,7 +675,7 @@ class ErpSchema {
   static Future<void> _seedAccounts(DatabaseExecutor db) async {
     if (!await _tableExists(db, 'accounts')) return;
     final now = DateTime.now().toIso8601String();
-    for (final a in systemAccounts) {
+    for (final a in [...systemAccounts, ...ControlSchema.systemAccounts]) {
       final key = a[0] as String;
       final has = await db.query('accounts',
           columns: ['id'], where: 'system_key = ?', whereArgs: [key], limit: 1);

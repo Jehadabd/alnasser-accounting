@@ -4,12 +4,17 @@
 //   رصيد البداية + المقبوض نقداً − المدفوع نقداً ± سندات الصناديق = المتوقع.
 //   المعدود − المتوقع = الفرق (زيادة أو نقص).
 // المصدر: كل الأجهزة / هذا الجهاز / المزامنة (من رأس الشاشة). الأرقام من المحرك
-// الموحّد (CashFlow) — للقراءة فقط: لا يكتب في القاعدة، ورصيد البداية والمعدود
-// لا يُحفظان (للطباعة فقط).
+// الموحّد (CashFlow). الأرقام للقراءة فقط؛ «حفظ العدّ» يكتب لقطة في سجل عدّ الدرج
+// (المتوقع، المعدود، الفرق، من عدّ) ولا يغيّر أي رصيد — الفرق يُرحَّل فقط إن اعتمده المدير.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 
+import '../accounting/vouchers_service.dart' show CashBox;
+import '../erp/control/cash_count_service.dart';
+import '../erp/control/control_screens.dart' show CashCountsScreen;
+import '../erp/device_defaults.dart';
+import '../erp/pickers.dart' show CashBoxDropdown;
 import '../erp/report_export.dart';
 import '../erp/sales/doc_pdf.dart';
 import '../services/reports_service.dart';
@@ -29,6 +34,11 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
   final _svc = ReportsService();
   final _opening = TextEditingController();
   final _counted = TextEditingController();
+  final _countNote = TextEditingController();
+  int? _boxId;
+  bool _boxReady = false;
+  bool _savingCount = false;
+  List<CashCount> _savedCounts = const [];
   late DateTime _day;
   String _source = ReportSource.all;
   SalesFacts? _facts;
@@ -46,6 +56,13 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
     if (_day.isAfter(_today)) _day = _today;
     _opening.addListener(_redraw);
     _counted.addListener(_redraw);
+    DeviceDefaults.cashBoxId().then((b) {
+      if (!mounted) return;
+      setState(() {
+        _boxId = b;
+        _boxReady = true;
+      });
+    });
     _load();
   }
 
@@ -53,6 +70,7 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
   void dispose() {
     _opening.dispose();
     _counted.dispose();
+    _countNote.dispose();
     super.dispose();
   }
 
@@ -76,8 +94,13 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
       final facts = await _svc.loadFacts(from: _day, to: _day);
       final summary = await _svc.getPeriodSummary(startDate: _day, endDate: _day);
       final cash = await _svc.cashFlow(facts, from: _day, to: _day);
+      List<CashCount> saved = const [];
+      try {
+        saved = await CashCountService.list(from: _day, to: _day);
+      } catch (_) {}
       if (!mounted || t != _token) return;
       setState(() {
+        _savedCounts = saved;
         _facts = facts;
         _summary = summary;
         _cash = cash;
@@ -263,7 +286,7 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
         );
     return SetCard(
       title: 'عدّ الدرج',
-      subtitle: 'اكتب رصيد البداية وما عددته الآن — لا يُحفظ، للطباعة والمطابقة فقط',
+      subtitle: 'اكتب رصيد البداية وما عددته — «حفظ العدّ» يسجّله باسمك ليراجعه المدير',
       icon: Icons.calculate_rounded,
       color: kSetBlue,
       child: Padding(
@@ -289,9 +312,111 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
               decoration: deco('المعدود فعلاً', 'ما في الدرج الآن'),
             ),
           ),
+          if (_boxReady)
+            CashBoxDropdown(
+              value: _boxId,
+              width: 260,
+              label: 'الصندوق المعدود',
+              onChanged: (CashBox? b) => setState(() => _boxId = b?.id),
+            ),
+          SizedBox(
+            width: 260,
+            child: TextField(
+              controller: _countNote,
+              decoration: InputDecoration(
+                labelText: 'ملاحظة (اختياري)',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                isDense: true,
+              ),
+            ),
+          ),
+          FilledButton.icon(
+            onPressed: !_hasCount || _savingCount || _cash == null ? null : _saveCount,
+            icon: _savingCount
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.save_rounded),
+            label: const Text('حفظ العدّ'),
+          ),
+          TextButton.icon(
+            onPressed: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const CashCountsScreen()));
+              _load();
+            },
+            icon: const Icon(Icons.history_rounded),
+            label: const Text('سجل عدّ الدرج'),
+          ),
+          if (_savedCounts.isNotEmpty)
+            SizedBox(
+              width: double.infinity,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                const Divider(height: 18),
+                Text('أعداد محفوظة لهذا اليوم (${_savedCounts.length})',
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                for (final c in _savedCounts)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      c.matched ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+                      color: c.matched ? kSetGreen : (c.isOver ? kSetOrange : kSetRed),
+                    ),
+                    title: Text(
+                        'عدّ ${c.no} — ${c.countedBy} — ${c.matched ? 'مطابق' : (c.isOver ? 'زيادة' : 'نقص')} ${repMoney(c.diff.abs())}'),
+                    subtitle: Text(
+                        'المتوقع ${repMoney(c.expected)} • المعدود ${repMoney(c.counted)}${c.boxName == null ? '' : ' • ${c.boxName}'} • ${CashCountStatus.label(c.status)}'),
+                  ),
+              ]),
+            ),
         ]),
       ),
     );
+  }
+
+  Future<void> _saveCount() async {
+    final c = _cash;
+    if (c == null || !_hasCount) return;
+    if (_boxId == null) {
+      setToast(context, 'اختر الصندوق المعدود', error: true);
+      return;
+    }
+    final diff = _num(_counted) - _expected;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حفظ عدّ الدرج'),
+        content: Text(
+          'المتوقع ${repMoney(_expected)}\nالمعدود ${repMoney(_num(_counted))}\n'
+          '${diff.abs() < 1 ? 'مطابق' : (diff > 0 ? 'زيادة' : 'نقص')} ${repMoney(diff.abs())}\n\n'
+          'يُحفظ باسمك ولا يُعدَّل بعد الحفظ. لا يتغير أي رصيد حتى يراجعه المدير.',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حفظ')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _savingCount = true);
+    try {
+      await CashCountService.save(
+        day: _day,
+        source: _source,
+        boxId: _boxId,
+        opening: _num(_opening),
+        expected: _expected,
+        counted: _num(_counted),
+        note: _countNote.text,
+      );
+      if (!mounted) return;
+      _countNote.clear();
+      setToast(context, 'حُفظ العدّ — بانتظار مراجعة المدير');
+      await _load();
+    } catch (e) {
+      if (mounted) setToast(context, 'تعذّر حفظ العدّ: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _savingCount = false);
+    }
   }
 
   Future<void> _print() async {

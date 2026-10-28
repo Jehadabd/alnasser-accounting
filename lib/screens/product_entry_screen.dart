@@ -27,6 +27,8 @@ import '../widgets/camera_barcode_scanner_dialog.dart';
 import '../widgets/formatters.dart';
 import '../widgets/product/category_management_dialog.dart';
 import 'product_entry/pe_widgets.dart';
+import '../erp/control/landed_cost_dialog.dart'; // 🚢 مصاريف الشحن والجمارك
+import '../erp/control/landed_cost_service.dart';
 
 // --- Theme Colors from Design ---
 const Color kPrimaryColor = Color(0xFF5D5FEF); // Purple/Indigo
@@ -251,6 +253,9 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
   bool _invoiceUnitSuggested = false;
 
   bool _saving = false;
+
+  /// 🚢 مصاريف شحن مطبّقة على الكلفة (تُسجَّل بعد نجاح الحفظ)
+  LandedPlan? _landed;
   bool _submitted = false;
   int _savedCount = 0;
 
@@ -928,7 +933,63 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
       }
     }
 
+    // 🚢 مصاريف الشحن: الكلفة والكمية يجب أن تبقيا كما حُسبتا
+    final landed = _landed;
+    if (landed != null) {
+      final costNow = _parse(_baseCostController.text);
+      final qtyNow = _parse(_stockController.text);
+      if ((costNow - landed.finalUnitCost).abs() > 0.01 || (qtyNow - landed.baseQty).abs() > 0.0001) {
+        final ok = await _confirm(
+          title: 'تغيّرت الكلفة أو الكمية',
+          message: 'أُضيفت مصاريف الشحن على كلفة ${peFormatNumber(landed.purchaseUnitCost)} وكمية '
+              '${peFormatNumber(landed.baseQty)}، ثم تغيّر أحدهما. أعد فتح «المزيد ← مصاريف الشحن» ليُعاد الحساب، '
+              'أو احفظ بلا مصاريف شحن (تبقى الكلفة كما هي في الحقل).',
+          confirmLabel: 'احفظ بلا مصاريف شحن',
+          cancelLabel: 'مراجعة',
+          color: PeColors.warning,
+        );
+        if (!mounted || !ok) return;
+        setState(() => _landed = null);
+      }
+    }
+
     await _performSave();
+  }
+
+  /// 🚢 «المزيد ← مصاريف الشحن والجمارك»
+  Future<void> _openLanded() async {
+    final qty = _parse(_stockController.text);
+    final purchase = _landed?.purchaseUnitCost ?? _parse(_baseCostController.text);
+    if (qty <= 0) {
+      _showSnack('اكتب الرصيد الافتتاحي أولاً — المصاريف توزَّع على الكمية', color: PeColors.warning);
+      _stockFocus.requestFocus();
+      return;
+    }
+    if (purchase <= 0) {
+      _showSnack('اكتب كلفة الوحدة (سعر الشراء) أولاً', color: PeColors.warning);
+      return;
+    }
+    final plan = await showLandedCostDialog(
+      context,
+      purchaseUnitCost: purchase,
+      baseQty: qty,
+      unitLabel: _baseUnitDisplay,
+      initial: _landed != null && (_landed!.baseQty - qty).abs() < 0.0001 ? _landed : null,
+    );
+    if (plan == null || !mounted) return;
+    setState(() {
+      _landed = plan;
+      _baseCostController.text = peFormatNumber(plan.finalUnitCost);
+    });
+  }
+
+  void _removeLanded() {
+    final l = _landed;
+    if (l == null) return;
+    setState(() {
+      _baseCostController.text = peFormatNumber(l.purchaseUnitCost);
+      _landed = null;
+    });
   }
 
   Future<bool> _confirmBelowCost(List<_PriceTier> below, double cost) async {
@@ -1064,6 +1125,18 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
       }
 
       final productId = await db.insertProduct(product);
+
+      // 🚢 سجل مصاريف الشحن (والقيد حسب طريقة الدفع) — بعد نجاح حفظ المادة فقط
+      final landedPlan = _landed;
+      if (landedPlan != null) {
+        try {
+          await LandedCostService.record(productId: productId, productName: product.name, plan: landedPlan);
+        } catch (e) {
+          debugPrint('⚠️ [إدخال بضاعة] مصاريف الشحن: $e');
+          _showSnack('حُفظت المادة بكلفتها الجديدة، لكن تعذّر تسجيل مصاريف الشحن: $e',
+              color: Colors.orange.shade800, seconds: 8);
+        }
+      }
 
       // 🏷️ حفظ الباركودات الإضافية (فشل أحدها لا يُلغي حفظ المادة)
       final failedBarcodes = <String>[];
@@ -1205,6 +1278,7 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
       _barcodeRows.clear();
       _hasExpiry = false;
       _expiryDate = null;
+      _landed = null;
       _submitted = false;
       _checkingName = false;
       _lastCheckedName = '';
@@ -2329,6 +2403,51 @@ class _ProductEntryScreenState extends State<ProductEntryScreen> {
                 ),
               );
             },
+          ),
+          // 🚢 المزيد: مصاريف شحن وجمارك تُضاف إلى كلفة الوحدة
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: _landed == null
+                ? Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton.icon(
+                      onPressed: _openLanded,
+                      icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                      label: const Text('المزيد: مصاريف شحن وجمارك'),
+                    ),
+                  )
+                : Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _kStockColor.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _kStockColor.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.local_shipping_rounded, size: 18, color: _kStockColor),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'شحن وجمارك ${peFormatNumber(_landed!.totalExtra)} د.ع: +${peFormatNumber(_landed!.perUnit)} للوحدة '
+                          '(${peFormatNumber(_landed!.purchaseUnitCost)} ← ${peFormatNumber(_landed!.finalUnitCost)}) — '
+                          '${LandedMode.label(_landed!.mode)}',
+                          style: const TextStyle(fontSize: 12, color: _kStockColor, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'تعديل',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.edit_rounded, size: 18),
+                        onPressed: _openLanded,
+                      ),
+                      IconButton(
+                        tooltip: 'إزالة (تعود الكلفة لسعر الشراء)',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.close_rounded, size: 18),
+                        onPressed: _removeLanded,
+                      ),
+                    ]),
+                  ),
           ),
           const SizedBox(height: 14),
           Row(

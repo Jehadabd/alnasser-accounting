@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 
 import '../../erp/accounting_plus/currency_voucher_screens.dart';
 import '../../erp/accounting_plus/period_screens.dart';
+import '../../erp/control/bank_rec_screen.dart' show BankRecListScreen;
+import '../../erp/control/control_screens.dart' show ControlHubScreen;
+import '../../erp/control/fixed_assets_screens.dart' show FixedAssetsScreen;
 import '../../erp/erp_common.dart' show HubSection, HubTile;
 import '../../erp/erp_ui.dart';
 import '../../models/app_user.dart';
@@ -63,6 +66,17 @@ class AccountingHomeScreen extends StatefulWidget {
         HubTile('تثبيت وإقفال السنة', Icons.lock_clock_rounded, AccColors.purple,
             () => go(const PeriodCloseScreen()), permission: AppPermissions.periodClose,
             subtitle: 'منع التعديل على فترة سابقة'),
+      ]),
+      HubSection('الرقابة والأدوات المالية', [
+        HubTile('الرقابة والأدوات المالية', Icons.shield_rounded, AccColors.red,
+            () => go(const ControlHubScreen()), permission: AppPermissions.accounting,
+            subtitle: 'عدّ الدرج، الفواتير المُنقَصة، الموافقات، التعادل، الطلبيات'),
+        HubTile('الأصول الثابتة والإهلاك', Icons.domain_rounded, ErpColors.gold,
+            () => go(const FixedAssetsScreen()), permission: AppPermissions.accountingPost,
+            subtitle: 'سجل الأصول وإهلاكها الشهري'),
+        HubTile('مطابقة كشف البنك', Icons.account_balance_rounded, AccColors.cyan,
+            () => go(const BankRecListScreen()), permission: AppPermissions.accounting,
+            subtitle: 'طابق حركات البنك مع كشفه'),
       ]),
       HubSection('أدوات', [
         HubTile('الملاحظات', Icons.sticky_note_2_rounded, ErpColors.gold, () => go(const NotesScreen())),

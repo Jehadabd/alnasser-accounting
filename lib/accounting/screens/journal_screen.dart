@@ -19,6 +19,11 @@ const Map<String, String> sourceTypeLabels = {
   'voucher': 'سند',
   'manual': 'قيد يدوي',
   'inventory_valuation': 'مطابقة مخزون',
+  'cash_count': 'فرق عدّ الصندوق',
+  'landed_cost': 'مصاريف شحن على المخزون',
+  'asset_acq': 'شراء أصل ثابت',
+  'depreciation': 'إهلاك الأصول',
+  'asset_disp': 'استبعاد أصل ثابت',
 };
 
 class JournalScreen extends StatefulWidget {

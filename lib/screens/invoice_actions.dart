@@ -43,6 +43,8 @@ import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import 'create_invoice_screen.dart';
 import '../controllers/invoice_controller.dart';
 import '../services/voucher_print.dart'; // 🧾 سندات التعديل بالقلم ومصمم السندات
+import '../erp/control/approval_gate.dart'; // ✅ موافقة المدير قبل العمليات الحساسة
+import '../erp/control/print_audit.dart'; // 🖨️ تتبّع طباعة الفواتير
 import '../services/invoice_edit_voucher.dart'; // 🧾 سند مرتجع/إضافة للفاتورة النقدية
 import '../services/invoice_staff_service.dart'; // 👷 المجهز والمحاسب
 import '../services/firebase_sync/invoice_sync_service.dart'; // ⚡ رفع فوري بعد الحفظ
@@ -633,6 +635,24 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         );
         if (!go) return null;
       }
+    }
+
+    // ✅ موافقة المدير قبل الحفظ: تاريخ سابق، بيع تحت الكلفة، خصم أعلى من المسموح
+    //    (المدير المسجّل لا يُسأل؛ التسوية على فاتورة سابقة ليست «تعديلاً» لتاريخها)
+    {
+      if (!mounted) return null;
+      final settlement = widget.settlementForInvoice != null;
+      final old = settlement ? null : inputData.invoiceToManage;
+      final go = await ApprovalGate.checkInvoice(
+        context,
+        items: inputData.invoiceItems,
+        discount: inputData.discount,
+        selectedDate: settlement ? DateTime.now() : inputData.selectedDate,
+        originalDate: old?.invoiceDate,
+        invoiceId: old?.id,
+        customerName: inputData.customerName,
+      );
+      if (!go) return null;
     }
 
     setState(() {
@@ -1319,6 +1339,11 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
             )
           : await generateInvoicePdf();
 
+      // 🖨️ تسجيل الطباعة (فاتورة محفوظة فقط؛ لا يوقف الطباعة إن فشل)
+      if (widget.settlementForInvoice == null) {
+        await PrintAudit.record(invoiceToManage?.id, kind: rollFormat ? 'roll' : 'a4');
+      }
+
       // 🌐 على الويب: فتح نافذة طباعة المتصفح مباشرة وتجنب استدعاءات Platform
       if (kIsWeb) {
         await Printing.layoutPdf(
@@ -1426,6 +1451,9 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
   Future<void> shareInvoice() async {
     try {
       final pdf = await generateInvoicePdf();
+      if (widget.settlementForInvoice == null) {
+        await PrintAudit.record(invoiceToManage?.id, kind: 'share');
+      }
       // 🌐 الويب: مشاركة وتنزيل PDF مباشرة عبر المتصفح دون مجلدات مؤقتة
       if (kIsWeb) {
         final bytes = await pdf.save();

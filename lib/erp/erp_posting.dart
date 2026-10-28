@@ -15,6 +15,8 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../accounting/ledger.dart';
+import 'control/cash_count_service.dart' show CashCountService;
+import 'control/landed_cost_service.dart' show LandedCostService, LandedMode;
 import 'erp_common.dart';
 import 'purchases/purchase_return_service.dart' show purchaseReturnCashPart;
 import 'sales/sales_return_service.dart' show returnCashPart;
@@ -91,6 +93,20 @@ class ErpPosting {
     await _purchaseReturns(s);
     await _stockDocs(s);
     await _commissions(s);
+    // 🛡️ الرقابة والأدوات المالية: كل قسم معزول — خطؤه لا يوقف غيره ولا يمسّ قيوده الموجودة
+    for (final (name, run) in <(String, Future<void> Function(ErpPostingSummary))>[
+      ('cash_count', _cashCounts),
+      ('landed_cost', _landedCosts),
+      ('asset_acq', _assetAcquisitions),
+      ('depreciation', _depreciation),
+      ('asset_disp', _assetDisposals),
+    ]) {
+      try {
+        await run(s);
+      } catch (e) {
+        s.errors.add('$name: $e');
+      }
+    }
     return s;
   }
 
@@ -388,6 +404,203 @@ class ErpPosting {
           lines: [
             JournalLineInput(accountId: expense, debit: amt),
             JournalLineInput(accountId: payable, credit: amt),
+          ]);
+    });
+  }
+
+  // ═══════════════════════════ 🛡️ الرقابة والأدوات المالية ═══════════════════════════
+
+  /// حساب صندوق بعينه — بلا رجوع للصندوق الافتراضي (الخطأ أفضل من ترحيل لصندوق آخر).
+  static Future<int> _boxAccountStrict(DatabaseExecutor db, int boxId) async {
+    final r = await db.query('cash_boxes', columns: ['account_id'], where: 'id = ?', whereArgs: [boxId], limit: 1);
+    if (r.isEmpty) throw LedgerException('الصندوق رقم $boxId غير موجود');
+    return r.first['account_id'] as int;
+  }
+
+  // ── فرق عدّ الدرج (المعتمد للترحيل فقط) ──
+  //    عجز:  مدين فروقات الصندوق / دائن الصندوق
+  //    زيادة: مدين الصندوق / دائن فروقات الصندوق
+  Future<void> _cashCounts(ErpPostingSummary summary) async {
+    final rows = await CashCountService.postableRows(db);
+    final sources = <_Src>[
+      for (final r in rows)
+        _Src(r['id'] as int, [r['count_day'], d0(r['diff']).toStringAsFixed(2), r['box_id']].join('|'), r),
+    ];
+    if (sources.isEmpty && !await _hasEntries('cash_count')) return;
+    await _reconcile('cash_count', sources, summary, (txn, s) async {
+      final r = s.row;
+      final diff = roundMoney(d0(r['diff']));
+      final box = await _boxAccountStrict(txn, r['box_id'] as int);
+      final over = await Ledger.systemAccountId(txn, 'cash_over_short');
+      final amt = diff.abs();
+      await Ledger.writeEntry(txn,
+          sourceType: 'cash_count',
+          sourceId: s.id,
+          sourceHash: s.hash,
+          date: parseDate(r['count_day']),
+          description: '${diff < 0 ? 'عجز' : 'زيادة'} في الصندوق — عدّ رقم ${r['count_no']} (${r['counted_by'] ?? ''})',
+          lines: diff < 0
+              ? [
+                  JournalLineInput(accountId: over, debit: amt, memo: 'عجز صندوق'),
+                  JournalLineInput(accountId: box, credit: amt),
+                ]
+              : [
+                  JournalLineInput(accountId: box, debit: amt),
+                  JournalLineInput(accountId: over, credit: amt, memo: 'زيادة صندوق'),
+                ]);
+    });
+  }
+
+  // ── مصاريف الشحن على المخزون ──
+  //    من صندوق: مدين المخزون / دائن الصندوق
+  //    إعادة تصنيف: مدين المخزون / دائن حساب المصروف الذي سُجّلت عليه
+  Future<void> _landedCosts(ErpPostingSummary summary) async {
+    final rows = await LandedCostService.postableRows(db);
+    final sources = <_Src>[
+      for (final r in rows)
+        _Src(
+            r['id'] as int,
+            [r['cost_date'], d0(r['total_extra']).toStringAsFixed(2), r['mode'], r['box_id'], r['expense_account_id']]
+                .join('|'),
+            r),
+    ];
+    if (sources.isEmpty && !await _hasEntries('landed_cost')) return;
+    await _reconcile('landed_cost', sources, summary, (txn, s) async {
+      final r = s.row;
+      final amt = roundMoney(d0(r['total_extra']));
+      final inventory = await Ledger.systemAccountId(txn, 'inventory');
+      final counter = r['mode'] == LandedMode.box
+          ? await _boxAccountStrict(txn, r['box_id'] as int)
+          : (r['expense_account_id'] as int?) ??
+              (throw LedgerException('لا حساب مصروف لسجل الشحن رقم ${s.id}'));
+      await Ledger.writeEntry(txn,
+          sourceType: 'landed_cost',
+          sourceId: s.id,
+          sourceHash: s.hash,
+          date: parseDate(r['cost_date']),
+          description: 'مصاريف شحن وجمارك على «${r['product_name'] ?? ''}» (${fmtQty(d0(r['base_qty']))} وحدة)',
+          lines: [
+            JournalLineInput(accountId: inventory, debit: amt, memo: 'مصاريف شحن محمّلة على الكلفة'),
+            JournalLineInput(accountId: counter, credit: amt),
+          ]);
+    });
+  }
+
+  Future<bool> _hasEntries(String sourceType) async {
+    final r = await db.query('journal_entries',
+        columns: ['id'], where: 'source_type = ?', whereArgs: [sourceType], limit: 1);
+    return r.isNotEmpty;
+  }
+
+  Future<bool> _assetsReady() => _tableExists(db, 'fixed_assets');
+
+  // ── شراء أصل (من صندوق أو رصيد افتتاحي) ──
+  Future<void> _assetAcquisitions(ErpPostingSummary summary) async {
+    final rows = await _assetsReady()
+        ? await db.rawQuery("SELECT * FROM fixed_assets WHERE funding IN ('box', 'opening')")
+        : const <Map<String, Object?>>[];
+    final sources = <_Src>[
+      for (final r in rows)
+        _Src(
+            r['id'] as int,
+            [r['acquired_on'], d0(r['cost']).toStringAsFixed(2), r['funding'], r['funding_box_id'], r['asset_account_id']]
+                .join('|'),
+            r),
+    ];
+    if (sources.isEmpty && !await _hasEntries('asset_acq')) return;
+    await _reconcile('asset_acq', sources, summary, (txn, s) async {
+      final r = s.row;
+      final cost = roundMoney(d0(r['cost']));
+      final asset = (r['asset_account_id'] as int?) ?? (throw LedgerException('لا حساب للأصل رقم ${s.id}'));
+      final counter = r['funding'] == 'box'
+          ? await _boxAccountStrict(txn, r['funding_box_id'] as int)
+          : await Ledger.systemAccountId(txn, 'opening_equity');
+      await Ledger.writeEntry(txn,
+          sourceType: 'asset_acq',
+          sourceId: s.id,
+          sourceHash: s.hash,
+          date: parseDate(r['acquired_on']),
+          description: '${r['funding'] == 'box' ? 'شراء' : 'رصيد افتتاحي —'} أصل ثابت رقم ${r['asset_no']}: ${r['name']}',
+          lines: [
+            JournalLineInput(accountId: asset, debit: cost),
+            JournalLineInput(accountId: counter, credit: cost),
+          ]);
+    });
+  }
+
+  // ── إهلاك شهر: مدين مصروف الإهلاك / دائن مجمع الإهلاك ──
+  Future<void> _depreciation(ErpPostingSummary summary) async {
+    final rows = await _tableExists(db, 'depreciation_runs')
+        ? await db.rawQuery("SELECT * FROM depreciation_runs WHERE status = 'posted' AND total > 0")
+        : const <Map<String, Object?>>[];
+    final sources = <_Src>[
+      for (final r in rows) _Src(r['id'] as int, [r['period'], r['run_date'], d0(r['total']).toStringAsFixed(2)].join('|'), r),
+    ];
+    if (sources.isEmpty && !await _hasEntries('depreciation')) return;
+    await _reconcile('depreciation', sources, summary, (txn, s) async {
+      final r = s.row;
+      final amt = roundMoney(d0(r['total']));
+      await Ledger.writeEntry(txn,
+          sourceType: 'depreciation',
+          sourceId: s.id,
+          sourceHash: s.hash,
+          date: parseDate(r['run_date']),
+          description: 'إهلاك الأصول الثابتة لشهر ${r['period']}',
+          lines: [
+            JournalLineInput(accountId: await Ledger.systemAccountId(txn, 'depreciation_expense'), debit: amt),
+            JournalLineInput(accountId: await Ledger.systemAccountId(txn, 'accum_depreciation'), credit: amt),
+          ]);
+    });
+  }
+
+  // ── استبعاد/بيع أصل ──
+  //    مدين الصندوق (المقبوض) + مدين مجمع الإهلاك / دائن حساب الأصل (الكلفة)
+  //    والفرق: ربح ⇒ دائن «أرباح وخسائر الاستبعاد»، خسارة ⇒ مدين.
+  Future<void> _assetDisposals(ErpPostingSummary summary) async {
+    final rows = await _assetsReady()
+        ? await db.rawQuery('''
+            SELECT a.*, COALESCE((SELECT SUM(l.amount) FROM depreciation_lines l
+                                  JOIN depreciation_runs r ON r.id = l.run_id
+                                  WHERE l.asset_id = a.id AND r.status = 'posted'), 0) AS accumulated
+            FROM fixed_assets a WHERE a.status = 'disposed' ''')
+        : const <Map<String, Object?>>[];
+    final sources = <_Src>[
+      for (final r in rows)
+        _Src(
+            r['id'] as int,
+            [
+              r['disposed_on'],
+              d0(r['cost']).toStringAsFixed(2),
+              d0(r['accumulated']).toStringAsFixed(2),
+              d0(r['disposal_amount']).toStringAsFixed(2),
+              r['disposal_box_id'],
+              r['asset_account_id'],
+            ].join('|'),
+            r),
+    ];
+    if (sources.isEmpty && !await _hasEntries('asset_disp')) return;
+    await _reconcile('asset_disp', sources, summary, (txn, s) async {
+      final r = s.row;
+      final cost = roundMoney(d0(r['cost']));
+      final acc = roundMoney(d0(r['accumulated']));
+      final proceeds = roundMoney(d0(r['disposal_amount']));
+      final asset = (r['asset_account_id'] as int?) ?? (throw LedgerException('لا حساب للأصل رقم ${s.id}'));
+      final gain = roundMoney(proceeds - (cost - acc));
+      final gl = await Ledger.systemAccountId(txn, 'asset_disposal');
+      await Ledger.writeEntry(txn,
+          sourceType: 'asset_disp',
+          sourceId: s.id,
+          sourceHash: s.hash,
+          date: parseDate(r['disposed_on']),
+          description: 'استبعاد أصل ثابت رقم ${r['asset_no']}: ${r['name']}',
+          lines: [
+            if (proceeds > 0)
+              JournalLineInput(accountId: await _boxAccountStrict(txn, r['disposal_box_id'] as int), debit: proceeds),
+            if (acc > 0)
+              JournalLineInput(accountId: await Ledger.systemAccountId(txn, 'accum_depreciation'), debit: acc),
+            if (gain < 0) JournalLineInput(accountId: gl, debit: -gain, memo: 'خسارة استبعاد'),
+            JournalLineInput(accountId: asset, credit: cost),
+            if (gain > 0) JournalLineInput(accountId: gl, credit: gain, memo: 'ربح استبعاد'),
           ]);
     });
   }

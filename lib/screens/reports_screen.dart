@@ -24,6 +24,7 @@ import '../owner/founders_screen.dart';
 import '../radar/radar_screen.dart';
 import 'custom_range_report_screen.dart';
 import 'day_close_screen.dart';
+import '../erp/control/control_screens.dart' show ControlHubScreen;
 import 'people_reports_screen.dart';
 import 'product_reports_screen.dart';
 import 'returns_report_screen.dart';
@@ -44,6 +45,9 @@ class ReportsScreen extends StatefulWidget {
           HubTile('رادار التاجر', Icons.radar_rounded, const Color(0xFF0E7490), () => go(const RadarScreen()),
               subtitle: 'المحقق المالي (بيع تحت الكلفة، خصومات، هبوط الربح، نقص المخزون)، السيولة بعد 30/60/90 يوماً، '
                   'أولوية تحصيل الديون مع تذكير واتساب، والشراء الذكي حسب الموسم',
+              permission: AppPermissions.viewCostProfit),
+          HubTile('الرقابة والأدوات المالية', Icons.shield_rounded, const Color(0xFFB91C1C), () => go(const ControlHubScreen()),
+              subtitle: 'عجز الدرج لكل محاسب، فواتير أُنقصت بعد طباعتها، نقطة التعادل، اقتراح الطلبيات، ربحية الفروع',
               permission: AppPermissions.viewCostProfit),
         ]),
         HubSection('حسب الفترة', subtitle: 'المبيعات والأرباح، ماذا حدث، وما دخل الصندوق فعلاً', [
