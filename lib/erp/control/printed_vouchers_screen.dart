@@ -70,11 +70,15 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
             if (!reg.contains(l['id'])) l
         ];
       }
+      // حماية إضافية: شاشة الفاتورة لا تعرض إلا سندات هذه الفاتورة
+      final mine = widget.invoiceId == null ? rows : rows.where((r) => r.invoiceId == widget.invoiceId).toList();
       if (!mounted) return;
       setState(() {
-        _rows = rows;
+        _rows = mine;
         _legacy = legacy;
         _loading = false;
+        // النوع المختار لم يعد بين النتائج ⇒ «الكل»
+        if (_kind != null && !_kindsPresent.contains(_kind)) _kind = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -285,22 +289,33 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
 
   // ───────────────────────── الواجهة ─────────────────────────
 
+  /// الأنواع الموجودة فعلاً في النتائج (لا تُعرض أنواع لا سندات لها هنا).
+  Set<String> get _kindsPresent => {
+        for (final r in _rows) r.kind,
+        if (_legacy.isNotEmpty) PrintedVoucherKind.legacyReceipt,
+      };
+
   @override
   Widget build(BuildContext context) {
-    final kinds = <String?>[
-      null,
+    const order = [
       PrintedVoucherKind.receipt,
       PrintedVoucherKind.cashReceipt,
       PrintedVoucherKind.cashRefund,
       PrintedVoucherKind.debitNote,
       PrintedVoucherKind.creditNote,
-      if (widget.invoiceId == null) PrintedVoucherKind.legacyReceipt,
+      PrintedVoucherKind.legacyReceipt,
     ];
+    final present = _kindsPresent;
+    final kinds = <String?>[null, for (final k in order) if (present.contains(k)) k];
     final shown = _kind == null ? _rows : _rows.where((r) => r.kind == _kind).toList();
     final legacyShown = (_kind == null || _kind == PrintedVoucherKind.legacyReceipt) ? _legacy : const <Map<String, Object?>>[];
     return ErpPage(
       title: _title,
-      subtitle: 'ما طُبع فقط — مع من طبعه ومتى ورمز التحقق',
+      subtitle: widget.invoiceId != null
+          ? 'سندات هذه الفاتورة فقط: قبض/صرف إن كانت نقدية، إشعار مدين/دائن إن كانت آجلة'
+          : widget.customerId != null
+              ? 'كل سندات هذا العميل فقط: تسديد الدين وسندات كل فواتيره'
+              : 'ما طُبع فقط — مع من طبعه ومتى ورمز التحقق',
       icon: Icons.verified_user_rounded,
       actions: [IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
       headerExtra: SearchBox(
@@ -312,6 +327,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
         },
       ),
       body: Column(children: [
+        if (kinds.length > 2)
         SizedBox(
           height: 48,
           child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), children: [
@@ -333,7 +349,11 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
                   ? EmptyState(
                       _global && _q.trim().isNotEmpty
                           ? 'لا يوجد سند مطبوع بهذا الرقم أو الرمز.\nإن كانت الورقة تحمل رمز تحقق ولم يُعثر عليه فهي ليست من طباعتنا.'
-                          : 'لا سندات مطبوعة بعد',
+                          : widget.invoiceId != null
+                              ? 'لم يُطبع أي سند لهذه الفاتورة.\nسندات الفاتورة تُطبع عند تعديلها بالقلم (إضافة أو مرتجع).'
+                              : widget.customerId != null
+                                  ? 'لم يُطبع أي سند لهذا العميل بعد'
+                                  : 'لا سندات مطبوعة بعد',
                       icon: _global && _q.trim().isNotEmpty ? Icons.gpp_bad_rounded : Icons.receipt_long_rounded)
                   : ListView(padding: const EdgeInsets.fromLTRB(8, 4, 8, 24), children: [
                       for (final v in shown)
