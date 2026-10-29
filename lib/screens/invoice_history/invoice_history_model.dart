@@ -452,11 +452,14 @@ class InvoiceHistoryBuilder {
       final int? era = _eraStart(chain);
 
       final HistState first = chain.first;
-      final bool firstIsCreation = first.kind == 'original' &&
-          (first.sysNotes ?? '').contains('الإنشاء');
+      final bool savedAtCreation = first.kind == 'original' && (first.sysNotes ?? '').contains('الإنشاء');
+      // 🧬 الفاتورة الجديدة لا تُنسخ عند إنشائها: «الأصلية» تُحفظ عند أول تعديل، وهي حالة
+      // الإنشاء نفسها (لا يغيّر الفاتورة على جهازها المُنشئ إلا شاشة التعديل)
+      final bool firstIsCreation = savedAtCreation ||
+          (!foreign && first.kind == 'original' && (first.sysNotes ?? '').contains('قبل أي تعديل'));
       final DateTime? createdAt = invCreatedAt ?? first.at;
       final String? createdBy =
-          invCreatedBy ?? (firstIsCreation ? first.by : null);
+          invCreatedBy ?? (savedAtCreation ? first.by : null);
       String? note;
       if (!firstIsCreation &&
           first.at != null &&

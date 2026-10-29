@@ -7,6 +7,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:archive/archive.dart'; // 🗜️ ضغط لقطات الفواتير (يعمل على الويب وسطح المكتب)
 
+import '../business/snapshot_chain.dart'; // 🧬 نسخ الفاتورة بالفروق
+
 /// DAO لسجل التدقيق المالي
 class AuditDao {
   final Future<Database> Function() getDatabase;
@@ -115,7 +117,7 @@ class AuditDao {
     Map<String, Object?> invoice,
     String itemsJson,
   ) {
-    return decodeSnapshotItems(last['items_json']) == itemsJson &&
+    return SnapshotChain.sameItems(decodeSnapshotItems(last['items_json']), itemsJson) &&
         (last['customer_name'] as String?) == (invoice['customer_name'] as String?) &&
         (last['customer_phone'] as String?) == (invoice['customer_phone'] as String?) &&
         (last['customer_address'] as String?) == (invoice['customer_address'] as String?) &&
@@ -291,25 +293,37 @@ class AuditDao {
       final items = await db.query('invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
       final itemsJson = buildSnapshotItemsJson(items);
       
-      // حساب رقم النسخة
-      final existingSnapshots = await db.query(
+      // سلسلة نسخ هذه الفاتورة كاملة (مبنية من الفروق) — لآخر نسخة ولحساب الفرق
+      final chainRaw = await db.query(
         'invoice_snapshots',
         where: 'invoice_id = ?',
         whereArgs: [invoiceId],
-        orderBy: 'version_number DESC',
-        limit: 1,
+        orderBy: 'version_number ASC, id ASC',
       );
+      final chain = SnapshotChain.materialize(
+          [for (final r in chainRaw) Map<String, dynamic>.from(r)], decodeSnapshotItems);
+      final Map<String, dynamic>? last = chain.isEmpty ? null : chain.last;
 
       // 🗜️ منع اللقطات المكررة: إن لم يتغيّر شيء عن آخر لقطة فلا نكتب صفاً جديداً.
-      // لا تُتخطّى إلا لقطة مطابقة حرفياً لما هو محفوظ بالفعل، فلا تضيع أي حالة فريدة.
-      if (existingSnapshots.isNotEmpty &&
-          isSameAsLastSnapshot(existingSnapshots.first, invoice, itemsJson)) {
-        return (existingSnapshots.first['id'] as int?) ?? -1;
+      // لا تُتخطّى إلا لقطة مطابقة لما هو محفوظ بالفعل، فلا تضيع أي حالة فريدة.
+      if (last != null &&
+          last['items_json'] != null &&
+          isSameAsLastSnapshot(last.cast<String, Object?>(), invoice, itemsJson)) {
+        return (last['id'] as int?) ?? -1;
       }
 
-      final nextVersion = existingSnapshots.isEmpty 
-          ? 1 
-          : ((existingSnapshots.first['version_number'] as int?) ?? 0) + 1;
+      final nextVersion = last == null ? 1 : ((last['version_number'] as int?) ?? 0) + 1;
+
+      // 🧬 الفرق عن النسخة السابقة بدل النسخة كاملة — إن كانت السابقة سليمة والفرق أصغر.
+      // النسخة الأولى، وكل نسخة بعد سلسلة طويلة أو سابقة مكسورة، تُحفظ كاملة.
+      String stored = itemsJson;
+      final prevFull = last?['items_json'] as String?;
+      if (prevFull != null) {
+        final rawTexts = [for (final r in chainRaw) decodeSnapshotItems(r['items_json'])];
+        final delta = SnapshotChain.encodeDelta(prevFull, itemsJson,
+            chainLength: SnapshotChain.trailingDeltas(rawTexts));
+        if (delta != null) stored = delta;
+      }
       
       return await db.insert('invoice_snapshots', {
         'invoice_id': invoiceId,
@@ -324,7 +338,7 @@ class AuditDao {
         'discount': invoice['discount'],
         'amount_paid': invoice['amount_paid_on_invoice'],
         'loading_fee': invoice['loading_fee'],
-        'items_json': encodeSnapshotItems(itemsJson),
+        'items_json': encodeSnapshotItems(stored),
         'created_at': DateTime.now().toIso8601String(),
         'notes': notes,
         'invoice_notes': invoice['notes'],
@@ -340,12 +354,14 @@ class AuditDao {
   Future<List<Map<String, dynamic>>> getInvoiceSnapshots(int invoiceId) async {
     final db = await getDatabase();
     try {
-      return await db.query(
+      final rows = await db.query(
         'invoice_snapshots',
         where: 'invoice_id = ?',
         whereArgs: [invoiceId],
-        orderBy: 'version_number ASC',
+        orderBy: 'version_number ASC, id ASC',
       );
+      // 🧬 النسخ المحفوظة فروقاً تُعاد كاملة
+      return SnapshotChain.materialize([for (final r in rows) Map<String, dynamic>.from(r)], decodeSnapshotItems);
     } catch (e) {
       debugPrint('خطأ في جلب نسخ الفاتورة: $e');
       return [];

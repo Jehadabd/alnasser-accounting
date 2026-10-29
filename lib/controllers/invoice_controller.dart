@@ -870,18 +870,9 @@ class InvoiceController {
             );
           }
           
-          if (data.isNewInvoice) {
-            try {
-              await _db.saveInvoiceSnapshot(
-                invoiceId: savedInvoice!.id!,
-                snapshotType: 'original',
-                notes: 'النسخة الأصلية عند الإنشاء',
-                createdBy: currentUserName,
-              );
-            } catch (_) {
-              // فشل حفظ اللقطة لا يُفشل حفظ الفاتورة (اللقطة للسجل فقط)
-            }
-          } else {
+          // 🧬 فاتورة جديدة: لا نسخة عند الإنشاء — الفاتورة نفسها هي نسختها الأصلية حتى
+          //    أول تعديل، وعندها تُحفظ «الأصلية» قبل التعديل (أعلاه). وفّر نسخة لكل فاتورة.
+          if (!data.isNewInvoice) {
             try {
               await _db.saveInvoiceSnapshot(
                 invoiceId: savedInvoice!.id!,

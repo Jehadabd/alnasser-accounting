@@ -10,6 +10,8 @@
 import 'package:flutter/material.dart';
 
 import '../services/database_service.dart';
+import '../services/database/business/snapshot_chain.dart'; // 🧬 النسخ المحفوظة فروقاً
+import '../services/database/dao/audit_dao.dart';
 import 'invoice_history/invoice_history_model.dart';
 import '../erp/control/printed_vouchers_screen.dart'; // 🧾 سندات هذه الفاتورة المطبوعة
 
@@ -94,8 +96,9 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
         whereArgs: [id],
         orderBy: 'version_number ASC, id ASC',
       );
-      final List<Map<String, dynamic>> snapshots =
-          snapshotRaw.map((r) => Map<String, dynamic>.from(r)).toList();
+      // 🧬 النسخ المحفوظة فروقاً تُعاد بناؤها كاملة (وما لا يُبنى بدقة يُعلَّم «غير معروف»)
+      final List<Map<String, dynamic>> snapshots = SnapshotChain.materialize(
+          snapshotRaw.map((r) => Map<String, dynamic>.from(r)).toList(), AuditDao.decodeSnapshotItems);
 
       final List<Map<String, dynamic>> adjustments = await _safeRows(() =>
           db.query('invoice_adjustments',

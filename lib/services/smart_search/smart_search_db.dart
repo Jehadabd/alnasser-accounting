@@ -7,6 +7,7 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'smart_search_models.dart';
+import 'smart_search_prune.dart';
 
 class SmartSearchDatabase {
   static SmartSearchDatabase? _instance;
@@ -758,7 +759,55 @@ class SmartSearchDatabase {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /// تنظيف العلاقات والترتيبات القديمة (أقدم من سنة)
+  /// ✂️ أقوى 20 رفيقاً لكل مادة (وأقوى 20 تالياً لكل مادة عند كل مسافة) — مرة في اليوم.
+  static const int kKeepPartners = 20;
+  static const int kGraceDays = 30;
+  static DateTime? _lastPrune;
+
+  Future<int> pruneWeakRelations({DateTime? now}) async {
+    final t = now ?? DateTime.now();
+    final last = _lastPrune;
+    if (now == null && last != null && t.difference(last).inHours < 24) return 0;
+    _lastPrune = t;
+    final db = await database;
+    final cutoff = t.subtract(const Duration(days: kGraceDays)).toIso8601String();
+    var deleted = 0;
+    try {
+      final assoc = await db.rawQuery(
+          'SELECT id, product_id_a, product_id_b, co_occurrence_count, updated_at FROM product_associations');
+      final ids = SmartSearchPrune.idsToDelete([
+        for (final r in assoc)
+          PruneRow(r['id'] as int, r['product_id_a'] as int, r['product_id_b'] as int,
+              (r['co_occurrence_count'] as int?) ?? 1, '${r['updated_at'] ?? ''}'),
+      ], keep: kKeepPartners, cutoffIso: cutoff);
+      deleted += await _deleteIds(db, 'product_associations', ids);
+
+      final seq = await db.rawQuery(
+          'SELECT id, from_product_id, distance, count, last_occurred FROM product_sequences');
+      final sids = SmartSearchPrune.idsToDelete([
+        for (final r in seq)
+          PruneRow(r['id'] as int, '${r['from_product_id']}:${r['distance']}', null,
+              (r['count'] as int?) ?? 1, '${r['last_occurred'] ?? ''}'),
+      ], keep: kKeepPartners, cutoffIso: cutoff);
+      deleted += await _deleteIds(db, 'product_sequences', sids);
+      if (deleted > 0) debugPrint('✂️ البحث الذكي: حُذفت $deleted علاقة ضعيفة (أقوى $kKeepPartners لكل مادة باقية)');
+    } catch (e) {
+      debugPrint('⚠️ تقليم علاقات البحث الذكي: $e');
+    }
+    return deleted;
+  }
+
+  static Future<int> _deleteIds(Database db, String table, List<int> ids) async {
+    var n = 0;
+    for (var i = 0; i < ids.length; i += 500) {
+      final chunk = ids.sublist(i, i + 500 > ids.length ? ids.length : i + 500);
+      n += await db.delete(table, where: 'id IN (${List.filled(chunk.length, '?').join(',')})', whereArgs: chunk);
+    }
+    return n;
+  }
+
   Future<void> cleanUpOldData() async {
+    await pruneWeakRelations();
     final db = await database;
     // نحصل على التاريخ قبل سنة
     final oneYearAgo = DateTime.now().subtract(const Duration(days: 365)).toIso8601String();

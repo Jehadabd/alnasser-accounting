@@ -45,6 +45,7 @@ import 'database/core/database_helpers.dart';
 import 'database/core/database_migrations.dart';
 import 'database/core/migration_guard.dart'; // 🛡️ حارس الهجرة
 import 'database/core/database_doctor.dart'; // 🩺 صيانة تلقائية + فحص مالي بلا تعديل
+import 'database/core/data_retention.dart'; // 🧹 سجل التصفح: آخر 7 أيام فقط
 import 'seat_service.dart' show SeatService;
 
 // Business Logic
@@ -439,6 +440,9 @@ class DatabaseService {
     } catch (e) {
       debugPrint('⚠️ Error running CustomerNameRule: $e');
     }
+
+    // 🧹 سجل تصفح الشاشات: آخر 7 أيام فقط (مرة في اليوم؛ السجلات المالية لا تُمسّ)
+    await DataRetention.runIfDue(db);
 
     // 🗜️ تصغير قاعدة البيانات: بقايا مزامنة Drive + ضغط اللقطات القديمة.
     // كلاهما يعمل مرة واحدة فعلياً: بعدها لا يجد ما يحذفه أو يضغطه.

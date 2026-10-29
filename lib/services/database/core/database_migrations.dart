@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../dao/product_dao.dart';
 import 'package:alnaser/services/database/core/database_helpers.dart'; // ✅ Explicit import
 import '../dao/audit_dao.dart'; // 🗜️ أدوات تنظيف وضغط اللقطات
+import '../business/snapshot_chain.dart'; // 🧬 النسخ المحفوظة فروقاً
 import 'database_doctor.dart' show MaintenanceLog; // 🧰 ما فعلته الصيانة التلقائية
 import '../business/stock_ledger.dart'; // 📦 دفتر المخزون المشترك
 
@@ -716,6 +717,17 @@ class DatabaseMigrations {
           scanned++;
 
           final raw = row['items_json'];
+          // 🧬 نسخة محفوظة فرقاً: لا تُقارن ولا تُستبدل — تُضغط كما هي حرفياً فقط
+          final decodedText = AuditDao.decodeSnapshotItems(raw);
+          if (SnapshotChain.isDelta(decodedText)) {
+            if (raw is String) {
+              batch.update('invoice_snapshots', {'items_json': AuditDao.encodeSnapshotItems(decodedText)},
+                  where: 'id = ?', whereArgs: [id]);
+              rewritten++;
+            }
+            prevInvoiceId = -1; // لا تُعدّ النسخة التالية مكررة لما قبل الفرق
+            continue;
+          }
           final parsed = AuditDao.decodeSnapshotItemRows(raw);
           final rawText = raw is String ? raw.trim() : '';
           // نص غير فارغ لم يُقرأ منه شيء = JSON تالف: يُحفظ حرفياً

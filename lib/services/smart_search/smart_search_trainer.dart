@@ -167,6 +167,8 @@ class SmartSearchTrainer {
 
     // تحديث القوة والنسب
     onProgress?.call(totalInvoices, totalInvoices, 'جاري حساب القوة والنسب...');
+    debugPrint('✂️ تقليم العلاقات الضعيفة (أقوى 20 لكل مادة)...');
+    await _smartDb.pruneWeakRelations(now: DateTime.now());
     debugPrint('📊 تحديث قوة العلاقات...');
     await _smartDb.updateAssociationStrengths();
     

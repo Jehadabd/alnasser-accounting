@@ -161,6 +161,30 @@ class InvoiceEditEvents {
     );
   }
 
+  /// الأسطر التي تغيّرت بين [before] و[after]: (ما كان قبل ولم يبقَ، ما صار بعد ولم يكن).
+  /// سطر يتكرر مرتين يُعدّ مرتين — فالمجموع (بعد − قبل) يبقى كما هو بالضبط.
+  static (List<Map<String, Object?>>, List<Map<String, Object?>>) changedLines(
+      List<Map<String, Object?>> before, List<Map<String, Object?>> after) {
+    final pool = <String, List<Map<String, Object?>>>{};
+    for (final a in after) {
+      pool.putIfAbsent(jsonEncode(a), () => []).add(a);
+    }
+    final onlyBefore = <Map<String, Object?>>[];
+    for (final b in before) {
+      final same = pool[jsonEncode(b)];
+      if (same != null && same.isNotEmpty) {
+        same.removeLast();
+      } else {
+        onlyBefore.add(b);
+      }
+    }
+    final onlyAfter = <Map<String, Object?>>[
+      for (final a in after)
+        if ((pool[jsonEncode(a)] ?? const []).contains(a)) a,
+    ];
+    return (onlyBefore, onlyAfter);
+  }
+
   /// بصمة المواد بلا ترتيب الأسطر (إعادة ترتيب الأسطر وحدها ليست تعديلاً).
   static String _itemsSig(List<Map<String, Object?>> items) {
     final rows = [
@@ -225,8 +249,12 @@ class InvoiceEditEvents {
       'loading_after': after.loadingFee,
       'payment_before': before.paymentType,
       'payment_after': after.paymentType,
-      'items_before': jsonEncode(before.items),
-      'items_after': jsonEncode(after.items),
+      // 🧬 الأسطر التي تغيّرت فقط (الطرح متعدد المجموعات): السطر المتطابق قبل وبعد لا يُحفظ.
+      // التقارير تجمع (بعد − قبل) لكل مادة، فالسطر المتطابق كان يُلغي نفسه أصلاً — النتيجة واحدة.
+      ...() {
+        final (onlyBefore, onlyAfter) = changedLines(before.items, after.items);
+        return {'items_before': jsonEncode(onlyBefore), 'items_after': jsonEncode(onlyAfter)};
+      }(),
       'doc_kind': kind,
       'doc_no': docNo,
       'edited_at': editedAt,
