@@ -16,10 +16,10 @@ import '../services/firebase_sync/sync_event_bus.dart';
 import '../services/firebase_sync/firebase_sync_service.dart'; // 🚀 رفع فوري عند الإنشاء/التعديل
 import '../services/firebase_sync/firebase_sync_config.dart';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
-// Note: XZEncoder is part of the archive package and uses LZMA2 algorithm
-// import 'package:lzma/lzma.dart'; // No longer needed directly
+import '../services/xz/xz_backup.dart'; // 🗜️ ضغط XZ حقيقي متحقق منه لنسخة تيليجرام
 
 // أنواع ترتيب العملاء
 enum CustomerSortType {
@@ -596,17 +596,30 @@ class AppProvider with ChangeNotifier {
       onProgress?.call(0.55);
       final tarData = TarEncoder().encode(archive);
       
-      // ضغط الـ TAR باستخدام XZ (LZMA2 مع Header صحيح)
-      // هذا يعطي أقوى نسبة ضغط (مثل 7-Zip Ultra) وملف سليم .tar.xz
-      onProgress?.call(0.65);
-      final xzEncoder = XZEncoder();
-      final xzData = xzEncoder.encode(tarData);
-      
-      // اسم الملف النهائي .tar.xz
-      final compressedName = '${folderName}_${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}.tar.xz';
-      
-      final compressedFile = File('${tempDir.path}/$compressedName');
-      await compressedFile.writeAsBytes(xzData);
+      // 🗜️ ضغط XZ حقيقي (LZMA2، قاموس 8MB) في معالج منفصل، ثم فكّه بمسار الاستعادة
+      // نفسه ومقارنته بالأصل بايتاً ببايت — انظر XzBackup.
+      // (XZEncoder في مكتبة archive لا يضغط: كان الملف بحجم القاعدة نفسه)
+      onProgress?.call(0.58);
+      final tarBytes = tarData is Uint8List ? tarData : Uint8List.fromList(tarData);
+      final xzData = await XzBackup.compressVerified(
+        tarBytes,
+        onProgress: (p) => onProgress?.call(0.58 + p * 0.10),
+      );
+      final stamp = '${folderName}_${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}';
+      final File compressedFile;
+      final String format;
+      if (xzData != null) {
+        compressedFile = File('${tempDir.path}/$stamp.tar.xz');
+        await compressedFile.writeAsBytes(xzData, flush: true);
+        format = 'XZ';
+      } else {
+        // بديل آمن نادر: ZIP (deflate) — الاستعادة تقبله أيضاً
+        debugPrint('⚠️ نسخة تيليجرام: تعذّر XZ المتحقق منه — تُرفع ZIP بدلاً منه');
+        compressedFile = File('${tempDir.path}/$stamp.zip');
+        await compressedFile.writeAsBytes(ZipEncoder().encode(archive)!, flush: true);
+        format = 'ZIP';
+      }
+      final sizeNote = '${_mb(dbBytes.length)} ← ${_mb(await compressedFile.length())} MB';
 
       // 5) إرسال النسخة الاحتياطية إلى Telegram
       onProgress?.call(0.70);
@@ -614,7 +627,7 @@ class AppProvider with ChangeNotifier {
         final telegramService = TelegramBackupService();
         if (await telegramService.isConfigured) {
           // 📦 1. إرسال ملف قاعدة البيانات (المضغوط)
-          final caption = '📦 نسخة XZ Ultra - $branchName - ${now.year}/${now.month}/${now.day} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
+          final caption = '📦 نسخة $format ($sizeNote) - $branchName - ${now.year}/${now.month}/${now.day} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
           await telegramService.sendDocument(file: compressedFile, caption: caption);
 
           // 🛑 2. إرسال نسخ PDF (تقرير الديون وكشوفات الحسابات)
@@ -639,6 +652,8 @@ class AppProvider with ChangeNotifier {
       _setLoading(false);
     }
   }
+
+  static String _mb(int bytes) => (bytes / 1048576).toStringAsFixed(1);
 
   Future<List<Invoice>> getAllInvoices() async {
     return await _db.getAllInvoices();
