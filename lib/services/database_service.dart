@@ -2273,11 +2273,6 @@ class DatabaseService {
     return File('dummy_path.pdf'); 
   }
   
-  Future<List<String>> getAllAudioNotePaths() async {
-    // Stub
-    return [];
-  }
-  
   Future<File> getDatabaseFile() async {
     return File(await getDatabaseFilePath());
   }

@@ -293,11 +293,17 @@ class _MainScreenState extends State<MainScreen> {
         for (final target in targets) {
           if (target == UploadTargets.telegram) {
                 // 1) رفع قاعدة البيانات إلى Telegram (محلي + تيليجرام فقط)
-                await appProvider.backupDatabaseToTelegram(
-                  onProgress: (p) {
-                    progressNotifier.value = p * 0.5; // 50% للرفع الأساسي
-                  },
-                );
+                // يرمي إن لم تصل القاعدة؛ ويعيد مشاكل غير قاتلة (تقارير PDF لم تُرسل...).
+                // الخطأ يُسجَّل ويكمل باقي الوجهات (Dropbox/Discord...) بدل أن يوقفها.
+                try {
+                  errors.addAll(await appProvider.backupDatabaseToTelegram(
+                    onProgress: (p) {
+                      progressNotifier.value = p * 0.5; // 50% للرفع الأساسي
+                    },
+                  ));
+                } catch (e) {
+                  errors.add('$e'.replaceFirst('Exception: ', ''));
+                }
 
                 // 2) إرسال الفواتير إلى Telegram
                 final bool isConfigured = await telegramService.isConfigured;

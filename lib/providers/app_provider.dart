@@ -96,7 +96,6 @@ class AppProvider with ChangeNotifier {
     _setLoading(true);
     try {
       await _loadCustomers();
-      await ensureAudioNotesDirectory();
       _listenToIncomingSync();
     } finally {
       _setLoading(false);
@@ -442,18 +441,18 @@ class AppProvider with ChangeNotifier {
 
   // Drive upload methods removed
 
-  // رفع ملف قاعدة البيانات إلى Telegram فقط (بدلاً من Drive)
-  Future<void> backupDatabaseToTelegram({ValueChanged<double>? onProgress}) async {
+  /// رفع قاعدة البيانات (XZ) ثم تقارير PDF إلى Telegram.
+  /// يرمي استثناءً إن لم تصل القاعدة نفسها (فلا يظهر «نجح» كذباً)،
+  /// ويعيد قائمة بمشاكل غير قاتلة (تقرير PDF لم يُرسل، Telegram غير مضبوط).
+  Future<List<String>> backupDatabaseToTelegram({ValueChanged<double>? onProgress}) async {
     _setLoading(true);
+    final problems = <String>[];
+    Directory? workDir;
     try {
-      // 1) تحضير المحتوى المطلوب: قاعدة البيانات + جميع ملفات الصوت
+      // 1) نسخة متّسقة من القاعدة في مجلد مؤقت
       onProgress?.call(0.05);
-      final audioPaths = await _db.getAllAudioNotePaths();
-
-      // 2) إنشاء مجلد مؤقت ونسخ قاعدة البيانات وجمع الصوتيات
-      onProgress?.call(0.15);
       final tempDir = await getTemporaryDirectory();
-      final backupRoot = Directory('${tempDir.path}/backup_${DateTime.now().millisecondsSinceEpoch}');
+      final backupRoot = workDir = Directory('${tempDir.path}/backup_${DateTime.now().millisecondsSinceEpoch}');
       if (!await backupRoot.exists()) {
         await backupRoot.create(recursive: true);
       }
@@ -462,121 +461,7 @@ class AppProvider with ChangeNotifier {
       // مهيّأة لأصغر أرشيف XZ — انظر BackupFiles.snapshotForBackup
       await BackupFiles.snapshotForBackup(dbCopy.path);
 
-      final audioDir = Directory('${backupRoot.path}/audio');
-      await audioDir.create(recursive: true);
-      
-      int copiedAudioFiles = 0;
-      for (final p in audioPaths) {
-        try {
-          final f = File(p);
-          File? sourceFile = f;
-          if (!await f.exists()) {
-            // البحث عن الملف في مجلدات أخرى محتملة
-            final fileName = p.split(Platform.pathSeparator).last;
-            
-            // البحث في مجلد قاعدة البيانات الحالي أولاً
-            final supportDir = await getApplicationSupportDirectory();
-            final dbAudioDir = Directory('${supportDir.path}/audio_notes');
-            final currentUserFile = File('${dbAudioDir.path}/$fileName');
-            if (await currentUserFile.exists()) {
-              sourceFile = currentUserFile;
-            } else {
-              // البحث في مجلد المستندات العام
-              final publicDocs = Directory('${Platform.environment['PUBLIC'] ?? ''}\\Documents');
-              if (await publicDocs.exists()) {
-                final publicFile = File('${publicDocs.path}\\$fileName');
-                if (await publicFile.exists()) {
-                  sourceFile = publicFile;
-                }
-              }
-              
-              // البحث في مجلد المستندات للمستخدمين الآخرين
-              final usersDir = Directory('C:\\Users');
-              if (await usersDir.exists()) {
-                await for (final userDir in usersDir.list()) {
-                  if (userDir is Directory) {
-                    final userDocs = Directory('${userDir.path}\\Documents');
-                    if (await userDocs.exists()) {
-                      final userFile = File('${userDocs.path}\\$fileName');
-                      if (await userFile.exists()) {
-                        sourceFile = userFile;
-                        break;
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-          
-          if (sourceFile != null && await sourceFile.exists()) {
-            final fileName = sourceFile.path.split(Platform.pathSeparator).last;
-            final targetPath = '${audioDir.path}/$fileName';
-            final sourceSize = await sourceFile.length();
-            
-            if (sourceSize > 0) {
-              await sourceFile.copy(targetPath);
-              final copiedFile = File(targetPath);
-              final copiedSize = await copiedFile.length();
-              if (copiedSize == sourceSize) {
-                copiedAudioFiles++;
-              }
-            }
-          }
-        } catch (e) {
-          // تجاهل أخطاء نسخ الملفات الصوتية
-        }
-      }
-      
-      // نسخ إضافي للملفات الصوتية من مجلد قاعدة البيانات الحالي
-      if (copiedAudioFiles == 0) {
-        try {
-          final supportDir = await getApplicationSupportDirectory();
-          final currentAudioDir = Directory('${supportDir.path}/audio_notes');
-          if (await currentAudioDir.exists()) {
-            final currentAudioFiles = await currentAudioDir.list().toList();
-            for (final file in currentAudioFiles) {
-              if (file is File) {
-                final fileName = file.path.split(Platform.pathSeparator).last;
-                final targetPath = '${audioDir.path}/$fileName';
-                if (!await File(targetPath).exists()) {
-                  await file.copy(targetPath);
-                  copiedAudioFiles++;
-                }
-              }
-            }
-          }
-        } catch (e) {
-          // تجاهل الأخطاء
-        }
-      }
-      
-      // نسخ إضافي للملفات الصوتية في مجلد قاعدة البيانات للنسخ الاحتياطية
-      if (copiedAudioFiles > 0) {
-        try {
-          final supportDir = await getApplicationSupportDirectory();
-          final backupAudioDir = Directory('${supportDir.path}/audio_backup');
-          await backupAudioDir.create(recursive: true);
-          
-          for (final p in audioPaths) {
-            try {
-              final f = File(p);
-              if (await f.exists()) {
-                final base = p.split(Platform.pathSeparator).last;
-                final backupPath = '${backupAudioDir.path}/$base';
-                await f.copy(backupPath);
-              }
-            } catch (e) {
-              // تجاهل الأخطاء
-            }
-          }
-        } catch (e) {
-          // تجاهل الأخطاء
-        }
-      }
-
-      // 3) استخدام XZ (LZMA2 container) للحصول على أقوى ضغط + ملف أرشيف سليم
-      // XZ يستخدم نفس خوارزمية LZMA2 القوية لكن مع Header يجعله ملف أرشيف نظامي
+      // 2) أرشيف TAR ثم ضغط XZ
       onProgress?.call(0.45);
       final now = DateTime.now();
       final settings = await SettingsManager.getAppSettings();
@@ -621,34 +506,36 @@ class AppProvider with ChangeNotifier {
       }
       final sizeNote = '${_mb(dbBytes.length)} ← ${_mb(await compressedFile.length())} MB';
 
-      // 5) إرسال النسخة الاحتياطية إلى Telegram
+      // 3) إرسال النسخة إلى Telegram — النتيجة تُفحص ولا تُتجاهل
       onProgress?.call(0.70);
-      try {
-        final telegramService = TelegramBackupService();
-        if (await telegramService.isConfigured) {
-          // 📦 1. إرسال ملف قاعدة البيانات (المضغوط)
-          final caption = '📦 نسخة $format ($sizeNote) - $branchName - ${now.year}/${now.month}/${now.day} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
-          await telegramService.sendDocument(file: compressedFile, caption: caption);
-
-          // 🛑 2. إرسال نسخ PDF (تقرير الديون وكشوفات الحسابات)
-          // يتم إرسالها دائماً عند الرفع اليدوي لضمان اكتمال النسخة
-          onProgress?.call(0.75);
-          
-          debugPrint('📄 جاري إرسال تقارير PDF الملحقة...');
-          await telegramService.backupDebtRecordsPdf();
-          await telegramService.backupAccountStatementsPdf();
-          debugPrint('✅ تم إرسال كافة التقارير بنجاح');
-
-        } else {
-             debugPrint('Telegram is not configured');
+      final telegramService = TelegramBackupService();
+      if (!await telegramService.isConfigured) {
+        problems.add('قاعدة البيانات لم تُرفع: إعدادات Telegram غير مكتملة');
+      } else {
+        final caption = '📦 نسخة $format ($sizeNote) - $branchName - ${now.year}/${now.month}/${now.day} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
+        final sent = await telegramService.sendDocumentWithDetails(file: compressedFile, caption: caption);
+        if (!sent.success) {
+          throw Exception('لم تُرفع قاعدة البيانات إلى Telegram: ${sent.errorMessage ?? 'خطأ غير معروف'}'
+              '${sent.statusCode != null ? ' (كود ${sent.statusCode})' : ''}'
+              '${sent.errorDetails != null && sent.errorDetails!.isNotEmpty ? ' — ${sent.errorDetails}' : ''}');
         }
-      } catch (e) {
-        debugPrint('Error uploading to Telegram: $e');
-         rethrow;
+
+        // 4) تقارير PDF (تقرير الديون وكشوفات الحسابات) — فشلها لا يلغي رفع القاعدة لكنه يُبلَّغ
+        onProgress?.call(0.75);
+        final debtPdf = await telegramService.backupDebtRecordsPdf();
+        if (debtPdf != null) problems.add(debtPdf);
+        final statementsPdf = await telegramService.backupAccountStatementsPdf();
+        if (statementsPdf != null) problems.add(statementsPdf);
       }
 
       onProgress?.call(1.0);
+      return problems;
     } finally {
+      // نسخة القاعدة المؤقتة لا تبقى على القرص. (الملف المضغوط يبقى: ديسكورد
+      // قد يكون ما زال يقرؤه في الخلفية)
+      try {
+        if (workDir != null && await workDir.exists()) await workDir.delete(recursive: true);
+      } catch (_) {}
       _setLoading(false);
     }
   }
@@ -757,18 +644,4 @@ class AppProvider with ChangeNotifier {
     _hasTempInvoiceData = true;
     notifyListeners();
   }
-
-  // إنشاء مجلد الملفات الصوتية في نفس مجلد قاعدة البيانات
-  Future<void> ensureAudioNotesDirectory() async {
-    try {
-      final supportDir = await getApplicationSupportDirectory();
-      final audioDir = Directory('${supportDir.path}/audio_notes');
-      if (!await audioDir.exists()) {
-        await audioDir.create(recursive: true);
-      }
-    } catch (e) {
-      // تجاهل الأخطاء
-    }
-  }
-
 }

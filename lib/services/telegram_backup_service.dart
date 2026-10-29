@@ -539,7 +539,8 @@ $detailedStats
   }
 
   /// 📄 نسخ احتياطي: تقرير الديون (PDF)
-  Future<void> backupDebtRecordsPdf() async {
+  /// يعيد null إن أُرسل (أو لا ديون فلا تقرير)، وإلا نص المشكلة.
+  Future<String?> backupDebtRecordsPdf() async {
     try {
       debugPrint('📄 جاري إعداد تقرير الديون للنسخ الاحتياطي...');
       final db = DatabaseService();
@@ -551,7 +552,7 @@ $detailedStats
       
       if (count == 0) {
         debugPrint('ℹ️ لا يوجد عملاء عليهم ديون لإرسال التقرير.');
-        return;
+        return null;
       }
       
       // ✅ استخدام نفس الخدمة المستخدمة في زر "تقرير الديون"
@@ -564,19 +565,26 @@ $detailedStats
       final file = File('${tempDir.path}/DebtReport_$dateStr.pdf');
       await file.writeAsBytes(pdfBytes);
       
-      await sendDocumentWithDetails(
+      final sent = await sendDocumentWithDetails(
         file: file,
         caption: '📄 تقرير الديون الشامل - $dateStr',
       );
+      if (!sent.success) {
+        return 'تقرير الديون (PDF) لم يُرسل: ${sent.errorMessage ?? ''}'
+            '${sent.statusCode != null ? ' (كود ${sent.statusCode})' : ''}';
+      }
       debugPrint('✅ تم إرسال تقرير الديون بنجاح');
+      return null;
     } catch (e) {
       debugPrint('❌ خطأ في نسخ تقرير الديون: $e');
       _lastError = 'خطأ في تقرير الديون: $e';
+      return 'تقرير الديون (PDF) لم يُرسل: $e';
     }
   }
 
   /// 📄 نسخ احتياطي: كشوفات الحسابات (PDF)
-  Future<void> backupAccountStatementsPdf() async {
+  /// يعيد null إن أُرسل (أو لا عملاء)، وإلا نص المشكلة.
+  Future<String?> backupAccountStatementsPdf() async {
     try {
       debugPrint('📄 جاري إعداد كشوفات الحسابات للنسخ الاحتياطي...');
       final db = DatabaseService();
@@ -584,7 +592,7 @@ $detailedStats
       
       if (customers.isEmpty) {
         debugPrint('ℹ️ لا يوجد عملاء لإرسال كشوفات الحسابات.');
-        return;
+        return null;
       }
       
       final pdfService = PdfService();
@@ -608,14 +616,20 @@ $detailedStats
       final file = File('${tempDir.path}/$fileName');
       await file.writeAsBytes(pdfBytes);
       
-      await sendDocumentWithDetails(
+      final sent = await sendDocumentWithDetails(
         file: file,
         caption: '📚 كشوفات حسابات العملاء - $dateStr',
       );
+      if (!sent.success) {
+        return 'كشوفات الحسابات (PDF) لم تُرسل: ${sent.errorMessage ?? ''}'
+            '${sent.statusCode != null ? ' (كود ${sent.statusCode})' : ''}';
+      }
       debugPrint('✅ تم إرسال كشوفات الحسابات بنجاح');
+      return null;
     } catch (e) {
       debugPrint('❌ خطأ في نسخ كشوفات الحسابات: $e');
       _lastError = 'خطأ في كشوفات الحسابات: $e';
+      return 'كشوفات الحسابات (PDF) لم تُرسل: $e';
     }
   }
 }
