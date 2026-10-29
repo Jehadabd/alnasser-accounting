@@ -10,6 +10,7 @@ import '../../erp/accounting_plus/period_screens.dart';
 import '../../erp/control/bank_rec_screen.dart' show BankRecListScreen;
 import '../../erp/control/control_screens.dart' show ControlHubScreen;
 import '../../erp/control/fixed_assets_screens.dart' show FixedAssetsScreen;
+import '../../erp/control/printed_vouchers_screen.dart' show PrintedVouchersScreen;
 import '../../erp/erp_common.dart' show HubSection, HubTile;
 import '../../erp/erp_ui.dart';
 import '../../models/app_user.dart';
@@ -39,6 +40,9 @@ class AccountingHomeScreen extends StatefulWidget {
         HubTile('قوالب السندات', Icons.bookmarks_rounded, AccColors.blue,
             () => go(const VoucherTemplatesScreen()), permission: AppPermissions.accountingPost,
             subtitle: 'سندات متكررة بنقرة'),
+        HubTile('سجل السندات المطبوعة', Icons.verified_user_rounded, AccColors.navy,
+            () => go(const PrintedVouchersScreen()), permission: AppPermissions.accounting,
+            subtitle: 'كل سند طُبع: من ومتى — وتحقّق من ورقة برقمها أو رمزها'),
         HubTile('الصناديق والبنوك', Icons.account_balance_wallet_rounded, AccColors.green,
             () => go(const CashBoxesScreen()), permission: AppPermissions.accounting,
             subtitle: 'الأرصدة وكشف الحركة'),

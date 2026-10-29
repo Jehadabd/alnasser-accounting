@@ -152,7 +152,9 @@ class InvoiceEditVoucher {
     await deliverStatementPdf(bytes, 'سند_تعديل_فاتورة_$voucherId');
   }
 
-  static Future<Uint8List?> buildPdf(int voucherId) async {
+  /// [number]: الرقم المطبوع (رقم السند في سجل السندات المطبوعة)؛ بلا قيمة: رقم هذا السند.
+  /// [stampLine]: رمز التحقق ورقم النسخة من سجل السندات المطبوعة.
+  static Future<Uint8List?> buildPdf(int voucherId, {String? number, String? stampLine}) async {
     final db = await DatabaseService().database;
     final vr = await db.query('invoice_edit_vouchers', where: 'id = ?', whereArgs: [voucherId], limit: 1);
     if (vr.isEmpty) return null;
@@ -198,7 +200,7 @@ class InvoiceEditVoucher {
           decoration: const pw.BoxDecoration(color: PdfColors.grey200),
           child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
             pw.Text(title, style: st(13, b: true)),
-            pw.Text('رقم $voucherId', style: st(11, b: true)),
+            pw.Text('رقم ${number ?? voucherId}', style: st(11, b: true)),
           ]),
         ),
         pw.SizedBox(height: 6),
@@ -253,6 +255,11 @@ class InvoiceEditVoucher {
           pw.Text(refund ? 'المستلم: ____________' : 'الدافع: ____________', style: st(10)),
           pw.Text('المحاسب: ____________', style: st(10)),
         ]),
+        if (stampLine != null && stampLine.isNotEmpty)
+          pw.Padding(
+            padding: const pw.EdgeInsets.only(top: 6),
+            child: pw.Text('رمز التحقق: $stampLine', style: st(9.5, b: true)),
+          ),
       ]),
     ));
     return pdf.save();

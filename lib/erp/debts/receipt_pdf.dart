@@ -9,6 +9,7 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../../accounting/screens/acc_ui.dart';
 import '../../services/settings_manager.dart';
+import '../../services/printed_vouchers.dart' show PrintStamp; // 🧾 رمز التحقق
 import '../../services/voucher_print.dart'; // 🧾 تصميم سند القبض
 import '../arabic_words.dart';
 import '../erp_common.dart';
@@ -29,6 +30,7 @@ class ReceiptPdf {
     String? notes,
     double commission = 0,
     String? recordedBy, // 👤 من سجّل الوصل (المحاسب) — بلا قيمة: المستخدم الحالي (وقت الإنشاء)
+    PrintStamp? stamp, // 🔐 رمز التحقق ورقم النسخة (سجل السندات المطبوعة)
   }) async {
     // 🎨 تصميم «سند قبض» من مصمم السندات إن اختير؛ وإلا هذا الشكل كما هو
     try {
@@ -40,6 +42,7 @@ class ReceiptPdf {
         docNo: docNo,
         notes: notes,
         recordedBy: recordedBy ?? currentUserName(),
+        stamp: stamp,
       );
       if (designed != null) return designed;
     } catch (_) {}
@@ -132,6 +135,10 @@ class ReceiptPdf {
             pw.Text('توقيع المستلم: ..................', style: st(11)),
             pw.Text('توقيع المحاسب: ..................', style: st(11)),
           ]),
+          if (stamp != null) ...[
+            pw.SizedBox(height: 4),
+            pw.Text('رمز التحقق: ${stamp.line}', style: st(10, color: navy)),
+          ],
         ]),
       ),
     ));

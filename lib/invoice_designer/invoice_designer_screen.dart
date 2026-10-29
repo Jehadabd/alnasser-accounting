@@ -592,6 +592,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       ('accountant', 'المحاسب', false),
       ('printedAt', 'وقت الطباعة', false),
       ('printedBy', 'طُبع بواسطة', false),
+      ('verifyCode', 'رمز التحقق', false),
     ];
   }
 

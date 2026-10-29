@@ -23,6 +23,7 @@ import 'control_common.dart';
 import 'fixed_assets_screens.dart';
 import 'landed_cost_service.dart';
 import 'print_audit.dart';
+import 'printed_vouchers_screen.dart';
 import 'purchase_suggestions_screen.dart';
 
 DateTime _monthStart() {
@@ -65,6 +66,9 @@ class _ControlHubScreenState extends State<ControlHubScreen> {
       icon: Icons.shield_rounded,
       body: HubSections(sections: [
           HubSection('حماية النقد', [
+            HubTile('سجل السندات المطبوعة', Icons.verified_user_rounded, ErpColors.navy,
+                () => _go(context, const PrintedVouchersScreen()),
+                subtitle: 'تحقّق من سند بين يديك برقمه أو رمزه'),
             HubTile('سجل عدّ الدرج', Icons.point_of_sale_rounded, ErpColors.green, () => _go(context, const CashCountsScreen()),
                 subtitle: _pendingCounts > 0 ? '$_pendingCounts بانتظار المراجعة' : 'العجز والزيادة لكل محاسب'),
             HubTile('فواتير أُنقصت بعد طباعتها', Icons.print_disabled_rounded, ErpColors.red,

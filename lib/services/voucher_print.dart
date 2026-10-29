@@ -31,6 +31,7 @@ import 'database_service.dart';
 import 'invoice_edit_events.dart';
 import 'invoice_edit_log.dart';
 import 'invoice_edit_voucher.dart';
+import 'printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة ورمز التحقق
 import 'settings_manager.dart';
 
 /// أنواع السندات.
@@ -151,7 +152,23 @@ class VoucherPrint {
   static Future<pw.Document> renderVoucher(InvoiceLayout layout, InvoicePrintData data) {
     var l = layout;
     var d = data;
+    var copied = false;
     final no = data.field('voucherNo').trim();
+    // 🔐 رمز التحقق (ورقم النسخة) يُطبع دائماً: إن لم يضعه التصميم يُضاف أسفل يسار الورقة
+    final code = data.field('verifyCode').trim();
+    if (code.isNotEmpty && !_uses(l, 'verifyCode')) {
+      l = layout.copy();
+      copied = true;
+      l.elements.add(LayoutElement(
+        id: InvoiceLayout.newId('e'),
+        type: ElType.field,
+        x: 8,
+        y: l.heightMm - 10,
+        w: 80,
+        h: 7,
+        props: {'key': 'verifyCode', 'label': 'رمز التحقق', 'fontSize': 10.0, 'bold': true, 'align': 'left'},
+      ));
+    }
     if (no.isNotEmpty && !_uses(l, 'voucherNo')) {
       if (_uses(l, 'voucherTitle')) {
         // نسخة من البيانات (لا تُعدَّل الأصلية: المعاينة تعيد استعمالها)
@@ -163,7 +180,7 @@ class VoucherPrint {
           paymentType: data.paymentType,
         );
       } else {
-        l = layout.copy();
+        if (!copied) l = layout.copy();
         l.elements.add(LayoutElement(
           id: InvoiceLayout.newId('e'),
           type: ElType.field,
@@ -191,6 +208,7 @@ class VoucherPrint {
     String? notes,
     String? recordedBy,
     String? phone,
+    PrintStamp? stamp,
   }) async {
     final layout = await designFor(VoucherKinds.receipt);
     if (layout == null) return null;
@@ -204,7 +222,8 @@ class VoucherPrint {
             docNo: docNo,
             notes: notes,
             recordedBy: recordedBy,
-            phone: phone));
+            phone: phone,
+            stamp: stamp));
   }
 
   /// بيانات سند القبض للتصميم (يستعملها أيضاً سند القبض القديم من صفحة العميل).
@@ -217,6 +236,7 @@ class VoucherPrint {
     String? notes,
     String? recordedBy,
     String? phone,
+    PrintStamp? stamp,
   }) async {
     final db = await DatabaseService().database;
     final total = lines.fold<double>(0, (s, l) => s + _d(l['amount']));
@@ -240,6 +260,7 @@ class VoucherPrint {
         'paymentType': 'نقد',
         'user': recordedBy ?? '',
         'accountant': await displayNameOf(db, recordedBy),
+        if (stamp != null) 'verifyCode': stamp.line,
       },
       rows: [
         for (var i = 0; i < lines.length; i++)
@@ -428,13 +449,57 @@ class VoucherPrint {
       {int? legacyCashVoucherId, (String, InvoicePrintData)? prepared}) async {
     final r = prepared ?? await editEventData(eventId);
     if (r == null) return;
-    final (kind, data) = r;
+    final (kind, raw) = r;
+    // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة؛ فشله يوقفها (ورقة بلا سجل لا يُتحقق منها)
+    final PrintStamp stamp;
+    try {
+      final db = await DatabaseService().database;
+      final e = await InvoiceEditEvents.byId(db, eventId);
+      final invId = (e?['invoice_id'] as num?)?.toInt() ?? 0;
+      final inv = invId == 0
+          ? const <Map<String, Object?>>[]
+          : await db.query('invoices', columns: ['customer_id'], where: 'id = ?', whereArgs: [invId], limit: 1);
+      stamp = await PrintedVouchers.forEditEvent(
+        eventId: eventId,
+        kind: kind,
+        voucherNo: raw.field('voucherNo'),
+        amount: raw.totals['voucherAmount'] ?? 0,
+        customerName: raw.field('customer'),
+        customerId: inv.isEmpty ? null : (inv.first['customer_id'] as num?)?.toInt(),
+        invoiceId: invId,
+        invoiceNo: raw.field('invoiceNo'),
+        details: {
+          'invoice_before': raw.totals['invoiceBefore'],
+          'invoice_after': raw.totals['invoiceAfter'],
+          'debt_before': raw.totals['previousDebt'],
+          'debt_after': raw.totals['currentDebt'],
+          'reason': raw.field('voucherReason'),
+          'recorded_by': raw.field('user'),
+        },
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('لم يُطبع السند: تعذّر تسجيله في سجل السندات المطبوعة ($e)'),
+          backgroundColor: Colors.red,
+        ));
+      }
+      return;
+    }
+    final data = InvoicePrintData(
+      company: raw.company,
+      fields: {...raw.fields, 'verifyCode': stamp.line},
+      rows: raw.rows,
+      totals: raw.totals,
+      paymentType: raw.paymentType,
+    );
     final layout = await designFor(kind);
     Uint8List? bytes;
     if (layout != null) {
       bytes = await _render(layout, data);
     } else if ((kind == VoucherKinds.cashReceipt || kind == VoucherKinds.cashRefund) && legacyCashVoucherId != null) {
-      bytes = await InvoiceEditVoucher.buildPdf(legacyCashVoucherId); // الشكل الحالي للسند النقدي
+      // الشكل الحالي للسند النقدي
+      bytes = await InvoiceEditVoucher.buildPdf(legacyCashVoucherId, number: data.field('voucherNo'), stampLine: stamp.line);
     }
     // بلا تصميم ولا سند قديم: قالب البرنامج الافتراضي لهذا النوع
     bytes ??= await _render(InvoiceLayoutTemplates.defaultFor(kind), data);

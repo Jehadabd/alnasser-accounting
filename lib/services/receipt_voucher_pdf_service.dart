@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'pdf_header.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:intl/intl.dart';
+import 'printed_vouchers.dart' show PrintStamp; // 🔐 رمز التحقق
 import 'voucher_print.dart'; // 🧾 تصميم سند القبض
 
 class ReceiptVoucherPdfService {
@@ -24,6 +25,7 @@ class ReceiptVoucherPdfService {
     required pw.MemoryImage? logoImage,
     int? receiptNumber, // رقم سند القبض (اختياري)
     String? recordedBy, // 👤 من سجّل التسديد (المحاسب)
+    PrintStamp? stamp, // 🔐 رمز التحقق ورقم النسخة
   }) async {
     // 🎨 تصميم «سند قبض» من مصمم السندات إن اختير
     try {
@@ -42,6 +44,7 @@ class ReceiptVoucherPdfService {
             }
           ],
           recordedBy: recordedBy,
+          stamp: stamp,
         );
         return VoucherPrint.renderVoucher(layout, data); // 🔢 مع رقم السند دائماً
       }
@@ -177,6 +180,13 @@ class ReceiptVoucherPdfService {
                     ),
                   ),
                 ),
+                if (stamp != null) ...[
+                  pw.SizedBox(height: 10),
+                  pw.Center(
+                    child: pw.Text('رمز التحقق: ${stamp.line}',
+                        style: pw.TextStyle(font: font, fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                  ),
+                ],
               ],
             ),
           );

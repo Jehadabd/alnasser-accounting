@@ -32,6 +32,7 @@ import 'dart:math' as math;
 import '../erp/debts/customer_money.dart';
 import '../owner/founder_service.dart';
 import '../services/debt_return_service.dart';
+import '../services/printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة
 
 class AddTransactionScreen extends StatefulWidget {
   final Customer customer;
@@ -639,6 +640,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       // الطباعة بعد الحفظ: فشلها لا يعني أن التسديد لم يُحفظ
       try {
         final lines = await ReceiptsService().receiptLines(res.receiptId);
+        // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة (فشله يوقفها)
+        final stamp = await PrintedVouchers.forCustomerReceipt(res.receiptId);
         final bytes = await ReceiptPdf.build(
           title: 'وصل قبض',
           number: res.receiptNo,
@@ -648,6 +651,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           fxRate: 1,
           lines: lines,
           notes: note.isEmpty ? null : note,
+          stamp: stamp,
         );
         if (mounted) await ReportExport.openPdf(context, bytes, 'وصل_قبض_${res.receiptNo}');
       } catch (e) {

@@ -13,6 +13,7 @@ import 'package:alnaser/erp/control/landed_cost_service.dart';
 import 'package:alnaser/erp/erp_posting.dart';
 import 'package:alnaser/erp/erp_schema.dart';
 import 'package:alnaser/models/invoice_item.dart';
+import 'package:alnaser/services/printed_vouchers.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -390,6 +391,22 @@ void main() {
       expect(await _bal(db, inv), 20000);
       expect(await _bal(db, box), 0);
       await db.close();
+    });
+  });
+
+  group('رمز التحقق للسندات المطبوعة', () {
+    test('ثابت لنفس السند، ويتغيّر بتغيّر المبلغ أو الاسم أو الملح', () {
+      const salt = 'abcdefghijklmnopqrstuvwx';
+      final a = PrintedVouchers.codeOf(salt, 'receipt', '15', 250000, 'محمد أحمد');
+      expect(a.length, 6);
+      expect(RegExp(r'^[ABCDEFGHJKMNPQRSTUVWXYZ2-9]{6}$').hasMatch(a), isTrue);
+      expect(PrintedVouchers.codeOf(salt, 'receipt', '15', 250000, '  محمد   أحمد '), a);
+      expect(PrintedVouchers.codeOf(salt, 'receipt', '15', 260000, 'محمد أحمد'), isNot(a));
+      expect(PrintedVouchers.codeOf(salt, 'receipt', '15', 250000, 'محمد علي'), isNot(a));
+      expect(PrintedVouchers.codeOf(salt, 'debit_note', '15', 250000, 'محمد أحمد'), isNot(a));
+      expect(PrintedVouchers.codeOf('zyxwvutsrqponmlkjihgfedc', 'receipt', '15', 250000, 'محمد أحمد'), isNot(a));
+      expect(PrintStamp(a, 1, 1).line, a);
+      expect(PrintStamp(a, 2, 1).line, '$a — نسخة 2');
     });
   });
 

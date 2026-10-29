@@ -171,6 +171,7 @@ class InvoicePrintData {
       fields: {
         'voucherTitle': title,
         'voucherNo': '15',
+        'verifyCode': 'K7Q2XM',
         'invoiceNo': receipt ? '15' : '1202610045',
         'date': dateText(now),
         'time': timeText(now),

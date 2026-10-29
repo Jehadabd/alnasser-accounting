@@ -8,7 +8,7 @@
 //   • fixed_assets     بتمويل box/opening ⇒ قيد شراء الأصل؛ وبحالة 'disposed' ⇒ قيد الاستبعاد.
 //   • depreciation_runs بحالة 'posted' ⇒ قيد إهلاك الشهر.
 //   • landed_costs     بطريقة box/reclass ⇒ قيد مصاريف الشحن على المخزون.
-// وما سواها سجلات متابعة فقط: invoice_prints، approval_log، bank_recs، bank_rec_marks.
+// وما سواها سجلات متابعة فقط: invoice_prints، printed_vouchers، approval_log، bank_recs، bank_rec_marks.
 
 import 'package:sqflite/sqflite.dart';
 
@@ -134,6 +134,30 @@ class ControlSchema {
       UNIQUE(rec_id, line_key)
     )''',
     'CREATE INDEX IF NOT EXISTS idx_bank_rec_marks_key ON bank_rec_marks(line_key)',
+
+    // 🧾 سجل السندات المطبوعة (يُكتب لحظة الطباعة فقط — PrintedVouchers)
+    '''
+    CREATE TABLE IF NOT EXISTS printed_vouchers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      voucher_no TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      customer_id INTEGER,
+      customer_name TEXT,
+      invoice_id INTEGER,
+      invoice_no TEXT,
+      ref_type TEXT NOT NULL,
+      ref_id INTEGER,
+      copy_no INTEGER NOT NULL DEFAULT 1,
+      verify_code TEXT NOT NULL,
+      printed_by TEXT,
+      printed_at TEXT NOT NULL,
+      details TEXT
+    )''',
+    'CREATE INDEX IF NOT EXISTS idx_pv_customer ON printed_vouchers(customer_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pv_invoice ON printed_vouchers(invoice_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pv_ref ON printed_vouchers(ref_type, ref_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pv_code ON printed_vouchers(verify_code)',
 
     // 🚢 مصاريف الشحن والجمارك المحمّلة على كلفة مادة
     '''

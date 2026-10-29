@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 
 import '../services/database_service.dart';
 import 'invoice_history/invoice_history_model.dart';
+import '../erp/control/printed_vouchers_screen.dart'; // 🧾 سندات هذه الفاتورة المطبوعة
 
 class InvoiceHistoryScreen extends StatefulWidget {
   final int invoiceId;
@@ -177,6 +178,18 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
                   });
                 },
               ),
+            // 🧾 السندات المطبوعة لهذه الفاتورة فقط (قبض/صرف/إشعار مدين/دائن)
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              icon: const Icon(Icons.receipt_long),
+              label: const Text('سندات الفاتورة'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PrintedVouchersScreen(invoiceId: widget.invoiceId, invoiceLabel: shownNumber),
+                ),
+              ),
+            ),
             IconButton(
               icon: const Icon(Icons.refresh),
               tooltip: 'تحديث',

@@ -1,6 +1,5 @@
 // screens/customer_details_screen.dart
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
@@ -9,13 +8,10 @@ import '../models/customer.dart';
 import '../models/transaction.dart';
 import '../models/grouped_transaction.dart'; // ✅ Added
 import '../models/verification_result.dart'; // ✅ Added
-import '../models/customer_receipt_voucher.dart'; // ✅ Added
 import 'add_transaction_screen.dart';
 import 'create_invoice_screen.dart';
 import '../services/database_service.dart';
 import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
-import '../services/receipt_voucher_pdf_service.dart';
-import 'package:printing/printing.dart'; // Assume this is for PDF preview on non-Windows
 import 'dart:io';
 // import 'package:path_provider/path_provider.dart'; // Not directly used in final snippet, but for file operations
 // import 'package:share_plus/share_plus.dart'; // Not directly used here
@@ -24,8 +20,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/services.dart';
 import 'audit_log_screen.dart';
 import '../services/password_service.dart';
-import 'package:pdf/widgets.dart' as pw;
-import '../services/logo_service.dart'; // 🖼️ Custom logo loading
 import '../services/settings_manager.dart'; // 📋 For company info in WhatsApp message
 import '../erp/debts/customer_card_screen.dart';
 import '../erp/debts/receipt_screen.dart';
@@ -35,6 +29,7 @@ import 'debt_reminders_screen.dart'; // 📅
 import '../accounting/screens/acc_ui.dart' show accAppBar;
 import 'statements/customer_statements_screen.dart';
 import '../widgets/loading_dialog.dart';
+import '../erp/control/printed_vouchers_screen.dart'; // 🧾 أرشيف السندات المطبوعة
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
@@ -857,7 +852,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     children: [
                       Icon(Icons.archive, color: Colors.blueGrey, size: 20),
                       SizedBox(width: 12),
-                      Text('أرشيف سندات القبض القديمة'),
+                      Text('أرشيف السندات المطبوعة'),
                     ],
                   ),
                 ),
@@ -2116,195 +2111,17 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     }
   }
 
-  // 📄 دالة عرض أرشيف سندات القبض
+  // 🧾 أرشيف السندات المطبوعة لهذا العميل: سندات القبض، سندات الفواتير النقدية،
+  //    الإشعارات المدينة والدائنة، والأرشيف القديم — مع إعادة الطباعة والتحقق
   Future<void> _showReceiptVouchersArchive() async {
-    try {
-      // إظهار مؤشر التحميل
-      LoadingDialog.show(
-        context,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-
-      final db = DatabaseService();
-      final receipts = await db.getCustomerReceiptVouchers(widget.customer.id!);
-
-      LoadingDialog.hide(); // إغلاق مؤشر التحميل
-
-      if (!mounted) return;
-
-      // عرض قائمة سندات القبض
-      await showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Row(
-            children: [
-              const Icon(Icons.archive, color: Color(0xFF3F51B5)),
-              const SizedBox(width: 12),
-              Text('أرشيف سندات القبض (${receipts.length})'),
-            ],
-          ),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 400,
-            child: receipts.isEmpty
-                ? const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.receipt_long, size: 64, color: Colors.grey),
-                        SizedBox(height: 16),
-                        Text(
-                          'لا توجد سندات قبض محفوظة',
-                          style: TextStyle(color: Colors.grey, fontSize: 16),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: receipts.length,
-                    itemBuilder: (context, index) {
-                      final receipt = receipts[index];
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: Colors.green[100],
-                            child: Text(
-                              '${receipt.receiptNumber}',
-                              style: TextStyle(
-                                color: Colors.green[800],
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          title: Text(
-                            '${formatCurrency(receipt.paidAmount)} دينار',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.green,
-                            ),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'رقم السند: ${receipt.receiptNumber} | التاريخ: ${DateFormat('yyyy/MM/dd HH:mm').format(receipt.createdAt)}',
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                              ),
-                              Text(
-                                'قبل: ${formatCurrency(receipt.beforePayment)} → بعد: ${formatCurrency(receipt.afterPayment)}',
-                                style: const TextStyle(fontSize: 11, color: Colors.grey),
-                              ),
-                            ],
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.print, color: Color(0xFF3F51B5)),
-                            tooltip: 'إعادة طباعة السند',
-                            onPressed: () => _reprintReceiptVoucher(receipt),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إغلاق'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      LoadingDialog.hide(); // إغلاق مؤشر التحميل إن كان مفتوحاً
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطأ في تحميل سندات القبض: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  // 📄 دالة إعادة طباعة سند القبض
-  Future<void> _reprintReceiptVoucher(CustomerReceiptVoucher receipt) async {
-    try {
-      final font = pw.Font.ttf(
-          await rootBundle.load('assets/fonts/Amiri-Regular.ttf'));
-      // استخدام نفس خط الفاتورة لكلمة الناصر
-      final alnaserFont = pw.Font.ttf(
-          await rootBundle.load('assets/fonts/PTBLDHAD.TTF'));
-      // تحميل اللوجو باستخدام خدمة اللوجو
-      final logoImage = await LogoService.getLogoImage();
-      
-      // 👤 المحاسب = من سجّل التسديد (من حركته)، لا من يطبع الآن
-      String? recordedBy;
-      if (receipt.transactionId != null) {
-        try {
-          final tr = await (await DatabaseService().database).query('transactions',
-              columns: ['created_by_username'], where: 'id = ?', whereArgs: [receipt.transactionId], limit: 1);
-          recordedBy = tr.isEmpty ? null : tr.first['created_by_username'] as String?;
-        } catch (_) {}
-      }
-      final pdf = await ReceiptVoucherPdfService.generateReceiptVoucherPdf(
-        recordedBy: recordedBy,
-        customerName: receipt.customerName,
-        beforePayment: receipt.beforePayment,
-        paidAmount: receipt.paidAmount,
-        afterPayment: receipt.afterPayment,
-        dateTime: receipt.createdAt,
-        font: font,
-        alnaserFont: alnaserFont,
-        logoImage: logoImage,
-        receiptNumber: receipt.receiptNumber,
-      );
-
-      // 🌐 الويب: فتح نافذة الطباعة مباشرة وتجنب استدعاءات Platform
-      if (kIsWeb) {
-        await Printing.layoutPdf(
-          onLayout: (format) async => await pdf.save(),
-          name: 'سند_قبض_${receipt.receiptNumber}.pdf',
-        );
-        return;
-      }
-
-      // حفظ PDF في ملف مؤقت وفتحه
-      final tempDir = Directory.systemTemp;
-      final filePath =
-          '${tempDir.path}/receipt_voucher_${receipt.receiptNumber}_${DateTime.now().millisecondsSinceEpoch}.pdf';
-      final file = File(filePath);
-      await file.writeAsBytes(await pdf.save());
-
-      if (Platform.isWindows) {
-        await Process.start('cmd', ['/c', 'start', 'msedge', filePath]);
-      } else {
-        await Printing.layoutPdf(
-          onLayout: (format) async => await pdf.save(),
-        );
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('تم فتح سند القبض للطباعة'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطأ في طباعة السند: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+    final id = widget.customer.id;
+    if (id == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PrintedVouchersScreen(customerId: id, customerName: widget.customer.name),
+      ),
+    );
   }
 
   /// 📊 عرض كشف الحساب التجاري

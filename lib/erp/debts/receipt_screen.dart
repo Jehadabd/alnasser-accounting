@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../../accounting/ledger.dart';
 import '../../accounting/screens/acc_ui.dart';
 import '../../accounting/vouchers_service.dart';
+import '../../services/printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة
 import '../arabic_words.dart';
 import '../currency_service.dart';
 import '../erp_common.dart';
@@ -148,7 +149,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           ok: 'طباعة');
       if (print) {
         final lines = await ReceiptsService().receiptLines(res.receiptId);
+        // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة (فشله يوقفها)
+        final stamp = await PrintedVouchers.forCustomerReceipt(res.receiptId);
         final bytes = await ReceiptPdf.build(
+          stamp: stamp,
           title: 'وصل قبض',
           number: res.receiptNo,
           date: _date,
@@ -352,7 +356,16 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
 
   Future<void> _print(Map<String, Object?> r) async {
     final lines = await ReceiptsService().receiptLines(r['id'] as int);
+    // 🧾 إعادة الطباعة = نسخة جديدة في سجل السندات المطبوعة
+    final PrintStamp stamp;
+    try {
+      stamp = await PrintedVouchers.forCustomerReceipt(r['id'] as int);
+    } catch (e) {
+      if (mounted) showError(context, 'لم يُطبع الوصل: تعذّر تسجيله في سجل السندات المطبوعة ($e)');
+      return;
+    }
     final bytes = await ReceiptPdf.build(
+      stamp: stamp,
       title: 'وصل قبض',
       number: r['receipt_no'] as int,
       date: parseDate(r['receipt_date']),
