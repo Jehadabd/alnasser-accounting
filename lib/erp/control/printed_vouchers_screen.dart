@@ -61,12 +61,13 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
 
   Future<void> _load() async {
     try {
-      final rows = await PrintedVouchers.list(customerId: widget.customerId, invoiceId: widget.invoiceId, query: _q);
+      final rows = await PrintedVouchers.list(
+          customerId: widget.customerId, invoiceId: widget.invoiceId, query: _q, byName: _global);
       var legacy = const <Map<String, Object?>>[];
       if (widget.invoiceId == null && (!_global || _q.trim().isNotEmpty)) {
         final reg = {for (final r in rows) if (r.refType == PrintedRef.legacyReceipt) r.refId};
         legacy = [
-          for (final l in await PrintedVouchers.legacyArchive(customerId: widget.customerId, query: _q))
+          for (final l in await PrintedVouchers.legacyArchive(customerId: widget.customerId, query: _q, byName: _global))
             if (!reg.contains(l['id'])) l
         ];
       }
@@ -77,8 +78,6 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
         _rows = mine;
         _legacy = legacy;
         _loading = false;
-        // النوع المختار لم يعد بين النتائج ⇒ «الكل»
-        if (_kind != null && !_kindsPresent.contains(_kind)) _kind = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -289,24 +288,26 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
 
   // ───────────────────────── الواجهة ─────────────────────────
 
-  /// الأنواع الموجودة فعلاً في النتائج (لا تُعرض أنواع لا سندات لها هنا).
-  Set<String> get _kindsPresent => {
-        for (final r in _rows) r.kind,
-        if (_legacy.isNotEmpty) PrintedVoucherKind.legacyReceipt,
-      };
+  /// أنواع السندات التي تخص هذه الشاشة: الفاتورة لها سندات التعديل الأربعة فقط؛
+  /// العميل والسجل العام لهما كل الأنواع.
+  List<String> get _kindsHere => [
+        if (widget.invoiceId == null) PrintedVoucherKind.receipt,
+        PrintedVoucherKind.cashReceipt,
+        PrintedVoucherKind.cashRefund,
+        PrintedVoucherKind.debitNote,
+        PrintedVoucherKind.creditNote,
+        if (widget.invoiceId == null) PrintedVoucherKind.legacyReceipt,
+      ];
+
+  int _countOf(String? k) => k == null
+      ? _rows.length + _legacy.length
+      : (k == PrintedVoucherKind.legacyReceipt
+          ? _legacy.length + _rows.where((r) => r.kind == k).length
+          : _rows.where((r) => r.kind == k).length);
 
   @override
   Widget build(BuildContext context) {
-    const order = [
-      PrintedVoucherKind.receipt,
-      PrintedVoucherKind.cashReceipt,
-      PrintedVoucherKind.cashRefund,
-      PrintedVoucherKind.debitNote,
-      PrintedVoucherKind.creditNote,
-      PrintedVoucherKind.legacyReceipt,
-    ];
-    final present = _kindsPresent;
-    final kinds = <String?>[null, for (final k in order) if (present.contains(k)) k];
+    final kinds = <String?>[null, ..._kindsHere];
     final shown = _kind == null ? _rows : _rows.where((r) => r.kind == _kind).toList();
     final legacyShown = (_kind == null || _kind == PrintedVoucherKind.legacyReceipt) ? _legacy : const <Map<String, Object?>>[];
     return ErpPage(
@@ -320,14 +321,15 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       actions: [IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
       headerExtra: SearchBox(
         autofocus: _global,
-        hint: _global ? 'تحقق من ورقة: اكتب رقم السند أو رمز التحقق المطبوع عليها' : 'بحث: رقم السند، رمز التحقق، الاسم',
+        hint: _global
+            ? 'تحقق من ورقة: اكتب رقم السند أو رمز التحقق المطبوع عليها (أو الاسم)'
+            : 'بحث برقم السند أو رمز التحقق — اختر النوع أولاً ليكون الرقم مميزاً',
         onChanged: (v) {
           _q = v;
           _load();
         },
       ),
       body: Column(children: [
-        if (kinds.length > 2)
         SizedBox(
           height: 48,
           child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), children: [
@@ -335,7 +337,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
               Padding(
                 padding: const EdgeInsetsDirectional.only(end: 6),
                 child: ChoiceChip(
-                  label: Text(k == null ? 'الكل' : PrintedVoucherKind.label(k)),
+                  label: Text('${k == null ? 'الكل' : PrintedVoucherKind.label(k)}  ${_countOf(k)}'),
                   selected: _kind == k,
                   onSelected: (_) => setState(() => _kind = k),
                 ),

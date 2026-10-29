@@ -285,7 +285,9 @@ class PrintedVouchers {
   /// السندات (كل سند سطر واحد بآخر طباعة له وعدد نسخه).
   /// [customerId]: سندات العميل (ومنها وصولات عدة عملاء هو أحدهم). [invoiceId]: سندات الفاتورة.
   /// [query]: رقم سند، أو رمز تحقق، أو اسم.
-  static Future<List<PrintedVoucher>> list({int? customerId, int? invoiceId, String? query, int limit = 500}) async {
+  /// [byName]: البحث بالاسم أيضاً (السجل العام فقط؛ داخل العميل/الفاتورة الاسم معروف).
+  static Future<List<PrintedVoucher>> list(
+      {int? customerId, int? invoiceId, String? query, bool byName = false, int limit = 500}) async {
     final db = await controlDb();
     final where = <String>[];
     final args = <Object?>[];
@@ -301,8 +303,8 @@ class PrintedVouchers {
     }
     final q = (query ?? '').trim();
     if (q.isNotEmpty) {
-      where.add('(p.voucher_no = ? OR p.verify_code = ? OR p.customer_name LIKE ? OR p.invoice_no = ?)');
-      args.addAll([q, q.toUpperCase(), '%$q%', q]);
+      where.add('(p.voucher_no = ? OR p.verify_code = ? OR p.invoice_no = ?${byName ? ' OR p.customer_name LIKE ?' : ''})');
+      args.addAll([q, q.toUpperCase(), q, if (byName) '%$q%']);
     }
     final rows = await db.rawQuery('''
       SELECT p.*, g.copies, g.first_printed_at FROM printed_vouchers p
@@ -325,7 +327,7 @@ class PrintedVouchers {
   }
 
   /// أرشيف سندات القبض القديم لعميل (ما طُبع قبل هذا السجل).
-  static Future<List<Map<String, Object?>>> legacyArchive({int? customerId, String? query}) async {
+  static Future<List<Map<String, Object?>>> legacyArchive({int? customerId, String? query, bool byName = false}) async {
     final db = await controlDb();
     final t = await db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='customer_receipt_vouchers'");
     if (t.isEmpty) return const [];
@@ -337,8 +339,8 @@ class PrintedVouchers {
     }
     final q = (query ?? '').trim();
     if (q.isNotEmpty) {
-      where.add('(CAST(receipt_number AS TEXT) = ? OR customer_name LIKE ?)');
-      args.addAll([q, '%$q%']);
+      where.add('(CAST(receipt_number AS TEXT) = ?${byName ? ' OR customer_name LIKE ?' : ''})');
+      args.addAll([q, if (byName) '%$q%']);
     }
     return db.rawQuery(
         'SELECT * FROM customer_receipt_vouchers ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'} '

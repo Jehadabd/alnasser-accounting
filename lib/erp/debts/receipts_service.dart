@@ -64,11 +64,13 @@ class ReceiptsService {
     final isBase = currency == 'IQD';
     final db = await erpDb();
 
-    // رأس الوصل أولاً
-    final receiptNo = await db.transaction((txn) => nextDocNumber(txn, 'customer_receipts', 'receipt_no'));
+    // رأس الوصل أولاً — الرقم يُحسب ويُحجز في المعاملة نفسها (لا رقم مكرر لو حُفظ وصلان معاً)
     final totalBase = valid.fold<double>(0, (s, l) => s + (isBase ? l.amountFc : roundMoney(l.amountFc * fxRate)));
     final totalDisc = valid.fold<double>(0, (s, l) => s + l.discount);
-    final receiptId = await db.insert('customer_receipts', {
+    late final int receiptNo;
+    final receiptId = await db.transaction((txn) async {
+      receiptNo = await nextDocNumber(txn, 'customer_receipts', 'receipt_no');
+      return txn.insert('customer_receipts', {
       'receipt_no': receiptNo,
       'receipt_date': date.toIso8601String(),
       'cash_box_id': cashBoxId,
@@ -82,6 +84,7 @@ class ReceiptsService {
       'is_compound': valid.length > 1 ? 1 : 0,
       'created_by': currentUserName(),
       'created_at': DateTime.now().toIso8601String(),
+      });
     });
 
     final errors = <String>[];
