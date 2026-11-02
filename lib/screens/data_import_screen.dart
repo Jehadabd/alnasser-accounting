@@ -5,7 +5,7 @@
 // أولاً؛ Xero: الأرصدة الافتتاحية بتاريخ واحد ومطابقة مجموعها مع البرنامج السابق؛
 // Odoo: «اختبار» بلا كتابة وتعرّف الأعمدة من عناوينها):
 //   0) أين تُستورد؟ دمج مع القاعدة الحالية، أو قاعدة جديدة فارغة (تُؤرشف الحالية).
-//   1) الملف ‎.xlsx أو ‎.csv ← أوراقه وعدد صفوف كل ورقة.
+//   1) الملف ‎.xlsx أو ‎.xls أو ‎.csv ← أوراقه وعدد صفوف كل ورقة.
 //   2) الورقة وما تستورده (عملاء / مواد / موردون) وصف العناوين.
 //   3) ربط الأعمدة (التطبيق يخمّن ويتذكر ربطك للملفات بالعناوين نفسها).
 //   4) تاريخ الرصيد ومعنى الإشارة.
@@ -129,9 +129,9 @@ class _DataImportScreenState extends State<DataImportScreen> {
   Future<void> _pick() async {
     final res = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['xlsx', 'csv', 'xls', 'txt'],
+      allowedExtensions: const ['xlsx', 'xls', 'csv', 'txt', 'htm', 'html', 'xml'],
       withData: true,
-      dialogTitle: 'اختر ملف Excel (‎.xlsx) أو CSV',
+      dialogTitle: 'اختر ملف Excel (‎.xlsx أو ‎.xls) أو CSV',
     );
     if (res == null || res.files.isEmpty) return;
     final f = res.files.single;
@@ -438,10 +438,10 @@ class _DataImportScreenState extends State<DataImportScreen> {
 
   Widget _fileCard() => SetCard(
         title: '1. الملف',
-        subtitle: _fileName == null ? 'Excel ‏(‎.xlsx) أو CSV — الملف نفسه لا يتغير' : _fileName!,
+        subtitle: _fileName == null ? 'Excel ‏(‎.xlsx أو ‎.xls) أو CSV — الملف نفسه لا يتغير' : _fileName!,
         icon: Icons.description_outlined,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const SetBanner('ملف ‎.xls القديم: افتحه في Excel واحفظه «مصنف Excel ‎(.xlsx)». '
+          const SetBanner('يقبل ‎.xlsx و‎.xls (حتى ملفات Excel 97–2003 وExcel 95) و‎.csv. '
               'اجعل كل عمود بعنوان واضح في الصف الأول (الاسم، الهاتف، الرصيد...) — التطبيق يتعرّف عليه.'),
           const SizedBox(height: 10),
           Align(

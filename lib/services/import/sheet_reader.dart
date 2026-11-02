@@ -1,13 +1,15 @@
 // lib/services/import/sheet_reader.dart
 //
-// 📄 قارئ جداول للاستيراد: ملف Excel (‎.xlsx) أو CSV ← أوراق، ولكل ورقة صفوف نصية.
+// 📄 قارئ جداول للاستيراد: ملف Excel (‎.xlsx أو ‎.xls) أو CSV ← أوراق، ولكل ورقة صفوف نصية.
 //
 //   • xlsx = ملف مضغوط فيه XML: أسماء الأوراق (workbook.xml)، والنصوص المشتركة
 //     (sharedStrings.xml)، وخلايا كل ورقة. يُقرأ بمكتبتي archive و xml الموجودتين أصلاً
 //     — لا مكتبة جديدة.
 //   • الخلية تُقرأ نصاً كما هي (الأرقام كما خزّنها Excel)، والتحويل إلى رقم في
 //     [ImportNumbers] حتى يُرفض الرقم غير الواضح بدل أن يُخمَّن.
-//   • ‎.xls القديم (ثنائي) غير مدعوم: يُطلب حفظه بصيغة xlsx أو CSV.
+//   • ‎.xls القديم (Excel 97–2003 وExcel 5/95): يقرؤه [XlsReader] مباشرة.
+//     وما يحمل امتداد ‎.xls وهو في الحقيقة جدول HTML أو «XML Spreadsheet 2003»
+//     (تصدير كثير من البرامج) يُقرأ أيضاً — يُعرف الملف من محتواه لا من امتداده.
 //   • CSV: يُكتشف الفاصل (, ; Tab)، ويجب أن يكون الترميز UTF-8.
 //
 // قراءة فقط: هذا الملف لا يكتب في قاعدة البيانات.
@@ -17,6 +19,8 @@ import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
+
+import 'xls_reader.dart';
 
 /// ورقة واحدة: صفوف من خلايا نصية (الصف قد يكون أقصر من غيره).
 class SheetTable {
@@ -57,21 +61,167 @@ class SheetReader {
   static List<SheetTable> read(Uint8List bytes, String fileName) {
     final lower = fileName.toLowerCase();
     final isZip = bytes.length > 4 && bytes[0] == 0x50 && bytes[1] == 0x4B;
-    final isOle = bytes.length > 8 && bytes[0] == 0xD0 && bytes[1] == 0xCF && bytes[2] == 0x11 && bytes[3] == 0xE0;
-    if (isOle || lower.endsWith('.xls')) {
-      throw SheetReadException('ملف Excel القديم (‎.xls) غير مدعوم. افتحه في Excel واحفظه باسم «مصنف Excel ‎(.xlsx)» ثم أعد المحاولة.');
-    }
+    if (XlsReader.isOle(bytes)) return readXls(bytes);
     if (isZip) return readXlsx(bytes);
+    final markup = _markupText(bytes);
+    if (markup != null) {
+      if (markup.contains('urn:schemas-microsoft-com:office:spreadsheet')) return readSpreadsheetMl(markup);
+      if (RegExp(r'<table', caseSensitive: false).hasMatch(markup)) {
+        return [readHtmlTable(markup, name: _baseName(fileName))];
+      }
+    }
     if (lower.endsWith('.csv') || lower.endsWith('.txt') || lower.endsWith('.tsv')) {
       return [readCsv(bytes, name: _baseName(fileName))];
     }
-    throw SheetReadException('صيغة غير معروفة. المقبول: ‎.xlsx أو ‎.csv');
+    if (lower.endsWith('.xls')) {
+      throw SheetReadException('تعذّرت قراءة ملف ‎.xls (الملف تالف أو ناقص). افتحه في Excel واحفظه بصيغة xlsx ثم أعد المحاولة.');
+    }
+    throw SheetReadException('صيغة غير معروفة. المقبول: ‎.xlsx أو ‎.xls أو ‎.csv');
   }
 
   static String _baseName(String f) {
     final n = f.split(RegExp(r'[\\/]')).last;
     final dot = n.lastIndexOf('.');
     return dot > 0 ? n.substring(0, dot) : n;
+  }
+
+  // ─────────────────────────── xls (ثنائي) ───────────────────────────
+
+  static List<SheetTable> readXls(Uint8List bytes) {
+    try {
+      return [for (final s in XlsReader.read(bytes)) SheetTable(s.name, s.rows)];
+    } on XlsFormatException catch (e) {
+      throw SheetReadException(e.message);
+    } on RangeError {
+      throw SheetReadException('تعذّرت قراءة ملف ‎.xls (الملف تالف أو ناقص).');
+    }
+  }
+
+  // ─────────────── ‎.xls نصي: XML Spreadsheet 2003 أو جدول HTML ───────────────
+
+  /// نص الملف إن كان يبدأ بوسم (<) — وإلا null.
+  static String? _markupText(Uint8List b) {
+    String text;
+    if (b.length >= 2 && b[0] == 0xFF && b[1] == 0xFE) {
+      text = String.fromCharCodes([for (var i = 2; i + 1 < b.length; i += 2) b[i] | (b[i + 1] << 8)]);
+    } else {
+      var start = (b.length >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) ? 3 : 0;
+      while (start < b.length && (b[start] == 0x20 || b[start] == 0x09 || b[start] == 0x0A || b[start] == 0x0D)) {
+        start++;
+      }
+      if (start >= b.length || b[start] != 0x3C) return null; // <
+      final body = Uint8List.sublistView(b, start);
+      try {
+        text = utf8.decode(body);
+      } on FormatException {
+        // تصدير قديم بترميز ويندوز العربي
+        text = XlsReader.decodeCp1256(body);
+      }
+    }
+    return text.trimLeft().startsWith('<') ? text : null;
+  }
+
+  static List<SheetTable> readSpreadsheetMl(String xml) {
+    XmlDocument doc;
+    try {
+      doc = XmlDocument.parse(xml);
+    } catch (e) {
+      throw SheetReadException('تعذّرت قراءة الملف (XML Spreadsheet تالف): $e');
+    }
+    final out = <SheetTable>[];
+    var index = 0;
+    for (final ws in _all(doc, 'Worksheet')) {
+      index++;
+      final rows = <List<String>>[];
+      for (final table in _all(ws, 'Table')) {
+        var ri = 0;
+        for (final row in table.childElements.where((e) => e.name.local == 'Row')) {
+          final idx = int.tryParse(_attr(row, 'Index') ?? '');
+          if (idx != null && idx > 0) ri = idx - 1;
+          while (rows.length <= ri) {
+            rows.add(<String>[]);
+          }
+          final cells = <String>[];
+          var ci = 0;
+          for (final c in row.childElements.where((e) => e.name.local == 'Cell')) {
+            final cIdx = int.tryParse(_attr(c, 'Index') ?? '');
+            if (cIdx != null && cIdx > 0) ci = cIdx - 1;
+            while (cells.length < ci) {
+              cells.add('');
+            }
+            final data = c.childElements.where((e) => e.name.local == 'Data').toList();
+            final v = data.isEmpty ? '' : data.first.innerText;
+            final type = data.isEmpty ? null : _attr(data.first, 'Type');
+            cells.add(type == 'Boolean' ? (v.trim() == '1' ? 'TRUE' : 'FALSE') : (type == 'Error' ? '' : v));
+            ci += 1 + (int.tryParse(_attr(c, 'MergeAcross') ?? '') ?? 0);
+          }
+          while (cells.isNotEmpty && cells.last.trim().isEmpty) {
+            cells.removeLast();
+          }
+          rows[ri] = cells;
+          ri++;
+        }
+      }
+      while (rows.isNotEmpty && rows.last.every((c) => c.trim().isEmpty)) {
+        rows.removeLast();
+      }
+      out.add(SheetTable(_attr(ws, 'Name') ?? 'ورقة $index', rows));
+    }
+    if (out.isEmpty) throw SheetReadException('لا توجد أوراق في الملف');
+    return out;
+  }
+
+  static final _reRow = RegExp(r'<tr\b[^>]*>(.*?)(?=<tr\b|</table|$)', caseSensitive: false, dotAll: true);
+  static final _reCell = RegExp(r'<t([dh])\b([^>]*)>(.*?)(?=<t[dh]\b|</tr|$)', caseSensitive: false, dotAll: true);
+  static final _reColspan = RegExp(r'colspan\s*=\s*"?(\d+)', caseSensitive: false);
+
+  /// أول جدول HTML (تصدير «Excel» من برامج كثيرة) — الصفوف والخلايا كنص.
+  static SheetTable readHtmlTable(String html, {String name = 'HTML'}) {
+    final start = html.toLowerCase().indexOf('<table');
+    var body = start < 0 ? html : html.substring(start);
+    final end = body.toLowerCase().indexOf('</table');
+    if (end > 0) body = body.substring(0, end);
+    final rows = <List<String>>[];
+    for (final m in _reRow.allMatches(body)) {
+      final cells = <String>[];
+      for (final c in _reCell.allMatches(m.group(1) ?? '')) {
+        cells.add(_htmlText(c.group(3) ?? ''));
+        final span = int.tryParse(_reColspan.firstMatch(c.group(2) ?? '')?.group(1) ?? '') ?? 1;
+        for (var i = 1; i < span && i < 200; i++) {
+          cells.add('');
+        }
+      }
+      while (cells.isNotEmpty && cells.last.trim().isEmpty) {
+        cells.removeLast();
+      }
+      rows.add(cells);
+    }
+    while (rows.isNotEmpty && rows.last.every((c) => c.trim().isEmpty)) {
+      rows.removeLast();
+    }
+    if (rows.isEmpty) throw SheetReadException('لا يوجد جدول في الملف');
+    return SheetTable(name, rows);
+  }
+
+  static String _htmlText(String s) {
+    var t = s
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'<[^>]*>'), '')
+        .replaceAll(RegExp(r'\s+'), ' ');
+    t = t.replaceAllMapped(RegExp(r'&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);'), (m) {
+      final e = m.group(1)!;
+      if (e.startsWith('#x') || e.startsWith('#X')) {
+        final v = int.tryParse(e.substring(2), radix: 16);
+        return v == null ? m.group(0)! : String.fromCharCode(v);
+      }
+      if (e.startsWith('#')) {
+        final v = int.tryParse(e.substring(1));
+        return v == null ? m.group(0)! : String.fromCharCode(v);
+      }
+      return const {'nbsp': ' ', 'amp': '&', 'lt': '<', 'gt': '>', 'quot': '"', 'apos': "'"}[e.toLowerCase()] ??
+          m.group(0)!;
+    });
+    return t.trim();
   }
 
   // ─────────────────────────── xlsx ───────────────────────────

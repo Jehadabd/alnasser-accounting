@@ -76,7 +76,7 @@ class ImportFields {
   static const _phone = ['الهاتف', 'هاتف', 'رقم الهاتف', 'رقم الموبايل', 'موبايل', 'جوال', 'تلفون', 'phone', 'mobile', 'tel'];
   static const _address = ['العنوان', 'عنوان', 'المنطقة', 'address'];
   static const _note = ['ملاحظة', 'ملاحظات', 'note', 'notes'];
-  static const _balance = ['الرصيد', 'رصيد', 'الدين', 'دين', 'المتبقي', 'المبلغ', 'balance', 'debt', 'amount'];
+  static const _balance = ['الرصيد', 'رصيد', 'الدين', 'دين', 'المتبقي', 'المبلغ', 'مبلغ', 'المطلوب', 'balance', 'debt', 'amount'];
 
   static List<ImportField> of(ImportKind k) => switch (k) {
         ImportKind.customers => const [

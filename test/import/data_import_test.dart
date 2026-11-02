@@ -5,6 +5,7 @@
 // التشغيل: flutter test test/import/data_import_test.dart
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:alnaser/services/import/data_import.dart';
@@ -57,9 +58,80 @@ void main() {
       expect(sheets[1].rows, isEmpty);
     });
 
-    test('xls القديم مرفوض برسالة واضحة', () {
+    test('xls ناقص أو تالف: رسالة واضحة لا انهيار', () {
       final ole = Uint8List.fromList([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0]);
       expect(() => SheetReader.read(ole, 'x.xls'), throwsA(isA<SheetReadException>()));
+      final cut = File('test/import/fixtures/excel97_small.xls').readAsBytesSync().sublist(0, 1536);
+      expect(() => SheetReader.read(cut, 'x.xls'), throwsA(isA<SheetReadException>()));
+    });
+
+    group('xls القديم', () {
+      List<SheetTable> load(String f) => SheetReader.read(File('test/import/fixtures/$f').readAsBytesSync(), f);
+
+      test('Excel 97: ملف صغير (تيار القطاعات الصغيرة)', () {
+        final s = load('excel97_small.xls');
+        expect(s.single.name, 'ورقة');
+        expect(s.single.rows, [
+          ['الاسم', 'الرصيد'],
+          ['علي', '1500'],
+          ['زينب', '-20.5'],
+        ]);
+      });
+
+      test('Excel 97: نص طويل ينقسم بين سجلين، وأرقام وهواتف', () {
+        final t = load('excel97_long_text.xls').single;
+        expect(t.rows.length, 21);
+        expect(t.cell(0, 4), 'ع' * 5000);
+        expect(t.rows[1], ['زبون 1 أبو محمد', '07700000001', '250', '', 'after']);
+        expect(t.rows[20], ['زبون 20 أبو محمد', '07700000020', '-5']);
+      });
+
+      test('Excel 97: انقسام نص مضغوط←عريض، تنسيق ونطق، معادلة نصية، ورسم مضمّن يُتجاهل', () {
+        final t = load('excel97_sst_split.xls').single;
+        expect(t.name, 'الموردون');
+        expect(t.rows[0], ['abcde سلام', 'علي', 'ok', 'Z']);
+        expect(t.rows[1], ['نص معادلة']);
+        expect(t.rows[2], ['fillé']);
+        expect(t.rows.length, 400);
+      });
+
+      test('Excel 95 (BIFF5) بترميز عربي 1256، RK وMULRK وNUMBER', () {
+        final t = load('excel95_cp1256.xls').single;
+        expect(t.name, 'العملاء');
+        expect(t.rows[0], ['الاسم', 'الرصيد']);
+        expect(t.rows[1], ['عميل رقم 1 ـ أبو علي', '250']);
+        expect(t.rows[300], ['زينب', '-1234.75']);
+        expect(t.rows[301], ['', '123.45', '7']);
+      });
+    });
+
+    test('ملف ‎.xls هو في الحقيقة جدول HTML', () {
+      const html = '<html><head><meta charset="utf-8"></head><body><table>'
+          '<tr><th>الاسم</th><th colspan="2">الرصيد</th><th>ملاحظة</th></tr>'
+          '<tr><td>جهاد&nbsp;عبد</td><td>1,250</td><td></td><td>أ &amp; ب</td></tr>'
+          '<tr><td><b>علي</b><br>الثاني</td><td>-5</td></tr>'
+          '</table></body></html>';
+      final t = SheetReader.read(Uint8List.fromList(utf8.encode(html)), 'a.xls').single;
+      expect(t.rows, [
+        ['الاسم', 'الرصيد', '', 'ملاحظة'],
+        ['جهاد عبد', '1,250', '', 'أ & ب'],
+        ['علي الثاني', '-5'],
+      ]);
+    });
+
+    test('ملف ‎.xls هو في الحقيقة XML Spreadsheet 2003', () {
+      const xml = '<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" '
+          'xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="الزبائن"><Table>'
+          '<Row><Cell><Data ss:Type="String">الاسم</Data></Cell><Cell><Data ss:Type="String">الرصيد</Data></Cell></Row>'
+          '<Row ss:Index="3"><Cell><Data ss:Type="String">علي</Data></Cell><Cell ss:Index="3"><Data ss:Type="Number">1500</Data></Cell></Row>'
+          '</Table></Worksheet></Workbook>';
+      final t = SheetReader.read(Uint8List.fromList(utf8.encode(xml)), 'b.xls').single;
+      expect(t.name, 'الزبائن');
+      expect(t.rows, [
+        ['الاسم', 'الرصيد'],
+        <String>[],
+        ['علي', '', '1500'],
+      ]);
     });
 
     test('CSV: فاصل منقوطة، تنصيص، UTF-8 مع BOM', () {
@@ -120,6 +192,9 @@ void main() {
     expect(m['address'], 4);
     final p = ColumnGuess.guess(['Item', 'Barcode', 'Price', 'Cost', 'Qty'], ImportKind.products);
     expect([p['name'], p['barcode'], p['price'], p['cost'], p['qty']], [0, 1, 2, 3, 4]);
+    // عناوين ملف .xls حقيقي من برنامج آخر (فيه خطأ إملائي «اليون»)
+    final r = ColumnGuess.guess(['ت', 'الاسم', 'مبلغ اليون', 'ت البرنامج', 'العنوان'], ImportKind.customers);
+    expect([r['name'], r['balance'], r['address']], [1, 2, 4]);
   });
 
   group('المعاينة (قراءة فقط)', () {
