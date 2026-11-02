@@ -512,7 +512,10 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: picked ? kSetGreen : kSetBorder, width: picked ? 1.5 : 1),
       ),
-      child: ListTile(
+      // Material شفافة: ListTile يرسم تأثير الضغط فوق خلفية البطاقة الملوّنة لا تحتها
+      child: Material(
+        type: MaterialType.transparency,
+        child: ListTile(
         onTap: () => _pick(f),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         leading: Icon(picked ? Icons.check_circle_rounded : Icons.dns_rounded, color: picked ? kSetGreen : kSetBlue),
@@ -521,6 +524,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
         trailing: picked
             ? const SetStatusPill('مُختار', ok: true)
             : FilledButton(onPressed: () => _pick(f), child: const Text('اختر')),
+        ),
       ),
     );
   }

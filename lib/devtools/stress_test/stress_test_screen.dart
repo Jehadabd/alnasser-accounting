@@ -280,15 +280,19 @@ class _StressTestScreenState extends State<StressTestScreen> {
   }
 
   Widget _card({required IconData icon, required Color color, required String title, required List<Widget> children}) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white,
+    // Material (لا Container ملوّن): عناصر القائمة داخلها ترسم خلفيتها وتأثير الضغط عليها
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE3E8EF)),
+        side: const BorderSide(color: Color(0xFFE3E8EF)),
       ),
-      padding: const EdgeInsets.all(16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: SizedBox(
+          width: double.infinity,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Icon(icon, color: color),
           const SizedBox(width: 8),
@@ -296,7 +300,9 @@ class _StressTestScreenState extends State<StressTestScreen> {
         ]),
         const SizedBox(height: 12),
         ...children,
-      ]),
+          ]),
+        ),
+      ),
     );
   }
 
