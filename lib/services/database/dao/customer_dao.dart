@@ -25,10 +25,16 @@ class CustomerDao {
   /// ═══════════════════════════════════════════════════════════════════
   /// 🔒 Atomic Customer Creation (Multi-Session Safe)
   /// ═══════════════════════════════════════════════════════════════════
-  Future<int> insertCustomer(Customer customer) async {
+  Future<int> insertCustomer(Customer customer, {DateTime? openingDate}) async {
     final db = await getDatabase();
-    
-    return await db.transaction((txn) async {
+    return await db.transaction((txn) => insertCustomerIn(txn, customer, openingDate: openingDate));
+  }
+
+  /// نفس [insertCustomer] داخل معاملة قائمة — يستعمله الاستيراد من Excel ليضيف
+  /// كل العملاء في معاملة واحدة (كلهم أو لا أحد). [openingDate] تاريخ الرصيد
+  /// الافتتاحي (الافتراضي: الآن). الرصيد السالب (له علينا) يُسجَّل أيضاً.
+  static Future<int> insertCustomerIn(Transaction txn, Customer customer, {DateTime? openingDate}) async {
+    {
       // 🛡️ سجل الديون: لا حسابان بالاسم نفسه (بتجاهل المسافات)
       await CustomerNameRule.ensureAvailable(txn, customer.name);
 
@@ -84,9 +90,10 @@ class CustomerDao {
         customerId = await txn.insert('customers', customerMap);
       }
 
-      // إذا كان هناك دين مبدئي، أضف معاملة تلقائية
-      if (customer.currentTotalDebt > 0) {
-        final now = DateTime.now();
+      // إذا كان هناك رصيد مبدئي، أضف معاملة تلقائية (موجب = عليه، سالب = له)
+      // كان الشرط «> 0»: رصيد سالب يُكتب في بطاقة العميل بلا معاملة تسنده.
+      if (customer.currentTotalDebt.abs() > 0.0005) {
+        final now = openingDate ?? DateTime.now();
         final txUuid = UuidHelper.newTransactionUuid();
         await txn.insert('transactions', await TxAuthor.stamped(txn, {
           'customer_id': customerId,
@@ -98,7 +105,7 @@ class CustomerDao {
           'transaction_note': 'الدين المبدئي عند إضافة العميل',
           'transaction_type': 'opening_balance',
           'description': 'رصيد افتتاحي',
-          'created_at': now.toIso8601String(),
+          'created_at': DateTime.now().toIso8601String(), // وقت الإدخال الفعلي (التاريخ أعلاه قد يكون سابقاً)
           'invoice_id': null,
           'is_deleted': 0,
           'is_created_by_me': 1, // 🏷️ ملكية الرفع لهذا الجهاز
@@ -109,7 +116,7 @@ class CustomerDao {
       }
 
       return customerId;
-    });
+    }
   }
 
   /// جلب جميع العملاء النشطين

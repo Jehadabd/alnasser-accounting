@@ -446,6 +446,11 @@ class _SalesDetailReportScreenState extends State<SalesDetailReportScreen> {
   List<Map<String, Object?>> _rows = const [];
   bool _loading = true;
 
+  /// رقم آخر طلب تحميل: نتيجة طلب أقدم تُهمَل. كان تغيير الفترة (استعلام بطيء
+  /// لكل الفواتير) ثم «نقد» أو «آجل» فوراً يُكمل الاستعلامين، فيصل الأبطأ — «الكل» —
+  /// أخيراً ويكتب فوق النتيجة، فيبدو الاختيار وكأنه لا يعمل ويبقى «الكل».
+  int _loadSeq = 0;
+
   bool get _showProfit => AuthService().hasPermission(AppPermissions.viewCostProfit);
 
   @override
@@ -455,7 +460,15 @@ class _SalesDetailReportScreenState extends State<SalesDetailReportScreen> {
   }
 
   Future<void> _load() async {
-    if (!_allWarehouses && _warehouseId == null) return; // ينتظر اختيار المخزن
+    final seq = ++_loadSeq;
+    if (!_allWarehouses && _warehouseId == null) {
+      // ينتظر اختيار المخزن — لكن الاختيارات (التاريخ، نقد/آجل) تظهر فوراً
+      setState(() {
+        _rows = const [];
+        _loading = false;
+      });
+      return;
+    }
     setState(() => _loading = true);
     final db = await erpDb();
     final where = <String>[
@@ -500,7 +513,7 @@ class _SalesDetailReportScreenState extends State<SalesDetailReportScreen> {
       FROM invoices i LEFT JOIN warehouses w ON w.id = i.warehouse_id
       WHERE ${where.join(' AND ')}
       ORDER BY i.invoice_date DESC, i.id DESC LIMIT 5000''', args);
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return; // طلب أحدث في الطريق
     setState(() {
       _rows = rows;
       _loading = false;

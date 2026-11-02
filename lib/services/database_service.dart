@@ -655,9 +655,9 @@ class DatabaseService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /// 🔒 إدراج زبون - يذهب للهارد مباشرة
-  Future<int> insertCustomer(Customer customer) async {
+  Future<int> insertCustomer(Customer customer, {DateTime? openingDate}) async {
     await database;
-    final result = await _customerDao.insertCustomer(customer);
+    final result = await _customerDao.insertCustomer(customer, openingDate: openingDate);
     
     // 🚀 إبطال Cache بعد الكتابة
     invalidateCustomersCache();

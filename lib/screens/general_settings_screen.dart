@@ -53,6 +53,7 @@ import '../devtools/stress_test/stress_test_screen.dart'; // 🧪
 
 import '../models/account_statement_item.dart';
 import 'duplicate_customers_screen.dart'; // 🔗 دمج الحسابات المكررة
+import 'data_import_screen.dart'; // 📥 استيراد من Excel
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
 import '../widgets/loading_dialog.dart';
 
@@ -2399,7 +2400,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'النظام والأدوات',
           Icons.build_circle_outlined,
           'الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
-          keywords: 'شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات اختبار تحمل طباعة مخزون باركود ميزان',
+          keywords: 'استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات اختبار تحمل طباعة مخزون باركود ميزان',
           [
           // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
           _buildSettingsCard(
@@ -2425,6 +2426,18 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   title: 'إعدادات الطباعة والمخزون',
                   subtitle: 'A4 أو 80mm، ملصقات الباركود، باركود الميزان، حسابات الجرد',
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ErpSettingsScreen())),
+                ),
+                // 📥 استيراد عملاء/مواد/موردين من ملف Excel لبرنامج آخر
+                _buildActionTile(
+                  icon: Icons.upload_file_rounded,
+                  iconColor: Colors.green,
+                  title: 'استيراد من Excel',
+                  subtitle: 'عملاء وأرصدتهم، مواد، موردون — تختار الأعمدة، معاينة قبل الحفظ، ونسخة احتياطية تلقائية',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.manageUsers)) {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const DataImportScreen()));
+                    }
+                  },
                 ),
                 _buildActionTile(
                   icon: Icons.merge_type,
