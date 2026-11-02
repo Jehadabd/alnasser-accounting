@@ -217,28 +217,13 @@ class CustomerDao {
           AND (COALESCE(c.current_total_debt, 0) != 0 OR EXISTS (SELECT 1 FROM transactions t WHERE t.customer_id = c.id AND (t.is_deleted IS NULL OR t.is_deleted = 0) LIMIT 1))
         ''';
       } else {
-        // 🔎 يطابق إن تحقق أيٌّ من: كل الكلمات موجودة (بأي ترتيب)، أو الاسم بلا مسافات
-        // يحتوي البحث بلا مسافات. كان النص يُطابَق كما هو فتُفشله أي مسافة زائدة أو ناقصة.
-        const normName = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.name, 'أ', 'ا'), 'إ', 'ا'), 'آ', 'ا'), 'ة', 'ه'), 'ى', 'ي'), 'ؤ', 'و'), 'ئ', 'ي')";
-        final tokens = trimmedQuery.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-        final parts = <String>[];
-        for (final t in tokens) {
-          parts.add("(c.name LIKE ? OR $normName LIKE ? OR COALESCE(c.phone, '') LIKE ?)");
-          args.add('%$t%');
-          args.add('%${DatabaseHelpers.normalizeArabic(t)}%');
-          args.add('%$t%');
+        // 🔎 الفواصل لا قيمة لها: «جهاد عبد» = «جهادعبد» = «جهاد     عبد» = «جهاد-عبد»
+        // (كل كلمة في الاسم بأي ترتيب، والاسم يُقارن بلا فواصل)، والهاتف بلا مسافات.
+        final nameQ = NameSearch.where('c.name', trimmedQuery, phoneCol: 'c.phone');
+        if (nameQ != null) {
+          whereClause += ' AND ${nameQ.sql}';
+          args.addAll(nameQ.args);
         }
-        // 🔤 تجاهل المسافات كلياً: «عبدالرحمن» = «عبد الرحمن» = «عبد  الرحمن» (في الاسم والبحث)
-        final compact = DatabaseHelpers.normalizeArabic(trimmedQuery).replaceAll(RegExp(r'\s+'), '');
-        const compactClause = " OR REPLACE($normName, ' ', '') LIKE ?";
-        args.add('%$compact%');
-        // رقم هاتف مكتوب بمسافات (0770 123 4567)
-        final digits = trimmedQuery.replaceAll(RegExp(r'\s+'), '');
-        final phoneClause = RegExp(r'^[0-9+]{4,}$').hasMatch(digits)
-            ? " OR REPLACE(COALESCE(c.phone, ''), ' ', '') LIKE ?"
-            : '';
-        if (phoneClause.isNotEmpty) args.add('%$digits%');
-        whereClause += ' AND ((${parts.join(' AND ')})$compactClause$phoneClause)';
       }
 
       final safeOrderBy = orderBy.replaceAll("'", "");

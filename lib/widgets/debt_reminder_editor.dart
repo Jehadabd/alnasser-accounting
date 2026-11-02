@@ -4,6 +4,7 @@
 //   • اسم الموعد (اختياري)، شهر البداية، والأيام بالنقر (1 و2 و5…)، مرة أو كل شهر.
 //   • الأشخاص: عميل أو أكثر، ولكل واحد مبلغ مطلوب اختياري.
 //   • معاينة بجملة واضحة + تاريخ أول تذكير.
+//   • 💸 استثناء من سدّد مؤخراً: الإعداد العام أو مدة خاصة بهذا الموعد ([DebtGracePicker]).
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
@@ -42,6 +43,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
   late final TextEditingController _monthsCtrl;
   final _amountCtrls = <ReminderMember, TextEditingController>{};
   Map<int, double> _balances = const {};
+  int _globalGrace = DebtReminders.defaultGraceDays;
   String? _err;
 
   static const _shortMonths = ['ك٢', 'شباط', 'آذار', 'نيسان', 'أيار', 'حزيران', 'تموز', 'آب', 'أيلول', 'ت١', 'ت٢', 'ك١'];
@@ -64,6 +66,9 @@ class _ReminderEditorState extends State<_ReminderEditor> {
       _ctrlFor(m);
     }
     _loadBalances();
+    DebtReminders.graceDays().then((g) {
+      if (mounted) setState(() => _globalGrace = g);
+    });
   }
 
   TextEditingController _ctrlFor(ReminderMember m) => _amountCtrls.putIfAbsent(
@@ -149,6 +154,15 @@ class _ReminderEditorState extends State<_ReminderEditor> {
                 _section('يبدأ من شهر', Icons.calendar_month_rounded, _monthPicker()),
                 _section('أيام التذكير — انقر على الأيام التي تريدها', Icons.touch_app_outlined, _daysPicker()),
                 _section('التكرار', Icons.repeat_rounded, _repeatPicker()),
+                _section(
+                  'من سدّد مؤخراً — لا يُطالَب',
+                  Icons.price_check_rounded,
+                  DebtGracePicker(
+                    value: r.graceDays,
+                    global: _globalGrace,
+                    onChanged: (v) => setState(() => r.graceDays = v),
+                  ),
+                ),
                 _section(
                   widget.lockMembers ? 'الشخص' : 'الأشخاص (${r.members.length})',
                   Icons.groups_2_outlined,
@@ -482,7 +496,8 @@ class _ReminderEditorState extends State<_ReminderEditor> {
                     : next == null
                         ? 'هذا الموعد انتهى — اختر شهراً قادماً'
                         : 'أول تذكير: ${DateFormat('yyyy/MM/dd').format(next)} عند تشغيل البرنامج'
-                            '${r.members.length > 1 ? ' — ${r.members.length} أشخاص' : ''}',
+                            '${r.members.length > 1 ? ' — ${r.members.length} أشخاص' : ''}'
+                            ' — ${r.graceText(_globalGrace)}',
                 style: TextStyle(fontSize: 12.5, color: next == null ? _red : _muted),
               ),
             ]),
@@ -698,6 +713,114 @@ class _DayCell extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// اختيار «من سدّد مؤخراً لا يُطالَب»: -1 = لا استثناء، 0 = أثناء أيام المطالبة،
+/// N = قبل بداية أيام المطالبة بـ N يوم أو أقل. [global] غير null ⇒ يظهر خيار
+/// «الإعداد العام» وقيمته null.
+class DebtGracePicker extends StatefulWidget {
+  const DebtGracePicker({super.key, required this.value, required this.onChanged, this.global});
+  final int? value;
+  final int? global;
+  final ValueChanged<int?> onChanged;
+
+  @override
+  State<DebtGracePicker> createState() => _DebtGracePickerState();
+}
+
+class _DebtGracePickerState extends State<DebtGracePicker> {
+  static const _presets = [7, 10, 15, 30, 60];
+  late final TextEditingController _custom;
+
+  @override
+  void initState() {
+    super.initState();
+    final v = widget.value;
+    _custom = TextEditingController(text: v != null && v > 0 && !_presets.contains(v) ? '$v' : '');
+  }
+
+  @override
+  void dispose() {
+    _custom.dispose();
+    super.dispose();
+  }
+
+  String _days(int n) => '$n ${n == 1 ? 'يوم' : (n <= 10 ? 'أيام' : 'يوماً')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final v = widget.value;
+    final g = widget.global;
+    final effective = v ?? g ?? DebtReminders.defaultGraceDays;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        if (g != null)
+          _Pill(
+            label: 'الإعداد العام',
+            sub: g < 0 ? 'لا استثناء' : (g == 0 ? 'أثناء الأيام' : _days(g)),
+            selected: v == null,
+            onTap: () {
+              _custom.clear();
+              widget.onChanged(null);
+            },
+          ),
+        _Pill(label: 'لا استثناء', selected: v == -1, onTap: () {
+          _custom.clear();
+          widget.onChanged(-1);
+        }),
+        _Pill(label: 'أثناء أيام المطالبة', selected: v == 0, onTap: () {
+          _custom.clear();
+          widget.onChanged(0);
+        }),
+        for (final d in _presets)
+          _Pill(
+            label: d == 30 ? 'شهر' : (d == 60 ? 'شهران' : _days(d)),
+            selected: v == d,
+            onTap: () {
+              _custom.clear();
+              widget.onChanged(d);
+            },
+          ),
+        SizedBox(
+          width: 120,
+          child: TextField(
+            controller: _custom,
+            keyboardType: TextInputType.number,
+            textAlign: TextAlign.center,
+            decoration: InputDecoration(
+              hintText: 'مدة أخرى',
+              suffixText: 'يوم',
+              isDense: true,
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _line)),
+            ),
+            onChanged: (t) {
+              final n = int.tryParse(t.trim());
+              if (n != null && n > 0 && n <= 365) widget.onChanged(n);
+            },
+          ),
+        ),
+      ]),
+      const SizedBox(height: 6),
+      Text(
+        effective < 0
+            ? 'يُطالَب كل من عليه دين ولو سدّد أمس.'
+            : effective == 0
+                ? 'من سدّد في أحد أيام المطالبة لا يُطالَب في باقيها.'
+                : 'من سدّد قبل بداية أيام المطالبة بـ ${_days(effective)} أو أقل (أو أثناءها) لا يُطالَب. '
+                    'مثال: الأيام 1 إلى 5 ⇒ تسديد من يوم ${_example(effective)} فما بعد يستثنيه.',
+        style: const TextStyle(fontSize: 12, color: _muted, height: 1.5),
+      ),
+    ]);
+  }
+
+  /// يوم البداية − N في شهر من 31 يوماً (للمثال فقط)
+  String _example(int n) {
+    final d = DateTime(2026, 2, 1 - n);
+    return '${d.day}${d.month == 2 ? '' : ' من الشهر السابق'}';
+  }
 }
 
 class _Pill extends StatelessWidget {

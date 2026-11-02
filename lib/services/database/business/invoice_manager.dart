@@ -70,19 +70,30 @@ class InvoiceManager {
           throw Exception('لا يمكن حفظ فاتورة دين بدون تحديد عميل');
         }
 
-        // أ. تحديث بيانات العميل الأساسية (إذا تم تغيير الاسم أو العنوان)
-        // هذا يتم فقط لتحسين البيانات، وليس لتغيير الرصيد
+        // أ. تحديث بيانات العميل الأساسية — لا يغيّر الرصيد، ولا يمسح ما في البطاقة:
+        //    • الاسم لا يُستبدل (الاسم يحدد الحساب؛ «جهاد عبد» و«جهادعبد» حساب واحد).
+        //    • الهاتف يُضاف فقط إن كانت البطاقة بلا هاتف (رقم مختلف على الفاتورة لا يغيّر البطاقة).
+        //    • العنوان يُحدَّث فقط إن كُتب عنوان.
+        // كانت الجملة تكتب الاسم والهاتف والعنوان كما في الفاتورة، ففاتورة بلا هاتف
+        // (مثل نقطة البيع) تمسح هاتف العميل من بطاقته.
         if (invoice.customerId != null && invoice.customerId != 0) {
-          await txn.rawUpdate(
-            'UPDATE customers SET name = ?, address = ?, phone = ?, last_modified_at = ? WHERE id = ?',
-            [
-              invoice.customerName,
-              invoice.customerAddress ?? '',
-              invoice.customerPhone ?? '',
-              DateTime.now().toIso8601String(),
-              invoice.customerId
-            ]
-          );
+          final phone = (invoice.customerPhone ?? '').trim();
+          final address = (invoice.customerAddress ?? '').trim();
+          final now = DateTime.now().toIso8601String();
+          if (address.isNotEmpty) {
+            await txn.rawUpdate('UPDATE customers SET address = ?, last_modified_at = ? WHERE id = ?',
+                [address, now, invoice.customerId]);
+          }
+          if (phone.isNotEmpty) {
+            try {
+              await txn.rawUpdate(
+                  "UPDATE customers SET phone = ?, last_modified_at = ? WHERE id = ? AND TRIM(COALESCE(phone, '')) = ''",
+                  [phone, now, invoice.customerId]);
+            } on DatabaseException catch (e) {
+              // قيد UNIQUE(name, phone) مع حساب مكرر قديم: تبقى البطاقة بلا هاتف
+              if (!e.isUniqueConstraintError()) rethrow;
+            }
+          }
         }
 
         // ب. حفظ الفاتورة (Header)

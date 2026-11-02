@@ -8,6 +8,9 @@
 //     أو صفحة العميل.
 //   • تظهر نافذة «مطالبات اليوم» عند التشغيل: أول تشغيل في اليوم أو كل تشغيل.
 //   • الشخص الذي صار رصيده صفراً لا يظهر في التذكير.
+//   • 💸 من سدّد مؤخراً لا يظهر: أي تسديد منذ «بداية أيام المطالبة − N يوم» (N من
+//     الإعدادات، افتراضياً 10، ويمكن تخصيصه لكل موعد). مثال: الأيام 1 إلى 5 و N = 10
+//     ⇒ من سدّد من يوم 21 من الشهر السابق فما بعد لا يُطالَب في هذه الأيام.
 //
 // جداول محلية منفصلة (debt_reminders + debt_reminder_members) — لا تمس الفواتير ولا تُزامَن.
 
@@ -19,6 +22,7 @@ import '../models/app_user.dart';
 import '../models/invoice.dart';
 import 'auth_service.dart';
 import 'database_service.dart';
+import 'debt_return_service.dart';
 
 /// شخص داخل موعد
 class ReminderMember {
@@ -88,6 +92,7 @@ class DebtReminder {
     this.months,
     this.note,
     this.active = true,
+    this.graceDays,
     DateTime? createdAt,
     List<ReminderMember>? members,
   })  : days = _norm(days ?? const [1, 2, 3, 4, 5]),
@@ -103,6 +108,10 @@ class DebtReminder {
   int? months; // للشهري: عدد الأشهر، null = بلا نهاية (حتى يسدّد الجميع)
   String? note;
   bool active;
+
+  /// استثناء من سدّد مؤخراً لهذا الموعد: null = الإعداد العام، -1 = لا استثناء،
+  /// 0 = من سدّد أثناء أيام المطالبة فقط، N = من سدّد قبل بدايتها بـ N يوم أو أقل.
+  int? graceDays;
   DateTime createdAt;
   List<ReminderMember> members;
 
@@ -121,6 +130,7 @@ class DebtReminder {
         months: months,
         note: note,
         active: active,
+        graceDays: graceDays,
         createdAt: createdAt,
         members: members.map((m) => m.copy()).toList(),
       );
@@ -140,6 +150,7 @@ class DebtReminder {
         'months': months,
         'note': note,
         'active': active ? 1 : 0,
+        'paid_grace_days': graceDays,
         'created_at': createdAt.toIso8601String(),
       };
 
@@ -163,6 +174,7 @@ class DebtReminder {
       months: m['months'] as int?,
       note: m['note'] as String?,
       active: (m['active'] as int? ?? 1) == 1,
+      graceDays: (m['paid_grace_days'] as num?)?.toInt(),
       createdAt: DateTime.tryParse('${m['created_at'] ?? ''}'),
       members: members,
     );
@@ -184,6 +196,34 @@ class DebtReminder {
   }
 
   bool isDueOn(DateTime d) => active && coversMonth(d) && daysIn(d.year, d.month).contains(d.day);
+
+  /// بداية أيام المطالبة الحالية التي يقع فيها [d] (أول يوم في الأيام المتتالية
+  /// المنتهية بـ [d]). الأيام 1–5 ويوم 3 ⇒ يوم 1. null إن لم يكن [d] من أيام الموعد.
+  DateTime? windowStart(DateTime d) {
+    if (!isDueOn(d)) return null;
+    final ds = daysIn(d.year, d.month).toSet();
+    var s = d.day;
+    while (s > 1 && ds.contains(s - 1)) {
+      s--;
+    }
+    return DateTime(d.year, d.month, s);
+  }
+
+  /// هل يُستثنى من سدّد في [lastPaid] من مطالبة يوم [d]؟ [graceDays] بعد حلّ «الإعداد العام».
+  bool paidRecently(DateTime? lastPaid, DateTime d, int graceDays) {
+    final w = windowStart(d);
+    if (w == null || lastPaid == null || graceDays < 0) return false;
+    final cutoff = DateTime(w.year, w.month, w.day - graceDays);
+    return !DateUtils.dateOnly(lastPaid).isBefore(cutoff);
+  }
+
+  /// وصف الاستثناء بالكلمات ([global] = قيمة الإعداد العام).
+  String graceText(int global) {
+    final g = graceDays ?? global;
+    if (g < 0) return 'يُطالَب كل من عليه دين ولو سدّد مؤخراً';
+    if (g == 0) return 'لا يُطالَب من سدّد أثناء أيام المطالبة';
+    return 'لا يُطالَب من سدّد قبل الموعد بـ $g ${g == 1 ? 'يوم' : (g <= 10 ? 'أيام' : 'يوماً')} أو أقل';
+  }
 
   /// التاريخ القادم للتذكير (أو اليوم إن كان من أيامه)
   DateTime? nextDate(DateTime from) {
@@ -233,10 +273,13 @@ class DebtReminder {
 
 /// شخص مستحق التذكير اليوم مع رصيده الحالي
 class DueReminder {
-  const DueReminder(this.reminder, this.member, this.balance);
+  const DueReminder(this.reminder, this.member, this.balance, {this.lastPaid});
   final DebtReminder reminder;
   final ReminderMember member;
   final double balance;
+
+  /// آخر تسديد له (للعرض) — للمستثنى: سبب استثنائه.
+  final DateTime? lastPaid;
 }
 
 class DebtReminders {
@@ -248,6 +291,10 @@ class DebtReminders {
   static const _kEnabled = 'debt_rem_enabled';
   static const _kFreq = 'debt_rem_freq'; // daily | startup
   static const _kLast = 'debt_rem_last';
+  static const _kGrace = 'debt_rem_paid_grace_days';
+
+  /// الافتراضي: من سدّد قبل أيام المطالبة بـ 10 أيام أو أقل لا يُطالَب.
+  static const int defaultGraceDays = 10;
 
   /// موعد ينتظر حفظ فاتورة جديدة (من «المزيد») — يُربط بها بعد الحفظ
   static DebtReminder? pendingForNewInvoice;
@@ -282,6 +329,9 @@ class DebtReminders {
     final cols = (await db.rawQuery('PRAGMA table_info(debt_reminders)')).map((r) => '${r['name']}').toSet();
     if (!cols.contains('title')) await db.execute('ALTER TABLE debt_reminders ADD COLUMN title TEXT');
     if (!cols.contains('days')) await db.execute('ALTER TABLE debt_reminders ADD COLUMN days TEXT');
+    if (!cols.contains('paid_grace_days')) {
+      await db.execute('ALTER TABLE debt_reminders ADD COLUMN paid_grace_days INTEGER');
+    }
     await db.execute('''
       CREATE TABLE IF NOT EXISTS debt_reminder_members (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,6 +361,12 @@ class DebtReminders {
   static Future<void> setEnabled(bool v) async => (await SharedPreferences.getInstance()).setBool(_kEnabled, v);
   static Future<String> frequency() async => (await SharedPreferences.getInstance()).getString(_kFreq) ?? 'daily';
   static Future<void> setFrequency(String v) async => (await SharedPreferences.getInstance()).setString(_kFreq, v);
+
+  /// استثناء من سدّد مؤخراً (عام لكل المواعيد إلا ما خُصِّص): -1 = لا استثناء.
+  static Future<int> graceDays() async =>
+      (await SharedPreferences.getInstance()).getInt(_kGrace) ?? defaultGraceDays;
+  static Future<void> setGraceDays(int v) async =>
+      (await SharedPreferences.getInstance()).setInt(_kGrace, v < -1 ? -1 : v);
 
   // ─────────────────────────── القراءة والكتابة ───────────────────────────
 
@@ -413,23 +469,75 @@ class DebtReminders {
     ];
   }
 
-  /// المستحقون اليوم (من ما زال عليه دين)
-  static Future<List<DueReminder>> dueToday({bool includeSnoozed = false}) async {
-    final now = DateTime.now();
-    final due = (await list()).where((r) => r.isDueOn(now)).toList();
-    final bal = await balances([for (final r in due) ...r.members.map((m) => m.customerId)]);
+  /// أنواع معاملات التسديد (المرتجع المسجّل تسديداً لا يُعدّ — انظر [lastPayments]).
+  static const paymentTypes = ['manual_payment', 'payment', 'تسديد', 'debt_payment', 'Debt_Paid'];
+
+  /// تاريخ آخر تسديد لكل عميل (معاملة تُنقص الدين من نوع تسديد، غير محذوفة، وليست مرتجعاً).
+  static Future<Map<int, DateTime>> lastPayments(Iterable<int> ids) async {
+    final list = ids.toSet().toList();
+    if (list.isEmpty) return const {};
+    final db = await DatabaseService().database;
+    var notReturn = '';
+    try {
+      notReturn = ' AND NOT ${await DebtReturnService.isReturnSqlFull(db, 't')}';
+      await db.rawQuery('SELECT 1 FROM transactions t WHERE 0$notReturn');
+    } catch (_) {
+      notReturn = ''; // قاعدة بلا جداول المرتجع
+    }
+    final types = paymentTypes.map((t) => "'$t'").join(',');
+    final out = <int, DateTime>{};
+    for (var i = 0; i < list.length; i += 500) {
+      final part = list.sublist(i, (i + 500).clamp(0, list.length));
+      final rows = await db.rawQuery('''
+        SELECT t.customer_id AS cid, MAX(t.transaction_date) AS d FROM transactions t
+        WHERE t.customer_id IN (${List.filled(part.length, '?').join(',')})
+          AND COALESCE(t.is_deleted, 0) = 0 AND t.amount_changed < 0
+          AND t.transaction_type IN ($types)$notReturn
+        GROUP BY t.customer_id''', part);
+      for (final r in rows) {
+        final d = DateTime.tryParse('${r['d'] ?? ''}');
+        if (d != null) out[(r['cid'] as num).toInt()] = d;
+      }
+    }
+    return out;
+  }
+
+  /// المستحقون اليوم (من ما زال عليه دين ولم يسدّد مؤخراً)
+  static Future<List<DueReminder>> dueToday({bool includeSnoozed = false}) async =>
+      (await dueTodayDetailed(includeSnoozed: includeSnoozed)).due;
+
+  /// المستحقون اليوم + المستثنون لأنهم سدّدوا مؤخراً (للعرض).
+  static Future<({List<DueReminder> due, List<DueReminder> paidRecently})> dueTodayDetailed(
+      {bool includeSnoozed = false, DateTime? now}) async {
+    final today = now ?? DateTime.now();
+    final due = (await list()).where((r) => r.isDueOn(today)).toList();
+    final ids = [for (final r in due) ...r.members.map((m) => m.customerId)];
+    final bal = await balances(ids);
+    final paid = await lastPayments(ids);
+    final global = await graceDays();
     final out = <DueReminder>[];
+    final skipped = <DueReminder>[];
     final seen = <int>{}; // نفس العميل في موعدين اليوم: مرة واحدة
     for (final r in due) {
       for (final m in r.members) {
-        if (!m.active || (!includeSnoozed && m.isSnoozed(now))) continue;
+        if (!m.active || (!includeSnoozed && m.isSnoozed(today))) continue;
         final b = bal[m.customerId] ?? 0.0;
-        if (b <= 0.5 || !seen.add(m.customerId)) continue;
-        out.add(DueReminder(r, m, b));
+        if (b <= 0.5 || seen.contains(m.customerId)) continue;
+        final last = paid[m.customerId];
+        if (r.paidRecently(last, today, r.graceDays ?? global)) {
+          // في موعد آخر اليوم بمهلة أقصر قد يُطالَب — لا يُعلَّم «مرئياً» هنا
+          skipped.add(DueReminder(r, m, b, lastPaid: last));
+          continue;
+        }
+        seen.add(m.customerId);
+        out.add(DueReminder(r, m, b, lastPaid: last));
       }
     }
+    skipped.removeWhere((d) => seen.contains(d.member.customerId));
+    final skippedIds = <int>{};
+    skipped.retainWhere((d) => skippedIds.add(d.member.customerId));
     out.sort((a, b) => b.balance.compareTo(a.balance));
-    return out;
+    return (due: out, paidRecently: skipped);
   }
 
   static Future<int?> customerIdByName(String name) async {

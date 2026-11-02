@@ -46,6 +46,8 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
   bool _enabled = true;
   String _freq = 'daily';
   int _dueToday = 0;
+  int _paidRecently = 0;
+  int _grace = DebtReminders.defaultGraceDays;
 
   bool get _forCustomer => widget.customerId != null;
 
@@ -60,14 +62,17 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
     final bal = await DebtReminders.balances([for (final r in items) ...r.members.map((m) => m.customerId)]);
     final en = await DebtReminders.enabled();
     final fq = await DebtReminders.frequency();
-    final due = await DebtReminders.dueToday(includeSnoozed: true);
+    final gr = await DebtReminders.graceDays();
+    final due = await DebtReminders.dueTodayDetailed(includeSnoozed: true);
     if (!mounted) return;
     setState(() {
       _items = items;
       _balances = bal;
       _enabled = en;
       _freq = fq;
-      _dueToday = due.length;
+      _grace = gr;
+      _dueToday = due.due.length;
+      _paidRecently = due.paidRecently.length;
       _loading = false;
     });
   }
@@ -131,6 +136,7 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
       ),
       children: [
         if (!_forCustomer) _settingsCard(),
+        if (!_forCustomer) _graceCard(),
         if (_items.isEmpty)
           const SetBanner(
             'لا مواعيد بعد. اضغط «موعد جديد»، اختر الأيام (مثل 1 و2 و5) ثم أضف الأشخاص.',
@@ -154,9 +160,25 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
     );
   }
 
+  Widget _graceCard() => SetCard(
+        title: 'من سدّد مؤخراً لا يُطالَب',
+        subtitle: 'الإعداد العام لكل المواعيد — ويمكن تخصيصه لموعد من «تعديل»',
+        icon: Icons.price_check_rounded,
+        color: kSetGreen,
+        child: DebtGracePicker(
+          value: _grace,
+          onChanged: (v) async {
+            final n = v ?? DebtReminders.defaultGraceDays;
+            await DebtReminders.setGraceDays(n);
+            await _load();
+          },
+        ),
+      );
+
   Widget _settingsCard() => SetCard(
         title: 'الظهور عند التشغيل',
-        subtitle: _dueToday == 0 ? 'لا مطالبات اليوم' : 'مستحق اليوم: $_dueToday شخص',
+        subtitle: (_dueToday == 0 ? 'لا مطالبات اليوم' : 'مستحق اليوم: $_dueToday شخص') +
+            (_paidRecently == 0 ? '' : ' — مستثنى لأنه سدّد مؤخراً: $_paidRecently'),
         icon: Icons.notifications_active_outlined,
         color: _accent,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -270,6 +292,8 @@ class _ReminderCard extends StatelessWidget {
                 ]),
                 const SizedBox(height: 2),
                 Text(r.describe(), style: const TextStyle(color: kSetMuted, height: 1.5)),
+                if (r.graceDays != null)
+                  Text(r.graceText(0), style: const TextStyle(fontSize: 12.5, color: kSetGreen)),
                 Text('${r.members.length} شخص • عليهم دين $owing • المطلوب ${_money(total)}',
                     style: const TextStyle(fontSize: 12.5, color: kSetMuted)),
                 if ((r.note ?? '').isNotEmpty)
@@ -430,6 +454,7 @@ class _DueDialogState extends State<_DueDialog> {
               if ((r.title ?? '').trim().isNotEmpty) r.title!.trim(),
               if (m.amount != null) 'رصيده الآن ${_money(d.balance)}',
               if (m.invoiceId != null) 'فاتورة #${m.invoiceId}',
+              d.lastPaid == null ? 'لم يسدّد سابقاً' : 'آخر تسديد ${DateFormat('yyyy/MM/dd').format(d.lastPaid!)}',
               r.daysText(),
               if ((r.note ?? '').isNotEmpty) r.note!,
             ].join(' • '),
