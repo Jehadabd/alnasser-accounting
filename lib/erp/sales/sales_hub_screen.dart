@@ -11,12 +11,11 @@ import '../../screens/custom_range_report_screen.dart';
 import '../../screens/returns_report_screen.dart';
 import '../../services/reports_service.dart';
 import '../debts/debt_reports_screen.dart';
-import '../device_defaults.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
-import '../pickers.dart';
 import '../pos/price_checker_screen.dart';
 import '../warranty/warranty_screens.dart'; // 🛠️ الضمان والصيانة
+import 'device_cash_screen.dart';
 import 'invoice_extras.dart';
 import 'quotes_orders_screen.dart';
 import 'sales_return_screen.dart';
@@ -47,51 +46,16 @@ class SalesHubScreen extends StatefulWidget {
             permission: AppPermissions.salesDocs),
         HubTile('قارئ الأسعار', Icons.qr_code_scanner_rounded, ErpColors.cyan, () => go(const PriceCheckerScreen()),
             subtitle: 'شاشة للزبائن'),
-        HubTile('صندوق ومخزن هذا الجهاز', Icons.devices, ErpColors.navy, () => SalesHubScreen.deviceDefaults(context),
-            subtitle: 'لكل كاشير صندوقه', permission: AppPermissions.accountingPost),
+        HubTile('صندوق ومخزن هذا الجهاز', Icons.devices, ErpColors.navy, () => go(const DeviceCashScreen()),
+            subtitle: 'لكل شاشة صندوقها • كل الصناديق', permission: AppPermissions.accountingPost),
         HubTile('إقفال اليوم', Icons.point_of_sale_rounded, ErpColors.green, () => go(const DayCloseScreen()),
             subtitle: 'المتوقع في الدرج ومطابقته مع المعدود', permission: AppPermissions.repDaily),
       ]),
       ];
 
-  static Future<void> deviceDefaults(BuildContext context) async {
-    int? box = await DeviceDefaults.cashBoxId();
-    int? wh = await DeviceDefaults.warehouseId();
-    if (!context.mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, set) => AlertDialog(
-          title: const Text('صندوق ومخزن هذا الجهاز'),
-          content: SizedBox(
-            width: 420,
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const Text('كل فاتورة بيع تُحفظ من هذا الجهاز (القائمة والكاشير) تُسجَّل على هذا الصندوق '
-                  'وتُخصم من هذا المخزن.'),
-              const SizedBox(height: 12),
-              CashBoxDropdown(value: box, width: 400, onChanged: (b) => set(() => box = b?.id)),
-              const SizedBox(height: 10),
-              WarehouseDropdown(value: wh, width: 400, onChanged: (w) => set(() => wh = w?.id)),
-            ]),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                await DeviceDefaults.set();
-                if (ctx.mounted) Navigator.pop(ctx, false);
-              },
-              child: const Text('بلا (الافتراضي)'),
-            ),
-            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حفظ')),
-          ],
-        ),
-      ),
-    );
-    if (ok == true) {
-      await DeviceDefaults.set(cashBoxId: box, warehouseId: wh);
-      if (context.mounted) showOk(context, 'حُفظ صندوق ومخزن هذا الجهاز');
-    }
-  }
+  /// 🖥️ شاشة صندوق ومخزن هذا الجهاز (كانت نافذة صغيرة؛ الاسم باقٍ لمن يستدعيه).
+  static Future<void> deviceDefaults(BuildContext context) =>
+      Navigator.push(context, MaterialPageRoute(builder: (_) => const DeviceCashScreen()));
 
   @override
   State<SalesHubScreen> createState() => _SalesHubScreenState();

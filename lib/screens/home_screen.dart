@@ -262,7 +262,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ]),
+      // mainAxisSize.min: كان العمود يأخذ ارتفاع الشاشة كله، فيُحسب موضع رسالة
+      // SnackBar العائمة فوقه ⇒ «Floating SnackBar presented off screen».
       floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.end,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [

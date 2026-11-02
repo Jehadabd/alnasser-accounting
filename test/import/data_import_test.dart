@@ -206,6 +206,55 @@ void main() {
       expect(plan.errors.single.line, 5);
     });
 
+    test('المراجعة: الاستبعاد والتعديل يغيّران المجموع، والأصل محفوظ', () async {
+      final t = SheetTable('s', [
+        ['الاسم', 'الرصيد'],
+        ['أ', '100'],
+        ['ب', '200'],
+        ['ج', '300'],
+      ]);
+      final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1},
+          ImportOptions(openingDate: DateTime(2026, 1, 1)));
+      expect(plan.positiveTotal, 600);
+      expect(plan.rows.any((r) => r.edited), isFalse);
+      plan.allRows[1].include = false; // ب مستبعد
+      plan.allRows[2].balance = 350; // ج عُدّل
+      expect(plan.rows.map((r) => r.name), ['أ', 'ج']);
+      expect(plan.positiveTotal, 450);
+      expect(plan.allRows[2].edited, isTrue);
+      expect(plan.allRows[2].originalBalance, 300);
+      expect(plan.allRows.length, 3);
+    });
+
+    test('قاعدة جديدة: الأسماء الموجودة في القاعدة الحالية لا تُتجاوز', () async {
+      final t = SheetTable('s', [
+        ['الاسم', 'الرصيد'],
+        ['علي', '1000'],
+        ['علي', '5'], // مكرر في الملف ما زال يُتجاوز
+      ]);
+      final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1},
+          ImportOptions(openingDate: DateTime(2026, 1, 1)),
+          freshTarget: true);
+      expect(plan.rows.map((r) => r.name), ['علي']);
+      expect(plan.skipped.single.line, 3);
+    });
+
+    test('تعديل غير صالح يُرفض قبل أي كتابة', () async {
+      final t = SheetTable('s', [
+        ['المادة', 'السعر', 'الكمية'],
+        ['مفتاح', '1000', '5'],
+      ]);
+      final plan = await DataImport.plan(db, t, ImportKind.products, {'name': 0, 'price': 1, 'qty': 2},
+          ImportOptions(openingDate: DateTime(2026, 1, 1)));
+      plan.allRows.single.price = 0;
+      expect(() => DataImport.execute(plan, ImportOptions(openingDate: DateTime(2026)), fileName: 'f', sheet: 's'),
+          throwsArgumentError);
+      plan.allRows.single.price = 10;
+      plan.allRows.single.qty = double.nan;
+      expect(() => DataImport.execute(plan, ImportOptions(openingDate: DateTime(2026)), fileName: 'f', sheet: 's'),
+          throwsArgumentError);
+    });
+
     test('حقل مطلوب غير مربوط ⇒ لا معاينة', () async {
       final t = SheetTable('s', [
         ['a'],

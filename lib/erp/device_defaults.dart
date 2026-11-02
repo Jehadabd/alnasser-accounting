@@ -5,10 +5,25 @@
 // الصحيح، وتُخصم الكمية من مخزنه.
 //
 // الإعداد محفوظ على الجهاز نفسه (SharedPreferences) — كل طرفية لها صندوقها.
+//
+// 🖥️🖥️ تعدد الشاشات على الحاسبة الواحدة: كل الشاشات تتشارك ملف الإعدادات نفسه،
+// فلكل شاشة مفتاح خاص (‎__seat2، ‎__seat3...). الشاشة الأولى على المفتاح القديم
+// كما كانت. شاشة لم يُضبط لها شيء تأخذ إعداد الشاشة الأولى (نفس السلوك السابق
+// تماماً)، و«بلا» لشاشة غير الأولى تُحفظ صفراً صريحاً = الصندوق الافتراضي.
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/seat_service.dart';
 import 'erp_common.dart';
+
+/// إعداد شاشة واحدة: [inherited] = لم يُضبط لها شيء فتأخذ إعداد الشاشة الأولى.
+class SeatDefaults {
+  const SeatDefaults(this.seat, this.cashBoxId, this.warehouseId, {this.inherited = false});
+  final int seat;
+  final int? cashBoxId;
+  final int? warehouseId;
+  final bool inherited;
+}
 
 class DeviceDefaults {
   DeviceDefaults._();
@@ -16,34 +31,74 @@ class DeviceDefaults {
   static const _kBox = 'erp_device_cash_box_id';
   static const _kWarehouse = 'erp_device_warehouse_id';
 
-  static Future<int?> cashBoxId() async {
-    final p = await SharedPreferences.getInstance();
-    return p.getInt(_kBox);
+  static String _key(String base, int seat) => seat <= 1 ? base : '${base}__seat$seat';
+
+  /// القيمة الفعلية لشاشة: مفتاحها، وإلا (لغير الأولى) مفتاح الشاشة الأولى.
+  /// صفر محفوظ = «بلا» صريحة.
+  static int? _read(SharedPreferences p, String base, int seat) {
+    final own = p.getInt(_key(base, seat));
+    if (own != null) return own <= 0 ? null : own;
+    if (seat <= 1) return null;
+    final first = p.getInt(base);
+    return (first == null || first <= 0) ? null : first;
   }
 
-  static Future<int?> warehouseId() async {
+  static bool _inherited(SharedPreferences p, int seat) =>
+      seat > 1 && p.getInt(_key(_kBox, seat)) == null && p.getInt(_key(_kWarehouse, seat)) == null;
+
+  static Future<int?> cashBoxId({int? seat}) async {
     final p = await SharedPreferences.getInstance();
-    return p.getInt(_kWarehouse);
+    return _read(p, _kBox, seat ?? SeatService.seat);
   }
 
-  static Future<void> set({int? cashBoxId, int? warehouseId}) async {
+  static Future<int?> warehouseId({int? seat}) async {
     final p = await SharedPreferences.getInstance();
-    if (cashBoxId == null) {
-      await p.remove(_kBox);
-    } else {
-      await p.setInt(_kBox, cashBoxId);
+    return _read(p, _kWarehouse, seat ?? SeatService.seat);
+  }
+
+  /// إعداد كل الشاشات ‎1..[seats] على هذه الحاسبة. يعيد القراءة من الملف لأن
+  /// شاشة أخرى (عملية أخرى) قد تكون غيّرته.
+  static Future<List<SeatDefaults>> allSeats(int seats) async {
+    final p = await SharedPreferences.getInstance();
+    try {
+      await p.reload();
+    } catch (_) {}
+    return [
+      for (var s = 1; s <= (seats < 1 ? 1 : seats); s++)
+        SeatDefaults(s, _read(p, _kBox, s), _read(p, _kWarehouse, s), inherited: _inherited(p, s)),
+    ];
+  }
+
+  static Future<void> set({int? cashBoxId, int? warehouseId, int? seat}) async {
+    final p = await SharedPreferences.getInstance();
+    // الشاشات الأخرى تكتب الملف نفسه: نقرأ آخر نسخة قبل الكتابة حتى لا نمحو ما كتبته
+    try {
+      await p.reload();
+    } catch (_) {}
+    final s = seat ?? SeatService.seat;
+    Future<void> write(String base, int? v) async {
+      final k = _key(base, s);
+      if (v != null) {
+        await p.setInt(k, v);
+      } else if (s <= 1) {
+        await p.remove(k);
+      } else {
+        await p.setInt(k, 0); // «بلا» صريحة: لا ترث إعداد الشاشة الأولى
+      }
     }
-    if (warehouseId == null) {
-      await p.remove(_kWarehouse);
-    } else {
-      await p.setInt(_kWarehouse, warehouseId);
-    }
+
+    await write(_kBox, cashBoxId);
+    await write(_kWarehouse, warehouseId);
   }
 
   /// يختم فاتورة محفوظة بصندوق ومخزن هذا الجهاز. لا يغيّر فاتورة مختومة
   /// مسبقاً، ولا يرمي أي خطأ (الحفظ الأصلي تمّ وهو الأهم).
   static Future<void> stampInvoice(int invoiceId) async {
     try {
+      // الإعداد قد يُضبط لهذه الشاشة من شاشة أخرى على الحاسبة نفسها
+      try {
+        await (await SharedPreferences.getInstance()).reload();
+      } catch (_) {}
       final box = await cashBoxId();
       final wh = await warehouseId();
       if (box == null && wh == null) return;

@@ -49,7 +49,6 @@ import '../widgets/settings_kit.dart' show SetBanner, SetBannerKind, SetSteps;
 import '../models/app_user.dart' show AppPermissions;
 import '../erp/erp_settings_screen.dart';
 import '../erp/activity/activity_log.dart' show ActivityLogScreen;
-import '../devtools/stress_test/stress_test_screen.dart'; // 🧪
 
 import '../models/account_statement_item.dart';
 import 'duplicate_customers_screen.dart'; // 🔗 دمج الحسابات المكررة
@@ -2400,7 +2399,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'النظام والأدوات',
           Icons.build_circle_outlined,
           'الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
-          keywords: 'استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات اختبار تحمل طباعة مخزون باركود ميزان',
+          keywords: 'استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
           [
           // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
           _buildSettingsCard(
@@ -2458,18 +2457,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   onTap: () {
                     if (requirePermission(context, AppPermissions.manageUsers)) {
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityLogScreen()));
-                    }
-                  },
-                ),
-                // 🧪 اختبار التحمّل الحقيقي (للمدير فقط)
-                _buildActionTile(
-                  icon: Icons.science_outlined,
-                  iconColor: Colors.deepOrange,
-                  title: 'اختبار التحمّل والحسابات',
-                  subtitle: 'آلاف الفواتير والمعاملات في القاعدة الحقيقية ثم مطابقة كل رقم، ومقارنة حاسوبين عبر فايربيس',
-                  onTap: () {
-                    if (requirePermission(context, AppPermissions.manageUsers)) {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const StressTestScreen()));
                     }
                   },
                 ),

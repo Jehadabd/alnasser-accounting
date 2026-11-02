@@ -43,6 +43,9 @@ class SeatService {
       List.generate(16, (_) => Random.secure().nextInt(256).toRadixString(16).padLeft(2, '0')).join();
 
   static String _deviceId = '';
+
+  /// بصمة هذه الحاسبة في جدول app_seats (لعرض شاشاتها المفتوحة).
+  static String get deviceId => _deviceId;
   static Timer? _beat;
   static Timer? _watch;
   static int? _dataVersion;

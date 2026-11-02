@@ -182,6 +182,18 @@ class PlanRow {
   double price = 0;
   double? cost;
   double qty = 0;
+
+  /// المستخدم قد يستبعد الصف من المعاينة قبل الاستيراد.
+  bool include = true;
+
+  /// القيمة كما في الملف (لإظهار ما عدّله المستخدم).
+  double? originalBalance;
+  double? originalPrice;
+  double? originalQty;
+  bool get edited =>
+      (originalBalance != null && (originalBalance! - balance).abs() > 0.004) ||
+      (originalPrice != null && (originalPrice! - price).abs() > 0.004) ||
+      (originalQty != null && (originalQty! - qty).abs() > 0.00001);
 }
 
 /// صف لن يُضاف: [error] = خطأ في البيانات (رقم غير مفهوم...)، وإلا تجاوز (موجود/مكرر/فارغ).
@@ -194,10 +206,15 @@ class SkipRow {
 }
 
 class ImportPlan {
-  ImportPlan(this.kind, this.rows, this.skipped);
+  ImportPlan(this.kind, List<PlanRow> all, this.skipped) : allRows = all;
   final ImportKind kind;
-  final List<PlanRow> rows;
+
+  /// كل الصفوف الصالحة (بما فيها ما استبعده المستخدم).
+  final List<PlanRow> allRows;
   final List<SkipRow> skipped;
+
+  /// ما سيُستورد فعلاً.
+  List<PlanRow> get rows => allRows.where((r) => r.include).toList();
 
   List<SkipRow> get errors => skipped.where((s) => s.error).toList();
 
@@ -275,8 +292,9 @@ class DataImport {
     SheetTable t,
     ImportKind kind,
     Map<String, int?> map,
-    ImportOptions o,
-  ) async {
+    ImportOptions o, {
+    bool freshTarget = false,
+  }) async {
     final fields = ImportFields.of(kind);
     for (final f in fields.where((f) => f.required)) {
       if (map[f.key] == null) throw ArgumentError('اربط عموداً بحقل «${f.label}»');
@@ -290,7 +308,10 @@ class DataImport {
     final existing = <String, String>{}; // مفتاح ← الاسم المحفوظ
     final deleted = <String>{};
     final barcodes = <String>{};
-    if (kind == ImportKind.customers) {
+    // [freshTarget]: الاستيراد إلى قاعدة جديدة فارغة — لا «موجود» يُقارن به
+    if (freshTarget) {
+      // لا شيء
+    } else if (kind == ImportKind.customers) {
       for (final r in await db.rawQuery('SELECT name, COALESCE(is_deleted, 0) AS d FROM customers')) {
         final n = '${r['name'] ?? ''}';
         final k = _customerKey(n);
@@ -422,6 +443,10 @@ class DataImport {
           row.currency = cur ?? o.defaultCurrency;
         }
       }
+      row
+        ..originalBalance = row.balance
+        ..originalPrice = row.price
+        ..originalQty = row.qty;
       seen[key] = line;
       rows.add(row);
     }
@@ -475,6 +500,12 @@ class DataImport {
     if (plan.rows.isEmpty) {
       return ImportResult(added: 0, skippedAtSave: const [], backupPath: '', verified: true);
     }
+    // 🛡️ القيم بعد تعديل المستخدم في المعاينة: أرقام سليمة فقط
+    for (final r in plan.rows) {
+      final bad = !r.balance.isFinite ||
+          (plan.kind == ImportKind.products && (!r.price.isFinite || r.price <= 0 || !r.qty.isFinite || r.qty < 0));
+      if (bad) throw ArgumentError('الصف ${r.line} «${r.name}»: قيمة غير صالحة — صحّحها في المعاينة');
+    }
     final db = await DatabaseService().database;
     final hasBalances = plan.rows.any((r) => r.balance.abs() >= 0.005);
     if (plan.kind != ImportKind.products && hasBalances) {
@@ -521,14 +552,15 @@ class DataImport {
     String backup,
     void Function(int, int)? onProgress,
   ) async {
+    final rows = plan.rows;
     final lateSkips = <SkipRow>[];
     var added = 0;
     await db.transaction((txn) async {
       final ids = <int>[];
       var expected = 0.0;
       var expectedWithBalance = 0;
-      for (var i = 0; i < plan.rows.length; i++) {
-        final r = plan.rows[i];
+      for (var i = 0; i < rows.length; i++) {
+        final r = rows[i];
         // ظهر الاسم بعد المعاينة (جهاز آخر، أو شاشة أخرى)؟ يُتجاوز ولا يُمس
         final now = await CustomerNameRule.findActive(txn, r.name);
         if (now != null) {
@@ -551,7 +583,7 @@ class DataImport {
           expected += r.balance;
           expectedWithBalance++;
         }
-        if (i % 50 == 0) onProgress?.call(i + 1, plan.rows.length);
+        if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
       }
       // 🛡️ مطابقة قبل الحفظ النهائي: من القاعدة نفسها، لا من الذاكرة
       final check = await _sumCustomerOpenings(txn, ids);
@@ -565,7 +597,7 @@ class DataImport {
       }
       added = ids.length;
     });
-    onProgress?.call(plan.rows.length, plan.rows.length);
+    onProgress?.call(rows.length, rows.length);
     return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true);
   }
 
@@ -604,6 +636,7 @@ class DataImport {
     String backup,
     void Function(int, int)? onProgress,
   ) async {
+    final rows = plan.rows;
     final lateSkips = <SkipRow>[];
     var added = 0;
     await db.transaction((txn) async {
@@ -612,8 +645,8 @@ class DataImport {
       };
       final ids = <int>[];
       final expected = <String, double>{};
-      for (var i = 0; i < plan.rows.length; i++) {
-        final r = plan.rows[i];
+      for (var i = 0; i < rows.length; i++) {
+        final r = rows[i];
         if (names.contains(_looseKey(r.name))) {
           lateSkips.add(SkipRow(r.line, r.name, 'أُضيف بالاسم نفسه بعد المعاينة — لم يُمس'));
           continue;
@@ -638,7 +671,7 @@ class DataImport {
               supplierId: id, amount: r.balance, currency: r.currency, date: o.openingDate, description: 'استيراد من Excel');
           expected[r.currency] = (expected[r.currency] ?? 0) + r.balance;
         }
-        if (i % 50 == 0) onProgress?.call(i + 1, plan.rows.length);
+        if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
       }
       // 🛡️ مطابقة قبل الحفظ النهائي لكل عملة
       for (final cur in const ['IQD', 'USD']) {
@@ -665,7 +698,7 @@ class DataImport {
       }
       added = ids.length;
     });
-    onProgress?.call(plan.rows.length, plan.rows.length);
+    onProgress?.call(rows.length, rows.length);
     return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true);
   }
 
@@ -675,12 +708,13 @@ class DataImport {
     String backup,
     void Function(int, int)? onProgress,
   ) async {
+    final rows = plan.rows;
     final lateSkips = <SkipRow>[];
     final problems = <String>[];
     var added = 0;
     final svc = DatabaseService();
-    for (var i = 0; i < plan.rows.length; i++) {
-      final r = plan.rows[i];
+    for (var i = 0; i < rows.length; i++) {
+      final r = rows[i];
       final now = DateTime.now();
       try {
         final id = await svc.insertProduct(Product(
@@ -714,9 +748,9 @@ class DataImport {
             'وإعادة استيراد الملف تكمل الباقي (الموجود يُتجاوز)');
         break;
       }
-      if (i % 20 == 0) onProgress?.call(i + 1, plan.rows.length);
+      if (i % 20 == 0) onProgress?.call(i + 1, rows.length);
     }
-    onProgress?.call(plan.rows.length, plan.rows.length);
+    onProgress?.call(rows.length, rows.length);
     return ImportResult(
         added: added, skippedAtSave: lateSkips, backupPath: backup, verified: problems.isEmpty, problems: problems);
   }
