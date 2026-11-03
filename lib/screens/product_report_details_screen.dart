@@ -12,10 +12,15 @@ import '../widgets/report_kit.dart';
 import 'invoice_details_screen.dart';
 
 class ProductReportDetailsScreen extends StatefulWidget {
-  const ProductReportDetailsScreen({super.key, required this.productId, required this.productName, this.categoryName});
+  const ProductReportDetailsScreen(
+      {super.key, required this.productId, required this.productName, this.categoryName, this.customerId, this.customerName});
   final int? productId;
   final String productName;
   final String? categoryName;
+
+  /// هذه المادة لعميل واحد فقط (من تقارير بضاعة العميل).
+  final int? customerId;
+  final String? customerName;
 
   @override
   State<ProductReportDetailsScreen> createState() => _ProductReportDetailsScreenState();
@@ -44,7 +49,11 @@ class _ProductReportDetailsScreenState extends State<ProductReportDetailsScreen>
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final facts = await ReportsService().loadFacts(productId: widget.productId, productName: widget.productName);
+      final facts = await ReportsService().loadFacts(
+          productId: widget.productId,
+          productName: widget.productName,
+          customerId: widget.customerId,
+          customerName: widget.customerName);
       Map<String, Object?>? product;
       if (widget.productId != null) {
         final db = await DatabaseService().database;
@@ -98,7 +107,10 @@ class _ProductReportDetailsScreenState extends State<ProductReportDetailsScreen>
     final profit = repCanSeeProfit();
     return ReportScaffold(
       title: widget.productName,
-      subtitle: [if (widget.categoryName != null) widget.categoryName!, 'تقرير المادة'].join(' • '),
+      subtitle: [
+        if (widget.categoryName != null) widget.categoryName!,
+        widget.customerId == null ? 'تقرير المادة' : 'للعميل ${widget.customerName ?? ''} فقط',
+      ].join(' • '),
       icon: Icons.inventory_2_rounded,
       actions: [IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
       loading: _loading,

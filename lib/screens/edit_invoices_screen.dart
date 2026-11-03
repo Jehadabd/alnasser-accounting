@@ -52,6 +52,7 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
   /// 📦 فلتر المادة: الفواتير التي فيها هذه المادة فقط (null = بلا فلتر)
   ({int id, String name})? _product;
   final TextEditingController _productShown = TextEditingController();
+  double _productFieldWidth = 380;
 
   @override
   void initState() {
@@ -336,49 +337,28 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
         }
       },
       onSelected: _setProduct,
-      fieldViewBuilder: (context, ctrl, focus, submit) => TextField(
-        controller: ctrl,
-        focusNode: focus,
-        decoration: _field('المادة: الاسم أو الرمز أو الباركود', Icons.inventory_2_outlined),
-        onSubmitted: (t) async {
-          // الماسح يكتب الباركود ثم Enter: مطابقة تامة تُختار فوراً
-          final hit = await ProductLookup.exact(await DatabaseService().database, t);
-          if (!mounted) return;
-          if (hit != null) {
-            _setProduct(hit);
-          } else {
-            submit();
-          }
-        },
-      ),
-      optionsViewBuilder: (context, onSelect, options) => Align(
-        alignment: AlignmentDirectional.topStart,
-        child: Material(
-          elevation: 6,
-          borderRadius: BorderRadius.circular(12),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 320, maxWidth: 420),
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              shrinkWrap: true,
-              itemCount: options.length,
-              itemBuilder: (context, i) {
-                final m = options.elementAt(i);
-                final sub = [
-                  if ('${m['item_code'] ?? ''}'.isNotEmpty) 'الرمز ${m['item_code']}',
-                  if ('${m['barcode'] ?? ''}'.isNotEmpty) 'الباركود ${m['barcode']}',
-                ].join(' • ');
-                return ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.inventory_2_outlined, color: _navy),
-                  title: Text('${m['name'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: sub.isEmpty ? null : Text(sub),
-                  onTap: () => onSelect(m),
-                );
-              },
-            ),
-          ),
-        ),
+      fieldViewBuilder: (context, ctrl, focus, submit) => LayoutBuilder(builder: (context, box) {
+        _productFieldWidth = box.maxWidth; // عرض القائمة المنبثقة = عرض الخانة
+        return TextField(
+          controller: ctrl,
+          focusNode: focus,
+          decoration: _field('المادة: الاسم أو الرمز أو الباركود', Icons.inventory_2_outlined),
+          onSubmitted: (t) async {
+            // الماسح يكتب الباركود ثم Enter: مطابقة تامة تُختار فوراً
+            final hit = await ProductLookup.exact(await DatabaseService().database, t);
+            if (!mounted) return;
+            if (hit != null) {
+              _setProduct(hit);
+            } else {
+              submit();
+            }
+          },
+        );
+      }),
+      optionsViewBuilder: (context, onSelect, options) => _ProductOptions(
+        width: _productFieldWidth,
+        options: options.toList(),
+        onSelect: onSelect,
       ),
     );
   }
@@ -660,4 +640,121 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
     }
   }
 
+}
+
+/// 📦 قائمة المواد المقترحة تحت خانة «المادة»: بيضاء بإطار وظل ناعم كبقية الشاشة،
+/// والعنصر المحدد بالأسهم مميَّز، وتحت كل مادة رمزها وباركودها.
+class _ProductOptions extends StatelessWidget {
+  const _ProductOptions({required this.width, required this.options, required this.onSelect});
+  final double width;
+  final List<Map<String, Object?>> options;
+  final AutocompleteOnSelected<Map<String, Object?>> onSelect;
+
+  static const _navy = Color(0xFF0F3460);
+  static const _border = Color(0xFFE3E9F1);
+  static const _text = Color(0xFF1E293B);
+  static const _muted = Color(0xFF64748B);
+
+  Widget _tag(IconData icon, String text) => Container(
+        margin: const EdgeInsetsDirectional.only(end: 6, top: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(20)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 13, color: _muted),
+          const SizedBox(width: 4),
+          Text(text, textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 11.5, color: _muted)),
+        ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final highlighted = AutocompleteHighlightedOption.of(context);
+    return Align(
+      alignment: AlignmentDirectional.topStart,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6),
+        // أبيض بإطار وظل ناعم (بلا صبغة Material 3 البنفسجية التي كانت تلوّن الخلفية)
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _border),
+            boxShadow: const [BoxShadow(color: Color(0x1A0F172A), blurRadius: 24, offset: Offset(0, 10))],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(15),
+            child: Material(
+            type: MaterialType.transparency,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: 340, maxWidth: width < 300 ? 300 : width),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Container(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+                  color: const Color(0xFFF8FAFC),
+                  child: Text(
+                    options.isEmpty ? 'لا مواد مطابقة' : 'المواد المطابقة (${options.length}) — اختر مادة لعرض فواتيرها',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted),
+                  ),
+                ),
+                const Divider(height: 1, color: _border),
+                Flexible(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(6),
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 2),
+                    itemBuilder: (context, i) {
+                      final m = options[i];
+                      final selected = i == highlighted;
+                      final code = '${m['item_code'] ?? ''}'.trim();
+                      final barcode = '${m['barcode'] ?? ''}'.trim();
+                      return Material(
+                        color: selected ? const Color(0xFFEFF4FF) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          hoverColor: const Color(0xFFF5F8FF),
+                          onTap: () => onSelect(m),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            child: Row(children: [
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: _navy.withValues(alpha: selected ? 0.14 : 0.07),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.inventory_2_rounded, size: 19, color: _navy),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Text('${m['name'] ?? ''}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontWeight: FontWeight.w800, color: _text)),
+                                  if (code.isNotEmpty || barcode.isNotEmpty)
+                                    Wrap(children: [
+                                      if (code.isNotEmpty) _tag(Icons.tag_rounded, code),
+                                      if (barcode.isNotEmpty) _tag(Icons.qr_code_rounded, barcode),
+                                    ]),
+                                ]),
+                              ),
+                              Icon(Icons.chevron_left_rounded, color: selected ? _navy : const Color(0xFFCBD5E1)),
+                            ]),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ]),
+            ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

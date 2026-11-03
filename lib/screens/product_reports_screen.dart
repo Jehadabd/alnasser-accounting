@@ -5,6 +5,8 @@
 //   • القسم (مع أقسامه الفرعية) + بحث + ترتيب (المبيعات/الربح/الكمية/الهامش/الاسم).
 //   • مؤشرات: مواد مباعة، المبيعات، الكلفة، الربح وهامشه، المرتجع.
 //   • توزيع الأقسام، ثم جدول المواد، ثم «مواد لم تُبع في الفترة».
+//   • [customerId]: بضاعة عميل واحد (من بطاقة العميل) — ما اشتراه وكمياته ومبالغه
+//     وما أرجعه؛ الفترة الافتراضية «الكل».
 // الأرقام من المحرك الموحّد: الكمية بالوحدة الأساسية (الكرتون = عدد قطعه)،
 // والخسارة تظهر بالأحمر وبإشارتها (كانت تُعرض ربحاً).
 
@@ -22,8 +24,12 @@ import 'product_report_details_screen.dart';
 enum _Sort { sales, profit, qty, margin, name }
 
 class ProductReportsScreen extends StatefulWidget {
-  const ProductReportsScreen({super.key, this.initialCategoryId});
+  const ProductReportsScreen({super.key, this.initialCategoryId, this.customerId, this.customerName});
   final int? initialCategoryId;
+
+  /// تقارير بضاعة عميل واحد (null = كل العملاء).
+  final int? customerId;
+  final String? customerName;
 
   @override
   State<ProductReportsScreen> createState() => _ProductReportsScreenState();
@@ -52,6 +58,7 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
   void initState() {
     super.initState();
     _categoryId = widget.initialCategoryId;
+    if (widget.customerId != null) _from = null; // كل تعامله مع المحل
     _load();
   }
 
@@ -67,7 +74,8 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
     setState(() => _loading = true);
     try {
       _rs.reportSourceFilter = _source;
-      final facts = await _rs.loadFacts(from: _from, to: _to);
+      final facts = await _rs.loadFacts(
+          from: _from, to: _to, customerId: widget.customerId, customerName: widget.customerName);
       final cats = await _rs.getCategories();
       final all = facts.byProduct();
       if (!mounted || token != _loadToken) return;
@@ -194,8 +202,11 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
             .toList();
 
     return ReportScaffold(
-      title: 'تقارير البضاعة',
-      subtitle: _categoryId == null ? 'كل الأقسام' : 'قسم: ${_catName(_categoryId)}',
+      title: widget.customerId == null ? 'تقارير البضاعة' : 'بضاعة العميل: ${widget.customerName ?? ''}',
+      subtitle: [
+        if (widget.customerId != null) 'ما اشتراه هذا العميل',
+        _categoryId == null ? 'كل الأقسام' : 'قسم: ${_catName(_categoryId)}',
+      ].join(' — '),
       icon: Icons.inventory_2_rounded,
       actions: [
         SourceMenu(
@@ -276,6 +287,8 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
                               productId: shown[i].productId,
                               productName: shown[i].name,
                               categoryName: _catName(shown[i].categoryId),
+                              customerId: widget.customerId,
+                              customerName: widget.customerName,
                             )),
                           ),
                         ),
@@ -289,7 +302,8 @@ class _ProductReportsScreenState extends State<ProductReportsScreen> {
                     constraints: const BoxConstraints(maxWidth: 1180),
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 10, 16, 40),
-                      child: _unsoldCard(unsold),
+                      // «لم تُبع» لا معنى لها لعميل واحد
+                      child: widget.customerId == null ? _unsoldCard(unsold) : const SizedBox.shrink(),
                     ),
                   ),
                 ),

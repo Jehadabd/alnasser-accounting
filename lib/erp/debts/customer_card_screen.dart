@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../accounting/screens/acc_ui.dart';
 import '../../models/app_user.dart';
+import '../../screens/product_reports_screen.dart'; // 📦 بضاعة هذا العميل
 import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
@@ -462,6 +463,10 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
                 permission: AppPermissions.collection)),
         a('الفواتير غير المسددة', Icons.receipt_outlined, ErpColors.orange,
             () => _open(OpenInvoicesScreen(customerId: widget.customerId))),
+        a('تقارير البضاعة لهذا العميل', Icons.inventory_2_rounded, ErpColors.green,
+            () => _open(
+                ProductReportsScreen(customerId: widget.customerId, customerName: '${_customer!['name']}'),
+                permission: AppPermissions.repProducts)),
       ]),
     );
   }
