@@ -147,6 +147,7 @@ class _DataImportScreenState extends State<DataImportScreen> {
       var first = sheets.indexWhere((s) => s.rows.length > 1);
       if (first < 0) first = 0;
       _fileName = f.name;
+      _opt.sourceId = DataImport.fileFingerprint(bytes); // يمنع إضافة الملف نفسه مرتين
       _sheets = sheets;
       _sheet = first;
       _opt.headerRow = sheets[first].firstNonEmptyRow;
@@ -291,10 +292,20 @@ class _DataImportScreenState extends State<DataImportScreen> {
                   Text('مجموع الأرصدة الافتتاحية (${e.key}): ${_money(e.value)} — بتاريخ ${_date(_opt.openingDate)}',
                       style: const TextStyle(fontWeight: FontWeight.w800)),
               if (!_money3) Text('مجموع الكميات: ${_money(plan.qtyTotal)}', style: const TextStyle(fontWeight: FontWeight.w800)),
+              if (plan.existingRows.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                SetBanner(
+                  'منها ${plan.existingRows.length} ${plan.kind == ImportKind.customers ? 'عميل' : 'مورد'} موجود عندنا: '
+                  'يُضاف إلى رصيد كل منهم مبلغه من الملف'
+                  '${plan.balanceByCurrency.length <= 1 ? ' (المجموع ${_money(plan.existingTotal)})' : ''} بمعاملة '
+                  '«رصيد مستورد» يُذكر فيها الملف والصف واسمك. و${plan.newRows.length} حساب جديد.',
+                  kind: SetBannerKind.warn,
+                ),
+              ],
               if (rows.any((r) => r.edited))
                 Text('عدّلت ${rows.where((r) => r.edited).length} قيمة عن الملف.', style: const TextStyle(color: kSetOrange)),
               const SizedBox(height: 6),
-              Text('لن يُستورد ${plan.skipped.length + plan.allRows.length - rows.length} صف (موجود، مكرر، خطأ، أو استبعدته).'),
+              Text('لن يُستورد ${plan.skipped.length + plan.allRows.length - rows.length} صف (مكرر، مستورد سابقاً، خطأ، أو استبعدته).'),
               const SizedBox(height: 8),
               const SetBanner('تُؤخذ نسخة احتياطية كاملة قبل الحفظ. إن لم تطابق المجاميع المحفوظة هذه المراجعة يُلغى الاستيراد كله.'),
               const SizedBox(height: 10),
@@ -610,6 +621,37 @@ class _DataImportScreenState extends State<DataImportScreen> {
             }),
           ),
         ]),
+        const SizedBox(height: 12),
+        Text(cust ? 'عميل موجود عندنا بالاسم نفسه:' : 'مورد موجود عندنا بالاسم نفسه:',
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          ChoiceChip(
+            label: const Text('يُضاف مبلغه إلى حسابه بمعاملة'),
+            selected: _opt.addToExisting,
+            onSelected: (_) => setState(() {
+              _opt.addToExisting = true;
+              _plan = null;
+            }),
+          ),
+          ChoiceChip(
+            label: const Text('يُتجاوز ولا يُمس'),
+            selected: !_opt.addToExisting,
+            onSelected: (_) => setState(() {
+              _opt.addToExisting = false;
+              _plan = null;
+            }),
+          ),
+        ]),
+        if (_opt.addToExisting)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'تُكتب معاملة «رصيد مستورد» فيها اسم الملف ورقم الصف واسم من قام بالاستيراد، ولا يتغير هاتفه ولا عنوانه. '
+              'إعادة استيراد الملف نفسه لا تضيف المبلغ مرة ثانية.',
+              style: TextStyle(fontSize: 12, color: kSetMuted, height: 1.5),
+            ),
+          ),
         if (!cust) ...[
           const SizedBox(height: 10),
           Row(children: [
@@ -795,6 +837,14 @@ class _DataImportScreenState extends State<DataImportScreen> {
             kpi('الصافي ${e.key == 'USD' ? 'دولار' : 'دينار'}', _money(e.value), kSetBlue),
           ],
       ]),
+      if (plan.existingRows.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: SetBanner(
+            '${plan.newRows.length} حساب جديد، و${plan.existingRows.length} موجود عندنا يُضاف إليه مبلغه '
+            '(${byCur.length <= 1 ? _money(plan.existingTotal) : 'حسب العملة'}) — معلَّمة في القائمة.',
+          ),
+        ),
     ]);
   }
 
@@ -861,7 +911,19 @@ class _DataImportScreenState extends State<DataImportScreen> {
             ),
           ),
           SizedBox(width: 56, child: Text('${r.line}', style: const TextStyle(color: kSetMuted))),
-          Expanded(flex: 4, child: Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+          Expanded(
+            flex: 4,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+              if (r.isExisting)
+                Text(
+                  'موجود${r.existingName != r.name ? ' «${r.existingName}»' : ''}: '
+                  '${_money(r.existingBalance)} ← ${_money(ImportNumbers.money(r.existingBalance + r.balance))}',
+                  style: const TextStyle(fontSize: 11.5, color: kSetOrange, fontWeight: FontWeight.w700),
+                  overflow: TextOverflow.ellipsis,
+                ),
+            ]),
+          ),
           if (_money3) ...[
             Expanded(flex: 3, child: Text(r.phone ?? '—', style: const TextStyle(color: kSetMuted), overflow: TextOverflow.ellipsis)),
             Expanded(
@@ -886,13 +948,18 @@ class _DataImportScreenState extends State<DataImportScreen> {
 
   Widget _resultCard(ImportResult r) => SetCard(
         title: r.verified ? 'تم الاستيراد ✓' : 'تم مع ملاحظات',
-        subtitle: 'أُضيف ${r.added} ${_kind.noun}',
+        subtitle: 'أُضيف ${r.added} ${_kind.noun} جديد'
+            '${r.addedToExisting > 0 ? '، وأُضيفت مبالغ إلى ${r.addedToExisting} حساب موجود' : ''}',
         icon: r.verified ? Icons.check_circle_rounded : Icons.warning_amber_rounded,
         color: r.verified ? kSetGreen : kSetOrange,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           if (r.verified) const SetBanner('المجاميع المحفوظة في القاعدة طابقت المراجعة.', kind: SetBannerKind.ok),
           for (final p in r.problems) SetBanner(p, kind: SetBannerKind.warn),
-          if (r.skippedAtSave.isNotEmpty) Text('تُجوّز عند الحفظ ${r.skippedAtSave.length} (أُضيفت بالاسم نفسه بعد المراجعة).'),
+          if (r.skippedAtSave.isNotEmpty) ...[
+            Text('تُجوّز عند الحفظ ${r.skippedAtSave.length}:', style: const TextStyle(fontWeight: FontWeight.w700)),
+            for (final x in r.skippedAtSave.take(30))
+              Text('• الصف ${x.line} «${x.name}»: ${x.reason}', style: const TextStyle(fontSize: 12.5, color: kSetMuted)),
+          ],
           if (_fresh != null) ...[
             const SizedBox(height: 8),
             SelectableText('القاعدة السابقة كاملة (أرشيف): ${_fresh!.archivePath}',

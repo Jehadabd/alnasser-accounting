@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:alnaser/services/database/business/tx_author.dart';
 import 'package:alnaser/services/import/data_import.dart';
 import 'package:alnaser/services/import/sheet_reader.dart';
 import 'package:archive/archive.dart';
@@ -213,7 +214,7 @@ void main() {
     });
     tearDown(() => db.close());
 
-    test('العملاء: موجود يُتجاوز، مكرر في الملف يُتجاوز، رقم غير واضح خطأ، والمجموع دقيق', () async {
+    test('العملاء: الموجود يُضاف إليه، مكرر في الملف يُتجاوز، رقم غير واضح خطأ، والمجموع دقيق', () async {
       final t = SheetTable('s', [
         ['الاسم', 'الهاتف', 'الرصيد'],
         ['جهاد عبد', '0770 123 4567', '250,000'],
@@ -227,15 +228,56 @@ void main() {
       ]);
       final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'phone': 1, 'balance': 2},
           ImportOptions(openingDate: DateTime(2026, 1, 1)));
-      expect(plan.rows.map((r) => r.name), ['جهاد عبد', 'زينب', 'كاظم']);
+      expect(plan.rows.map((r) => r.name), ['جهاد عبد', 'علي', 'زينب', 'كاظم']);
       expect(plan.rows.first.phone, '9647701234567');
-      expect(plan.positiveTotal, 250000);
+      expect(plan.existingRows.single.name, 'علي');
+      expect(plan.existingRows.single.existingId, 1);
+      expect(plan.existingTotal, 1000);
+      expect(plan.newRows.length, 3);
+      expect(plan.positiveTotal, 251000);
       expect(plan.negativeTotal, -1500.5);
-      expect(plan.balanceByCurrency['IQD'], 248499.5);
+      expect(plan.balanceByCurrency['IQD'], 249499.5);
       expect(plan.errors.map((e) => e.line), [5]);
-      expect(plan.skipped.length, 5);
+      expect(plan.skipped.length, 4);
       expect(plan.skipped.firstWhere((s) => s.line == 4).reason, contains('مكرر في الملف'));
-      expect(plan.skipped.firstWhere((s) => s.line == 3).reason, contains('موجود'));
+      expect(plan.skipped.firstWhere((s) => s.line == 6).reason, contains('محذوف'));
+
+      // الخيار القديم: الموجود يُتجاوز ولا يُمس
+      final skip = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'phone': 1, 'balance': 2},
+          ImportOptions(openingDate: DateTime(2026, 1, 1), addToExisting: false));
+      expect(skip.rows.map((r) => r.name), ['جهاد عبد', 'زينب', 'كاظم']);
+      expect(skip.skipped.firstWhere((s) => s.line == 3).reason, contains('موجود'));
+    });
+
+    test('موجود بلا مبلغ في الملف: لا شيء يُضاف', () async {
+      final t = SheetTable('s', [
+        ['الاسم', 'الرصيد'],
+        ['علي', ''],
+        ['علي ', '0'], // مكرر
+      ]);
+      final plan = await DataImport.plan(
+          db, t, ImportKind.customers, {'name': 0, 'balance': 1}, ImportOptions(openingDate: DateTime(2026, 1, 1)));
+      expect(plan.rows, isEmpty);
+      expect(plan.skipped.first.reason, contains('لا مبلغ'));
+    });
+
+    test('الملف نفسه مرة ثانية: صفوفه المستوردة سابقاً تُتجاوز', () async {
+      await db.execute('CREATE TABLE data_import_rows (row_key TEXT PRIMARY KEY, kind TEXT, entity_id INTEGER, '
+          'amount REAL, currency TEXT, file_name TEXT, at TEXT)');
+      await db.insert('data_import_rows', {'row_key': 'f1|customers|زينب', 'kind': 'customers', 'at': '2026-11-03T10:00'});
+      final t = SheetTable('s', [
+        ['الاسم', 'الرصيد'],
+        ['زينب', '500'],
+        ['كاظم', '700'],
+      ]);
+      final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1},
+          ImportOptions(openingDate: DateTime(2026, 1, 1), sourceId: 'f1'));
+      expect(plan.rows.map((r) => r.name), ['كاظم']);
+      expect(plan.skipped.single.reason, contains('سابقاً (2026-11-03)'));
+      // ملف آخر (بصمة أخرى): يُستورد
+      final other = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1},
+          ImportOptions(openingDate: DateTime(2026, 1, 1), sourceId: 'f2'));
+      expect(other.rows.length, 2);
     });
 
     test('عكس الإشارة: الموجب = له علينا', () async {
@@ -277,7 +319,8 @@ void main() {
       final plan = await DataImport.plan(db, t, ImportKind.suppliers,
           {'name': 0, 'balance': 1, 'currency': 2}, ImportOptions(openingDate: DateTime(2026, 1, 1)));
       expect(plan.rows.map((r) => '${r.name}:${r.currency}:${r.balance}'),
-          ['شركة الفرات:USD:1500.0', 'مخزن بغداد:IQD:2000000.0']);
+          ['شركة الفرات:USD:1500.0', 'شركة النور:IQD:100.0', 'مخزن بغداد:IQD:2000000.0']);
+      expect(plan.existingRows.single.name, 'شركة النور');
       expect(plan.errors.single.line, 5);
     });
 
@@ -337,6 +380,67 @@ void main() {
       ]);
       expect(() => DataImport.plan(db, t, ImportKind.products, {'name': 0}, ImportOptions(openingDate: DateTime(2026))),
           throwsArgumentError);
+    });
+  });
+
+  group('التنفيذ: إضافة مبلغ إلى عميل موجود', () {
+    late Database db;
+    setUp(() async {
+      db = await databaseFactoryFfiNoIsolate.openDatabase(inMemoryDatabasePath,
+          options: OpenDatabaseOptions(singleInstance: false));
+      await db.execute('CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, '
+          'current_total_debt REAL DEFAULT 0, is_deleted INTEGER DEFAULT 0, last_modified_at TEXT)');
+      await db.execute('CREATE TABLE transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER, '
+          'transaction_uuid TEXT, sync_uuid TEXT, transaction_date TEXT, amount_changed REAL, '
+          'balance_before_transaction REAL, new_balance_after_transaction REAL, transaction_note TEXT, '
+          'transaction_type TEXT, description TEXT, created_at TEXT, invoice_id INTEGER, is_deleted INTEGER, '
+          'is_created_by_me INTEGER, is_uploaded INTEGER, checksum TEXT, created_by_username TEXT)');
+      // علي: دين 1000 بتاريخ 2026-03-01، ثم تسديد 400 بتاريخ 2026-05-01 ⇒ 600
+      await db.insert('customers', {'id': 1, 'name': 'علي', 'current_total_debt': 600});
+      await db.insert('transactions', {'customer_id': 1, 'transaction_date': '2026-03-01T00:00:00.000',
+          'amount_changed': 1000, 'new_balance_after_transaction': 1000, 'transaction_type': 'manual_debt', 'is_deleted': 0});
+      await db.insert('transactions', {'customer_id': 1, 'transaction_date': '2026-05-01T00:00:00.000',
+          'amount_changed': -400, 'new_balance_after_transaction': 600, 'transaction_type': 'manual_payment', 'is_deleted': 0});
+    });
+    tearDown(() => db.close());
+
+    test('معاملة بالمبلغ والملف والصف ومن قام بها، وسلسلة الأرصدة تُعاد بالتاريخ، ولا تكرار', () async {
+      TxAuthor.currentName = () => 'أحمد';
+      addTearDown(() => TxAuthor.currentName = null);
+      final t = SheetTable('s', [
+        ['الاسم', 'الرصيد'],
+        ['علي', '250'],
+      ]);
+      final o = ImportOptions(openingDate: DateTime(2026, 1, 1), sourceId: 'abc');
+      final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1}, o);
+      expect(plan.existingRows.single.existingBalance, 600);
+
+      final res = await DataImport.debugExecuteCustomers(db, plan, o, 'ديون.xls');
+      expect(res.added, 0);
+      expect(res.addedToExisting, 1);
+
+      final card = await db.query('customers', where: 'id = 1');
+      expect(card.single['current_total_debt'], 850);
+      final txs = await db.query('transactions', where: 'customer_id = 1', orderBy: 'transaction_date, id');
+      expect(txs.map((x) => x['amount_changed']), [250, 1000, -400]); // المستورد بتاريخ أقدم أولاً
+      expect(txs.map((x) => x['new_balance_after_transaction']), [250, 1250, 850]);
+      expect(txs.map((x) => x['balance_before_transaction']), [0, 250, 1250]);
+      final imp = txs.first;
+      expect(imp['transaction_type'], 'opening_balance');
+      expect(imp['description'], 'رصيد مستورد من Excel');
+      expect(imp['transaction_note'], 'استيراد من Excel: «ديون.xls» — الصف 2 — بواسطة أحمد');
+      expect(imp['created_by_username'], 'أحمد');
+      expect('${imp['transaction_uuid']}', startsWith('tximp_'));
+
+      // الملف نفسه مرة ثانية: المراجعة تتجاوزه ولا يتغير شيء
+      final again = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1}, o);
+      expect(again.rows, isEmpty);
+      expect(again.skipped.single.reason, contains('سابقاً'));
+      final res2 = await DataImport.debugExecuteCustomers(db, plan, o, 'ديون.xls'); // خطة قديمة أُعيد تنفيذها
+      expect(res2.addedToExisting, 0);
+      expect(res2.skippedAtSave.single.reason, contains('سابقاً'));
+      expect((await db.query('customers', where: 'id = 1')).single['current_total_debt'], 850);
+      expect((await db.query('transactions')).length, 3);
     });
   });
 }

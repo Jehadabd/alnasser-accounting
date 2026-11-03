@@ -297,6 +297,33 @@ class SupplierDebtReconciler {
     await rebuildSupplierBalances(db, supplierId);
   }
 
+  /// رصيد مستورد يُضاف إلى مورد موجود (الاستيراد من Excel): حركة مستقلة من نوع
+  /// الرصيد الافتتاحي بمعرّف ثابت [uuid] — لا تستبدل رصيده الافتتاحي ولا تتكرر
+  /// إن استُدعيت مرتين بالمعرّف نفسه. يعيد false إن كانت موجودة سلفاً.
+  static Future<bool> addImportedBalance(
+    DatabaseExecutor db, {
+    required int supplierId,
+    required double amount,
+    required String currency,
+    required DateTime date,
+    required String description,
+    required String uuid,
+  }) async {
+    final existing = await db.query('supplier_transactions',
+        columns: ['id'], where: 'transaction_uuid = ?', whereArgs: [uuid], limit: 1);
+    if (existing.isNotEmpty) return false;
+    await _insert(db,
+        supplierId: supplierId,
+        amount: amount,
+        currency: currency,
+        type: openingType,
+        description: description,
+        uuid: uuid,
+        date: date.toIso8601String());
+    await rebuildSupplierBalances(db, supplierId);
+    return true;
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // 3) إعادة بناء أرصدة المورد من دفتره
   // ═══════════════════════════════════════════════════════════════════════

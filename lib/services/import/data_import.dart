@@ -14,17 +14,25 @@
 //          الافتتاحي في دفتر المخزون والمزامنة)، ثم تُطابق الكمية والسعر بعد الحفظ.
 //
 // قواعد الأمان الحسابي:
-//   • الاسم الموجود يُتجاوز ولا يُمس رصيده ولا سعره (قرار المالك 2026-11-03)،
-//     فإعادة استيراد الملف نفسه لا تضاعف أي رصيد.
+//   • عميل أو مورد موجود بالاسم نفسه: يُضاف مبلغه من الملف إلى حسابه بمعاملة
+//     «رصيد مستورد» (قرار المالك 2026-11-03 — كان يُتجاوز)، تُذكر فيها الملف
+//     والصف ومن قام بالاستيراد، ولا تُمس بطاقته (الهاتف والعنوان). يمكن إيقاف
+//     ذلك من [ImportOptions.addToExisting] فيُتجاوز كما كان.
+//   • إعادة استيراد الملف نفسه (بصمة محتواه) لا تضيف أي مبلغ مرة ثانية: لكل صف
+//     مفتاح ثابت (البصمة + النوع + الاسم) في سجل data_import_rows وفي معرّف
+//     المعاملة، والصف الذي سبق استيراده يُتجاوز مع ذكر تاريخه.
+//   • المادة الموجودة تُتجاوز ولا يُمس سعرها ولا كميتها.
 //   • الرصيد يُسجَّل «رصيداً افتتاحياً» بمعاملة بتاريخ يختاره المستخدم (قيد على
 //     «رأس المال الافتتاحي» كما في إضافة عميل أو مورد يدوياً) — لا يُكتب رقم في
 //     البطاقة بلا معاملة تسنده.
 //   • الرقم غير الواضح («1.234,5» أو «abc») يُرفض ولا يُخمَّن.
 //   • الفترة المثبّتة: لا رصيد افتتاحي بتاريخ داخلها.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' show sha1;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -37,10 +45,13 @@ import '../../models/supplier.dart';
 import '../backup_files.dart';
 import '../database/business/customer_name_rule.dart';
 import '../database/business/supplier_debt_reconciler.dart';
+import '../database/business/tx_author.dart';
 import '../database/core/database_helpers.dart';
 import '../database/dao/customer_dao.dart';
 import '../database/supplier_compat.dart';
 import '../database_service.dart';
+import '../firebase_sync/uuid_helper.dart';
+import '../../utils/money_calculator.dart';
 import '../name_search.dart';
 import 'sheet_reader.dart';
 
@@ -152,7 +163,15 @@ class ImportOptions {
     this.headerRow = 0,
     this.positiveIsNormal = true,
     this.defaultCurrency = 'IQD',
+    this.addToExisting = true,
+    this.sourceId = '',
   });
+
+  /// العملاء والموردون الموجودون بالاسم نفسه: يُضاف مبلغهم بمعاملة (true) أو يُتجاوزون.
+  bool addToExisting;
+
+  /// بصمة محتوى الملف ([fileFingerprint]) — تمنع إضافة الملف نفسه مرتين. فارغة = بلا منع.
+  String sourceId;
 
   /// تاريخ الرصيد الافتتاحي لكل العملاء/الموردين المستوردين.
   DateTime openingDate;
@@ -190,6 +209,19 @@ class PlanRow {
   double? originalBalance;
   double? originalPrice;
   double? originalQty;
+
+  /// حساب موجود بالاسم نفسه يُضاف إليه المبلغ بمعاملة (null = حساب جديد).
+  int? existingId;
+  String? existingName;
+
+  /// رصيده الحالي قبل الاستيراد (بعملة الصف للمورد).
+  double existingBalance = 0;
+
+  /// المفتاح الثابت للصف (null إن لم تُعرف بصمة الملف).
+  String? rowKey;
+
+  bool get isExisting => existingId != null;
+
   bool get edited =>
       (originalBalance != null && (originalBalance! - balance).abs() > 0.004) ||
       (originalPrice != null && (originalPrice! - price).abs() > 0.004) ||
@@ -231,11 +263,19 @@ class ImportPlan {
   double get positiveTotal => ImportNumbers.money(rows.where((r) => r.balance > 0).fold(0.0, (s, r) => s + r.balance));
   double get negativeTotal => ImportNumbers.money(rows.where((r) => r.balance < 0).fold(0.0, (s, r) => s + r.balance));
   double get qtyTotal => rows.fold(0.0, (s, r) => s + r.qty);
+
+  /// الحسابات الجديدة / الموجودة التي سيُضاف إليها مبلغ.
+  List<PlanRow> get newRows => rows.where((r) => !r.isExisting).toList();
+  List<PlanRow> get existingRows => rows.where((r) => r.isExisting).toList();
+  double get existingTotal => ImportNumbers.money(existingRows.fold(0.0, (s, r) => s + r.balance));
 }
 
 class ImportResult {
   ImportResult({required this.added, required this.skippedAtSave, required this.backupPath, required this.verified, this.problems = const []});
   final int added;
+
+  /// حسابات موجودة أُضيف إليها مبلغ.
+  int addedToExisting = 0;
 
   /// صفوف تجاوزها الحفظ لأن اسمها ظهر بعد المعاينة (من جهاز آخر مثلاً).
   final List<SkipRow> skippedAtSave;
@@ -248,6 +288,57 @@ class ImportResult {
 
 class DataImport {
   DataImport._();
+
+  /// بصمة محتوى الملف (‎SHA-1، 20 حرفاً) — الملف نفسه بأي اسم يعطي البصمة نفسها.
+  static String fileFingerprint(List<int> bytes) => sha1.convert(bytes).toString().substring(0, 20);
+
+  static String _rowKey(String sourceId, ImportKind kind, String nameKey) => '$sourceId|${kind.name}|$nameKey';
+
+  /// معرّف معاملة ثابت للصف: إعادة الاستيراد تجده فلا تكرر المبلغ (ولا المزامنة).
+  static String _txUuid(String rowKey) => 'tximp_${sha1.convert(utf8.encode(rowKey)).toString().substring(0, 32)}';
+
+  static String _author() {
+    try {
+      return TxAuthor.currentName?.call()?.trim() ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static String _importNote(String fileName, PlanRow r) {
+    final who = _author();
+    return 'استيراد من Excel: «$fileName» — الصف ${r.line}${who.isEmpty ? '' : ' — بواسطة $who'}';
+  }
+
+  static Future<void> _ensureRowLedger(DatabaseExecutor db) => db.execute('''
+      CREATE TABLE IF NOT EXISTS data_import_rows (
+        row_key TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        entity_id INTEGER,
+        amount REAL,
+        currency TEXT,
+        file_name TEXT,
+        at TEXT NOT NULL
+      )''');
+
+  /// المفاتيح التي سبق استيرادها ← تاريخها.
+  static Future<Map<String, String>> _importedBefore(DatabaseExecutor db, List<String> keys) async {
+    final out = <String, String>{};
+    if (keys.isEmpty) return out;
+    try {
+      for (var i = 0; i < keys.length; i += 500) {
+        final part = keys.sublist(i, (i + 500).clamp(0, keys.length));
+        final r = await db.rawQuery(
+            'SELECT row_key, at FROM data_import_rows WHERE row_key IN (${List.filled(part.length, '?').join(',')})', part);
+        for (final x in r) {
+          out['${x['row_key']}'] = '${x['at'] ?? ''}';
+        }
+      }
+    } on DatabaseException {
+      // لا سجل بعد = لا استيراد سابق
+    }
+    return out;
+  }
 
   // ─────────────────────────── 1) المعاينة (قراءة فقط) ───────────────────────────
 
@@ -306,22 +397,31 @@ class DataImport {
 
     // الموجود في القاعدة (مرة واحدة)
     final existing = <String, String>{}; // مفتاح ← الاسم المحفوظ
+    final existingId = <String, int>{};
+    final existingBal = <String, Map<String, double>>{}; // مفتاح ← العملة ← الرصيد
     final deleted = <String>{};
     final barcodes = <String>{};
+    double d0(Object? v) => (v as num?)?.toDouble() ?? 0;
     // [freshTarget]: الاستيراد إلى قاعدة جديدة فارغة — لا «موجود» يُقارن به
     if (freshTarget) {
       // لا شيء
     } else if (kind == ImportKind.customers) {
-      for (final r in await db.rawQuery('SELECT name, COALESCE(is_deleted, 0) AS d FROM customers')) {
+      for (final r in await db.rawQuery('SELECT * FROM customers ORDER BY id')) {
         final n = '${r['name'] ?? ''}';
         final k = _customerKey(n);
         if (k.isEmpty) continue;
-        if ((r['d'] as num? ?? 0) == 0) {
-          existing.putIfAbsent(k, () => n);
-        } else {
+        final merged = r.containsKey('merged_into_id') && r['merged_into_id'] != null;
+        if ((r['is_deleted'] as num? ?? 0) == 0 && !merged) {
+          if (!existing.containsKey(k)) {
+            existing[k] = n;
+            existingId[k] = r['id'] as int;
+            existingBal[k] = {'IQD': d0(r['current_total_debt'])};
+          }
+        } else if (!merged) {
           deleted.add(k);
         }
       }
+      deleted.removeAll(existing.keys);
     } else if (kind == ImportKind.products) {
       for (final r in await db.rawQuery('SELECT name, name_norm, barcode FROM products')) {
         final n = '${r['name'] ?? ''}';
@@ -338,9 +438,13 @@ class DataImport {
         }
       } catch (_) {}
     } else {
-      for (final r in await db.rawQuery('SELECT name FROM suppliers')) {
+      for (final r in await db.rawQuery('SELECT * FROM suppliers ORDER BY id')) {
         final n = '${r['name'] ?? ''}';
-        existing.putIfAbsent(_looseKey(n), () => n);
+        final k = _looseKey(n);
+        if (existing.containsKey(k)) continue;
+        existing[k] = n;
+        existingId[k] = r['id'] as int;
+        existingBal[k] = {'IQD': d0(r['total_debt_iqd']), 'USD': d0(r['total_debt_usd'])};
       }
     }
 
@@ -381,7 +485,8 @@ class DataImport {
         continue;
       }
       final have = existing[key];
-      if (have != null) {
+      final addTo = have != null && kind != ImportKind.products && o.addToExisting;
+      if (have != null && !addTo) {
         skipped.add(SkipRow(line, name, 'موجود في البرنامج باسم «$have» — لم يُمس'));
         continue;
       }
@@ -391,6 +496,7 @@ class DataImport {
       }
 
       final row = PlanRow(line: line, name: name)
+        ..rowKey = o.sourceId.isEmpty ? null : _rowKey(o.sourceId, kind, key)
         ..phone = kind == ImportKind.products ? null : phoneOf(cell(r, 'phone'))
         ..address = _nullIfEmpty(cell(r, 'address'))
         ..note = _nullIfEmpty(cell(r, 'note'));
@@ -442,6 +548,16 @@ class DataImport {
           }
           row.currency = cur ?? o.defaultCurrency;
         }
+        if (addTo) {
+          if (row.balance.abs() < 0.005) {
+            skipped.add(SkipRow(line, name, 'موجود باسم «$have» ولا مبلغ له في الملف — لا شيء يُضاف'));
+            continue;
+          }
+          row
+            ..existingId = existingId[key]
+            ..existingName = have
+            ..existingBalance = existingBal[key]?[row.currency] ?? 0;
+        }
       }
       row
         ..originalBalance = row.balance
@@ -449,6 +565,19 @@ class DataImport {
         ..originalQty = row.qty;
       seen[key] = line;
       rows.add(row);
+    }
+
+    // 🛡️ الملف نفسه استُورد سابقاً؟ صفوفه لا تُضاف مرة ثانية
+    final before = await _importedBefore(db, [for (final r in rows) if (r.rowKey != null) r.rowKey!]);
+    if (before.isNotEmpty) {
+      rows.removeWhere((r) {
+        final at = r.rowKey == null ? null : before[r.rowKey!];
+        if (at == null) return false;
+        final day = at.length >= 10 ? at.substring(0, 10) : at;
+        skipped.add(SkipRow(r.line, r.name, 'استُورد من هذا الملف نفسه سابقاً ($day) — لا يُضاف مرة ثانية'));
+        return true;
+      });
+      skipped.sort((a, b) => a.line.compareTo(b.line));
     }
     return ImportPlan(kind, rows, skipped);
   }
@@ -507,6 +636,7 @@ class DataImport {
       if (bad) throw ArgumentError('الصف ${r.line} «${r.name}»: قيمة غير صالحة — صحّحها في المعاينة');
     }
     final db = await DatabaseService().database;
+    await _ensureRowLedger(db);
     final hasBalances = plan.rows.any((r) => r.balance.abs() >= 0.005);
     if (plan.kind != ImportKind.products && hasBalances) {
       await PeriodLock.assertOpen(o.openingDate, db);
@@ -516,10 +646,10 @@ class DataImport {
     late ImportResult result;
     switch (plan.kind) {
       case ImportKind.customers:
-        result = await _customers(db, plan, o, backup, onProgress);
+        result = await _customers(db, plan, o, backup, fileName, onProgress);
         DatabaseService().invalidateCustomersCache();
       case ImportKind.suppliers:
-        result = await _suppliers(db, plan, o, backup, onProgress);
+        result = await _suppliers(db, plan, o, backup, fileName, onProgress);
       case ImportKind.products:
         result = await _products(db, plan, backup, onProgress);
     }
@@ -540,8 +670,10 @@ class DataImport {
         'details': result.problems.isEmpty ? (bal.isEmpty ? null : bal) : result.problems.join(' | '),
       });
     } catch (_) {}
+    final ex = result.addedToExisting;
     await ActivityLog.log('استيراد', 'استيراد من Excel',
-        'استيراد ${result.added} ${plan.kind.noun} من «$fileName» (${plan.skipped.length} مُتجاوز) — نسخة قبل الاستيراد: $backup');
+        'استيراد ${result.added} ${plan.kind.noun} جديد${ex > 0 ? '، وإضافة مبالغ إلى $ex حساب موجود (${plan.existingTotal})' : ''} '
+        'من «$fileName» (${plan.skipped.length} مُتجاوز) — نسخة قبل الاستيراد: $backup');
     return result;
   }
 
@@ -550,17 +682,76 @@ class DataImport {
     ImportPlan plan,
     ImportOptions o,
     String backup,
+    String fileName,
     void Function(int, int)? onProgress,
   ) async {
     final rows = plan.rows;
     final lateSkips = <SkipRow>[];
     var added = 0;
+    var addedExisting = 0;
     await db.transaction((txn) async {
+      final txCols = {for (final c in await txn.rawQuery('PRAGMA table_info(transactions)')) '${c['name']}'};
       final ids = <int>[];
       var expected = 0.0;
       var expectedWithBalance = 0;
+      // الحسابات الموجودة: رصيد كل منها قبل الإضافة (من معاملاته، مصدر الحقيقة)
+      final exIds = <int>[];
+      final exUuids = <String>[];
+      var exExpected = 0.0;
+      var exBefore = 0.0;
+      final ledger = <Map<String, Object?>>[];
       for (var i = 0; i < rows.length; i++) {
         final r = rows[i];
+        final note = _importNote(fileName, r);
+        final uuid = r.rowKey == null ? null : _txUuid(r.rowKey!);
+        if (uuid != null) {
+          final dup = await txn.query('transactions', columns: ['id'], where: 'transaction_uuid = ?', whereArgs: [uuid], limit: 1);
+          if (dup.isNotEmpty) {
+            lateSkips.add(SkipRow(r.line, r.name, 'استُورد من هذا الملف نفسه سابقاً — لم يُضف مرة ثانية'));
+            continue;
+          }
+        }
+        if (r.isExisting) {
+          // ➕ حساب موجود: معاملة «رصيد مستورد» بالمبلغ، والبطاقة كما هي
+          final cur = await txn.query('customers',
+              columns: ['id'], where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [r.existingId], limit: 1);
+          if (cur.isEmpty) {
+            lateSkips.add(SkipRow(r.line, r.name, 'الحساب «${r.existingName}» حُذف بعد المعاينة — لم يُضف شيء'));
+            continue;
+          }
+          if (exIds.contains(r.existingId)) {
+            lateSkips.add(SkipRow(r.line, r.name, 'الحساب نفسه مكرر في الملف — لم يُضف مرة ثانية'));
+            continue;
+          }
+          exBefore += await _sumTx(txn, r.existingId!);
+          final txUuid = uuid ?? UuidHelper.newTransactionUuid();
+          await txn.insert(
+              'transactions',
+              await TxAuthor.stamped(txn, {
+                'customer_id': r.existingId,
+                'transaction_uuid': txUuid,
+                'sync_uuid': txUuid,
+                'transaction_date': o.openingDate.toIso8601String(),
+                'amount_changed': r.balance,
+                'new_balance_after_transaction': 0.0, // يُضبط في إعادة الحساب أدناه
+                if (txCols.contains('balance_before_transaction')) 'balance_before_transaction': 0.0,
+                'transaction_note': note,
+                'transaction_type': 'opening_balance',
+                'description': 'رصيد مستورد من Excel',
+                'created_at': DateTime.now().toIso8601String(),
+                'invoice_id': null,
+                'is_deleted': 0,
+                'is_created_by_me': 1,
+                'is_uploaded': 0,
+              }));
+          await _rebuildCustomerBalances(txn, r.existingId!, txCols);
+          exIds.add(r.existingId!);
+          exUuids.add(txUuid);
+          exExpected += r.balance;
+          ledger.add({'row_key': r.rowKey, 'entity_id': r.existingId, 'amount': r.balance});
+          if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
+          continue;
+        }
         // ظهر الاسم بعد المعاينة (جهاز آخر، أو شاشة أخرى)؟ يُتجاوز ولا يُمس
         final now = await CustomerNameRule.findActive(txn, r.name);
         if (now != null) {
@@ -577,12 +768,15 @@ class DataImport {
             currentTotalDebt: r.balance,
           ),
           openingDate: o.openingDate,
+          openingNote: note,
+          openingUuid: uuid,
         );
         ids.add(id);
         if (r.balance.abs() >= 0.005) {
           expected += r.balance;
           expectedWithBalance++;
         }
+        ledger.add({'row_key': r.rowKey, 'entity_id': id, 'amount': r.balance});
         if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
       }
       // 🛡️ مطابقة قبل الحفظ النهائي: من القاعدة نفسها، لا من الذاكرة
@@ -595,10 +789,104 @@ class DataImport {
       if ((cards - expected).abs() > 0.005) {
         throw StateError('أُلغي الاستيراد كله: أرصدة البطاقات ($cards) لا تطابق المعاملات ($expected)');
       }
+      // 🛡️ الحسابات الموجودة: المعاملات المضافة = المعاينة، والبطاقات زادت بالمبلغ نفسه بالضبط
+      if (exIds.isNotEmpty) {
+        var got = 0.0;
+        for (final u in exUuids) {
+          final r = await txn.rawQuery(
+              'SELECT COALESCE(SUM(amount_changed), 0) AS s, COUNT(*) AS n FROM transactions '
+              'WHERE transaction_uuid = ? AND COALESCE(is_deleted, 0) = 0',
+              [u]);
+          if (((r.first['n'] as num?) ?? 0).toInt() != 1) {
+            throw StateError('أُلغي الاستيراد كله: معاملة مستوردة ($u) لم تُحفظ مرة واحدة بالضبط');
+          }
+          got += (r.first['s'] as num?)?.toDouble() ?? 0;
+        }
+        var after = 0.0;
+        for (final id in exIds) {
+          final tx = await _sumTx(txn, id);
+          final card = await txn.query('customers', columns: ['current_total_debt'], where: 'id = ?', whereArgs: [id], limit: 1);
+          final c = (card.first['current_total_debt'] as num?)?.toDouble() ?? 0;
+          if ((c - tx).abs() > 0.005) {
+            throw StateError('أُلغي الاستيراد كله: بطاقة العميل #$id ($c) لا تساوي مجموع معاملاته ($tx)');
+          }
+          after += tx;
+        }
+        final want = ImportNumbers.money(exExpected);
+        if ((ImportNumbers.money(got) - want).abs() > 0.005 ||
+            (ImportNumbers.money(after - exBefore) - want).abs() > 0.005) {
+          throw StateError('أُلغي الاستيراد كله: ما أُضيف للحسابات الموجودة (${ImportNumbers.money(got)}، '
+              'تغيّر الأرصدة ${ImportNumbers.money(after - exBefore)}) لا يطابق المعاينة ($want)');
+        }
+      }
+      await _writeLedger(txn, ledger, ImportKind.customers, 'IQD', fileName);
       added = ids.length;
+      addedExisting = exIds.length;
     });
     onProgress?.call(rows.length, rows.length);
-    return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true);
+    return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true)
+      ..addedToExisting = addedExisting;
+  }
+
+  /// للاختبار فقط: تنفيذ العملاء على قاعدة معطاة (بلا نسخة احتياطية ولا فحص الفترة).
+  static Future<ImportResult> debugExecuteCustomers(Database db, ImportPlan plan, ImportOptions o, String fileName) async {
+    await _ensureRowLedger(db);
+    return _customers(db, plan, o, '', fileName, null);
+  }
+
+  static Future<double> _sumTx(DatabaseExecutor db, int customerId) async {
+    final r = await db.rawQuery(
+        'SELECT COALESCE(SUM(amount_changed), 0) AS s FROM transactions WHERE customer_id = ? AND COALESCE(is_deleted, 0) = 0',
+        [customerId]);
+    return ImportNumbers.money((r.first['s'] as num?)?.toDouble() ?? 0);
+  }
+
+  /// سلسلة أرصدة العميل بترتيب التاريخ (المعاملة المستوردة قد تكون بتاريخ أقدم من
+  /// معاملات لاحقة)، ثم البطاقة = المجموع — نفس [TransactionDao.recalculateCustomerTransactionBalances]
+  /// و[recalculateAndApplyCustomerDebt] لكن داخل معاملة الاستيراد.
+  static Future<void> _rebuildCustomerBalances(Transaction txn, int customerId, Set<String> txCols) async {
+    final txs = await txn.rawQuery(
+        'SELECT id, amount_changed, transaction_date FROM transactions '
+        'WHERE customer_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY transaction_date ASC, id ASC',
+        [customerId]);
+    var running = 0.0;
+    for (final t in txs) {
+      final before = running;
+      final amt = (t['amount_changed'] as num?)?.toDouble() ?? 0;
+      running = MoneyCalculator.add(running, amt);
+      final date = DateTime.tryParse('${t['transaction_date'] ?? ''}');
+      await txn.update(
+        'transactions',
+        {
+          'new_balance_after_transaction': running,
+          if (txCols.contains('balance_before_transaction')) 'balance_before_transaction': before,
+          if (txCols.contains('checksum') && date != null)
+            'checksum': MoneyCalculator.calculateTransactionChecksum(
+                customerId: customerId, amount: amt, balanceBefore: before, balanceAfter: running, date: date),
+        },
+        where: 'id = ?',
+        whereArgs: [t['id']],
+      );
+    }
+    await txn.update('customers', {'current_total_debt': running, 'last_modified_at': DateTime.now().toIso8601String()},
+        where: 'id = ?', whereArgs: [customerId]);
+  }
+
+  static Future<void> _writeLedger(
+      DatabaseExecutor db, List<Map<String, Object?>> rows, ImportKind kind, String currency, String fileName) async {
+    final at = DateTime.now().toIso8601String();
+    for (final r in rows) {
+      if (r['row_key'] == null) continue;
+      await db.insert('data_import_rows', {
+        'row_key': r['row_key'],
+        'kind': kind.name,
+        'entity_id': r['entity_id'],
+        'amount': r['amount'],
+        'currency': r['currency'] ?? currency,
+        'file_name': fileName,
+        'at': at,
+      });
+    }
   }
 
   static Future<({double sum, int count})> _sumCustomerOpenings(DatabaseExecutor db, List<int> ids) async {
@@ -634,19 +922,55 @@ class DataImport {
     ImportPlan plan,
     ImportOptions o,
     String backup,
+    String fileName,
     void Function(int, int)? onProgress,
   ) async {
     final rows = plan.rows;
     final lateSkips = <SkipRow>[];
     var added = 0;
+    var addedExisting = 0;
     await db.transaction((txn) async {
       final names = {
         for (final r in await txn.rawQuery('SELECT name FROM suppliers')) _looseKey('${r['name'] ?? ''}'),
       };
       final ids = <int>[];
       final expected = <String, double>{};
+      // الموجودون: رصيد كل عملة قبل الإضافة، والمتوقع إضافته
+      final exIds = <int>{};
+      final exBefore = <String, double>{};
+      final exExpected = <String, double>{};
+      final ledger = <Map<String, Object?>>[];
       for (var i = 0; i < rows.length; i++) {
         final r = rows[i];
+        if (r.isExisting) {
+          final sup = await txn.query('suppliers', columns: ['id'], where: 'id = ?', whereArgs: [r.existingId], limit: 1);
+          if (sup.isEmpty) {
+            lateSkips.add(SkipRow(r.line, r.name, 'المورد «${r.existingName}» حُذف بعد المعاينة — لم يُضف شيء'));
+            continue;
+          }
+          if (!exIds.contains(r.existingId)) {
+            for (final cur in const ['IQD', 'USD']) {
+              exBefore[cur] = (exBefore[cur] ?? 0) + await _sumSupplierTx(txn, r.existingId!, cur);
+            }
+          }
+          final note = _importNote(fileName, r);
+          final ok = await SupplierDebtReconciler.addImportedBalance(txn,
+              supplierId: r.existingId!,
+              amount: r.balance,
+              currency: r.currency,
+              date: o.openingDate,
+              description: 'رصيد مستورد — $note',
+              uuid: r.rowKey == null ? 'simp_${UuidHelper.newTransactionUuid()}' : 's${_txUuid(r.rowKey!)}');
+          if (!ok) {
+            lateSkips.add(SkipRow(r.line, r.name, 'استُورد من هذا الملف نفسه سابقاً — لم يُضف مرة ثانية'));
+            continue;
+          }
+          exIds.add(r.existingId!);
+          exExpected[r.currency] = (exExpected[r.currency] ?? 0) + r.balance;
+          ledger.add({'row_key': r.rowKey, 'entity_id': r.existingId, 'amount': r.balance, 'currency': r.currency});
+          if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
+          continue;
+        }
         if (names.contains(_looseKey(r.name))) {
           lateSkips.add(SkipRow(r.line, r.name, 'أُضيف بالاسم نفسه بعد المعاينة — لم يُمس'));
           continue;
@@ -668,9 +992,11 @@ class DataImport {
         if (r.balance.abs() >= 0.005) {
           // موجب = له علينا — نفس اصطلاح «رصيد افتتاحي» في شاشة المورد
           await SupplierDebtReconciler.setOpeningBalance(txn,
-              supplierId: id, amount: r.balance, currency: r.currency, date: o.openingDate, description: 'استيراد من Excel');
+              supplierId: id, amount: r.balance, currency: r.currency, date: o.openingDate,
+              description: _importNote(fileName, r));
           expected[r.currency] = (expected[r.currency] ?? 0) + r.balance;
         }
+        ledger.add({'row_key': r.rowKey, 'entity_id': id, 'amount': r.balance, 'currency': r.currency});
         if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
       }
       // 🛡️ مطابقة قبل الحفظ النهائي لكل عملة
@@ -695,11 +1021,39 @@ class DataImport {
           throw StateError('أُلغي الاستيراد كله: أرصدة الموردين بـ$cur المحفوظة ($got، البطاقات $cards) '
               'لا تطابق المعاينة ($want)');
         }
+        // الموجودون: دفترهم وبطاقاتهم زادت بالمبلغ نفسه بالضبط
+        if (exIds.isNotEmpty) {
+          var after = 0.0;
+          var cardsAfter = 0.0;
+          final col = cur == 'USD' ? 'total_debt_usd' : 'total_debt_iqd';
+          for (final id in exIds) {
+            after += await _sumSupplierTx(txn, id, cur);
+            final c = await txn.query('suppliers', columns: [col], where: 'id = ?', whereArgs: [id], limit: 1);
+            cardsAfter += (c.first[col] as num?)?.toDouble() ?? 0;
+          }
+          final wantEx = ImportNumbers.money(exExpected[cur] ?? 0);
+          final delta = ImportNumbers.money(after - (exBefore[cur] ?? 0));
+          if ((delta - wantEx).abs() > 0.005 || (ImportNumbers.money(cardsAfter) - ImportNumbers.money(after)).abs() > 0.005) {
+            throw StateError('أُلغي الاستيراد كله: ما أُضيف للموردين الموجودين بـ$cur ($delta، البطاقات $cardsAfter) '
+                'لا يطابق المعاينة ($wantEx)');
+          }
+        }
       }
+      await _writeLedger(txn, ledger, ImportKind.suppliers, 'IQD', fileName);
       added = ids.length;
+      addedExisting = exIds.length;
     });
     onProgress?.call(rows.length, rows.length);
-    return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true);
+    return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true)
+      ..addedToExisting = addedExisting;
+  }
+
+  static Future<double> _sumSupplierTx(DatabaseExecutor db, int supplierId, String cur) async {
+    final r = await db.rawQuery(
+        "SELECT COALESCE(SUM(amount_changed), 0) AS s FROM supplier_transactions "
+        "WHERE supplier_id = ? AND COALESCE(is_deleted, 0) = 0 AND COALESCE(currency, 'IQD') = ?",
+        [supplierId, cur]);
+    return (r.first['s'] as num?)?.toDouble() ?? 0;
   }
 
   static Future<ImportResult> _products(

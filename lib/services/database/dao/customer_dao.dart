@@ -33,7 +33,10 @@ class CustomerDao {
   /// نفس [insertCustomer] داخل معاملة قائمة — يستعمله الاستيراد من Excel ليضيف
   /// كل العملاء في معاملة واحدة (كلهم أو لا أحد). [openingDate] تاريخ الرصيد
   /// الافتتاحي (الافتراضي: الآن). الرصيد السالب (له علينا) يُسجَّل أيضاً.
-  static Future<int> insertCustomerIn(Transaction txn, Customer customer, {DateTime? openingDate}) async {
+  /// [openingNote] ملاحظة معاملة الرصيد (الاستيراد: الملف والصف ومن قام به)،
+  /// و[openingUuid] معرّفها الثابت (يمنع تكرار استيراد الملف نفسه).
+  static Future<int> insertCustomerIn(Transaction txn, Customer customer,
+      {DateTime? openingDate, String? openingNote, String? openingUuid}) async {
     {
       // 🛡️ سجل الديون: لا حسابان بالاسم نفسه (بتجاهل المسافات)
       await CustomerNameRule.ensureAvailable(txn, customer.name);
@@ -94,7 +97,7 @@ class CustomerDao {
       // كان الشرط «> 0»: رصيد سالب يُكتب في بطاقة العميل بلا معاملة تسنده.
       if (customer.currentTotalDebt.abs() > 0.0005) {
         final now = openingDate ?? DateTime.now();
-        final txUuid = UuidHelper.newTransactionUuid();
+        final txUuid = openingUuid ?? UuidHelper.newTransactionUuid();
         await txn.insert('transactions', await TxAuthor.stamped(txn, {
           'customer_id': customerId,
           'transaction_uuid': txUuid, // 🆔 هوية فورية — لا ننتظر backfill الإقلاع
@@ -102,7 +105,7 @@ class CustomerDao {
           'transaction_date': now.toIso8601String(),
           'amount_changed': customer.currentTotalDebt,
           'new_balance_after_transaction': customer.currentTotalDebt,
-          'transaction_note': 'الدين المبدئي عند إضافة العميل',
+          'transaction_note': openingNote ?? 'الدين المبدئي عند إضافة العميل',
           'transaction_type': 'opening_balance',
           'description': 'رصيد افتتاحي',
           'created_at': DateTime.now().toIso8601String(), // وقت الإدخال الفعلي (التاريخ أعلاه قد يكون سابقاً)
