@@ -15,6 +15,7 @@ import '../../services/database_service.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../report_export.dart';
+import 'screen_usage.dart';
 
 class ActivityLog {
   ActivityLog._();
@@ -63,11 +64,15 @@ class ActivityLog {
 
   /// فتح شاشة (مرة في الدقيقة لكل شاشة).
   static void viewed(String screen) {
+    // قبل الدخول (شاشة الشبكة من صفحة الدخول مثلاً) لا نلمس القاعدة
+    if (AuthService().currentUser == null) return;
     final now = DateTime.now();
     final last = _lastView[screen];
     if (last != null && now.difference(last).inSeconds < 60) return;
     _lastView[screen] = now;
     log('تصفح', screen, 'فتح شاشة «$screen»');
+    // 📈 عدّاد يومي مختصر يبقى 120 يوماً (السجل التفصيلي يُحذف بعد 7 أيام)
+    DatabaseService().database.then((db) => ScreenUsage.bump(db, screen)).catchError((_) {});
   }
 
   static Future<List<Map<String, Object?>>> query({
@@ -195,6 +200,11 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
       subtitle: 'من فعل ماذا ومتى — ${fmtQty(_rows.length)} حركة',
       icon: Icons.manage_search_rounded,
       actions: [
+        IconButton(
+          tooltip: 'استعمال الشاشات (آخر 30 يوماً)',
+          icon: const Icon(Icons.insights_rounded),
+          onPressed: () => showScreenUsageDialog(context),
+        ),
         ...exportActions(context,
             title: 'سجل حركات النظام',
             subtitle: () => '${fmtDate(_from)} — ${fmtDate(_to)}',

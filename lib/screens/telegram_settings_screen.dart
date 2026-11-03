@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/settings_manager.dart';
 import '../services/telegram_invoice_export_service.dart';
+import '../widgets/owner_summary_card.dart'; // 📊 ملخص المالك اليومي
 import '../widgets/settings_kit.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -507,6 +508,9 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                 ),
               ]),
               const SizedBox(height: 16),
+
+              // 📊 ملخص المالك اليومي
+              OwnerSummaryCard(telegramReady: connected),
 
               // إجراءات متقدمة
               SetCard(

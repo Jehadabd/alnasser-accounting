@@ -4,6 +4,7 @@
 //
 // ما يُحذف (فقط):
 //   • سجل «تصفح» الشاشات (activity_logs.action = 'تصفح') الأقدم من 7 أيام.
+//   • عدّاد استعمال الشاشات اليومي (screen_usage) الأقدم من 120 يوماً.
 //
 // ما لا يُمسّ أبداً: الفواتير، المعاملات، القيود، السندات، سجل العمليات المالية
 // (إضافة/تعديل/حذف/اعتماد/موافقة)، إقرارات المزامنة (transaction_acks: دليل المطابقة
@@ -21,6 +22,7 @@ class DataRetention {
   DataRetention._();
 
   static const int browseDays = 7;
+  static const int usageDays = 120;
   static const String _lastRunKey = 'retention_last_run';
 
   /// يحذف «تصفح» الشاشات الأقدم من [browseDays]. يعيد عدد الصفوف المحذوفة.
@@ -38,6 +40,12 @@ class DataRetention {
       if (logs.isNotEmpty) {
         final cutoff = t.subtract(const Duration(days: browseDays)).toIso8601String();
         deleted += await db.delete('activity_logs', where: "action = 'تصفح' AND at < ?", whereArgs: [cutoff]);
+      }
+      final usage = await db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='screen_usage'");
+      if (usage.isNotEmpty) {
+        final u = t.subtract(const Duration(days: usageDays));
+        final cutoff = '${u.year.toString().padLeft(4, '0')}-${u.month.toString().padLeft(2, '0')}-${u.day.toString().padLeft(2, '0')}';
+        await db.delete('screen_usage', where: 'day < ?', whereArgs: [cutoff]);
       }
       if (has.isNotEmpty) {
         await db.rawInsert(

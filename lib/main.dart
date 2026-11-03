@@ -74,6 +74,8 @@ import 'erp/debts/debts_hub_screen.dart';
 import 'erp/inventory/inventory_hub_screen.dart';
 import 'erp/accounting_plus/period_screens.dart' show AccountingPlusHubScreen;
 import 'services/seat_service.dart';
+import 'erp/activity/screen_usage.dart' show ScreenUsageObserver; // 📈
+import 'widgets/home_destinations.dart' show HomeDests;
 
 /// 🔥 مفتاح الملاح العام — يُستخدم من ReconciliationPrompt وغيرها لإظهار
 /// حوارات من خارج شجرة الويدجت.
@@ -81,6 +83,16 @@ final GlobalKey<NavigatorState> globalNavigatorKey = GlobalKey<NavigatorState>()
 
 /// 🧭 يتتبع الشاشات المفتوحة للوحة الجانبية العامة
 final SideNavObserver sideNavObserver = SideNavObserver();
+
+/// 📈 فتح الشاشات الرئيسية المسمّاة ← عدّاد استعمال الشاشات
+final ScreenUsageObserver screenUsageObserver = ScreenUsageObserver({
+  for (final d in const [
+    HomeDests.pos, HomeDests.createInvoice, HomeDests.debtRegister, HomeDests.editInvoices,
+    HomeDests.productEntry, HomeDests.suppliers, HomeDests.sales, HomeDests.inventory,
+    HomeDests.accounting, HomeDests.reports, HomeDests.settings,
+  ])
+    if (d.route != null) d.route!: d.title,
+});
 
 bool _syncRestartPrompted = false;
 
@@ -619,7 +631,7 @@ class MyApp extends StatelessWidget {
         },
         initialRoute: initialRoute,
         navigatorKey: globalNavigatorKey, // ✅ مفتاح الملاح العام
-        navigatorObservers: [sideNavObserver, SaveLock.newObserver()],
+        navigatorObservers: [sideNavObserver, SaveLock.newObserver(), screenUsageObserver],
         // ⌨️ اختصارات لوحة المفاتيح لكل الشاشات (F1 الكاشير، F2 قائمة، F4 المحاسبة...)
         builder: (context, child) =>
             GlobalShortcuts(

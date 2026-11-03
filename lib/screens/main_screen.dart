@@ -18,6 +18,7 @@ import '../owner/owner_access.dart';
 import '../services/auth_service.dart'; // 👤
 import '../models/app_user.dart'; // 👤 AppPermissions
 import '../services/debt_reminders.dart'; // 📅
+import '../services/owner_summary.dart'; // 📊 ملخص المالك اليومي
 import 'debt_reminders_screen.dart' show showDueRemindersDialog;
 import '../services/reports_service.dart'; // ✅ Added
 import '../services/settings_manager.dart'; // ✅ Added
@@ -64,6 +65,8 @@ class _MainScreenState extends State<MainScreen> {
         if (!mounted) return;
         await DebtReminders.checkOnStartup(context, showDueRemindersDialog);
       });
+      // 📊 ملخص المالك اليومي على تيليجرام (إن فُعّل على هذا الجهاز)
+      OwnerSummary.start();
     });
   }
 

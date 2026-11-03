@@ -8,6 +8,8 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../services/database_service.dart';
 import '../services/debt_reminders.dart';
+import '../services/settings_manager.dart';
+import '../services/whatsapp/claim_message.dart'; // 📨 مطالبة رسمية عبر واتساب
 import '../widgets/debt_reminder_editor.dart';
 import '../widgets/settings_kit.dart';
 import 'customer_details_screen.dart';
@@ -351,6 +353,65 @@ class _DueDialog extends StatefulWidget {
 
 class _DueDialogState extends State<_DueDialog> {
   final _done = <int, String>{}; // معرّف الشخص في الموعد ← ما حدث له
+  Map<int, String> _phones = const {}; // العميل ← هاتفه
+  Map<int, String> _invoiceNo = const {}; // معرّف الفاتورة ← رقمها المطبوع (لا المعرّف الداخلي)
+  String _company = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadContacts();
+  }
+
+  Future<void> _loadContacts() async {
+    try {
+      final ids = {for (final d in widget.due) d.member.customerId}.toList();
+      final db = await DatabaseService().database;
+      final phones = <int, String>{};
+      for (var i = 0; i < ids.length; i += 500) {
+        final part = ids.sublist(i, i + 500 > ids.length ? ids.length : i + 500);
+        final r = await db.rawQuery(
+            'SELECT id, phone FROM customers WHERE id IN (${List.filled(part.length, '?').join(',')})', part);
+        for (final x in r) {
+          final ph = '${x['phone'] ?? ''}'.trim();
+          if (ph.isNotEmpty) phones[x['id'] as int] = ph;
+        }
+      }
+      final invIds = {for (final d in widget.due) if (d.member.invoiceId != null) d.member.invoiceId!}.toList();
+      final invNo = <int, String>{};
+      if (invIds.isNotEmpty) {
+        final r = await db.rawQuery(
+            'SELECT id, invoice_number FROM invoices WHERE id IN (${List.filled(invIds.length, '?').join(',')})', invIds);
+        for (final x in r) {
+          final n = '${x['invoice_number'] ?? ''}'.trim();
+          if (n.isNotEmpty) invNo[x['id'] as int] = n;
+        }
+      }
+      final company = (await SettingsManager.getAppSettings()).invoiceDesign.companyName;
+      if (!mounted) return;
+      setState(() {
+        _phones = phones;
+        _invoiceNo = invNo;
+        _company = company.replaceAll(RegExp(r'ـ+'), '').trim(); // بلا تطويل الزخرفة
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _whatsApp(DueReminder d) async {
+    final phone = WhatsAppLink.normalizePhone(_phones[d.member.customerId]);
+    if (phone == null) return;
+    final text = ClaimMessage.build(
+      customerName: d.member.customerName,
+      company: _company,
+      balance: d.balance,
+      amount: d.member.amount,
+      lastPaid: d.lastPaid,
+      invoiceNumber: d.member.invoiceId == null ? null : _invoiceNo[d.member.invoiceId],
+    );
+    final ok = await WhatsAppLink.open(phone, text);
+    if (!mounted) return;
+    setToast(context, ok ? 'فُتح واتساب برسالة المطالبة' : 'تعذّر فتح واتساب — نُسخت الرسالة، الصقها يدوياً', error: !ok);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -470,6 +531,13 @@ class _DueDialogState extends State<_DueDialog> {
                 icon: const Icon(Icons.person_outline, size: 18),
                 label: const Text('فتح حساب العميل'),
               ),
+              if (_phones.containsKey(m.customerId))
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: const Color(0xFF15803D)),
+                  onPressed: () => _whatsApp(d),
+                  icon: const Icon(Icons.chat_rounded, size: 18),
+                  label: const Text('مطالبة عبر واتساب'),
+                ),
               TextButton.icon(
                 onPressed: () async {
                   await DebtReminders.snoozeMemberToTomorrow(m.id!);

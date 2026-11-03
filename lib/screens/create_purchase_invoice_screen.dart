@@ -23,6 +23,7 @@ import '../erp/erp_kit.dart' show ErpTheme;
 import '../owner/ai_invoice/ai_alias_store.dart';
 import '../owner/ai_invoice/ai_purchase_prefill.dart';
 import '../owner/owner_access.dart';
+import '../erp/purchases/purchase_price_history.dart'; // 🏷️ سجل أسعار الشراء
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
@@ -69,6 +70,10 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   //    المورد القديم ويضيفها للجديد (دين مزدوج).
   bool _supplierLocked = false;
 
+  // 🏷️ آخر سعر شراء لكل (مادة، مورد، عملة) — قراءة فقط، يُحمَّل مرة لكل مفتاح
+  final Map<String, Future<PurchasePriceRow?>> _lastBuy = {};
+  double _alertPct = PurchasePriceHistory.defaultAlertPct;
+
   static String _normCurrency(String? c) => c == 'USD' ? 'USD' : 'IQD';
 
   static final intl.NumberFormat _moneyFmt = intl.NumberFormat('#,##0.##', 'en_US');
@@ -84,6 +89,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   @override
   void initState() {
     super.initState();
+    PurchasePriceHistory.alertPct().then((v) {
+      if (mounted) setState(() => _alertPct = v);
+    });
     _selectedSupplier = widget.preselectedSupplier;
     
     if (widget.existingInvoice != null) {
@@ -808,6 +816,15 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (!isNew && item.productId > 0) ...[
+                  _priceRiseBadge(item),
+                  IconButton(
+                    tooltip: 'أسعار الشراء السابقة لهذه المادة',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.price_change_outlined, size: 18, color: _pMuted),
+                    onPressed: () => _showPriceHistory(item),
+                  ),
+                ],
                 if (isNew) ...[
                   const SizedBox(width: 4),
                   TextButton.icon(
@@ -1280,6 +1297,129 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
 
   // #,##0.## — الدولار يحتفظ بكسوره (كان يُقرَّب لأقرب رقم صحيح في العرض)
   String _formatNumber(double number) => _moneyFmt.format(number);
+
+  // ═══════════════════ 🏷️ سجل أسعار الشراء (قراءة فقط) ═══════════════════
+
+  /// شارة «↑ x% عن آخر شراء» إن رفع المورد نفسه السعر فوق النسبة المحددة.
+  Widget _priceRiseBadge(PurchaseInvoiceItem item) {
+    final sid = _selectedSupplier?.id;
+    if (sid == null || item.conversionFactor <= 0) return const SizedBox.shrink();
+    final key = '${item.productId}|$sid|$_currency';
+    final future = _lastBuy[key] ??= DatabaseService().database.then((db) => PurchasePriceHistory.last(db,
+        productId: item.productId, supplierId: sid, currency: _currency, excludeInvoiceId: widget.existingInvoice?.id));
+    return FutureBuilder<PurchasePriceRow?>(
+      future: future,
+      builder: (context, snap) {
+        final last = snap.data;
+        final pct = PurchasePriceHistory.risePct(item.unitPrice / item.conversionFactor, last?.baseCost);
+        if (last == null || pct == null || pct <= _alertPct) return const SizedBox.shrink();
+        final when = last.date == null ? '' : intl.DateFormat('yyyy/MM/dd').format(last.date!);
+        return Tooltip(
+          message: 'آخر شراء من المورد نفسه $when: ${_formatNumber(last.unitPrice)} لكل ${last.unitName}'
+              '${last.factor > 1 ? ' (${_formatNumber(last.baseCost)} للوحدة الأساسية)' : ''}',
+          child: Container(
+            margin: const EdgeInsetsDirectional.only(start: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7ED),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFFFDBA74)),
+            ),
+            child: Text('↑ ${pct.toStringAsFixed(1)}% عن آخر شراء',
+                style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: Color(0xFFC2410C))),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showPriceHistory(PurchaseInvoiceItem item) async {
+    final db = await DatabaseService().database;
+    final rows = await PurchasePriceHistory.forProduct(db, item.productId, excludeInvoiceId: widget.existingInvoice?.id);
+    if (!mounted) return;
+    // الأرخص لكل عملة (بكلفة الوحدة الأساسية)
+    final cheapest = <String, double>{};
+    for (final r in rows) {
+      final c = cheapest[r.currency];
+      if (c == null || r.baseCost < c) cheapest[r.currency] = r.baseCost;
+    }
+    final pctCtrl = TextEditingController(text: _alertPct.toStringAsFixed(_alertPct % 1 == 0 ? 0 : 1));
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('أسعار شراء «${item.productName ?? ''}»'),
+        content: SizedBox(
+          width: 560,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('آخر 3 أسعار من كل مورد (فواتير الشراء المؤكدة). المقارنة بكلفة الوحدة الأساسية وبالعملة نفسها.',
+                style: TextStyle(fontSize: 12.5, color: _pMuted, height: 1.5)),
+            const SizedBox(height: 10),
+            if (rows.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text('لا مشتريات سابقة لهذه المادة.', textAlign: TextAlign.center),
+              )
+            else
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1, color: _pLine),
+                  itemBuilder: (_, i) {
+                    final r = rows[i];
+                    final best = (cheapest[r.currency] ?? -1) == r.baseCost;
+                    return ListTile(
+                      dense: true,
+                      title: Text(r.supplierName.isEmpty ? 'مورد محذوف' : r.supplierName,
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      subtitle: Text([
+                        if (r.date != null) intl.DateFormat('yyyy/MM/dd').format(r.date!),
+                        if (r.invoiceNumber.isNotEmpty) 'فاتورة ${r.invoiceNumber}',
+                        '${_formatNumber(r.unitPrice)} لكل ${r.unitName}',
+                      ].join(' • ')),
+                      trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Text('${_formatNumber(r.baseCost)} ${r.currency == 'USD' ? '\$' : 'د.ع'}',
+                            style: TextStyle(fontWeight: FontWeight.w900, color: best ? const Color(0xFF067647) : _pNavy)),
+                        Text(best ? 'الأرخص' : 'للوحدة الأساسية',
+                            style: TextStyle(fontSize: 11, color: best ? const Color(0xFF067647) : _pMuted)),
+                      ]),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 12),
+            Row(children: [
+              const Expanded(child: Text('نبّهني إن رفع المورد السعر أكثر من:')),
+              SizedBox(
+                width: 90,
+                child: TextField(
+                  controller: pctCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  textAlign: TextAlign.center,
+                  decoration: const InputDecoration(isDense: true, suffixText: '%', border: OutlineInputBorder()),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
+          FilledButton(
+            onPressed: () async {
+              final v = double.tryParse(pctCtrl.text.trim().replaceAll('٫', '.'));
+              if (v != null && v >= 0 && v <= 1000) {
+                await PurchasePriceHistory.setAlertPct(v);
+                if (mounted) setState(() => _alertPct = v);
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('حفظ النسبة'),
+          ),
+        ],
+      ),
+    );
+    // لا dispose هنا: النافذة قد تكون في حركة إغلاقها وما زالت تقرأ المتحكم
+  }
 }
 
 class _TableHeadersDelegate extends SliverPersistentHeaderDelegate {

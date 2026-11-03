@@ -3,7 +3,8 @@
 // 🏷️ طباعة ملصقات الباركود وقوائم الأسعار (مثل الإداري وسهل).
 //   • ملصق لكل مادة: الاسم + باركود Code128 + السعر المختار، بعدد نسخ.
 //   • قائمة أسعار PDF بمستويات الأسعار المطلوبة.
-// قراءة فقط — لا تغيّر أي بيانات.
+// لا تغيّر أي بيانات مالية. تسجّل فقط السعر المطبوع على كل ملصق (label_prints)
+// لقائمة «ملصقات تحتاج إعادة طباعة».
 
 import 'dart:typed_data';
 
@@ -16,6 +17,7 @@ import '../../accounting/screens/acc_ui.dart';
 import '../erp_common.dart';
 import '../report_export.dart';
 import '../stock_helpers.dart';
+import 'label_reprint.dart';
 
 class LabelOptions {
   LabelOptions({
@@ -94,6 +96,8 @@ class BarcodeLabels {
         return;
       }
       final bytes = await _labelsPdf(items, opts);
+      // 🏷️ السعر الذي طُبع على كل ملصق (لا يرمي ولا يوقف الطباعة)
+      if (opts.showPrice) await LabelReprint.record(db, items, opts.priceLevel);
       if (context.mounted) await ReportExport.openPdf(context, bytes, 'ملصقات باركود');
     } catch (e) {
       if (context.mounted) showError(context, 'تعذّرت طباعة الملصقات: $e');

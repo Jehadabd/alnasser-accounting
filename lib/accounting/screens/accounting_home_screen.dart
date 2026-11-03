@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 
 import '../../erp/accounting_plus/currency_voucher_screens.dart';
+import '../../erp/accounting_plus/month_close_screen.dart'; // ✅ جاهزية إقفال الشهر
 import '../../erp/accounting_plus/period_screens.dart';
 import '../../erp/control/bank_rec_screen.dart' show BankRecListScreen;
 import '../../erp/control/control_screens.dart' show ControlHubScreen;
@@ -67,6 +68,9 @@ class AccountingHomeScreen extends StatefulWidget {
         HubTile('إعادة تقييم العملة', Icons.swap_horiz_rounded, AccColors.orange,
             () => go(const FxRevaluationScreen()), permission: AppPermissions.periodClose,
             subtitle: 'ذمم الموردين بالدولار'),
+        HubTile('جاهزية إقفال الشهر', Icons.fact_check_rounded, AccColors.green,
+            () => go(const MonthCloseScreen()), permission: AppPermissions.accounting,
+            subtitle: 'فحص القيود والأرصدة والدرج والبنك ثم التثبيت'),
         HubTile('تثبيت وإقفال السنة', Icons.lock_clock_rounded, AccColors.purple,
             () => go(const PeriodCloseScreen()), permission: AppPermissions.periodClose,
             subtitle: 'منع التعديل على فترة سابقة'),

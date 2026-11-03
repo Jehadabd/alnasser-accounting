@@ -11,6 +11,7 @@
 import 'package:flutter/material.dart';
 
 import '../accounting/screens/acc_ui.dart' show accAppBar, FadeSlideIn;
+import '../erp/activity/activity_log.dart' show ActivityLog;
 import '../erp/erp_kit.dart' show ErpTheme;
 
 const kSetNavy = Color(0xFF0F3460);
@@ -54,6 +55,7 @@ class SettingsScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    ActivityLog.viewed(title); // 📈 مرة في الدقيقة لكل شاشة
     final list = children ?? const <Widget>[];
     return Theme(
       data: ErpTheme.apply(Theme.of(context)),
