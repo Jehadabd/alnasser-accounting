@@ -220,7 +220,7 @@ class DebtReminder {
   /// وصف الاستثناء بالكلمات ([global] = قيمة الإعداد العام).
   String graceText(int global) {
     final g = graceDays ?? global;
-    if (g < 0) return 'يُطالَب كل من عليه دين ولو سدّد مؤخراً';
+    if (g < 0) return 'يُطالَب كل مدين ولو سدّد حديثاً';
     if (g == 0) return 'لا يُطالَب من سدّد أثناء أيام المطالبة';
     return 'لا يُطالَب من سدّد قبل الموعد بـ $g ${g == 1 ? 'يوم' : (g <= 10 ? 'أيام' : 'يوماً')} أو أقل';
   }
@@ -262,7 +262,7 @@ class DebtReminder {
   String describe() {
     final start = '${DebtReminders.monthName(startMonth)} $startYear';
     if (!monthly) return '${daysText()} — $start فقط';
-    final until = months == null ? 'بلا نهاية' : 'لمدة $months ${months == 1 ? 'شهر' : 'أشهر'}';
+    final until = months == null ? 'دون تاريخ انتهاء' : 'لمدة $months ${months == 1 ? 'شهر' : 'أشهر'}';
     return '${daysText()} من كل شهر — يبدأ $start، $until';
   }
 

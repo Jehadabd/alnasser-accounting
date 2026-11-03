@@ -1029,7 +1029,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                     ]),
                     // 📅 موعد المطالبة — لفواتير الدين فقط
                     if (paymentType == 'دين')
-                      section('موعد المطالبة', 'تذكير بهذا الدين عند تشغيل البرنامج في أيام تختارها',
+                      section('موعد المطالبة بالسداد', 'تنبيه بالمطالبة بهذا الدين عند تشغيل البرنامج في أيام محددة',
                           Icons.event_repeat_rounded, const Color(0xFF4F46E5), [_reminderMoreBody(ctx, setD)]),
                     section('بعد الحفظ', 'يُحفظ لهذا الجهاز', Icons.print_outlined, const Color(0xFF0F766E), [
                       FutureBuilder<SharedPreferences>(
@@ -1184,7 +1184,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       ),
       onPressed: () => edit(),
       icon: const Icon(Icons.add_alarm_rounded, size: 19),
-      label: const Text('تحديد موعد مطالبة'),
+      label: const Text('تحديد موعد المطالبة بالسداد'),
     );
 
     if (invId == null) {

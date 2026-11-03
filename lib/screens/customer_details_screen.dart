@@ -794,6 +794,18 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   case 'receipt_archive':
                     _showReceiptVouchersArchive();
                     break;
+                  case 'debt_reminders':
+                    // 📅 مواعيد المطالبة بالسداد لهذا العميل (والعامة في: التحصيل والتقارير)
+                    if (widget.customer.id != null) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => DebtRemindersScreen(
+                              customerId: widget.customer.id, customerName: widget.customer.name),
+                        ),
+                      );
+                    }
+                    break;
                   case 'customer_receipts':
                     Navigator.push(
                       context,
@@ -833,6 +845,16 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       Icon(Icons.analytics, color: Colors.blueGrey, size: 20),
                       SizedBox(width: 12),
                       Text('كشف الحساب التجاري'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'debt_reminders',
+                  child: Row(
+                    children: [
+                      Icon(Icons.event_repeat_rounded, color: Color(0xFF4F46E5), size: 20),
+                      SizedBox(width: 12),
+                      Text('مواعيد المطالبة بالسداد'),
                     ],
                   ),
                 ),
@@ -1539,29 +1561,6 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                 onPressed: () => _openTransaction(customer, isDebt: false),
                 icon: const Icon(Icons.payments_outlined),
                 label: const Text('تسديد', style: TextStyle(fontWeight: FontWeight.w800)),
-              ),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
-                onPressed: () => _openStatements(),
-                icon: const Icon(Icons.receipt_long_rounded),
-                label: const Text('كشف الحساب'),
-              ),
-              // 📅 مواعيد المطالبة بهذا الدين
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF4F46E5),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                ),
-                onPressed: customer.id == null
-                    ? null
-                    : () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DebtRemindersScreen(customerId: customer.id, customerName: customer.name),
-                          ),
-                        ),
-                icon: const Icon(Icons.event_repeat_rounded),
-                label: const Text('مواعيد المطالبة'),
               ),
               if ((customer.phone ?? '').trim().isNotEmpty)
                 OutlinedButton.icon(

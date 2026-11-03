@@ -98,15 +98,15 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
               ),
               // 📅 تذكير الديون له إعداده الخاص في شاشته
               SetCard(
-                title: 'مواعيد المطالبة بالدين',
-                subtitle: 'تذكير بعملاء محددين في أيام تختارها — إعداد منفصل',
+                title: 'مواعيد المطالبة بالسداد',
+                subtitle: 'تنبيه بالعملاء المستحقة مطالبتهم في أيام محددة من الشهر — إعداد منفصل',
                 icon: Icons.event_repeat_rounded,
                 color: const Color(0xFF4F46E5),
                 child: SetActionRow(
                   icon: Icons.event_note_rounded,
                   color: const Color(0xFF4F46E5),
-                  title: 'فتح مواعيد المطالبة',
-                  subtitle: 'كل المواعيد، وظهورها: أول تشغيل في اليوم أو كل تشغيل',
+                  title: 'فتح مواعيد المطالبة بالسداد',
+                  subtitle: 'جميع المواعيد، وتوقيت التنبيه: عند أول تشغيل في اليوم أو عند كل تشغيل',
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DebtRemindersScreen())),
                 ),
               ),

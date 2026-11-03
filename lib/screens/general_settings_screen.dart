@@ -51,7 +51,6 @@ import '../erp/erp_settings_screen.dart';
 import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 
 import '../models/account_statement_item.dart';
-import 'duplicate_customers_screen.dart'; // 🔗 دمج الحسابات المكررة
 import 'data_import_screen.dart'; // 📥 استيراد من Excel
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
 import '../widgets/loading_dialog.dart';
@@ -2435,17 +2434,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   onTap: () {
                     if (requirePermission(context, AppPermissions.manageUsers)) {
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const DataImportScreen()));
-                    }
-                  },
-                ),
-                _buildActionTile(
-                  icon: Icons.merge_type,
-                  iconColor: Colors.deepOrange,
-                  title: 'دمج الحسابات المكررة',
-                  subtitle: 'حسابان بالاسم نفسه في سجل الديون ← حساب واحد (بتأكيدك ونسخة احتياطية)',
-                  onTap: () {
-                    if (requirePermission(context, AppPermissions.manageUsers)) {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const DuplicateCustomersScreen()));
                     }
                   },
                 ),

@@ -104,7 +104,7 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('حذف الموعد؟'),
-        content: Text('لن يظهر تذكير «${r.shownTitle}» بعد الآن (${r.members.length} شخص). الديون نفسها لا تتأثر.'),
+        content: Text('لن يُعرض تنبيه «${r.shownTitle}» بعد الآن (${r.members.length} عميل). لا يتأثر أي رصيد.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
           FilledButton(
@@ -123,9 +123,9 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
   @override
   Widget build(BuildContext context) {
     return SettingsScaffold(
-      title: _forCustomer ? 'مواعيد المطالبة — ${widget.customerName ?? ''}' : 'مواعيد المطالبة',
+      title: _forCustomer ? 'مواعيد المطالبة بالسداد — ${widget.customerName ?? ''}' : 'مواعيد المطالبة بالسداد',
       icon: Icons.event_repeat_rounded,
-      subtitle: 'أيام تختارها وأشخاص تطالبهم — يظهر التذكير عند تشغيل البرنامج',
+      subtitle: 'أيام محددة من الشهر والعملاء المطلوب مطالبتهم — يُعرض التنبيه عند تشغيل البرنامج',
       loading: _loading,
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: _accent,
@@ -139,7 +139,7 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
         if (!_forCustomer) _graceCard(),
         if (_items.isEmpty)
           const SetBanner(
-            'لا مواعيد بعد. اضغط «موعد جديد»، اختر الأيام (مثل 1 و2 و5) ثم أضف الأشخاص.',
+            'لا توجد مواعيد مطالبة. لإضافة موعد اختر «موعد جديد»، وحدّد أيام المطالبة (مثل 1 و2 و5)، ثم أضف العملاء.',
             icon: Icons.event_busy_rounded,
           )
         else
@@ -161,8 +161,8 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
   }
 
   Widget _graceCard() => SetCard(
-        title: 'من سدّد مؤخراً لا يُطالَب',
-        subtitle: 'الإعداد العام لكل المواعيد — ويمكن تخصيصه لموعد من «تعديل»',
+        title: 'مهلة الإعفاء لمن سدّد حديثاً',
+        subtitle: 'الإعداد العام لجميع المواعيد، ويمكن تخصيصه لموعد بعينه من «تعديل»',
         icon: Icons.price_check_rounded,
         color: kSetGreen,
         child: DebtGracePicker(
@@ -176,15 +176,15 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
       );
 
   Widget _settingsCard() => SetCard(
-        title: 'الظهور عند التشغيل',
-        subtitle: (_dueToday == 0 ? 'لا مطالبات اليوم' : 'مستحق اليوم: $_dueToday شخص') +
-            (_paidRecently == 0 ? '' : ' — مستثنى لأنه سدّد مؤخراً: $_paidRecently'),
+        title: 'التنبيه عند تشغيل البرنامج',
+        subtitle: (_dueToday == 0 ? 'لا مطالبات مستحقة اليوم' : 'المستحق مطالبتهم اليوم: $_dueToday عميل') +
+            (_paidRecently == 0 ? '' : ' — المُعفَون لسدادهم حديثاً: $_paidRecently'),
         icon: Icons.notifications_active_outlined,
         color: _accent,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           SetSwitch(
-            title: 'إظهار مطالبات اليوم',
-            subtitle: 'تظهر فقط لمن ما زال عليه دين',
+            title: 'عرض المطالبات المستحقة',
+            subtitle: 'تشمل العملاء المدينين فقط',
             value: _enabled,
             color: _accent,
             onChanged: (v) async {
@@ -199,7 +199,7 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
             child: IgnorePointer(
               ignoring: !_enabled,
               child: Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final f in const [('daily', 'أول تشغيل في اليوم'), ('startup', 'عند كل تشغيل')])
+                for (final f in const [('daily', 'عند أول تشغيل في اليوم'), ('startup', 'عند كل تشغيل')])
                   ChoiceChip(
                     label: Text(f.$2),
                     selected: _freq == f.$1,
@@ -224,7 +224,7 @@ class _DebtRemindersScreenState extends State<DebtRemindersScreen> {
                     _load();
                   },
                   icon: const Icon(Icons.visibility_outlined, size: 18),
-                  label: const Text('عرض مطالبات اليوم الآن'),
+                  label: const Text('عرض المطالبات المستحقة اليوم'),
                 ),
               ]),
             ),
@@ -258,12 +258,12 @@ class _ReminderCard extends StatelessWidget {
     final (String status, Color c) = !r.active
         ? ('موقوف', kSetMuted)
         : owing == 0
-            ? ('سدّدوا — لا تذكير', kSetGreen)
+            ? ('مسدَّد — لا مطالبة', kSetGreen)
             : r.isDueOn(now)
                 ? ('مستحق اليوم', kSetRed)
                 : next == null
-                    ? ('انتهى', kSetMuted)
-                    : ('القادم ${DateFormat('yyyy/MM/dd').format(next)}', _accent);
+                    ? ('منتهٍ', kSetMuted)
+                    : ('الموعد القادم ${DateFormat('yyyy/MM/dd').format(next)}', _accent);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -294,7 +294,7 @@ class _ReminderCard extends StatelessWidget {
                 Text(r.describe(), style: const TextStyle(color: kSetMuted, height: 1.5)),
                 if (r.graceDays != null)
                   Text(r.graceText(0), style: const TextStyle(fontSize: 12.5, color: kSetGreen)),
-                Text('${r.members.length} شخص • عليهم دين $owing • المطلوب ${_money(total)}',
+                Text('${r.members.length} عميل • المدينون منهم $owing • المبلغ المستحق ${_money(total)}',
                     style: const TextStyle(fontSize: 12.5, color: kSetMuted)),
                 if ((r.note ?? '').isNotEmpty)
                   Text(r.note!, style: const TextStyle(fontSize: 12.5, color: kSetMuted, fontStyle: FontStyle.italic)),
@@ -381,9 +381,9 @@ class _DueDialogState extends State<_DueDialog> {
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('مطالبات اليوم (${list.length})',
+                  Text('المطالبات المستحقة اليوم (${list.length})',
                       style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kSetText)),
-                  Text('المجموع المطلوب ${_money(total)} دينار', style: const TextStyle(fontSize: 12.5, color: kSetMuted)),
+                  Text('إجمالي المبالغ المستحقة ${_money(total)} دينار', style: const TextStyle(fontSize: 12.5, color: kSetMuted)),
                 ]),
               ),
               IconButton(
@@ -411,13 +411,13 @@ class _DueDialogState extends State<_DueDialog> {
                   nav.push(MaterialPageRoute(builder: (_) => const DebtRemindersScreen()));
                 },
                 icon: const Icon(Icons.tune_rounded, size: 18),
-                label: const Text('إدارة المواعيد'),
+                label: const Text('إدارة مواعيد المطالبة'),
               ),
               const Spacer(),
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: _accent, minimumSize: const Size(110, 46)),
                 onPressed: () => Navigator.pop(context),
-                child: const Text('تم'),
+                child: const Text('إغلاق'),
               ),
             ]),
           ),
@@ -452,9 +452,9 @@ class _DueDialogState extends State<_DueDialog> {
           Text(
             [
               if ((r.title ?? '').trim().isNotEmpty) r.title!.trim(),
-              if (m.amount != null) 'رصيده الآن ${_money(d.balance)}',
+              if (m.amount != null) 'رصيده الحالي ${_money(d.balance)}',
               if (m.invoiceId != null) 'فاتورة #${m.invoiceId}',
-              d.lastPaid == null ? 'لم يسدّد سابقاً' : 'آخر تسديد ${DateFormat('yyyy/MM/dd').format(d.lastPaid!)}',
+              d.lastPaid == null ? 'لا سداد سابق' : 'آخر سداد ${DateFormat('yyyy/MM/dd').format(d.lastPaid!)}',
               r.daysText(),
               if ((r.note ?? '').isNotEmpty) r.note!,
             ].join(' • '),
@@ -468,24 +468,24 @@ class _DueDialogState extends State<_DueDialog> {
               TextButton.icon(
                 onPressed: () => _openCustomer(context, m.customerId),
                 icon: const Icon(Icons.person_outline, size: 18),
-                label: const Text('فتح الحساب'),
+                label: const Text('فتح حساب العميل'),
               ),
               TextButton.icon(
                 onPressed: () async {
                   await DebtReminders.snoozeMemberToTomorrow(m.id!);
-                  setState(() => _done[m.id!] = 'سيُذكَّر غداً');
+                  setState(() => _done[m.id!] = 'أُجّلت المطالبة إلى الغد');
                 },
                 icon: const Icon(Icons.snooze_rounded, size: 18),
-                label: const Text('ذكّرني غداً'),
+                label: const Text('تأجيل إلى الغد'),
               ),
               TextButton.icon(
                 style: TextButton.styleFrom(foregroundColor: kSetMuted),
                 onPressed: () async {
                   await DebtReminders.setMemberActive(m.id!, false);
-                  setState(() => _done[m.id!] = 'لن يُذكَّر به في هذا الموعد');
+                  setState(() => _done[m.id!] = 'استُبعد من هذا الموعد');
                 },
                 icon: const Icon(Icons.person_remove_outlined, size: 18),
-                label: const Text('إيقافه من الموعد'),
+                label: const Text('استبعاد من الموعد'),
               ),
             ]),
         ]),

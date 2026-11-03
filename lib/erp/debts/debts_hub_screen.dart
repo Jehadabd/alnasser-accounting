@@ -95,10 +95,10 @@ class _DebtsHubScreenState extends State<DebtsHubScreen> {
               subtitle: 'كل وصولات القبض وإعادة طباعتها', permission: AppPermissions.collection),
           HubTile('الاستحقاقات', Icons.event_note, ErpColors.gold, () => _go(const DueItemsScreen()),
               subtitle: 'شيكات، كمبيالات، أقساط', permission: AppPermissions.collection),
-          // 📅 تذكير فقط (لا يغيّر الرصيد): أيام تختارها + أشخاص تطالبهم
-          HubTile('مواعيد المطالبة', Icons.event_repeat_rounded, const Color(0xFF4F46E5),
+          // 📅 تنبيه فقط (لا يغيّر أي رصيد): أيام محددة من الشهر + العملاء المطلوب مطالبتهم
+          HubTile('مواعيد المطالبة بالسداد', Icons.event_repeat_rounded, const Color(0xFF4F46E5),
               () => _go(const DebtRemindersScreen()),
-              subtitle: 'تذكير بأيام تختارها (1، 2، 5…) لعدة أشخاص عند التشغيل'),
+              subtitle: 'تنبيه عند تشغيل البرنامج بالعملاء المستحقة مطالبتهم في أيام محددة من الشهر'),
         ]),
         HubSection('العملاء', [
           HubTile('كشف حساب عميل', Icons.list_alt, ErpColors.blue, () => _go(const CustomerStatementScreen()),

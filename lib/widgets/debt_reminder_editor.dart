@@ -115,7 +115,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
       return;
     }
     if (r.members.isEmpty) {
-      setState(() => _err = 'أضف شخصاً واحداً على الأقل');
+      setState(() => _err = 'أضف عميلاً واحداً على الأقل');
       return;
     }
     for (final m in r.members) {
@@ -152,10 +152,10 @@ class _ReminderEditorState extends State<_ReminderEditor> {
                     TextField(controller: _title, decoration: _dec('مثال: مطالبة بداية الشهر — عملاء السوق')),
                   ),
                 _section('يبدأ من شهر', Icons.calendar_month_rounded, _monthPicker()),
-                _section('أيام التذكير — انقر على الأيام التي تريدها', Icons.touch_app_outlined, _daysPicker()),
+                _section('أيام المطالبة — حدّد الأيام من الشهر', Icons.touch_app_outlined, _daysPicker()),
                 _section('التكرار', Icons.repeat_rounded, _repeatPicker()),
                 _section(
-                  'من سدّد مؤخراً — لا يُطالَب',
+                  'مهلة الإعفاء لمن سدّد حديثاً',
                   Icons.price_check_rounded,
                   DebtGracePicker(
                     value: r.graceDays,
@@ -164,14 +164,14 @@ class _ReminderEditorState extends State<_ReminderEditor> {
                   ),
                 ),
                 _section(
-                  widget.lockMembers ? 'الشخص' : 'الأشخاص (${r.members.length})',
+                  widget.lockMembers ? 'العميل' : 'العملاء (${r.members.length})',
                   Icons.groups_2_outlined,
                   _membersBox(),
                 ),
                 _section(
                   'ملاحظة (اختياري)',
                   Icons.notes_rounded,
-                  TextField(controller: _note, decoration: _dec('مثال: وعدوا بالسداد بعد استلام الرواتب')),
+                  TextField(controller: _note, decoration: _dec('مثال: تعهّد بالسداد بعد صرف الرواتب')),
                 ),
                 _preview(next),
                 if (_err != null)
@@ -222,9 +222,9 @@ class _ReminderEditorState extends State<_ReminderEditor> {
           const SizedBox(width: 14),
           const Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('موعد المطالبة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: _ink)),
+              Text('موعد مطالبة بالسداد', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: _ink)),
               SizedBox(height: 2),
-              Text('يظهر لك تذكير عند تشغيل البرنامج في الأيام التي تختارها',
+              Text('يُعرض تنبيه بالمطالبة عند تشغيل البرنامج في الأيام المحددة',
                   style: TextStyle(fontSize: 12.5, color: _muted, height: 1.4)),
             ]),
           ),
@@ -289,7 +289,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
   Widget _daysPicker() => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
           Expanded(
-            child: Text(r.days.isEmpty ? 'لم تختر أياماً بعد' : r.daysText(),
+            child: Text(r.days.isEmpty ? 'لم تُحدَّد أيام بعد' : r.daysText(),
                 style: TextStyle(fontWeight: FontWeight.w800, color: r.days.isEmpty ? _red : _accent, fontSize: 15)),
           ),
           if (r.days.isNotEmpty)
@@ -365,7 +365,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
                   child: Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
                     for (final m in _monthPresets)
                       _Pill(
-                        label: m == null ? 'بلا نهاية' : '$m أشهر',
+                        label: m == null ? 'دون انتهاء' : '$m أشهر',
                         selected: r.months == m,
                         onTap: () => setState(() {
                           r.months = m;
@@ -397,7 +397,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
           if (r.members.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 10),
-              child: Text('لا أشخاص بعد — أضف العملاء الذين تريد مطالبتهم في هذه الأيام',
+              child: Text('لم يُضَف عملاء — أضف العملاء المطلوب مطالبتهم في هذه الأيام',
                   textAlign: TextAlign.center, style: TextStyle(color: _muted)),
             ),
           for (final m in r.members) _memberRow(m),
@@ -413,7 +413,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
               ),
               onPressed: _addPeople,
               icon: const Icon(Icons.person_add_alt_1_rounded, size: 19),
-              label: const Text('إضافة أشخاص'),
+              label: const Text('إضافة عملاء'),
             ),
           ],
         ]),
@@ -439,7 +439,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
                 maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, color: _ink)),
             Text(
               [
-                if (!m.active) 'موقوف في هذا الموعد',
+                if (!m.active) 'مستبعد من هذا الموعد',
                 if (bal != null) 'رصيده ${_money(bal)}',
                 if (m.invoiceId != null) 'فاتورة #${m.invoiceId}',
               ].join(' • '),
@@ -459,7 +459,7 @@ class _ReminderEditorState extends State<_ReminderEditor> {
         ),
         if (!m.active)
           IconButton(
-            tooltip: 'إعادة تفعيله',
+            tooltip: 'إعادة إدراجه',
             onPressed: () => setState(() => m.active = true),
             icon: const Icon(Icons.play_circle_outline, size: 20, color: _accent),
           ),
@@ -495,8 +495,8 @@ class _ReminderEditorState extends State<_ReminderEditor> {
                     ? 'اختر الأيام أولاً'
                     : next == null
                         ? 'هذا الموعد انتهى — اختر شهراً قادماً'
-                        : 'أول تذكير: ${DateFormat('yyyy/MM/dd').format(next)} عند تشغيل البرنامج'
-                            '${r.members.length > 1 ? ' — ${r.members.length} أشخاص' : ''}'
+                        : 'أول تنبيه: ${DateFormat('yyyy/MM/dd').format(next)} عند تشغيل البرنامج'
+                            '${r.members.length > 1 ? ' — ${r.members.length} عملاء' : ''}'
                             ' — ${r.graceText(_globalGrace)}',
                 style: TextStyle(fontSize: 12.5, color: next == null ? _red : _muted),
               ),
@@ -580,7 +580,7 @@ class _MultiPickerState extends State<_MultiPicker> {
               const Icon(Icons.person_add_alt_1_rounded, color: _accent),
               const SizedBox(width: 10),
               const Expanded(
-                child: Text('اختر الأشخاص', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: _ink)),
+                child: Text('اختيار العملاء', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: _ink)),
               ),
               IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded, color: _muted)),
             ]),
@@ -606,7 +606,7 @@ class _MultiPickerState extends State<_MultiPicker> {
             padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
             child: Row(children: [
               FilterChip(
-                label: const Text('من عليهم دين فقط'),
+                label: const Text('المدينون فقط'),
                 selected: _onlyDebt,
                 onSelected: (v) => setState(() => _onlyDebt = v),
               ),
@@ -757,14 +757,14 @@ class _DebtGracePickerState extends State<DebtGracePicker> {
         if (g != null)
           _Pill(
             label: 'الإعداد العام',
-            sub: g < 0 ? 'لا استثناء' : (g == 0 ? 'أثناء الأيام' : _days(g)),
+            sub: g < 0 ? 'بلا إعفاء' : (g == 0 ? 'أثناء أيام المطالبة' : _days(g)),
             selected: v == null,
             onTap: () {
               _custom.clear();
               widget.onChanged(null);
             },
           ),
-        _Pill(label: 'لا استثناء', selected: v == -1, onTap: () {
+        _Pill(label: 'بلا إعفاء', selected: v == -1, onTap: () {
           _custom.clear();
           widget.onChanged(-1);
         }),
@@ -806,11 +806,11 @@ class _DebtGracePickerState extends State<DebtGracePicker> {
       const SizedBox(height: 6),
       Text(
         effective < 0
-            ? 'يُطالَب كل من عليه دين ولو سدّد أمس.'
+            ? 'يُطالَب كل مدين ولو سدّد أمس.'
             : effective == 0
                 ? 'من سدّد في أحد أيام المطالبة لا يُطالَب في باقيها.'
                 : 'من سدّد قبل بداية أيام المطالبة بـ ${_days(effective)} أو أقل (أو أثناءها) لا يُطالَب. '
-                    'مثال: الأيام 1 إلى 5 ⇒ تسديد من يوم ${_example(effective)} فما بعد يستثنيه.',
+                    'مثال: الأيام 1 إلى 5 ⇒ السداد من يوم ${_example(effective)} فما بعد يُعفيه.',
         style: const TextStyle(fontSize: 12, color: _muted, height: 1.5),
       ),
     ]);
