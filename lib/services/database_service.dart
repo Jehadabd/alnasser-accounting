@@ -2026,6 +2026,8 @@ class DatabaseService {
     String? searchId,
     String? status,
     String? paymentType,
+    int? productId,
+    String? productName,
   }) async {
     await database;
     return _invoiceDao.getInvoicesPaginated(
@@ -2035,6 +2037,8 @@ class DatabaseService {
       searchId: searchId,
       status: status,
       paymentType: paymentType,
+      productId: productId,
+      productName: productName,
     );
   }
   

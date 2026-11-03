@@ -2637,7 +2637,7 @@ class _ItemSearchDialogState extends State<_ItemSearchDialog> {
             child: TextField(
               autofocus: true,
               decoration: InputDecoration(
-                hintText: 'ابحث بالاسم أو الرقم أو الرمز أو الباركود',
+                hintText: 'ابحث باسم المادة أو رمزها أو الباركود',
                 prefixIcon: const Icon(Icons.search),
                 filled: true,
                 fillColor: _C.field,

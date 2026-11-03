@@ -30,6 +30,7 @@ import '../services/auth_service.dart';
 import '../services/database_service.dart';
 import 'item_card_editor_screen.dart';
 import 'product_delete.dart';
+import 'product_lookup.dart';
 
 const Map<String, String> itemTypeLabels = {
   'trade': 'للمتاجرة',
@@ -44,14 +45,13 @@ class ItemCardService {
 
   Future<List<Map<String, Object?>>> search(String q, {int? categoryId, String? filter}) async {
     final db = await _db;
-    final t = q.trim();
-    final like = '%$t%';
     final where = <String>['COALESCE(p.is_deleted, 0) = 0'];
     final args = <Object?>[];
-    if (t.isNotEmpty) {
-      where.add('''(p.name LIKE ? OR d.item_code LIKE ? OR d.second_name LIKE ? OR d.brand LIKE ?
-             OR p.barcode = ? OR CAST(p.id AS TEXT) = ? OR p.id IN (SELECT product_id FROM product_barcodes WHERE barcode = ?))''');
-      args.addAll([like, like, like, like, t, t, t]);
+    // 🔎 الاسم أو رمز المادة أو الباركود — لا الرقم الداخلي (ProductLookup)
+    final w = ProductLookup.where(q);
+    if (w != null) {
+      where.add(w.sql);
+      args.addAll(w.args);
     }
     if (categoryId != null) {
       where.add('p.category_id = ?');
@@ -394,7 +394,7 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
         Row(children: [
           Expanded(
             child: SearchBox(
-              hint: 'بحث بالاسم، الرقم، الرمز، الماركة أو الباركود',
+              hint: 'بحث باسم المادة أو رمزها أو الباركود',
               autofocus: true,
               onChanged: (v) {
                 _q = v;

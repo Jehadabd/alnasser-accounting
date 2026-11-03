@@ -21,6 +21,7 @@ import 'package:alnaser/models/app_settings.dart';
 import 'dart:async'; // Added for Timer
 import '../widgets/app_side_nav.dart';
 import '../accounting/screens/acc_ui.dart' show accAppBar;
+import '../inventory/product_lookup.dart'; // 📦 البحث بالمادة
 
 class EditInvoicesScreen extends StatefulWidget {
   const EditInvoicesScreen({super.key});
@@ -47,6 +48,10 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
   AppSettings? _appSettings;
   String? _statusFilter; // محفوظة | معلقة
   String? _paymentFilter; // نقد | دين
+
+  /// 📦 فلتر المادة: الفواتير التي فيها هذه المادة فقط (null = بلا فلتر)
+  ({int id, String name})? _product;
+  final TextEditingController _productShown = TextEditingController();
 
   @override
   void initState() {
@@ -103,6 +108,8 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
         searchId: _searchId,
         status: _statusFilter,
         paymentType: _paymentFilter,
+        productId: _product?.id,
+        productName: _product?.name,
       );
       
       if (newInvoices.isEmpty) {
@@ -160,6 +167,7 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
     _scrollController.removeListener(_onScroll);
     _nameController.dispose();
     _idController.dispose();
+    _productShown.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -278,10 +286,100 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
       ),
       keyboardType: TextInputType.number,
     );
+    final product = _productField();
     return LayoutBuilder(
-      builder: (context, c) => c.maxWidth < 620
-          ? Column(children: [name, const SizedBox(height: 10), number])
-          : Row(children: [Expanded(flex: 3, child: name), const SizedBox(width: 12), Expanded(flex: 2, child: number)]),
+      builder: (context, c) => c.maxWidth < 760
+          ? Column(children: [name, const SizedBox(height: 10), number, const SizedBox(height: 10), product])
+          : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(flex: 3, child: name),
+              const SizedBox(width: 12),
+              Expanded(flex: 2, child: number),
+              const SizedBox(width: 12),
+              Expanded(flex: 3, child: product),
+            ]),
+    );
+  }
+
+  void _setProduct(Map<String, Object?>? p) {
+    setState(() {
+      _product = p == null ? null : (id: p['id'] as int, name: '${p['name'] ?? ''}');
+      _productShown.text = _product?.name ?? '';
+    });
+    _fetchInvoices(refresh: true);
+  }
+
+  /// 📦 المادة: اكتب اسمها أو رمزها أو امسح الباركود ثم اخترها ⇒ تظهر الفواتير التي فيها فقط.
+  Widget _productField() {
+    if (_product != null) {
+      return TextField(
+        controller: _productShown,
+        readOnly: true,
+        style: const TextStyle(fontWeight: FontWeight.w800, color: _blue),
+        decoration: _field('الفواتير التي فيها المادة', Icons.inventory_2_rounded).copyWith(
+          suffixIcon: IconButton(
+            tooltip: 'إلغاء فلتر المادة',
+            icon: const Icon(Icons.close_rounded),
+            onPressed: () => _setProduct(null),
+          ),
+        ),
+      );
+    }
+    return Autocomplete<Map<String, Object?>>(
+      displayStringForOption: (m) => '${m['name'] ?? ''}',
+      optionsBuilder: (v) async {
+        final q = v.text.trim();
+        if (q.isEmpty) return const <Map<String, Object?>>[];
+        try {
+          return await ProductLookup.search(await DatabaseService().database, q);
+        } catch (_) {
+          return const <Map<String, Object?>>[];
+        }
+      },
+      onSelected: _setProduct,
+      fieldViewBuilder: (context, ctrl, focus, submit) => TextField(
+        controller: ctrl,
+        focusNode: focus,
+        decoration: _field('المادة: الاسم أو الرمز أو الباركود', Icons.inventory_2_outlined),
+        onSubmitted: (t) async {
+          // الماسح يكتب الباركود ثم Enter: مطابقة تامة تُختار فوراً
+          final hit = await ProductLookup.exact(await DatabaseService().database, t);
+          if (!mounted) return;
+          if (hit != null) {
+            _setProduct(hit);
+          } else {
+            submit();
+          }
+        },
+      ),
+      optionsViewBuilder: (context, onSelect, options) => Align(
+        alignment: AlignmentDirectional.topStart,
+        child: Material(
+          elevation: 6,
+          borderRadius: BorderRadius.circular(12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320, maxWidth: 420),
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              shrinkWrap: true,
+              itemCount: options.length,
+              itemBuilder: (context, i) {
+                final m = options.elementAt(i);
+                final sub = [
+                  if ('${m['item_code'] ?? ''}'.isNotEmpty) 'الرمز ${m['item_code']}',
+                  if ('${m['barcode'] ?? ''}'.isNotEmpty) 'الباركود ${m['barcode']}',
+                ].join(' • ');
+                return ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.inventory_2_outlined, color: _navy),
+                  title: Text('${m['name'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  subtitle: sub.isEmpty ? null : Text(sub),
+                  onTap: () => onSelect(m),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -323,7 +421,11 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
   Widget _list() {
     if (_loading) return const Center(child: CircularProgressIndicator(color: _navy));
     if (_invoices.isEmpty) {
-      final searching = _searchName.isNotEmpty || _searchId.isNotEmpty || _statusFilter != null || _paymentFilter != null;
+      final searching = _searchName.isNotEmpty ||
+          _searchId.isNotEmpty ||
+          _statusFilter != null ||
+          _paymentFilter != null ||
+          _product != null;
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(searching ? Icons.search_off_rounded : Icons.receipt_long_outlined, size: 56, color: _border),

@@ -50,6 +50,8 @@ class InvoiceDao {
     String? searchId,
     String? status, // 'محفوظة' | 'معلقة' | null = الكل
     String? paymentType, // 'نقد' | 'دين' | null = الكل
+    int? productId, // 📦 فقط الفواتير التي فيها هذه المادة
+    String? productName, // اسمها — لبنود قديمة حُفظت بلا رقم مادة
   }) async {
     final db = await getDatabase();
     
@@ -80,6 +82,13 @@ class InvoiceDao {
       // ✅ البحث برقم الفاتورة التجاري فقط (invoice_number)؛ الـ id الداخلي للتتبع التقني حصراً
       whereClause += ' AND invoice_number LIKE ?';
       args.add('%$searchId%');
+    }
+
+    if (productId != null) {
+      // 📦 الفواتير التي فيها هذه المادة: برقمها، أو باسمها للبنود القديمة بلا رقم
+      whereClause += ' AND EXISTS (SELECT 1 FROM invoice_items ii WHERE ii.invoice_id = invoices.id '
+          'AND (ii.product_id = ? OR (ii.product_id IS NULL AND ii.product_name = ?)))';
+      args.addAll([productId, productName ?? '']);
     }
     
     final maps = await db.query(
