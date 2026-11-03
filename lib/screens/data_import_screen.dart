@@ -208,7 +208,12 @@ class _DataImportScreenState extends State<DataImportScreen> {
 
   bool get _canImport =>
       !(_target == _Target.fresh && _freshBlockers.isNotEmpty) &&
-      !_busy && _plan != null && _plan!.rows.isNotEmpty && _badEdits.isEmpty && _expectedMatches != false;
+      !_busy &&
+      _plan != null &&
+      _plan!.rows.isNotEmpty &&
+      _plan!.undecided.isEmpty &&
+      _badEdits.isEmpty &&
+      _expectedMatches != false;
 
   Future<void> _import() async {
     final plan = _plan;
@@ -295,10 +300,14 @@ class _DataImportScreenState extends State<DataImportScreen> {
               if (plan.existingRows.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 SetBanner(
-                  'منها ${plan.existingRows.length} ${plan.kind == ImportKind.customers ? 'عميل' : 'مورد'} موجود عندنا: '
-                  'يُضاف إلى رصيد كل منهم مبلغه من الملف'
-                  '${plan.balanceByCurrency.length <= 1 ? ' (المجموع ${_money(plan.existingTotal)})' : ''} بمعاملة '
-                  '«رصيد مستورد» يُذكر فيها الملف والصف واسمك. و${plan.newRows.length} حساب جديد.',
+                  '${plan.newRows.length} حساب جديد، و${plan.existingRows.length} موجود عندنا:\n'
+                  '${[
+                    for (final a in ExistingAction.values)
+                      if (plan.existingRows.any((r) => r.action == a))
+                        '• ${a.label}: ${plan.existingRows.where((r) => r.action == a).length}',
+                  ].join('\n')}'
+                  '${plan.balanceByCurrency.length <= 1 ? '\nتغيّر ديون الموجودين: ${_money(plan.existingDelta)}' : ''}\n'
+                  'كل تغيير معاملة يُذكر فيها الملف والصف واسمك.',
                   kind: SetBannerKind.warn,
                 ),
               ],
@@ -621,37 +630,13 @@ class _DataImportScreenState extends State<DataImportScreen> {
             }),
           ),
         ]),
-        const SizedBox(height: 12),
-        Text(cust ? 'عميل موجود عندنا بالاسم نفسه:' : 'مورد موجود عندنا بالاسم نفسه:',
-            style: const TextStyle(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
-        Wrap(spacing: 8, runSpacing: 8, children: [
-          ChoiceChip(
-            label: const Text('يُضاف مبلغه إلى حسابه بمعاملة'),
-            selected: _opt.addToExisting,
-            onSelected: (_) => setState(() {
-              _opt.addToExisting = true;
-              _plan = null;
-            }),
-          ),
-          ChoiceChip(
-            label: const Text('يُتجاوز ولا يُمس'),
-            selected: !_opt.addToExisting,
-            onSelected: (_) => setState(() {
-              _opt.addToExisting = false;
-              _plan = null;
-            }),
-          ),
-        ]),
-        if (_opt.addToExisting)
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: Text(
-              'تُكتب معاملة «رصيد مستورد» فيها اسم الملف ورقم الصف واسم من قام بالاستيراد، ولا يتغير هاتفه ولا عنوانه. '
-              'إعادة استيراد الملف نفسه لا تضيف المبلغ مرة ثانية.',
-              style: TextStyle(fontSize: 12, color: kSetMuted, height: 1.5),
-            ),
-          ),
+        const SizedBox(height: 10),
+        Text(
+          cust
+              ? 'عميل موجود عندنا بالاسم نفسه: تختار له في المراجعة — دمج الدينين، أو مبلغ الملف هو الصحيح، أو دينه الحالي هو الصحيح.'
+              : 'مورد موجود عندنا بالاسم نفسه: تختار له في المراجعة — دمج الرصيدين، أو مبلغ الملف هو الصحيح، أو رصيده الحالي هو الصحيح.',
+          style: const TextStyle(fontSize: 12.5, color: kSetMuted, height: 1.5),
+        ),
         if (!cust) ...[
           const SizedBox(height: 10),
           Row(children: [
@@ -754,6 +739,7 @@ class _DataImportScreenState extends State<DataImportScreen> {
           ),
         ),
         const SizedBox(height: 8),
+        if (plan.existingRows.isNotEmpty) _existingBar(plan),
         _gridHeader(),
         Container(
           height: 420,
@@ -837,16 +823,68 @@ class _DataImportScreenState extends State<DataImportScreen> {
             kpi('الصافي ${e.key == 'USD' ? 'دولار' : 'دينار'}', _money(e.value), kSetBlue),
           ],
       ]),
-      if (plan.existingRows.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: SetBanner(
-            '${plan.newRows.length} حساب جديد، و${plan.existingRows.length} موجود عندنا يُضاف إليه مبلغه '
-            '(${byCur.length <= 1 ? _money(plan.existingTotal) : 'حسب العملة'}) — معلَّمة في القائمة.',
-          ),
-        ),
     ]);
   }
+
+  /// الأسماء الموجودة عندنا: اختيار للكل، وعدد ما بقي بلا اختيار.
+  Widget _existingBar(ImportPlan plan) {
+    final ex = plan.existingRows;
+    final left = plan.undecided.length;
+    final cust = plan.kind == ImportKind.customers;
+    void all(ExistingAction a) => setState(() {
+          for (final r in plan.allRows) {
+            if (r.isExisting) r.action = a;
+          }
+        });
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: left > 0 ? const Color(0xFFFFF7ED) : const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: (left > 0 ? kSetOrange : kSetGreen).withValues(alpha: 0.35)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(
+          '${ex.length} ${cust ? 'عميل' : 'مورد'} في الملف موجود عندنا بالاسم نفسه. '
+          '${left > 0 ? 'اختر لكل واحد (أو للكل) أي الدينين هو الصحيح — بقي $left بلا اختيار، والاستيراد متوقف حتى تختار.' : 'تم الاختيار للكل.'}',
+          style: TextStyle(fontWeight: FontWeight.w800, color: left > 0 ? kSetOrange : kSetGreen, height: 1.5),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          '• دمج الدينين: يُضاف مبلغ الملف إلى دينه الحالي.\n'
+          '• مبلغ الملف هو الصحيح: يصير دينه مبلغ الملف (تُسجَّل تسوية بالفرق).\n'
+          '• الدين الحالي هو الصحيح: لا يتغير شيء.',
+          style: TextStyle(fontSize: 12.5, color: kSetText, height: 1.6),
+        ),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          const Text('للكل:', style: TextStyle(fontWeight: FontWeight.w700)),
+          for (final a in ExistingAction.values)
+            OutlinedButton(
+              onPressed: () => all(a),
+              style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact, foregroundColor: _actionColor(a)),
+              child: Text(a.label),
+            ),
+          if (ex.any((r) => r.action != null))
+            TextButton(
+              onPressed: () => setState(() {
+                for (final r in plan.allRows) {
+                  r.action = null;
+                }
+              }),
+              child: const Text('مسح الاختيار'),
+            ),
+        ]),
+      ]),
+    );
+  }
+
+  static Color _actionColor(ExistingAction a) => switch (a) {
+        ExistingAction.merge => kSetBlue,
+        ExistingAction.useFile => kSetOrange,
+        ExistingAction.keep => kSetGreen,
+      };
 
   Widget _gridHeader() {
     const st = TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: kSetMuted);
@@ -915,13 +953,28 @@ class _DataImportScreenState extends State<DataImportScreen> {
             flex: 4,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
-              if (r.isExisting)
+              if (r.isExisting) ...[
                 Text(
-                  'موجود${r.existingName != r.name ? ' «${r.existingName}»' : ''}: '
-                  '${_money(r.existingBalance)} ← ${_money(ImportNumbers.money(r.existingBalance + r.balance))}',
-                  style: const TextStyle(fontSize: 11.5, color: kSetOrange, fontWeight: FontWeight.w700),
+                  'موجود${r.existingName != r.name ? ' «${r.existingName}»' : ''} — دينه الآن ${_money(r.existingBalance)}'
+                  '${r.action == null ? '' : ' ← بعد: ${_money(r.balanceAfter)}'}',
+                  style: TextStyle(
+                      fontSize: 11.5, color: r.action == null ? kSetOrange : kSetMuted, fontWeight: FontWeight.w700),
                   overflow: TextOverflow.ellipsis,
                 ),
+                const SizedBox(height: 4),
+                Wrap(spacing: 4, runSpacing: 4, children: [
+                  for (final a in ExistingAction.values)
+                    ChoiceChip(
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                      label: Text(a.label, style: const TextStyle(fontSize: 11)),
+                      selected: r.action == a,
+                      selectedColor: _actionColor(a).withValues(alpha: 0.18),
+                      onSelected: r.include ? (_) => setState(() => r.action = a) : null,
+                    ),
+                ]),
+              ],
             ]),
           ),
           if (_money3) ...[
@@ -955,6 +1008,9 @@ class _DataImportScreenState extends State<DataImportScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           if (r.verified) const SetBanner('المجاميع المحفوظة في القاعدة طابقت المراجعة.', kind: SetBannerKind.ok),
           for (final p in r.problems) SetBanner(p, kind: SetBannerKind.warn),
+          if (r.kept.isNotEmpty)
+            Text('بقي ${r.kept.length} حساب موجود كما هو (الدين الحالي هو الصحيح أو لا فرق).',
+                style: const TextStyle(color: kSetMuted)),
           if (r.skippedAtSave.isNotEmpty) ...[
             Text('تُجوّز عند الحفظ ${r.skippedAtSave.length}:', style: const TextStyle(fontWeight: FontWeight.w700)),
             for (final x in r.skippedAtSave.take(30))

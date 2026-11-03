@@ -14,10 +14,11 @@
 //          الافتتاحي في دفتر المخزون والمزامنة)، ثم تُطابق الكمية والسعر بعد الحفظ.
 //
 // قواعد الأمان الحسابي:
-//   • عميل أو مورد موجود بالاسم نفسه: يُضاف مبلغه من الملف إلى حسابه بمعاملة
-//     «رصيد مستورد» (قرار المالك 2026-11-03 — كان يُتجاوز)، تُذكر فيها الملف
-//     والصف ومن قام بالاستيراد، ولا تُمس بطاقته (الهاتف والعنوان). يمكن إيقاف
-//     ذلك من [ImportOptions.addToExisting] فيُتجاوز كما كان.
+//   • عميل أو مورد موجود بالاسم نفسه: المستخدم يختار لكل اسم [ExistingAction]
+//     (قرار المالك 2026-11-03): دمج الدينين (يُضاف مبلغ الملف)، أو مبلغ الملف هو
+//     الصحيح (تسوية بالفرق فيصير الدين = مبلغ الملف)، أو الدين الحالي هو الصحيح
+//     (لا شيء). بلا اختيار لا يبدأ الاستيراد. المعاملة تذكر الملف والصف ومن قام
+//     بالاستيراد، ولا تُمس بطاقته (الهاتف والعنوان).
 //   • إعادة استيراد الملف نفسه (بصمة محتواه) لا تضيف أي مبلغ مرة ثانية: لكل صف
 //     مفتاح ثابت (البصمة + النوع + الاسم) في سجل data_import_rows وفي معرّف
 //     المعاملة، والصف الذي سبق استيراده يُتجاوز مع ذكر تاريخه.
@@ -222,10 +223,38 @@ class PlanRow {
 
   bool get isExisting => existingId != null;
 
+  /// اختيار المستخدم للحساب الموجود (null = لم يختر بعد — يمنع الاستيراد).
+  ExistingAction? action;
+
+  /// الرصيد بعد الاستيراد حسب الاختيار (للمعاينة؛ الحفظ يعيد الحساب من القاعدة).
+  double get balanceAfter => switch (action) {
+        ExistingAction.merge => ImportNumbers.money(existingBalance + balance),
+        ExistingAction.useFile => balance,
+        _ => existingBalance,
+      };
+
   bool get edited =>
       (originalBalance != null && (originalBalance! - balance).abs() > 0.004) ||
       (originalPrice != null && (originalPrice! - price).abs() > 0.004) ||
       (originalQty != null && (originalQty! - qty).abs() > 0.00001);
+}
+
+/// ما يُفعل بحساب موجود بالاسم نفسه.
+enum ExistingAction {
+  /// دمج الدينين: يُضاف مبلغ الملف إلى دينه الحالي.
+  merge,
+
+  /// مبلغ الملف هو الصحيح: معاملة تسوية بالفرق فيصير دينه = مبلغ الملف.
+  useFile,
+
+  /// الدين الحالي هو الصحيح: لا يُكتب شيء.
+  keep;
+
+  String get label => switch (this) {
+        ExistingAction.merge => 'دمج الدينين',
+        ExistingAction.useFile => 'مبلغ الملف هو الصحيح',
+        ExistingAction.keep => 'الدين الحالي هو الصحيح',
+      };
 }
 
 /// صف لن يُضاف: [error] = خطأ في البيانات (رقم غير مفهوم...)، وإلا تجاوز (موجود/مكرر/فارغ).
@@ -268,14 +297,24 @@ class ImportPlan {
   List<PlanRow> get newRows => rows.where((r) => !r.isExisting).toList();
   List<PlanRow> get existingRows => rows.where((r) => r.isExisting).toList();
   double get existingTotal => ImportNumbers.money(existingRows.fold(0.0, (s, r) => s + r.balance));
+
+  /// حسابات موجودة لم يُختر لها بعد.
+  List<PlanRow> get undecided => existingRows.where((r) => r.action == null).toList();
+
+  /// التغيّر المتوقع في أرصدة الحسابات الموجودة (حسب أرصدتها وقت المعاينة).
+  double get existingDelta =>
+      ImportNumbers.money(existingRows.fold(0.0, (s, r) => s + (r.balanceAfter - r.existingBalance)));
 }
 
 class ImportResult {
   ImportResult({required this.added, required this.skippedAtSave, required this.backupPath, required this.verified, this.problems = const []});
   final int added;
 
-  /// حسابات موجودة أُضيف إليها مبلغ.
+  /// حسابات موجودة أُضيف إليها مبلغ أو سُوّي دينها.
   int addedToExisting = 0;
+
+  /// حسابات موجودة بقيت كما هي (اختيار «الدين الحالي هو الصحيح» أو لا فرق).
+  List<SkipRow> kept = const [];
 
   /// صفوف تجاوزها الحفظ لأن اسمها ظهر بعد المعاينة (من جهاز آخر مثلاً).
   final List<SkipRow> skippedAtSave;
@@ -303,6 +342,11 @@ class DataImport {
     } catch (_) {
       return '';
     }
+  }
+
+  static String _fmt(double v) {
+    final m = ImportNumbers.money(v);
+    return m == m.truncateToDouble() ? m.toInt().toString() : m.toString();
   }
 
   static String _importNote(String fileName, PlanRow r) {
@@ -635,6 +679,10 @@ class DataImport {
           (plan.kind == ImportKind.products && (!r.price.isFinite || r.price <= 0 || !r.qty.isFinite || r.qty < 0));
       if (bad) throw ArgumentError('الصف ${r.line} «${r.name}»: قيمة غير صالحة — صحّحها في المعاينة');
     }
+    if (plan.undecided.isNotEmpty) {
+      throw ArgumentError('اختر لكل اسم موجود عندنا: دمج الدينين، أو مبلغ الملف هو الصحيح، أو الدين الحالي هو الصحيح '
+          '(${plan.undecided.length} بلا اختيار)');
+    }
     final db = await DatabaseService().database;
     await _ensureRowLedger(db);
     final hasBalances = plan.rows.any((r) => r.balance.abs() >= 0.005);
@@ -672,7 +720,8 @@ class DataImport {
     } catch (_) {}
     final ex = result.addedToExisting;
     await ActivityLog.log('استيراد', 'استيراد من Excel',
-        'استيراد ${result.added} ${plan.kind.noun} جديد${ex > 0 ? '، وإضافة مبالغ إلى $ex حساب موجود (${plan.existingTotal})' : ''} '
+        'استيراد ${result.added} ${plan.kind.noun} جديد${ex > 0 ? '، وتغيير دين $ex حساب موجود (${plan.existingDelta})' : ''}'
+        '${result.kept.isNotEmpty ? '، وبقي ${result.kept.length} موجود كما هو' : ''} '
         'من «$fileName» (${plan.skipped.length} مُتجاوز) — نسخة قبل الاستيراد: $backup');
     return result;
   }
@@ -687,9 +736,12 @@ class DataImport {
   ) async {
     final rows = plan.rows;
     final lateSkips = <SkipRow>[];
+    final kept = <SkipRow>[];
     var added = 0;
     var addedExisting = 0;
     await db.transaction((txn) async {
+      kept.clear();
+      lateSkips.clear();
       final txCols = {for (final c in await txn.rawQuery('PRAGMA table_info(transactions)')) '${c['name']}'};
       final ids = <int>[];
       var expected = 0.0;
@@ -712,7 +764,11 @@ class DataImport {
           }
         }
         if (r.isExisting) {
-          // ➕ حساب موجود: معاملة «رصيد مستورد» بالمبلغ، والبطاقة كما هي
+          // حساب موجود: حسب اختيار المستخدم — والبطاقة (الهاتف والعنوان) كما هي
+          if (r.action == ExistingAction.keep) {
+            kept.add(SkipRow(r.line, r.name, 'الدين الحالي هو الصحيح — لم يتغير'));
+            continue;
+          }
           final cur = await txn.query('customers',
               columns: ['id'], where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [r.existingId], limit: 1);
           if (cur.isEmpty) {
@@ -723,7 +779,15 @@ class DataImport {
             lateSkips.add(SkipRow(r.line, r.name, 'الحساب نفسه مكرر في الملف — لم يُضف مرة ثانية'));
             continue;
           }
-          exBefore += await _sumTx(txn, r.existingId!);
+          final before = await _sumTx(txn, r.existingId!);
+          final useFile = r.action == ExistingAction.useFile;
+          // مبلغ الملف هو الصحيح: الفرق فقط (من القاعدة الآن، لا من المعاينة)
+          final amount = useFile ? ImportNumbers.money(r.balance - before) : r.balance;
+          if (amount.abs() < 0.005) {
+            kept.add(SkipRow(r.line, r.name, 'دينه الحالي يساوي مبلغ الملف — لا تسوية'));
+            continue;
+          }
+          exBefore += before;
           final txUuid = uuid ?? UuidHelper.newTransactionUuid();
           await txn.insert(
               'transactions',
@@ -732,12 +796,14 @@ class DataImport {
                 'transaction_uuid': txUuid,
                 'sync_uuid': txUuid,
                 'transaction_date': o.openingDate.toIso8601String(),
-                'amount_changed': r.balance,
+                'amount_changed': amount,
                 'new_balance_after_transaction': 0.0, // يُضبط في إعادة الحساب أدناه
                 if (txCols.contains('balance_before_transaction')) 'balance_before_transaction': 0.0,
-                'transaction_note': note,
+                'transaction_note': useFile
+                    ? '$note — الدين صار ${_fmt(r.balance)} بدل ${_fmt(before)} (مبلغ الملف هو الصحيح)'
+                    : '$note — دمج: أُضيف ${_fmt(r.balance)} إلى ${_fmt(before)}',
                 'transaction_type': 'opening_balance',
-                'description': 'رصيد مستورد من Excel',
+                'description': useFile ? 'تسوية رصيد من Excel' : 'رصيد مستورد من Excel',
                 'created_at': DateTime.now().toIso8601String(),
                 'invoice_id': null,
                 'is_deleted': 0,
@@ -745,10 +811,17 @@ class DataImport {
                 'is_uploaded': 0,
               }));
           await _rebuildCustomerBalances(txn, r.existingId!, txCols);
+          if (useFile) {
+            // 🛡️ الدين صار مبلغ الملف بالضبط
+            final now = await _sumTx(txn, r.existingId!);
+            if ((now - ImportNumbers.money(r.balance)).abs() > 0.005) {
+              throw StateError('أُلغي الاستيراد كله: دين «${r.name}» بعد التسوية ($now) لا يساوي مبلغ الملف (${r.balance})');
+            }
+          }
           exIds.add(r.existingId!);
           exUuids.add(txUuid);
-          exExpected += r.balance;
-          ledger.add({'row_key': r.rowKey, 'entity_id': r.existingId, 'amount': r.balance});
+          exExpected += amount;
+          ledger.add({'row_key': r.rowKey, 'entity_id': r.existingId, 'amount': amount});
           if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
           continue;
         }
@@ -825,7 +898,8 @@ class DataImport {
     });
     onProgress?.call(rows.length, rows.length);
     return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true)
-      ..addedToExisting = addedExisting;
+      ..addedToExisting = addedExisting
+      ..kept = kept;
   }
 
   /// للاختبار فقط: تنفيذ العملاء على قاعدة معطاة (بلا نسخة احتياطية ولا فحص الفترة).
@@ -927,9 +1001,12 @@ class DataImport {
   ) async {
     final rows = plan.rows;
     final lateSkips = <SkipRow>[];
+    final kept = <SkipRow>[];
     var added = 0;
     var addedExisting = 0;
     await db.transaction((txn) async {
+      kept.clear();
+      lateSkips.clear();
       final names = {
         for (final r in await txn.rawQuery('SELECT name FROM suppliers')) _looseKey('${r['name'] ?? ''}'),
       };
@@ -943,31 +1020,52 @@ class DataImport {
       for (var i = 0; i < rows.length; i++) {
         final r = rows[i];
         if (r.isExisting) {
+          if (r.action == ExistingAction.keep) {
+            kept.add(SkipRow(r.line, r.name, 'الدين الحالي هو الصحيح — لم يتغير'));
+            continue;
+          }
           final sup = await txn.query('suppliers', columns: ['id'], where: 'id = ?', whereArgs: [r.existingId], limit: 1);
           if (sup.isEmpty) {
             lateSkips.add(SkipRow(r.line, r.name, 'المورد «${r.existingName}» حُذف بعد المعاينة — لم يُضف شيء'));
             continue;
           }
-          if (!exIds.contains(r.existingId)) {
-            for (final cur in const ['IQD', 'USD']) {
-              exBefore[cur] = (exBefore[cur] ?? 0) + await _sumSupplierTx(txn, r.existingId!, cur);
-            }
+          if (exIds.contains(r.existingId)) {
+            lateSkips.add(SkipRow(r.line, r.name, 'المورد نفسه مكرر في الملف — لم يُضف مرة ثانية'));
+            continue;
+          }
+          final curBefore = await _sumSupplierTx(txn, r.existingId!, r.currency);
+          final useFile = r.action == ExistingAction.useFile;
+          final amount = useFile ? ImportNumbers.money(r.balance - curBefore) : r.balance;
+          if (amount.abs() < 0.005) {
+            kept.add(SkipRow(r.line, r.name, 'رصيده الحالي يساوي مبلغ الملف — لا تسوية'));
+            continue;
+          }
+          for (final cur in const ['IQD', 'USD']) {
+            exBefore[cur] = (exBefore[cur] ?? 0) + await _sumSupplierTx(txn, r.existingId!, cur);
           }
           final note = _importNote(fileName, r);
           final ok = await SupplierDebtReconciler.addImportedBalance(txn,
               supplierId: r.existingId!,
-              amount: r.balance,
+              amount: amount,
               currency: r.currency,
               date: o.openingDate,
-              description: 'رصيد مستورد — $note',
+              description: useFile
+                  ? 'تسوية رصيد — $note — صار ${_fmt(r.balance)} بدل ${_fmt(curBefore)} (مبلغ الملف هو الصحيح)'
+                  : 'رصيد مستورد — $note — دمج: أُضيف ${_fmt(r.balance)} إلى ${_fmt(curBefore)}',
               uuid: r.rowKey == null ? 'simp_${UuidHelper.newTransactionUuid()}' : 's${_txUuid(r.rowKey!)}');
           if (!ok) {
             lateSkips.add(SkipRow(r.line, r.name, 'استُورد من هذا الملف نفسه سابقاً — لم يُضف مرة ثانية'));
             continue;
           }
+          if (useFile) {
+            final now = await _sumSupplierTx(txn, r.existingId!, r.currency);
+            if ((ImportNumbers.money(now) - ImportNumbers.money(r.balance)).abs() > 0.005) {
+              throw StateError('أُلغي الاستيراد كله: رصيد المورد «${r.name}» بعد التسوية ($now) لا يساوي مبلغ الملف (${r.balance})');
+            }
+          }
           exIds.add(r.existingId!);
-          exExpected[r.currency] = (exExpected[r.currency] ?? 0) + r.balance;
-          ledger.add({'row_key': r.rowKey, 'entity_id': r.existingId, 'amount': r.balance, 'currency': r.currency});
+          exExpected[r.currency] = (exExpected[r.currency] ?? 0) + amount;
+          ledger.add({'row_key': r.rowKey, 'entity_id': r.existingId, 'amount': amount, 'currency': r.currency});
           if (i % 50 == 0) onProgress?.call(i + 1, rows.length);
           continue;
         }
@@ -1045,7 +1143,8 @@ class DataImport {
     });
     onProgress?.call(rows.length, rows.length);
     return ImportResult(added: added, skippedAtSave: lateSkips, backupPath: backup, verified: true)
-      ..addedToExisting = addedExisting;
+      ..addedToExisting = addedExisting
+      ..kept = kept;
   }
 
   static Future<double> _sumSupplierTx(DatabaseExecutor db, int supplierId, String cur) async {

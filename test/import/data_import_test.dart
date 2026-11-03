@@ -414,6 +414,11 @@ void main() {
       final o = ImportOptions(openingDate: DateTime(2026, 1, 1), sourceId: 'abc');
       final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1}, o);
       expect(plan.existingRows.single.existingBalance, 600);
+      // بلا اختيار لا يبدأ الاستيراد (قبل أي كتابة)
+      expect(plan.undecided.length, 1);
+      expect(() => DataImport.execute(plan, o, fileName: 'f', sheet: 's'), throwsArgumentError);
+      plan.existingRows.single.action = ExistingAction.merge;
+      expect(plan.existingRows.single.balanceAfter, 850);
 
       final res = await DataImport.debugExecuteCustomers(db, plan, o, 'ديون.xls');
       expect(res.added, 0);
@@ -428,7 +433,7 @@ void main() {
       final imp = txs.first;
       expect(imp['transaction_type'], 'opening_balance');
       expect(imp['description'], 'رصيد مستورد من Excel');
-      expect(imp['transaction_note'], 'استيراد من Excel: «ديون.xls» — الصف 2 — بواسطة أحمد');
+      expect(imp['transaction_note'], 'استيراد من Excel: «ديون.xls» — الصف 2 — بواسطة أحمد — دمج: أُضيف 250 إلى 600');
       expect(imp['created_by_username'], 'أحمد');
       expect('${imp['transaction_uuid']}', startsWith('tximp_'));
 
@@ -441,6 +446,42 @@ void main() {
       expect(res2.skippedAtSave.single.reason, contains('سابقاً'));
       expect((await db.query('customers', where: 'id = 1')).single['current_total_debt'], 850);
       expect((await db.query('transactions')).length, 3);
+    });
+    test('مبلغ الملف هو الصحيح: تسوية بالفرق فيصير الدين مبلغ الملف بالضبط', () async {
+      final t = SheetTable('s', [
+        ['الاسم', 'الرصيد'],
+        ['علي', '1,000'],
+      ]);
+      final o = ImportOptions(openingDate: DateTime(2026, 6, 1), sourceId: 'x2');
+      final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1}, o);
+      plan.existingRows.single.action = ExistingAction.useFile;
+      expect(plan.existingRows.single.balanceAfter, 1000);
+      expect(plan.existingDelta, 400);
+      final res = await DataImport.debugExecuteCustomers(db, plan, o, 'f.xls');
+      expect(res.addedToExisting, 1);
+      expect((await db.query('customers', where: 'id = 1')).single['current_total_debt'], 1000);
+      final imp = (await db.query('transactions', where: "transaction_uuid LIKE 'tximp_%'")).single;
+      expect(imp['amount_changed'], 400); // الفرق فقط
+      expect(imp['description'], 'تسوية رصيد من Excel');
+      expect('${imp['transaction_note']}', contains('الدين صار 1000 بدل 600'));
+      expect(imp['new_balance_after_transaction'], 1000); // آخر معاملة بالتاريخ
+    });
+
+    test('الدين الحالي هو الصحيح، أو لا فرق: لا تُكتب أي معاملة', () async {
+      final t = SheetTable('s', [
+        ['الاسم', 'الرصيد'],
+        ['علي', '600'],
+      ]);
+      final o = ImportOptions(openingDate: DateTime(2026, 6, 1), sourceId: 'x3');
+      for (final a in [ExistingAction.keep, ExistingAction.useFile]) {
+        final plan = await DataImport.plan(db, t, ImportKind.customers, {'name': 0, 'balance': 1}, o);
+        plan.existingRows.single.action = a;
+        final res = await DataImport.debugExecuteCustomers(db, plan, o, 'f.xls');
+        expect(res.addedToExisting, 0);
+        expect(res.kept.length, 1);
+      }
+      expect((await db.query('transactions')).length, 2);
+      expect((await db.query('customers', where: 'id = 1')).single['current_total_debt'], 600);
     });
   });
 }
