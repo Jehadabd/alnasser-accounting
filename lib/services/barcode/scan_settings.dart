@@ -80,7 +80,10 @@ class ScanSettings {
     return current;
   }
 
-  static Future<ScanSettings> ensureLoaded() async => _loaded ? current : load();
+  static Future<ScanSettings> ensureLoaded() {
+    if (_loaded) return Future.value(current);
+    return load();
+  }
 
   static Future<void> save(ScanSettings s) async {
     final v = s.copyWith(maxGapMs: clampGap(s.maxGapMs), minLength: clampMin(s.minLength));
