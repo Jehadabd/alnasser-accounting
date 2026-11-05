@@ -84,6 +84,24 @@ class SettingsScaffold extends StatelessWidget {
   }
 }
 
+/// محتوى شاشة إعدادات فرعية مضمّناً داخل شاشة أخرى (مثل تيليجرام داخل «النسخ
+/// الاحتياطي») — الثيم الموحّد نفسه بلا شريط علوي ولا تمرير خاص.
+class SetEmbedded extends StatelessWidget {
+  const SetEmbedded({super.key, required this.children, this.loading = false});
+  final List<Widget> children;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Theme(
+      data: ErpTheme.apply(Theme.of(context)),
+      child: loading
+          ? const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))
+          : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+    );
+  }
+}
+
 /// بطاقة تعريف أعلى الشاشة.
 class SetHero extends StatelessWidget {
   const SetHero({

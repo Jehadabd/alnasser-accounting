@@ -13,10 +13,14 @@ import 'package:url_launcher/url_launcher.dart';
 import '../erp/erp_kit.dart' show ErpDialog;
 import '../services/dropbox_backup_service.dart';
 import '../widgets/settings_kit.dart';
+import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 import '../widgets/migration_guard_views.dart' show restoreSummaryText;
 
 class DropboxBackupScreen extends StatefulWidget {
-  const DropboxBackupScreen({super.key});
+  const DropboxBackupScreen({super.key, this.embedded = false});
+
+  /// داخل «النسخ الاحتياطي والمزامنة» تحت مفتاح دروب بوكس (بلا شريط علوي).
+  final bool embedded;
 
   @override
   State<DropboxBackupScreen> createState() => _DropboxBackupScreenState();
@@ -296,9 +300,46 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
 
   // ─────────────────────────── الواجهة ───────────────────────────
 
+  List<Widget> _content() {
+    final connected = _authStatus == DropboxAuthStatus.authenticated;
+    return [
+      if (widget.embedded)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Row(children: [
+            Expanded(child: Align(alignment: AlignmentDirectional.centerStart, child: _statusPills())),
+            IconButton(
+              tooltip: 'تحديث',
+              onPressed: _busy ? null : _checkAuthAndLoadBackups,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+            if (connected)
+              IconButton(
+                tooltip: 'قطع الاتصال',
+                onPressed: _busy ? null : _logout,
+                icon: const Icon(Icons.logout_rounded),
+              ),
+          ]),
+        )
+      else
+        _hero(),
+      if (_lastResult != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: SetBanner(_lastResult!.$2, kind: _lastResult!.$1 ? SetBannerKind.ok : SetBannerKind.error),
+        ),
+      if (!connected) _authCard() else ...[
+        _backupCard(),
+        _settingsCard(),
+        _listCard(),
+      ],
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final connected = _authStatus == DropboxAuthStatus.authenticated;
+    if (widget.embedded) return SetEmbedded(loading: _firstLoad, children: _firstLoad ? const [] : _content());
     return SettingsScaffold(
       title: 'النسخ الاحتياطي السحابي',
       subtitle: 'Dropbox — نسخ قاعدة البيانات مع تدوير تلقائي',
@@ -317,43 +358,31 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
             icon: const Icon(Icons.logout_rounded),
           ),
       ],
-      children: _firstLoad
-          ? null
-          : [
-              _hero(),
-              if (_lastResult != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 14),
-                  child: SetBanner(_lastResult!.$2, kind: _lastResult!.$1 ? SetBannerKind.ok : SetBannerKind.error),
-                ),
-              if (!connected) _authCard() else ...[
-                _backupCard(),
-                _settingsCard(),
-                _listCard(),
-              ],
-            ],
+      children: _firstLoad ? null : _content(),
     );
   }
 
-  Widget _hero() {
+  Widget _statusPills() {
     final (String label, bool ok) = switch (_authStatus) {
-      DropboxAuthStatus.authenticated => ('متصل', true),
+      DropboxAuthStatus.authenticated => ('متصل${_account == null ? '' : ': $_account'}', true),
       DropboxAuthStatus.needsAuth => ('انتهى الاتصال — سجّل الدخول من جديد', false),
       DropboxAuthStatus.error => ('تعذّر الوصول — تحقّق من الإنترنت', false),
       DropboxAuthStatus.notConfigured => ('غير متصل', false),
     };
-    return SetHero(
-      icon: Icons.cloud_rounded,
-      color: _dbx,
-      title: 'Dropbox',
-      text: _account ?? 'احفظ نسخة من قاعدة بياناتك في حسابك على Dropbox، مع حذف النسخ الأقدم تلقائياً.',
-      status: Wrap(spacing: 8, runSpacing: 6, children: [
-        SetStatusPill(label, ok: ok),
-        if (_authStatus == DropboxAuthStatus.authenticated)
-          SetStatusPill('${_backups.length} نسخة محفوظة', ok: _backups.isNotEmpty, icon: Icons.inventory_2_rounded),
-      ]),
-    );
+    return Wrap(spacing: 8, runSpacing: 6, children: [
+      SetStatusPill(label, ok: ok),
+      if (_authStatus == DropboxAuthStatus.authenticated)
+        SetStatusPill('${_backups.length} نسخة محفوظة', ok: _backups.isNotEmpty, icon: Icons.inventory_2_rounded),
+    ]);
   }
+
+  Widget _hero() => SetHero(
+        icon: Icons.cloud_rounded,
+        color: _dbx,
+        title: 'Dropbox',
+        text: _account ?? 'احفظ نسخة من قاعدة بياناتك في حسابك على Dropbox، مع حذف النسخ الأقدم تلقائياً.',
+        status: _statusPills(),
+      );
 
   Widget _authCard() {
     return SetCard(
@@ -374,11 +403,27 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
           ),
           const SizedBox(height: 14),
         ],
-        const SetSteps([
-          'اضغط «فتح صفحة Dropbox» وسجّل الدخول ثم اضغط «Allow / السماح».',
-          'سيفتح المتصفح صفحة «localhost» قد تظهر أنها لا تعمل — هذا طبيعي.',
-          'انسخ الرابط كاملاً من شريط العنوان (أو الكود وحده) والصقه في الحقل ثم «تأكيد».',
-        ], color: _dbx),
+        const SetupGuide(color: _dbx, steps: [
+          GuideStep(
+            'تحتاج حساباً في Dropbox (المجاني يكفي، 2 غيغابايت). إن لم يكن عندك أنشئه من الرابط، وإن كان عندك تخطَّ هذه الخطوة.',
+            links: [
+              GuideLink('إنشاء حساب Dropbox', 'https://www.dropbox.com/register', icon: Icons.person_add_alt_1_rounded),
+              GuideLink('تسجيل الدخول', 'https://www.dropbox.com/login', icon: Icons.login_rounded),
+            ],
+          ),
+          GuideStep('اضغط الزر الأزرق «فتح صفحة Dropbox» أدناه — يفتح المتصفح. سجّل الدخول إن طُلب منك.'),
+          GuideStep('تظهر صفحة تسأل: هل تسمح لهذا التطبيق بالوصول؟ اضغط «Continue / متابعة» ثم «Allow / السماح».'),
+          GuideStep(
+            'يفتح المتصفح صفحة عنوانها يبدأ بـ http://localhost وقد يكتب «لا يمكن الوصول إلى هذا الموقع» — هذا طبيعي ومطلوب.',
+            note: 'لا تغلق هذه الصفحة: المطلوب منها هو العنوان المكتوب في أعلاها فقط.',
+          ),
+          GuideStep(
+            'اضغط على شريط العنوان أعلى المتصفح، ثم Ctrl+A ثم Ctrl+C لنسخه كاملاً، وارجع هنا والصقه في الخانة '
+            '(Ctrl+V) ثم اضغط «تأكيد».',
+            note: 'الكود صالح دقائق قليلة فقط. إن ظهر أنه مرفوض اضغط «فتح صفحة Dropbox مجدداً» وكرّر.',
+            warn: true,
+          ),
+        ]),
         const SizedBox(height: 6),
         SetPrimaryButton(
           label: _showCodeInput ? 'فتح صفحة Dropbox مجدداً' : 'فتح صفحة Dropbox',

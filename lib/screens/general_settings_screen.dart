@@ -588,7 +588,9 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         .where((text) => text.isNotEmpty)
         .toList();
 
-    _appSettings = _appSettings.copyWith(
+    // 🔁 من المحفوظ الآن لا من نسخة فتح الشاشة: لوحات تيليجرام/ديسكورد/دروب بوكس
+    //    المضمّنة هنا تحفظ بياناتها بنفسها، فلا يكتب هذا الحفظ فوقها بقيم قديمة.
+    _appSettings = (await SettingsManager.getAppSettings()).copyWith(
       phoneNumbers: newPhoneNumbers,
       remainingAmountColor: _remainingAmountColor.toARGB32(),
       discountColor: _discountColor.toARGB32(),
@@ -871,7 +873,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Text('يرفع إلى المفعّل فقط، من الأعلى إلى الأسفل. اسحب ⠿ لتغيير الترتيب. '
-              'الوجهة غير المربوطة تُتخطّى.',
+              'التفعيل وبيانات الربط في بطاقة كل وجهة أدناه. الوجهة غير المربوطة تُتخطّى.',
               style: TextStyle(fontSize: 12.5, color: Colors.black54, height: 1.5)),
         ),
         ReorderableListView(
@@ -905,16 +907,27 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   ]),
                   subtitle: Text(UploadTargets.hints[list[i]]!, style: const TextStyle(fontSize: 12)),
                   trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Switch(
-                      value: !_uploadDisabled.contains(list[i]),
-                      onChanged: (v) => setState(() {
-                        if (v) {
-                          _uploadDisabled.remove(list[i]);
-                        } else {
-                          _uploadDisabled.add(list[i]);
-                        }
-                      }),
-                    ),
+                    // تيليجرام/ديسكورد/دروب بوكس تُفعَّل من بطاقاتها أدناه (مفتاح واحد لكل وجهة)
+                    if (list[i] == UploadTargets.gdrive)
+                      Switch(
+                        value: !_uploadDisabled.contains(list[i]),
+                        onChanged: (v) => setState(() {
+                          if (v) {
+                            _uploadDisabled.remove(list[i]);
+                          } else {
+                            _uploadDisabled.add(list[i]);
+                          }
+                        }),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Text(_uploadDisabled.contains(list[i]) ? 'متوقف' : 'مفعّل',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: _uploadDisabled.contains(list[i]) ? Colors.black38 : const Color(0xFF047857))),
+                      ),
                     ReorderableDragStartListener(
                       index: i,
                       child: const MouseRegion(
@@ -928,6 +941,96 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           ],
         ),
       ]),
+    );
+  }
+
+  /// ☁️ وجهة نسخ احتياطي: المفتاح في رأس البطاقة يفعّلها (ضمن زر «رفع البيانات»)،
+  /// وعند تفعيلها تظهر إعداداتها كاملة تحتها — لا شاشة ثانية ولا إعدادات مكررة.
+  Widget _serviceCard({
+    required String target,
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String subtitle,
+    required Widget panel,
+    List<Widget> extra = const [],
+  }) {
+    final on = !_uploadDisabled.contains(target);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: on ? color.withValues(alpha: 0.35) : const Color(0xFFE6EBF2), width: on ? 1.4 : 1),
+        boxShadow: [
+          BoxShadow(color: on ? color.withValues(alpha: 0.10) : const Color(0x0A0F172A), blurRadius: 14, offset: const Offset(0, 4)),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InkWell(
+            onTap: () => setState(() => on ? _uploadDisabled.add(target) : _uploadDisabled.remove(target)),
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 10, 14),
+              child: Row(children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: on ? color : color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Icon(icon, color: on ? Colors.white : color, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(title, style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800, color: Color(0xFF1E293B))),
+                    Text(on ? subtitle : 'متوقف — فعّله لتظهر إعداداته وشرح الربط',
+                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF64748B), height: 1.4)),
+                  ]),
+                ),
+                Switch(
+                  value: on,
+                  activeThumbColor: color,
+                  onChanged: (v) => setState(() => v ? _uploadDisabled.remove(target) : _uploadDisabled.add(target)),
+                ),
+              ]),
+            ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            alignment: AlignmentDirectional.topStart,
+            child: !on
+                ? const SizedBox(width: double.infinity)
+                : Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.035),
+                      border: const Border(top: BorderSide(color: Color(0xFFEEF2F7))),
+                    ),
+                    padding: const EdgeInsets.fromLTRB(12, 14, 12, 6),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      KeyedSubtree(key: ValueKey('panel-$target'), child: panel),
+                      if (extra.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFE6EBF2)),
+                          ),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: extra),
+                        ),
+                    ]),
+                  ),
+          ),
+        ]),
+      ),
     );
   }
 
@@ -2191,26 +2294,20 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               ],
             ),
           ),
-          // 📤 إعدادات رفع قاعدة البيانات إلى تيليغرام
-          _buildSettingsCard(
+          // 📤 تيليجرام / ديسكورد / دروب بوكس — مكان واحد: المفتاح يفعّل الوجهة، وتحته إعداداتها
+          _serviceCard(
+            target: UploadTargets.telegram,
             icon: Icons.telegram,
-            iconColor: Colors.blue,
-            title: 'النسخ الاحتياطي - تيليغرام',
-            child: Column(children: [
-              _buildActionTile(
-                icon: Icons.cloud_upload,
-                iconColor: Colors.blue,
-                title: 'إعدادات رفع قاعدة البيانات',
-                subtitle: 'ربط البوت والقناة لرفع النسخ الاحتياطية والتقارير',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const TelegramSettingsScreen()),
-                  ).then((_) => _loadSettings());
-                },
+            color: const Color(0xFF229ED9),
+            title: 'تيليجرام',
+            subtitle: 'قاعدة البيانات والفواتير والتقارير إلى قناتك الخاصة',
+            panel: const TelegramSettingsScreen(embedded: true),
+            extra: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(4, 6, 4, 2),
+                child: Text('ما يُرفع إلى تيليجرام مع زر «رفع البيانات»',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Color(0xFF1E293B))),
               ),
-              const Divider(height: 1),
-              // 📤 طريقة رفع الفواتير مع زر «رفع قاعدة البيانات»
               _invoiceUploadModeTile(
                 icon: Icons.receipt_long_rounded,
                 title: 'رفع الفواتير العادية والجملة',
@@ -2230,43 +2327,23 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 value: _tgResendEdited,
                 onChanged: (v) => setState(() => _tgResendEdited = v),
               ),
-            ]),
+            ],
           ),
-          // 💬 إعدادات Discord Webhook
-          _buildSettingsCard(
-            icon: Icons.chat_bubble,
-            iconColor: const Color(0xFF5865F2),
-            title: 'النسخ الاحتياطي - Discord',
-            child: _buildActionTile(
-              icon: Icons.webhook,
-              iconColor: const Color(0xFF5865F2),
-              title: 'إعدادات Discord Webhook',
-              subtitle: 'إرسال النسخ الاحتياطية إلى Discord (بديل سهل لـ Telegram)',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const DiscordSettingsScreen()),
-                ).then((_) => _loadSettings());
-              },
-            ),
+          _serviceCard(
+            target: UploadTargets.discord,
+            icon: Icons.discord,
+            color: const Color(0xFF5865F2),
+            title: 'Discord',
+            subtitle: 'التقارير والنسخ إلى قناة على سيرفرك (بديل سهل لتيليجرام)',
+            panel: const DiscordSettingsScreen(embedded: true),
           ),
-          // ☁️ النسخ الاحتياطي السحابي - Dropbox
-          _buildSettingsCard(
-            icon: Icons.cloud,
-            iconColor: Colors.lightBlue,
-            title: 'النسخ الاحتياطي السحابي - Dropbox',
-            child: _buildActionTile(
-              icon: Icons.cloud_upload,
-              iconColor: Colors.lightBlue,
-              title: 'النسخ الاحتياطي إلى Dropbox',
-              subtitle: 'نسخ احتياطي تلقائي مع تدوير النسخ (حذف الأقدم تلقائياً)',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const DropboxBackupScreen()),
-                );
-              },
-            ),
+          _serviceCard(
+            target: UploadTargets.dropbox,
+            icon: Icons.cloud_rounded,
+            color: const Color(0xFF0061FE),
+            title: 'Dropbox',
+            subtitle: 'نسخ قاعدة البيانات إلى حسابك السحابي مع حذف الأقدم تلقائياً',
+            panel: const DropboxBackupScreen(embedded: true),
           ),
           // 🔥 إعدادات مزامنة Firebase (تظهر فقط إذا كانت المزامنة مشمولة في الترخيص)
           if (_isSyncAllowed)

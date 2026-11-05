@@ -3,14 +3,18 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import '../services/auth_service.dart';
 import '../services/settings_manager.dart';
 import '../services/telegram_invoice_export_service.dart';
 import '../widgets/owner_summary_card.dart'; // 📊 ملخص المالك اليومي
 import '../widgets/settings_kit.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 
 class TelegramSettingsScreen extends StatefulWidget {
-  const TelegramSettingsScreen({super.key});
+  const TelegramSettingsScreen({super.key, this.embedded = false});
+
+  /// داخل «النسخ الاحتياطي والمزامنة» تحت مفتاح تيليجرام (بلا شريط علوي).
+  final bool embedded;
 
   @override
   State<TelegramSettingsScreen> createState() => _TelegramSettingsScreenState();
@@ -35,10 +39,8 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
   (bool ok, String msg)? _lastTest;
   static const _tg = Color(0xFF229ED9);
   String? _botName;
-  
-  // للتحكم في عرض التعليمات
-  bool _showBotInstructions = false;
-  bool _showChannelInstructions = false;
+  String? _botUsername;
+  bool _detecting = false;
 
   @override
   void initState() {
@@ -126,6 +128,8 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
           setState(() {
             _botTokenController.text = token;
             _botName = data['result']['first_name'] ?? data['result']['username'];
+            final u = data['result']['username'];
+            _botUsername = u is String && u.isNotEmpty ? u : null;
             _isLoading = false;
           });
         }
@@ -229,7 +233,177 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
       return 'البوت ليس مشرفاً في القناة — أضفه كـ Admin مع صلاحية النشر.';
     }
     if (d.contains('unauthorized')) return 'التوكن غير صحيح — انسخه من جديد من BotFather.';
+    if (d.contains('webhook')) return 'هذا البوت مربوط ببرنامج آخر (Webhook) — أنشئ بوتاً جديداً خاصاً بهذا التطبيق.';
     return desc;
+  }
+
+  static Map<String, dynamic>? _map(Object? o) => o is Map ? o.cast<String, dynamic>() : null;
+
+  /// 🔎 يجد القناة التي أُضيف إليها البوت (أو كُتبت فيها رسالة) ويكتب معرّفها.
+  Future<void> _detectChannel() async {
+    final token = _extractBotToken(_botTokenController.text.trim());
+    if (token == null) {
+      _showSnackBar('ألصق توكن البوت أولاً (الجزء الأول من الشرح)', isError: true);
+      return;
+    }
+    setState(() => _detecting = true);
+    try {
+      final r = await http
+          .get(Uri.parse('https://api.telegram.org/bot$token/getUpdates'))
+          .timeout(const Duration(seconds: 15));
+      final data = json.decode(r.body);
+      if (!mounted) return;
+      if (data is! Map || data['ok'] != true) {
+        final desc = data is Map ? '${data['description'] ?? r.statusCode}' : '${r.statusCode}';
+        setState(() => _lastTest = (false, 'تعذّر الاكتشاف: ${_explainTelegramError(desc)}'));
+        return;
+      }
+      // آخر حالة لكل محادثة: أُضيف البوت ثم أُزيل ⇒ لا تظهر
+      final found = <String, ({String id, String title, String type})>{};
+      for (final raw in (data['result'] as List? ?? const [])) {
+        final u = _map(raw);
+        if (u == null) continue;
+        final member = _map(u['my_chat_member']);
+        Map<String, dynamic>? chat;
+        if (member != null) {
+          chat = _map(member['chat']);
+          final status = _map(member['new_chat_member'])?['status'];
+          if (chat != null && (status == 'left' || status == 'kicked')) {
+            found.remove('${chat['id']}');
+            continue;
+          }
+        }
+        chat ??= _map(_map(u['channel_post'] ?? u['edited_channel_post'] ?? u['message'] ?? u['edited_message'])?['chat']);
+        if (chat == null || chat['id'] == null) continue;
+        final type = '${chat['type'] ?? ''}';
+        final title = type == 'private'
+            ? 'محادثتك الخاصة مع البوت (${chat['first_name'] ?? ''})'
+            : '${chat['title'] ?? chat['username'] ?? chat['id']}';
+        found['${chat['id']}'] = (id: '${chat['id']}', title: title, type: type);
+      }
+      // القنوات أولاً ثم المجموعات ثم المحادثة الخاصة
+      int rank(String t) => t == 'channel' ? 0 : (t == 'private' ? 2 : 1);
+      final list = found.values.toList()..sort((a, b) => rank(a.type).compareTo(rank(b.type)));
+      if (list.isEmpty) {
+        setState(() => _lastTest = (
+              false,
+              'لم أجد قناة بعد. تأكّد أنك أضفت البوت «مشرفاً» في القناة، واكتب أي رسالة فيها، ثم اضغط الزر مرة أخرى.'
+            ));
+        return;
+      }
+      var pick = list.first;
+      if (list.length > 1) {
+        final chosen = await showDialog<({String id, String title, String type})>(
+          context: context,
+          builder: (ctx) => SimpleDialog(
+            title: const Text('أين تريد أن تصل النسخ؟', style: TextStyle(fontWeight: FontWeight.w800)),
+            children: [
+              for (final c in list)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(ctx, c),
+                  child: Row(children: [
+                    Icon(c.type == 'channel' ? Icons.campaign_rounded : (c.type == 'private' ? Icons.person_rounded : Icons.groups_rounded),
+                        color: _tg),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(c.title, style: const TextStyle(fontWeight: FontWeight.w700))),
+                  ]),
+                ),
+            ],
+          ),
+        );
+        if (chosen == null || !mounted) return;
+        pick = chosen;
+      }
+      setState(() {
+        _channelIdController.text = pick.id;
+        _channelName = null;
+        _lastTest = (true, 'وُجدت «${pick.title}» — اضغط «حفظ وربط الاتصال» لإكمال الربط.');
+      });
+    } catch (e) {
+      if (mounted) setState(() => _lastTest = (false, 'تعذّر الاكتشاف — تحقّق من الإنترنت ومن التوكن.\n$e'));
+    } finally {
+      if (mounted) setState(() => _detecting = false);
+    }
+  }
+
+  // ─────────── الشرح خطوة بخطوة ───────────
+
+  String get _ownerName => (AuthService().currentUser?.username ?? '').trim();
+
+  List<GuideStep> _botSteps() {
+    final owner = _ownerName;
+    final names = NameSuggest.telegramBot(owner, salt: DateTime.now().millisecondsSinceEpoch ~/ 86400000);
+    return [
+      const GuideStep(
+        'ثبّت تطبيق تيليجرام على حاسبتك أو هاتفك وسجّل الدخول برقم هاتفك. (إن كان مثبتاً عندك تخطَّ هذه الخطوة.)',
+        links: [
+          GuideLink('تحميل تيليجرام', 'https://telegram.org/apps', icon: Icons.download_rounded),
+          GuideLink('تيليجرام في المتصفح', 'https://web.telegram.org/a/', icon: Icons.language_rounded),
+        ],
+      ),
+      const GuideStep(
+        'افتح محادثة «BotFather» — هو الحساب الرسمي لصنع البوتات وبجانب اسمه علامة زرقاء ✔. '
+        'اضغط «Start» (أو «ابدأ») أسفل المحادثة.',
+        links: [GuideLink('فتح BotFather', 'https://t.me/BotFather', icon: Icons.smart_toy_rounded)],
+        note: 'إن سألك المتصفح «فتح Telegram؟» اختر «فتح». احذر الحسابات المقلّدة: الاسم الصحيح BotFather بالعلامة الزرقاء.',
+      ),
+      const GuideStep('انسخ هذا الأمر، والصقه في خانة الكتابة عند BotFather، ثم أرسله:', copies: ['/newbot']),
+      GuideStep(
+        'يسألك عن «الاسم» (name) — اسم يظهر لك فقط ويمكن أن يكون بالعربي. أرسل مثلاً:',
+        copies: [owner.isEmpty ? 'نسخ المتجر' : 'نسخ $owner'],
+      ),
+      GuideStep(
+        'ثم يسألك عن «اسم المستخدم» (username) — بالإنجليزي، بلا مسافات، وينتهي بكلمة bot. انسخ واحداً من هذه وأرسله:',
+        copies: names,
+        note: 'إن ردّ «Sorry, this username is already taken» فالاسم مأخوذ — أرسل الاسم الذي يليه.',
+      ),
+      const GuideStep(
+        'يرسل لك رسالة طويلة تبدأ بـ «Done! Congratulations» وفيها التوكن (رقم ثم : ثم حروف، مثل 123456789:AAH…). '
+        'انسخ الرسالة كلها والصقها في خانة «التوكن» أعلاه — التطبيق يأخذ التوكن منها وحده — ثم اضغط زر التحقق ✔ بجانب الخانة.',
+        note: 'التوكن مثل كلمة السر: لا ترسله لأحد. إن انكشف أرسل /revoke إلى BotFather ليعطيك توكناً جديداً.',
+        warn: true,
+      ),
+    ];
+  }
+
+  List<GuideStep> _channelSteps() {
+    final owner = _ownerName;
+    return [
+      GuideStep(
+        'في تيليجرام أنشئ قناة جديدة: على الحاسبة من القائمة ☰ ← «New Channel / قناة جديدة»، '
+        'وعلى الهاتف من أيقونة القلم ✏️ ← «New Channel». سمّها مثلاً:',
+        copies: [owner.isEmpty ? 'نسخ احتياطي - المتجر' : 'نسخ احتياطي - $owner'],
+      ),
+      const GuideStep('عند السؤال عن نوع القناة اختر «Private / خاصة» حتى لا يراها أحد غيرك. '
+          'إن طلب إضافة أعضاء اضغط «Skip / تخطٍّ».'),
+      GuideStep(
+        'أضف البوت «مشرفاً»: افتح القناة ← اضغط اسمها في الأعلى ← «Administrators / المشرفون» '
+        '(على الحاسبة: «Manage channel / إدارة القناة» ثم «Administrators») ← «Add Admin / إضافة مشرف» ← '
+        'اكتب اسم مستخدم البوت ← اختره ← تأكّد أن «Post Messages / نشر الرسائل» مفعّل ← «Save / حفظ».',
+        copies: [if (_botUsername != null) '@$_botUsername'],
+        note: _botUsername == null ? 'اسم مستخدم البوت هو الذي اخترته وينتهي بـ bot (يظهر هنا بعد التحقق من التوكن).' : null,
+      ),
+      GuideStep(
+        'اكتب أي رسالة في القناة (مثلاً: تجربة)، ثم ارجع هنا واضغط هذا الزر — يجد التطبيق القناة ويكتب معرّفها وحده:',
+        extra: Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: _tg, minimumSize: const Size(0, 44)),
+            onPressed: _detecting ? null : _detectChannel,
+            icon: _detecting
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.travel_explore_rounded, size: 18),
+            label: const Text('اكتشاف معرّف القناة تلقائياً'),
+          ),
+        ),
+      ),
+      const GuideStep(
+        'إن لم ينجح الزر: افتح القناة في «تيليجرام المتصفح»، وانظر إلى شريط العنوان أعلى المتصفح: '
+        'الرقم بعد علامة # ويبدأ بـ -100 هو المعرّف — انسخه والصقه في الخانة أعلاه.',
+        links: [GuideLink('تيليجرام في المتصفح', 'https://web.telegram.org/a/', icon: Icons.language_rounded)],
+      ),
+      const GuideStep('اضغط «حفظ وربط الاتصال» أسفل الصفحة — تصلك رسالة تجريبية في القناة، وتظهر علامة ✔ خضراء هنا.'),
+    ];
   }
 
     Future<void> _exportAllInvoices() async {
@@ -304,37 +478,39 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
     setToast(context, message, error: isError);
   }
 
-  void _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
-    final connected = _botName != null && _channelName != null;
-    final busy = _isLoading || _testing;
+    if (widget.embedded) return SetEmbedded(loading: !_loaded, children: _loaded ? _content() : const []);
     return SettingsScaffold(
       title: 'النسخ الاحتياطي عبر تيليجرام',
       subtitle: 'رفع قاعدة البيانات والتقارير إلى قناتك الخاصة',
       icon: Icons.telegram,
       loading: !_loaded,
-      children: !_loaded
-          ? null
-          : [
-              SetHero(
-                icon: Icons.telegram,
-                color: _tg,
-                title: 'ربط مع تيليجرام',
-                text: 'احصل على نسخ احتياطية وتقارير فورية على قناتك الخاصة. '
-                    'تحتاج بوتاً (توكن) وقناة يكون البوت مشرفاً فيها.',
-                status: Wrap(spacing: 8, runSpacing: 6, children: [
-                  SetStatusPill(_botName != null ? 'البوت: $_botName' : 'البوت غير مُتحقَّق', ok: _botName != null),
-                  SetStatusPill(_channelName != null ? 'القناة: $_channelName' : 'القناة غير مُختبرة',
-                      ok: _channelName != null),
-                ]),
-              ),
+      children: !_loaded ? null : _content(),
+    );
+  }
+
+  Widget _statusPills() => Wrap(spacing: 8, runSpacing: 6, children: [
+        SetStatusPill(_botName != null ? 'البوت: $_botName' : 'البوت غير مُتحقَّق', ok: _botName != null),
+        SetStatusPill(_channelName != null ? 'القناة: $_channelName' : 'القناة غير مُختبرة', ok: _channelName != null),
+      ]);
+
+  List<Widget> _content() {
+    final connected = _botName != null && _channelName != null;
+    final busy = _isLoading || _testing || _detecting;
+    return [
+              if (widget.embedded)
+                Padding(padding: const EdgeInsets.only(bottom: 12), child: _statusPills())
+              else
+                SetHero(
+                  icon: Icons.telegram,
+                  color: _tg,
+                  title: 'ربط مع تيليجرام',
+                  text: 'احصل على نسخ احتياطية وتقارير فورية على قناتك الخاصة. '
+                      'تحتاج بوتاً (توكن) وقناة يكون البوت مشرفاً فيها — الشرح أدناه خطوة بخطوة.',
+                  status: _statusPills(),
+                ),
 
               // 1) التوكن
               SetCard(
@@ -368,20 +544,11 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                       }
                     },
                   ),
-                  _HelpToggle(
-                    open: _showBotInstructions,
-                    label: 'كيف أحصل على التوكن؟',
+                  GuideToggle(
+                    label: 'كيف أصنع البوت وأحصل على التوكن؟ (شرح خطوة بخطوة)',
                     color: _tg,
-                    onTap: () => setState(() => _showBotInstructions = !_showBotInstructions),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const SetSteps(['ابحث عن ‎@BotFather‎ في تيليجرام.', 'أرسل ‎/newbot‎ واتبع التعليمات.', 'انسخ التوكن والصقه أعلاه.'],
-                          color: _tg),
-                      OutlinedButton.icon(
-                        onPressed: () => _openUrl('https://t.me/BotFather'),
-                        icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                        label: const Text('فتح BotFather'),
-                      ),
-                    ]),
+                    initiallyOpen: _botTokenController.text.trim().isEmpty,
+                    child: SetupGuide(steps: _botSteps(), color: _tg),
                   ),
                 ]),
               ),
@@ -414,16 +581,11 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                       }
                     },
                   ),
-                  _HelpToggle(
-                    open: _showChannelInstructions,
-                    label: 'كيف أحصل على المعرّف؟',
+                  GuideToggle(
+                    label: 'كيف أنشئ القناة وأحصل على معرّفها؟ (شرح خطوة بخطوة)',
                     color: _tg,
-                    onTap: () => setState(() => _showChannelInstructions = !_showChannelInstructions),
-                    child: const SetSteps([
-                      'أضف البوت كـ Admin في قناتك (مع صلاحية النشر).',
-                      'أرسل أي رسالة في القناة.',
-                      'استخرج معرّف القناة (مثلاً عبر ‎@getidsbot‎) والصقه أعلاه — يبدأ عادة بـ ‎-100‎.',
-                    ], color: _tg),
+                    initiallyOpen: _channelIdController.text.trim().isEmpty,
+                    child: SetupGuide(steps: _channelSteps(), color: _tg),
                   ),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 220),
@@ -526,58 +688,7 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                   onTap: busy ? null : _exportAllInvoices,
                 ),
               ),
-            ],
-    );
-  }
-}
-
-/// زر «كيف…؟» يفتح شرحاً تحته بحركة ناعمة.
-class _HelpToggle extends StatelessWidget {
-  const _HelpToggle({
-    required this.open,
-    required this.label,
-    required this.onTap,
-    required this.child,
-    required this.color,
-  });
-  final bool open;
-  final String label;
-  final VoidCallback onTap;
-  final Widget child;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const SizedBox(height: 6),
-      TextButton.icon(
-        style: TextButton.styleFrom(foregroundColor: color),
-        onPressed: onTap,
-        icon: AnimatedRotation(
-          turns: open ? 0.5 : 0,
-          duration: const Duration(milliseconds: 200),
-          child: const Icon(Icons.expand_more_rounded),
-        ),
-        label: Text(label),
-      ),
-      AnimatedSize(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-        alignment: AlignmentDirectional.topStart,
-        child: !open
-            ? const SizedBox(width: double.infinity)
-            : Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.06),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: color.withValues(alpha: 0.18)),
-                ),
-                child: child,
-              ),
-      ),
-    ]);
+    ];
   }
 }
 

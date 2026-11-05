@@ -13,6 +13,7 @@ import '../services/firebase_sync/firebase_custom_config.dart';
 import '../services/sync/sync_security.dart';
 import '../services/license_service.dart';
 import '../widgets/settings_kit.dart';
+import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 import '../services/seat_service.dart';
 
 class FirebaseCustomSetupScreen extends StatefulWidget {
@@ -621,118 +622,147 @@ service cloud.firestore {
         ),
       );
 
+  /// رابط صفحة في مشروع المستخدم (أو صفحة Firebase الرئيسية قبل كتابة معرّف المشروع).
+  String _fb(String path) {
+    final id = _projectIdController.text.trim();
+    return id.isEmpty ? 'https://console.firebase.google.com' : 'https://console.firebase.google.com/project/$id/$path';
+  }
+
+  bool get _hasProject => _projectIdController.text.trim().isNotEmpty;
+
+  /// يقبل المعرّف أو رابط المشروع كاملاً (https://console.firebase.google.com/project/<id>/...).
+  void _onProjectIdTyped(String v) {
+    final m = RegExp(r'/project/([a-z0-9-]+)').firstMatch(v);
+    if (m != null && m.group(1) != v) {
+      _projectIdController.text = m.group(1)!;
+      _projectIdController.selection = TextSelection.collapsed(offset: _projectIdController.text.length);
+    }
+    setState(() {});
+  }
+
+  Widget _projectIdField() => TextField(
+        controller: _projectIdController,
+        textDirection: TextDirection.ltr,
+        decoration: const InputDecoration(
+          labelText: 'معرّف المشروع (Project ID)',
+          hintText: 'مثال: my-shop-sync-1a2b3',
+          helperText: 'أو الصق رابط صفحة المشروع من المتصفح كاملاً',
+          prefixIcon: Icon(Icons.folder_open_rounded),
+        ),
+        onChanged: _onProjectIdTyped,
+      );
+
+  Widget _noProjectNote() => _hasProject
+      ? const SizedBox.shrink()
+      : const Padding(
+          padding: EdgeInsets.only(bottom: 10),
+          child: SetBanner('اكتب «معرّف المشروع» في الخطوة الأولى حتى تفتح الأزرار هنا صفحات مشروعك مباشرة.',
+              kind: SetBannerKind.warn),
+        );
+
   Widget _stepBody(int step) {
     final s = _steps[step];
+    Widget card(Widget child) => SetCard(
+          title: s.$1,
+          subtitle: s.$2,
+          icon: s.$3,
+          color: _fbOrange,
+          child: Padding(padding: const EdgeInsets.only(top: 12), child: child),
+        );
     switch (step) {
       case 0:
-        return SetCard(
-          title: s.$1,
-          subtitle: s.$2,
-          icon: s.$3,
-          color: _fbOrange,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const SizedBox(height: 12),
-            const SetSteps([
-              'ادخل إلى موقع Firebase (مجاني بالكامل).',
-              'اضغط «Add project» وسمِّ المشروع.',
-              'ألغِ تفعيل Google Analytics — لست بحاجة إليه.',
-            ], color: _fbOrange),
-            const SizedBox(height: 4),
-            Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: _fbOrange),
-                onPressed: () => _launchUrl('https://console.firebase.google.com'),
-                icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                label: const Text('افتح موقع Firebase'),
-              ),
-            ),
-          ]),
-        );
+        return card(SetupGuide(color: _fbOrange, steps: [
+          const GuideStep(
+            'تحتاج حساب Google (مثل Gmail). إن كان عندك تخطَّ هذه الخطوة، وإلا أنشئه من الرابط.',
+            links: [GuideLink('إنشاء حساب Google', 'https://accounts.google.com/signup', icon: Icons.person_add_alt_1_rounded)],
+          ),
+          const GuideStep(
+            'افتح موقع Firebase وسجّل الدخول بحساب Google. الخطة المجانية (Spark) تكفي ولا تحتاج بطاقة دفع.',
+            links: [GuideLink('افتح Firebase', 'https://console.firebase.google.com', icon: Icons.local_fire_department_rounded)],
+          ),
+          const GuideStep(
+            'اضغط «Create a project / إنشاء مشروع» (أو «Add project»)، واكتب اسماً بالإنجليزي، ثم وافق على الشروط ← «Continue».',
+            copies: ['alnaser-shop-sync'],
+          ),
+          const GuideStep(
+            'عند سؤال «Google Analytics» أطفئ المفتاح (لست بحاجة إليه) ← «Create project» وانتظر قليلاً ← «Continue».',
+          ),
+          GuideStep(
+            'انظر إلى شريط العنوان في المتصفح: بعد كلمة /project/ يظهر «معرّف المشروع». انسخ الرابط كاملاً والصقه هنا '
+            '(أو اكتب المعرّف وحده) — تصبح كل الأزرار في الخطوات التالية تفتح صفحات مشروعك مباشرة.',
+            extra: _projectIdField(),
+            note: 'المعرّف يظهر أيضاً في «Project settings / إعدادات المشروع» بجانب «Project ID».',
+          ),
+        ]));
       case 1:
-        return SetCard(
-          title: s.$1,
-          subtitle: s.$2,
-          icon: s.$3,
-          color: _fbOrange,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const SizedBox(height: 12),
-            const SetSteps([
-              'من القائمة الجانبية اختر «Firestore Database» ثم «Create database».',
-              'اختر موقع الخادم الأقرب لك (مثلاً eur3).',
-              'بعد الإنشاء اذهب إلى تبويب «Rules».',
-              'انسخ القواعد بالزر أدناه والصقها هناك، ثم اضغط «Publish».',
-            ], color: _fbOrange),
-            const SizedBox(height: 4),
-            // كان النص يدّعي أن القواعد تتحقق من groupSecret — وهي فعلياً تسمح لأي
-            // مستخدم مسجّل الدخول (ولو مجهولاً). النص الآن يصف ما تفعله فعلاً.
-            const SetBanner(
-              'القواعد تسمح بالقراءة والكتابة لأي جهاز مسجّل الدخول في مشروعك (تسجيل مجهول). '
-              'الحماية من البيانات المزوّرة يوفّرها «سرّ المجموعة» مع «الوضع الصارم» في إعدادات المزامنة — '
-              'لذلك لا تشارك مفاتيح مشروعك مع أحد.',
-              kind: SetBannerKind.warn,
-              icon: Icons.shield_outlined,
+        return card(Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _noProjectNote(),
+          SetupGuide(color: _fbOrange, steps: [
+            GuideStep(
+              'افتح صفحة Firestore في مشروعك واضغط «Create database / إنشاء قاعدة بيانات». '
+              '(في القائمة الجانبية تجدها في «Databases & Storage» أو «Build» ← «Firestore Database».)',
+              links: [GuideLink('افتح Firestore لمشروعي', _fb('firestore'), icon: Icons.storage_rounded)],
             ),
-            const SizedBox(height: 12),
-            Wrap(spacing: 10, runSpacing: 10, children: [
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: _fbOrange),
-                onPressed: _copyRules,
-                icon: const Icon(Icons.copy_rounded, size: 18),
-                label: const Text('نسخ القواعد'),
-              ),
-              if (_projectIdController.text.isNotEmpty)
-                OutlinedButton.icon(
-                  onPressed: () => _launchUrl(
-                      'https://console.firebase.google.com/project/${_projectIdController.text}/firestore/rules'),
-                  icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                  label: const Text('افتح صفحة Rules لمشروعي'),
-                ),
-            ]),
-          ]),
-        );
-      case 2:
-        return SetCard(
-          title: s.$1,
-          subtitle: s.$2,
-          icon: s.$3,
-          color: _fbOrange,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const SizedBox(height: 12),
-            const SetSteps([
-              'من القائمة الجانبية اختر «Authentication» ثم «Get started».',
-              'اذهب إلى تبويب «Sign-in method».',
-              'اختر «Anonymous» وفعّله (Enable).',
-              'اضغط «Save».',
-            ], color: _fbOrange),
-            if (_projectIdController.text.isNotEmpty)
-              Align(
+            const GuideStep(
+              'إن سألك عن النوع اختر «Standard edition». ثم اختر «الموقع / Location» الأقرب لك (مثل eur3 في أوروبا) ← «Next».',
+              note: 'الموقع لا يمكن تغييره لاحقاً، لكن أي موقع يعمل.',
+            ),
+            const GuideStep('اختر «Start in production mode» ← «Create / إنشاء» وانتظر حتى تظهر الصفحة الفارغة لقاعدة البيانات.'),
+            GuideStep(
+              'اضغط زر «نسخ القواعد» هنا، ثم افتح تبويب «Rules / القواعد»، احذف كل ما فيه، والصق القواعد مكانه (Ctrl+V) ← «Publish / نشر».',
+              links: [GuideLink('افتح صفحة Rules لمشروعي', _fb('firestore/rules'), icon: Icons.security_rounded)],
+              extra: Align(
                 alignment: AlignmentDirectional.centerStart,
-                child: OutlinedButton.icon(
-                  onPressed: () => _launchUrl(
-                      'https://console.firebase.google.com/project/${_projectIdController.text}/authentication/providers'),
-                  icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                  label: const Text('افتح صفحة المصادقة لمشروعي'),
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(backgroundColor: _fbOrange),
+                  onPressed: _copyRules,
+                  icon: const Icon(Icons.copy_rounded, size: 18),
+                  label: const Text('نسخ القواعد'),
                 ),
               ),
+            ),
           ]),
-        );
+          const SizedBox(height: 4),
+          // كان النص يدّعي أن القواعد تتحقق من groupSecret — وهي فعلياً تسمح لأي
+          // مستخدم مسجّل الدخول (ولو مجهولاً). النص الآن يصف ما تفعله فعلاً.
+          const SetBanner(
+            'القواعد تسمح بالقراءة والكتابة لأي جهاز مسجّل الدخول في مشروعك (تسجيل مجهول). '
+            'الحماية من البيانات المزوّرة يوفّرها «سرّ المجموعة» مع «الوضع الصارم» في إعدادات المزامنة — '
+            'لذلك لا تشارك مفاتيح مشروعك مع أحد.',
+            kind: SetBannerKind.warn,
+            icon: Icons.shield_outlined,
+          ),
+        ]));
+      case 2:
+        return card(Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _noProjectNote(),
+          SetupGuide(color: _fbOrange, steps: [
+            GuideStep(
+              'افتح صفحة «Authentication / المصادقة» في مشروعك، واضغط «Get started / البدء» إن ظهر.',
+              links: [GuideLink('افتح صفحة المصادقة لمشروعي', _fb('authentication/providers'), icon: Icons.how_to_reg_rounded)],
+            ),
+            const GuideStep('في تبويب «Sign-in method / طريقة تسجيل الدخول» اختر «Anonymous / مجهول» من القائمة.'),
+            const GuideStep('فعّل المفتاح «Enable» ← «Save / حفظ». يظهر «Anonymous» في القائمة بحالة «Enabled».'),
+          ]),
+        ]));
       case 3:
-        return SetCard(
-          title: s.$1,
-          subtitle: s.$2,
-          icon: s.$3,
-          color: _fbOrange,
-          child: const Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            SizedBox(height: 12),
-            SetSteps([
-              'ارجع للصفحة الرئيسية للمشروع (Project Overview).',
-              'اضغط أيقونة الويب (</>) لإضافة تطبيق.',
-              'اختر اسماً للتطبيق ثم اضغط «Register app».',
-              'سيظهر كود فيه المفاتيح (firebaseConfig) — أبقِ الصفحة مفتوحة للخطوة التالية.',
-            ], color: _fbOrange),
+        return card(Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _noProjectNote(),
+          SetupGuide(color: _fbOrange, steps: [
+            GuideStep(
+              'افتح «إعدادات المشروع» وانزل إلى قسم «Your apps / تطبيقاتك»، واضغط أيقونة الويب </> .',
+              links: [GuideLink('افتح إعدادات مشروعي', _fb('settings/general'), icon: Icons.settings_rounded)],
+            ),
+            const GuideStep(
+              'اكتب اسماً للتطبيق (أي اسم) ← لا تفعّل «Firebase Hosting» ← «Register app / تسجيل التطبيق».',
+              copies: ['alnaser-desktop'],
+            ),
+            const GuideStep(
+              'يظهر كود فيه «const firebaseConfig = { apiKey: … }». ظلّل الكود كله وانسخه (Ctrl+C) ← اضغط «الخطوة التالية» هنا والصقه في الخانة.',
+              note: 'إن أغلقت الصفحة: إعدادات المشروع ← «Your apps» ← اختر التطبيق ← «Config» يظهر الكود نفسه.',
+            ),
           ]),
-        );
+        ]));
       default:
         return _configStep(s);
     }

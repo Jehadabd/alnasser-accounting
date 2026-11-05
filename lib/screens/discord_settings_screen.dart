@@ -11,11 +11,16 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../services/auth_service.dart';
 import '../services/settings_manager.dart';
 import '../widgets/settings_kit.dart';
+import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 
 class DiscordSettingsScreen extends StatefulWidget {
-  const DiscordSettingsScreen({super.key});
+  const DiscordSettingsScreen({super.key, this.embedded = false});
+
+  /// داخل «النسخ الاحتياطي والمزامنة» تحت مفتاح ديسكورد (بلا شريط علوي).
+  final bool embedded;
 
   @override
   State<DiscordSettingsScreen> createState() => _DiscordSettingsScreenState();
@@ -159,25 +164,74 @@ class _DiscordSettingsScreenState extends State<DiscordSettingsScreen> {
         ),
       );
 
+  List<GuideStep> _steps() {
+    final owner = (AuthService().currentUser?.username ?? '').trim();
+    return [
+      const GuideStep(
+        'تحتاج حساباً في Discord (مجاني). إن لم يكن عندك أنشئه من الرابط الأول، ثم افتح Discord في المتصفح أو ثبّت تطبيقه.',
+        links: [
+          GuideLink('إنشاء حساب Discord', 'https://discord.com/register', icon: Icons.person_add_alt_1_rounded),
+          GuideLink('Discord في المتصفح', 'https://discord.com/app', icon: Icons.language_rounded),
+          GuideLink('تحميل Discord', 'https://discord.com/download', icon: Icons.download_rounded),
+        ],
+      ),
+      GuideStep(
+        'أنشئ «سيرفراً» خاصاً بك (إن لم يكن عندك): اضغط زر «+» في العمود الأيسر ← «Create My Own / أنشئ الخاص بي» ← '
+        '«For me and my friends» ← اكتب اسماً ← «Create / إنشاء». مثلاً:',
+        copies: [owner.isEmpty ? 'نسخ المتجر' : 'متجر $owner'],
+      ),
+      const GuideStep(
+        'افتح إعدادات السيرفر: اضغط اسم السيرفر في أعلى العمود ← «Server Settings / إعدادات الخادم».',
+        note: 'يجب أن تكون صاحب السيرفر أو لديك صلاحية «Manage Webhooks» — صاحب السيرفر لديه كل الصلاحيات.',
+      ),
+      const GuideStep('من القائمة اختر «Integrations / عمليات الدمج» ← «Webhooks» ← «New Webhook / ويب هوك جديد» '
+          '(أو «Create Webhook»).'),
+      const GuideStep(
+        'اضغط على الـ Webhook الجديد: غيّر اسمه إن أردت (مثلاً «نسخ المتجر»)، واختر من «Channel / القناة» '
+        'القناة التي تصلها النسخ (مثل #general)، ثم «Save Changes / حفظ التغييرات» إن ظهر.',
+      ),
+      const GuideStep(
+        'اضغط «Copy Webhook URL / نسخ رابط الويب هوك»، ثم ارجع هنا والصق الرابط في الخانة أعلاه واضغط «حفظ واختبار». '
+        'تصلك رسالة تجريبية في القناة.',
+        links: [GuideLink('شرح Discord الرسمي', 'https://support.discord.com/hc/articles/228383668', icon: Icons.help_outline_rounded)],
+        note: 'الرابط مثل كلمة السر: من يملكه يستطيع الكتابة في قناتك. لا ترسله لأحد.',
+        warn: true,
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
-    final busy = _isLoading || _testing;
+    if (widget.embedded) return SetEmbedded(loading: !_loaded, children: _loaded ? _content() : const []);
     return SettingsScaffold(
       title: 'إعدادات Discord',
       subtitle: 'استقبال التقارير والفواتير في قناة Discord',
       icon: Icons.discord,
       loading: !_loaded,
-      children: !_loaded
-          ? null
-          : [
-              SetHero(
-                icon: Icons.discord,
-                color: _discord,
-                title: 'النسخ والتقارير عبر Discord',
-                text: 'أنشئ Webhook في قناة على سيرفرك والصق رابطه هنا؛ يرسل التطبيق التقارير '
-                    'والملخصات إلى تلك القناة بجانب تيليجرام.',
-                status: SetStatusPill(_configured ? 'مرتبط' : 'غير مرتبط', ok: _configured),
-              ),
+      children: !_loaded ? null : _content(),
+    );
+  }
+
+  List<Widget> _content() {
+    final busy = _isLoading || _testing;
+    return [
+              if (widget.embedded)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: SetStatusPill(_configured ? 'مرتبط' : 'غير مرتبط', ok: _configured),
+                  ),
+                )
+              else
+                SetHero(
+                  icon: Icons.discord,
+                  color: _discord,
+                  title: 'النسخ والتقارير عبر Discord',
+                  text: 'أنشئ Webhook في قناة على سيرفرك والصق رابطه هنا؛ يرسل التطبيق التقارير '
+                      'والملخصات إلى تلك القناة بجانب تيليجرام.',
+                  status: SetStatusPill(_configured ? 'مرتبط' : 'غير مرتبط', ok: _configured),
+                ),
               SetCard(
                 title: 'رابط Webhook',
                 subtitle: 'يُحفظ على هذا الجهاز فقط',
@@ -246,22 +300,18 @@ class _DiscordSettingsScreenState extends State<DiscordSettingsScreen> {
                   ]),
                 ]),
               ),
-              const SetCard(
+              SetCard(
                 title: 'كيف أحصل على رابط Webhook؟',
+                subtitle: 'شرح خطوة بخطوة مع الروابط',
                 icon: Icons.help_outline_rounded,
                 color: _discord,
-                child: Padding(
-                  padding: EdgeInsets.only(top: 10),
-                  child: SetSteps([
-                    'افتح إعدادات سيرفر Discord (Server Settings).',
-                    'اذهب إلى Integrations ثم Webhooks.',
-                    'اضغط New Webhook.',
-                    'سمّه واختر القناة (Channel) التي ستصلها التقارير.',
-                    'اضغط Copy Webhook URL والصقه في الحقل أعلاه ثم «حفظ واختبار».',
-                  ], color: _discord),
+                child: GuideToggle(
+                  label: 'اعرض الخطوات',
+                  color: _discord,
+                  initiallyOpen: !_configured,
+                  child: SetupGuide(steps: _steps(), color: _discord),
                 ),
               ),
-            ],
-    );
+    ];
   }
 }

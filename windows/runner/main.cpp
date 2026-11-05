@@ -55,6 +55,7 @@ struct FindCtx {
   std::wstring exe;  // our exe path, lower case
   DWORD self_pid;
   HWND found;
+  HMONITOR monitor;  // only windows on this screen (nullptr = any screen)
 };
 
 // A Flutter window owned by another process of the SAME exe (not any Flutter app).
@@ -73,6 +74,8 @@ static BOOL CALLBACK FindOurWindow(HWND hwnd, LPARAM lp) {
   BOOL ok = QueryFullProcessImageNameW(proc, 0, path, &len);
   CloseHandle(proc);
   if (ok && Lower(std::wstring(path, len)) == ctx->exe) {
+    // Minimized windows report the screen they were on before minimizing.
+    if (ctx->monitor != nullptr && MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != ctx->monitor) return TRUE;
     ctx->found = hwnd;
     return FALSE;
   }
@@ -106,15 +109,58 @@ static std::wstring SlotMutexName(const std::wstring& exe, int slot) {
   return name;
 }
 
-// Tries to own the mutex of [slot]. Returns the handle, or nullptr if another copy owns it.
-static HANDLE TakeSlot(const std::wstring& exe, int slot) {
-  HANDLE h = CreateMutexW(nullptr, FALSE, SlotMutexName(exe, slot).c_str());
+// Tries to own the named mutex. Returns the handle, or nullptr if another copy owns it.
+static HANDLE TakeNamed(const std::wstring& name) {
+  HANDLE h = CreateMutexW(nullptr, FALSE, name.c_str());
   if (h == nullptr) return nullptr;
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
     CloseHandle(h);
     return nullptr;
   }
   return h;
+}
+
+// Tries to own the mutex of [slot]. Returns the handle, or nullptr if another copy owns it.
+static HANDLE TakeSlot(const std::wstring& exe, int slot) { return TakeNamed(SlotMutexName(exe, slot)); }
+
+// ----------------------------------------------------------------------------
+// One copy per screen. "Screen" = the monitor under the mouse when the app is
+// launched (where the desktop icon or the taskbar was clicked), inside this
+// Windows session. Opening the app again on the same screen shows the open
+// copy; opening it on another screen of the same PC starts another seat (if
+// the license allows it). Local\ makes the lock per session, so a multi-seat
+// PC where every seat is its own session keeps the seats independent.
+// ----------------------------------------------------------------------------
+static HMONITOR LaunchMonitor() {
+  POINT pt{0, 0};
+  if (!GetCursorPos(&pt)) pt = POINT{0, 0};
+  return MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+}
+
+static std::wstring MonitorKey(HMONITOR m) {
+  MONITORINFOEXW mi{};
+  mi.cbSize = sizeof(mi);
+  std::wstring dev = L"DISPLAY";
+  if (m != nullptr && GetMonitorInfoW(m, &mi)) dev = mi.szDevice;
+  std::wstring out;
+  for (wchar_t c : dev) {
+    if (std::iswalnum(c)) out.push_back(c);
+  }
+  return out.empty() ? std::wstring(L"DISPLAY") : out;
+}
+
+static std::wstring ScreenMutexName(const std::wstring& exe, HMONITOR m) {
+  return L"Local\\AlnaserAccounting_Screen_" + PathHash(exe) + L"_" + MonitorKey(m);
+}
+
+// The new window opens on the screen it was launched from.
+static void MoveToMonitor(HWND h, HMONITOR m) {
+  if (h == nullptr || m == nullptr || MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) == m) return;
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(mi);
+  if (!GetMonitorInfoW(m, &mi)) return;
+  SetWindowPos(h, nullptr, mi.rcWork.left + 10, mi.rcWork.top + 10, 0, 0,
+               SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 static int SeatFromCommandLine(const wchar_t* cl) {
@@ -125,15 +171,16 @@ static int SeatFromCommandLine(const wchar_t* cl) {
   return (v >= 1 && v <= 8) ? v : 0;
 }
 
-static void BringExistingToFront(const std::wstring& exe) {
-  FindCtx ctx{Lower(exe), GetCurrentProcessId(), nullptr};
+// Returns true if a window was found and brought to the front.
+static bool BringExistingToFront(const std::wstring& exe, HMONITOR monitor) {
+  FindCtx ctx{Lower(exe), GetCurrentProcessId(), nullptr, monitor};
   // The first instance may still be creating its window (fast double click): wait up to 5 s.
   for (int i = 0; i < 50 && ctx.found == nullptr; i++) {
     EnumWindows(FindOurWindow, reinterpret_cast<LPARAM>(&ctx));
     if (ctx.found == nullptr) Sleep(100);
   }
   HWND h = ctx.found;
-  if (h == nullptr) return;
+  if (h == nullptr) return false;
   if (IsIconic(h)) {
     ShowWindow(h, SW_RESTORE);
   } else if (!IsWindowVisible(h)) {
@@ -142,6 +189,7 @@ static void BringExistingToFront(const std::wstring& exe) {
   // This process was just started by the user, so it may set the foreground window.
   SetForegroundWindow(h);
   BringWindowToTop(h);
+  return true;
 }
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -150,6 +198,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   const std::wstring exe = ExePath();
   const bool relaunch = command_line != nullptr && wcsstr(command_line, L"--relaunch") != nullptr;
   HANDLE single_mutex = nullptr;
+  HANDLE screen_mutex = nullptr;
+  const HMONITOR screen = LaunchMonitor();
   int slot = 0;
   if (relaunch) {
     // In-app restart: the old process (same seat) is exiting now. Wait for its
@@ -160,7 +210,25 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       if (single_mutex == nullptr) Sleep(200);
     }
     if (single_mutex != nullptr) slot = want;
+    // The old copy releases its screen lock as it exits (best effort: the app runs anyway).
+    for (int i = 0; i < 75 && single_mutex != nullptr && screen_mutex == nullptr; i++) {
+      screen_mutex = TakeNamed(ScreenMutexName(exe, screen));
+      if (screen_mutex == nullptr) Sleep(200);
+    }
   } else {
+    // Already open on this screen (or a copy was moved here): show it, do not open another.
+    screen_mutex = TakeNamed(ScreenMutexName(exe, screen));
+    if (screen_mutex == nullptr) {
+      if (!BringExistingToFront(exe, screen)) BringExistingToFront(exe, nullptr);
+      return EXIT_SUCCESS;
+    }
+    FindCtx here{Lower(exe), GetCurrentProcessId(), nullptr, screen};
+    EnumWindows(FindOurWindow, reinterpret_cast<LPARAM>(&here));
+    if (here.found != nullptr) {
+      BringExistingToFront(exe, screen);
+      CloseHandle(screen_mutex);
+      return EXIT_SUCCESS;
+    }
     const int seats = AllowedSeats();
     for (int k = 1; k <= seats && single_mutex == nullptr; k++) {
       single_mutex = TakeSlot(exe, k);
@@ -168,12 +236,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
   }
   if (single_mutex == nullptr) {
+    if (screen_mutex) CloseHandle(screen_mutex);
     // Every allowed seat is taken: bring this desktop's window to the front, or
     // explain (the open copy may be on another seat's screen).
-    FindCtx probe{Lower(exe), GetCurrentProcessId(), nullptr};
+    FindCtx probe{Lower(exe), GetCurrentProcessId(), nullptr, nullptr};
     EnumWindows(FindOurWindow, reinterpret_cast<LPARAM>(&probe));
     if (probe.found != nullptr) {
-      BringExistingToFront(exe);
+      BringExistingToFront(exe, nullptr);
     } else {
       MessageBoxW(nullptr,
                   L"\x0627\x0644\x0628\x0631\x0646\x0627\x0645\x062C \x0645\x0641\x062A\x0648\x062D \x0627\x0644\x0622\x0646 \x0639\x0644\x0649 \x0634\x0627\x0634\x0629 \x0623\x062E\x0631\x0649 \x0645\x0646 \x0647\x0630\x0647 \x0627\x0644\x062D\x0627\x0633\x0628\x0629\x060C \x0648\x0643\x0644 \x0627\x0644\x0634\x0627\x0634\x0627\x062A \x0627\x0644\x0645\x0633\x0645\x0648\x062D\x0629 \x0641\x064A \x0627\x0644\x062A\x0631\x062E\x064A\x0635 \x0645\x0633\x062A\x0639\x0645\x0644\x0629.",
@@ -212,8 +281,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"\x0627\x0644\x0646\x0627\x0635\x0631 \x0644\x0644\x062D\x0633\x0627\x0628\x0627\x062A", origin, size)) {
     if (single_mutex) CloseHandle(single_mutex);
+    if (screen_mutex) CloseHandle(screen_mutex);
     return EXIT_FAILURE;
   }
+  MoveToMonitor(window.GetHandle(), screen);
   window.SetQuitOnClose(true);
 
   ::MSG msg;
@@ -225,5 +296,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoUninitialize();
   // The mutex is also released automatically if the process is killed.
   if (single_mutex) CloseHandle(single_mutex);
+  if (screen_mutex) CloseHandle(screen_mutex);
   return EXIT_SUCCESS;
 }
