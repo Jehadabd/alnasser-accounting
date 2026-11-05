@@ -36,7 +36,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   String? _account;
   String? _listError;
   DropboxSpace? _space; // 💾 مساحة الحساب
-  (bool ok, String msg)? _perm; // 🩺 نتيجة فحص الأذونات
+  DropboxPermissionReport? _perm; // 🩺 نتيجة فحص الأذونات (يعمل تلقائياً عند الاتصال)
   bool _checkingPerm = false;
 
   bool _firstLoad = true;
@@ -96,7 +96,10 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
       _account = status == DropboxAuthStatus.authenticated ? account : null;
       _refreshing = false;
       _firstLoad = false;
+      if (status != DropboxAuthStatus.authenticated) _perm = null;
     });
+    // 🩺 فحص الأذونات تلقائياً مرة عند فتح الشاشة / بعد الاتصال
+    if (status == DropboxAuthStatus.authenticated && _perm == null && !_checkingPerm) _checkPermissions();
   }
 
   Future<void> _startOAuthFlow() async {
@@ -126,11 +129,14 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
       _codeController.clear();
       setState(() {
         _showCodeInput = false;
-        _lastResult = (true, 'تم الاتصال بـ Dropbox بنجاح.');
+        _perm = null; // يُعاد الفحص تلقائياً على الربط الجديد
+        _lastResult = (true, 'تم الاتصال بـ Dropbox بنجاح — جارٍ فحص الأذونات...');
       });
       await _checkAuthAndLoadBackups();
     } else {
-      setState(() => _authError = 'رُفض الكود — قد يكون انتهى (صالح دقائق قليلة) أو نُسخ ناقصاً. اضغط «فتح صفحة Dropbox» مجدداً.');
+      final why = _backupService.lastAuthError;
+      setState(() => _authError = 'رُفض الكود — قد يكون انتهى (صالح دقائق قليلة) أو نُسخ ناقصاً. اضغط «فتح صفحة Dropbox» مجدداً.'
+          '${why == null || why.isEmpty ? '' : '\nردّ Dropbox: $why'}');
     }
   }
 
@@ -293,6 +299,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
       _backups = [];
       _account = null;
       _lastResult = null;
+      _perm = null;
     });
   }
 
@@ -313,10 +320,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
           child: SetBanner(_lastResult!.$2, kind: _lastResult!.$1 ? SetBannerKind.ok : SetBannerKind.error),
         ),
       if (!connected) _authCard() else ...[
-        if ((_listError ?? '').contains(DropboxBackupService.missingScopeMarker) || (_perm != null && !_perm!.$1))
-          _permissionsCard(open: true)
-        else
-          _permissionsCard(open: false),
+        _permissionsCard(),
         _backupCard(),
         _settingsCard(),
         _listCard(),
@@ -373,52 +377,102 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
 
   Future<void> _checkPermissions() async {
     setState(() => _checkingPerm = true);
-    final problem = await _backupService.checkPermissions();
+    final report = await _backupService.checkPermissionsDetailed();
     if (!mounted) return;
     setState(() {
       _checkingPerm = false;
-      _perm = problem == null ? (true, 'الأذونات سليمة — القراءة من Dropbox تعمل.') : (false, problem);
+      _perm = report;
+      if (report.allOk && _lastResult?.$1 == true) _lastResult = (true, 'تم الاتصال بـ Dropbox — والأذونات كلها سليمة.');
     });
   }
 
-  /// 🩺 أذونات تطبيق Dropbox: فحص بضغطة، وشرح إصلاحها بالروابط.
-  Widget _permissionsCard({required bool open}) {
+  /// 🩺 أذونات تطبيق Dropbox: فحص تلقائي بطلبات حقيقية، وما ينقص بالاسم، وإصلاحه.
+  Widget _permissionsCard() {
+    final r = _perm;
+    final missing = r?.missing ?? const <String>[];
+    final other = r?.otherFailure;
+    final bad = r != null && !r.allOk;
+    final listScopeError = (_listError ?? '').contains(DropboxBackupService.missingScopeMarker);
+
+    final String subtitle;
+    if (_checkingPerm) {
+      subtitle = 'جارٍ الفحص...';
+    } else if (r == null) {
+      subtitle = listScopeError ? 'ينقص تطبيق Dropbox إذن — اضغط «فحص الأذونات»' : 'يُفحص تلقائياً عند الاتصال';
+    } else if (r.allOk) {
+      subtitle = 'كل الأذونات موجودة — الرفع والتنزيل والحذف تعمل';
+    } else if (missing.isNotEmpty) {
+      subtitle = missing.length == 1 ? 'ينقص إذن واحد فقط' : 'ينقص ${missing.length} أذونات';
+    } else {
+      subtitle = 'الأذونات ليست السبب — انظر ردّ Dropbox';
+    }
+
     return SetCard(
       title: 'أذونات Dropbox',
-      subtitle: open ? 'ينقص تطبيق Dropbox إذن — الإصلاح أدناه' : 'إن فشل الرفع رغم وجود الإنترنت فافحصها',
+      subtitle: subtitle,
       icon: Icons.verified_user_rounded,
-      color: open ? kSetOrange : _dbx,
+      color: r == null ? (listScopeError ? kSetOrange : _dbx) : (r.allOk ? kSetGreen : kSetOrange),
       trailing: TextButton.icon(
         onPressed: _busy || _checkingPerm ? null : _checkPermissions,
         icon: _checkingPerm
             ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
             : const Icon(Icons.health_and_safety_rounded, size: 18),
-        label: const Text('فحص الأذونات'),
+        label: Text(r == null ? 'فحص الأذونات' : 'أعد الفحص'),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (_perm != null) ...[
+        if (r != null) ...[
           const SizedBox(height: 10),
-          SetBanner(_perm!.$2, kind: _perm!.$1 ? SetBannerKind.ok : SetBannerKind.error),
+          if (r.fatal != null)
+            SetBanner('تعذّر الفحص: ${r.fatal}', kind: SetBannerKind.error)
+          else if (r.allOk)
+            const SetBanner('رُفع ملف اختبار صغير ثم نُزّل ثم حُذف بنجاح — Dropbox جاهز للنسخ.', kind: SetBannerKind.ok)
+          else if (missing.isNotEmpty)
+            SetBanner(
+              'ينقص تطبيق Dropbox ${missing.length == 1 ? 'هذا الإذن فقط' : 'هذه الأذونات فقط'}: ${missing.join('، ')}. '
+              'الإصلاح بالخطوات أدناه.',
+              kind: SetBannerKind.warn,
+            )
+          else if (other != null)
+            SetBanner('فشلت خطوة «${other.label}» لسبب غير الأذونات.', kind: SetBannerKind.error),
+          const SizedBox(height: 10),
+          for (final e in r.scopes.entries) _ScopeRow(scope: e.key, state: e.value),
+          const SizedBox(height: 6),
+          for (final p in r.probes) _ProbeRow(probe: p),
+          if (r.tokenScopes == null && !r.allOk)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('هذا ربط قديم: لا نعرف ما منحه Dropbox لحظة الاتصال. اقطع الاتصال واربط من جديد لترى القائمة كاملة.',
+                  style: TextStyle(fontSize: 12, color: kSetMuted, height: 1.5)),
+            ),
         ],
         GuideToggle(
-          label: 'كيف أصلح أذونات Dropbox؟ (مرة واحدة)',
+          label: missing.isNotEmpty ? 'كيف أضيف ${missing.length == 1 ? 'الإذن الناقص' : 'الأذونات الناقصة'}؟' : 'كيف أصلح أذونات Dropbox؟ (مرة واحدة)',
           color: _dbx,
-          initiallyOpen: open,
+          initiallyOpen: missing.isNotEmpty || listScopeError,
           child: SetupGuide(color: _dbx, steps: [
             const GuideStep(
-              'افتح صفحة تطبيقات Dropbox بنفس الحساب الذي أنشأ تطبيق البرنامج (StoreApp)، واضغط على اسم التطبيق.',
+              'هذه الخطوات لصاحب تطبيق Dropbox الذي يستعمله البرنامج (المطوّر) مرة واحدة فقط — '
+              'من يستعمل البرنامج لا يدخل App Console أبداً، يضغط «ربط» فقط. '
+              'Dropbox لا يسمح لأي برنامج بتعديل أذونات تطبيقه تلقائياً؛ لذلك هذه الخطوة يدوية.',
+            ),
+            const GuideStep(
+              'افتح App Console بحساب Dropbox الذي أنشأ التطبيق، واضغط على اسم التطبيق.',
               links: [GuideLink('افتح App Console', DropboxBackupService.appConsoleUrl, icon: Icons.open_in_new_rounded)],
             ),
-            const GuideStep('افتح تبويب «Permissions / الأذونات» في أعلى الصفحة.'),
             const GuideStep(
-              'ضع علامة ✔ أمام هذه الأذونات الخمسة (ابحث عنها في الصفحة):',
-              copies: DropboxBackupService.requiredScopes,
+              'تأكّد أنه التطبيق الصحيح: في تبويب «Settings» قارن «App key» بهذا المفتاح. '
+              'إن اختلف فأنت تعدّل تطبيقاً آخر — وهذا وحده يفسّر بقاء الخطأ.',
+              copies: [DropboxBackupService.appKey],
+              warn: true,
             ),
-            const GuideStep('اضغط «Submit» أسفل الصفحة لحفظ الأذونات.'),
             GuideStep(
-              'ارجع هنا واضغط «قطع الاتصال» (أيقونة الخروج أعلى الشاشة)، ثم «فتح صفحة Dropbox» واربط من جديد — '
-              'الربط القديم لا يأخذ الأذونات الجديدة.',
-              note: 'إن لم يكن تطبيق Dropbox باسمك فاطلب من صاحبه تفعيل الأذونات.',
+              'افتح تبويب «Permissions» وضع ✔ أمام ${missing.isNotEmpty ? 'الناقص فقط' : 'هذه الأذونات'}:',
+              copies: missing.isNotEmpty ? missing : DropboxBackupService.requiredScopes,
+            ),
+            const GuideStep('اضغط «Submit» أسفل صفحة Permissions — بدونه لا يُحفظ شيء.'),
+            GuideStep(
+              'ارجع هنا: «قطع الاتصال» ثم اربط من جديد. الربط القديم يحتفظ بأذوناته القديمة، '
+              'والفحص يعمل تلقائياً بعد الربط.',
               warn: true,
               extra: Align(
                 alignment: AlignmentDirectional.centerStart,
@@ -431,6 +485,12 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
             ),
           ]),
         ),
+        if (bad && other != null && missing.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text('أرسل ردّ Dropbox الظاهر أعلاه كما هو لمعرفة السبب.',
+                style: TextStyle(fontSize: 12, color: kSetMuted)),
+          ),
       ]),
     );
   }
@@ -758,4 +818,77 @@ class _BusyDialog extends StatelessWidget {
           ]),
         ),
       );
+}
+
+/// سطر إذن: ✔ موجود / ✖ ناقص / ؟ غير معروف.
+class _ScopeRow extends StatelessWidget {
+  const _ScopeRow({required this.scope, required this.state});
+  final String scope;
+  final DropboxScopeState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final (IconData icon, Color c, String label) = switch (state) {
+      DropboxScopeState.granted => (Icons.check_circle_rounded, kSetGreen, 'موجود'),
+      DropboxScopeState.missing => (Icons.cancel_rounded, kSetRed, 'ناقص'),
+      DropboxScopeState.unknown => (Icons.help_rounded, kSetMuted, 'لم يُختبر'),
+    };
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: state == DropboxScopeState.missing ? const Color(0xFFFEF2F2) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: state == DropboxScopeState.missing ? const Color(0xFFFECACA) : kSetBorder),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 20, color: c),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: SelectableText(scope,
+                  style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700, fontSize: 13, color: kSetText)),
+            ),
+            Text(DropboxBackupService.scopeMeaning[scope] ?? '', style: const TextStyle(fontSize: 12, color: kSetMuted)),
+          ]),
+        ),
+        Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: c)),
+      ]),
+    );
+  }
+}
+
+/// سطر خطوة فحص: ما جُرّب ونتيجته، وردّ Dropbox عند الفشل.
+class _ProbeRow extends StatelessWidget {
+  const _ProbeRow({required this.probe});
+  final DropboxProbe probe;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = probe.ok ? kSetGreen : kSetRed;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Icon(probe.ok ? Icons.check_rounded : Icons.close_rounded, size: 16, color: c),
+          const SizedBox(width: 6),
+          Expanded(child: Text(probe.label, style: const TextStyle(fontSize: 12.5, color: kSetText))),
+          Text(probe.ok ? 'نجح' : 'فشل', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c)),
+        ]),
+        if (!probe.ok && probe.detail != null)
+          Container(
+            margin: const EdgeInsets.only(top: 4, bottom: 4),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(10)),
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: SelectableText(probe.detail!,
+                  style: const TextStyle(fontSize: 11.5, fontFamily: 'monospace', color: Color(0xFF7F1D1D), height: 1.4)),
+            ),
+          ),
+      ]),
+    );
+  }
 }

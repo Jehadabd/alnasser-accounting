@@ -92,6 +92,50 @@ enum DropboxAuthStatus {
 }
 
 /// خطأ من Dropbox برسالة مفهومة.
+/// حالة إذن واحد في فحص الأذونات.
+enum DropboxScopeState { granted, missing, unknown }
+
+/// خطوة واحدة من فحص الأذونات (طلب حقيقي صغير إلى Dropbox).
+class DropboxProbe {
+  const DropboxProbe(this.label, this.scope, this.ok, [this.detail]);
+  final String label;
+  final String scope;
+  final bool ok;
+
+  /// ردّ Dropbox كما وصل (عند الفشل).
+  final String? detail;
+}
+
+/// 🩺 نتيجة فحص الأذونات: لكل إذن مطلوب حالته، ولكل خطوة نتيجتها.
+class DropboxPermissionReport {
+  const DropboxPermissionReport({required this.scopes, required this.probes, this.tokenScopes, this.fatal});
+
+  /// الأذونات المطلوبة بالترتيب ← حالتها.
+  final Map<String, DropboxScopeState> scopes;
+  final List<DropboxProbe> probes;
+
+  /// الأذونات التي منحها Dropbox لهذا الربط لحظة الاتصال (null = ربط قديم لم تُحفظ له).
+  final List<String>? tokenScopes;
+
+  /// خطأ منع الفحص نفسه (لا إنترنت، انتهى الاتصال...).
+  final String? fatal;
+
+  List<String> get missing => [
+        for (final e in scopes.entries)
+          if (e.value == DropboxScopeState.missing) e.key
+      ];
+
+  /// خطوة فشلت لسبب غير الأذونات.
+  DropboxProbe? get otherFailure {
+    for (final p in probes) {
+      if (!p.ok && scopes[p.scope] != DropboxScopeState.missing) return p;
+    }
+    return null;
+  }
+
+  bool get allOk => fatal == null && probes.isNotEmpty && probes.every((p) => p.ok);
+}
+
 class DropboxException implements Exception {
   DropboxException(this.message);
   final String message;
@@ -121,6 +165,14 @@ class DropboxBackupService {
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   static const String _tokenKey = 'dropbox_access_token';
   static const String _refreshTokenKey = 'dropbox_refresh_token';
+  static const String _grantedScopesKey = 'dropbox_granted_scopes';
+
+  /// مفتاح تطبيق Dropbox الذي يستعمله البرنامج (معرّف عام وليس سرّاً) — ليطابقه المستخدم
+  /// بالتطبيق الذي يعدّل أذوناته في App Console (تبويب Settings ← App key).
+  static const String appKey = _appKey;
+
+  /// آخر ردّ رفض به Dropbox الكود (للعرض).
+  String? lastAuthError;
 
   // 🌐 API Endpoints
   static const String _apiContentUrl = 'https://content.dropboxapi.com/2';
@@ -186,6 +238,8 @@ class DropboxBackupService {
         final t = data['access_token'] as String?;
         if (t != null && t.isNotEmpty) {
           await saveAccessToken(t);
+          final sc = data['scope'];
+          if (sc is String && sc.trim().isNotEmpty) await _secureStorage.write(key: _grantedScopesKey, value: sc.trim());
           return t;
         }
       }
@@ -255,18 +309,93 @@ class DropboxBackupService {
     }
   }
 
-  /// 🩺 فحص الأذونات بلا رفع: يجرّب القراءة (قائمة النسخ). null = سليم، وإلا سبب المشكلة.
-  Future<String?> checkPermissions() async {
-    try {
-      await _fetchRemoteBackups();
-      return null;
-    } on DropboxException catch (e) {
-      return e.message;
-    } on SocketException catch (e) {
-      return 'تعذّر الوصول إلى Dropbox: ${e.message}';
-    } catch (e) {
-      return '$e';
+  /// 🩺 فحص الأذونات بطلبات حقيقية صغيرة، كلٌّ منها يحتاج إذناً واحداً:
+  /// الحساب ← قائمة النسخ ← رفع ملف اختبار صغير ← تنزيله ← حذفه.
+  /// ما ينجح = الإذن موجود فعلاً؛ ما يرفضه Dropbox يذكر هو اسم الإذن الناقص.
+  /// ملف الاختبار `.permission_check.txt` يُحذف فوراً ولا يُحسب نسخةً (القائمة تأخذ backup_* فقط).
+  Future<DropboxPermissionReport> checkPermissionsDetailed() async {
+    final token = await grantedScopes();
+    final states = <String, DropboxScopeState>{
+      for (final s in requiredScopes)
+        s: token == null ? DropboxScopeState.unknown : (token.contains(s) ? DropboxScopeState.granted : DropboxScopeState.missing),
+    };
+    final probes = <DropboxProbe>[];
+    const probePath = '$_backupFolder/.permission_check.txt';
+
+    Future<bool> run(String label, String scope, Future<http.Response> Function() call,
+        {bool Function(http.Response r)? alsoOk}) async {
+      final r = await call();
+      final ok = r.statusCode == 200 || (alsoOk?.call(r) ?? false);
+      if (ok) {
+        states[scope] = DropboxScopeState.granted; // نجح الطلب = الإذن موجود فعلاً
+        probes.add(DropboxProbe(label, scope, true));
+      } else {
+        final need = requiredScopeOf(utf8.decode(r.bodyBytes, allowMalformed: true));
+        if (need != null) states[need] = DropboxScopeState.missing;
+        probes.add(DropboxProbe(label, need ?? scope, false, _describeRaw(r)));
+      }
+      return ok;
     }
+
+    String? fatal;
+    try {
+      await run('قراءة معلومات الحساب', 'account_info.read', () => _authorizedPost('$_apiUrl/users/get_current_account'));
+      await run(
+        'عرض قائمة النسخ',
+        'files.metadata.read',
+        () => _authorizedPost(
+          '$_apiUrl/files/list_folder',
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'path': _backupFolder, 'recursive': false}),
+        ),
+        alsoOk: (r) => r.statusCode == 409 && r.body.contains('not_found'), // لا مجلد بعد = القراءة مسموحة
+      );
+      final uploaded = await run(
+        'رفع ملف اختبار صغير',
+        'files.content.write',
+        () => _authorizedPost(
+          '$_apiContentUrl/files/upload',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Dropbox-API-Arg': _apiArg({'path': probePath, 'mode': 'overwrite', 'mute': true}),
+          },
+          body: utf8.encode('permission check ${DateTime.now().toIso8601String()}'),
+        ),
+      );
+      if (uploaded) {
+        await run(
+          'تنزيل ملف الاختبار',
+          'files.content.read',
+          () => _authorizedPost('$_apiContentUrl/files/download', headers: {'Dropbox-API-Arg': _apiArg({'path': probePath})}),
+        );
+        await run(
+          'حذف ملف الاختبار',
+          'files.content.write',
+          () => _authorizedPost(
+            '$_apiUrl/files/delete_v2',
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'path': probePath}),
+          ),
+        );
+      }
+    } on DropboxException catch (e) {
+      fatal = e.message;
+    } on SocketException catch (e) {
+      fatal = 'تعذّر الوصول إلى Dropbox (الإنترنت؟): ${e.message}';
+    } catch (e) {
+      fatal = '$e';
+    }
+    return DropboxPermissionReport(scopes: states, probes: probes, tokenScopes: token, fatal: fatal);
+  }
+
+  /// ردّ Dropbox كما هو (مختصراً) مع رقم الحالة — للعرض في الفحص.
+  static String _describeRaw(http.Response r) {
+    var raw = '';
+    try {
+      raw = utf8.decode(r.bodyBytes, allowMalformed: true).trim();
+    } catch (_) {}
+    if (raw.length > 400) raw = '${raw.substring(0, 400)}…';
+    return 'HTTP ${r.statusCode}${raw.isEmpty ? '' : ' — $raw'}';
   }
 
   /// 💾 مساحة الحساب: المستعمل والكلي. null إن تعذّر السؤال (لا يمنع الرفع).
@@ -311,6 +440,9 @@ class DropboxBackupService {
         'client_id=$_appKey&'
         'response_type=code&'
         '${hasRedirect ? 'redirect_uri=${Uri.encodeComponent(redirectUri)}&' : ''}'
+        // نطلب الأذونات صراحةً: إن نقص التطبيقَ إذنٌ في App Console يرفض Dropbox من البداية
+        // في صفحة الموافقة نفسها بدل ربطٍ «ناجح» يفشل عند الرفع.
+        'scope=${Uri.encodeComponent(requiredScopes.join(' '))}&'
         'token_access_type=offline';
   }
 
@@ -329,6 +461,7 @@ class DropboxBackupService {
 
   /// 🔐 تبديل Authorization Code بـ Access Token
   Future<bool> exchangeCodeForToken(String code, [String? redirectUri]) async {
+    lastAuthError = null;
     try {
       final response = await http.post(
         Uri.parse(_tokenUrl),
@@ -351,11 +484,21 @@ class DropboxBackupService {
         if (data['refresh_token'] != null) {
           await saveRefreshToken(data['refresh_token']);
         }
+        // Dropbox يذكر الأذونات الممنوحة فعلاً لهذا الربط — نحفظها لفحص الأذونات.
+        final sc = data['scope'];
+        if (sc is String && sc.trim().isNotEmpty) {
+          await _secureStorage.write(key: _grantedScopesKey, value: sc.trim());
+        } else {
+          await _secureStorage.delete(key: _grantedScopesKey);
+        }
         return true;
       }
-      debugPrint('❌ Dropbox: رُفض الكود (${response.statusCode}) ${response.body}');
+      final body = utf8.decode(response.bodyBytes, allowMalformed: true).trim();
+      lastAuthError = body.length > 300 ? '${body.substring(0, 300)}…' : body;
+      debugPrint('❌ Dropbox: رُفض الكود (${response.statusCode}) $body');
       return false;
     } catch (e) {
+      lastAuthError = '$e';
       debugPrint('❌ خطأ في تبديل الكود: $e');
       return false;
     }
@@ -373,6 +516,14 @@ class DropboxBackupService {
     } catch (_) {}
     await _secureStorage.delete(key: _tokenKey);
     await _secureStorage.delete(key: _refreshTokenKey);
+    await _secureStorage.delete(key: _grantedScopesKey);
+  }
+
+  /// الأذونات الممنوحة لهذا الربط كما ذكرها Dropbox لحظة الاتصال (null = غير معروفة).
+  Future<List<String>?> grantedScopes() async {
+    final v = await _secureStorage.read(key: _grantedScopesKey);
+    if (v == null || v.trim().isEmpty) return null;
+    return v.trim().split(RegExp(r'\s+'));
   }
 
   /// 📸 لقطة متّسقة من القاعدة المفتوحة (تشمل ما في ملف -wal).
@@ -512,14 +663,35 @@ class DropboxBackupService {
   /// صفحة إعدادات تطبيقات Dropbox (لتفعيل الأذونات).
   static const appConsoleUrl = 'https://www.dropbox.com/developers/apps';
 
-  /// الأذونات التي يحتاجها البرنامج في تبويب «Permissions».
+  /// الأذونات التي يستعملها البرنامج فعلاً (تبويب «Permissions» في App Console):
+  ///   account_info.read  ← اسم الحساب والمساحة (users/get_current_account, get_space_usage)
+  ///   files.metadata.read ← قائمة النسخ (files/list_folder)
+  ///   files.content.write ← رفع النسخ وحذف الأقدم (files/upload, files/delete_v2)
+  ///   files.content.read  ← تنزيل نسخة للاستعادة (files/download)
   static const requiredScopes = [
     'account_info.read',
     'files.metadata.read',
-    'files.metadata.write',
-    'files.content.read',
     'files.content.write',
+    'files.content.read',
   ];
+
+  /// شرح كل إذن بالعربية (للعرض).
+  static const scopeMeaning = {
+    'account_info.read': 'قراءة اسم الحساب والمساحة',
+    'files.metadata.read': 'عرض قائمة النسخ',
+    'files.content.write': 'رفع النسخ وحذف الأقدم',
+    'files.content.read': 'تنزيل نسخة للاستعادة',
+  };
+
+  /// اسم الإذن الذي ذكره Dropbox في ردّه (JSON أو نص عادي)، أو null.
+  static String? requiredScopeOf(String raw) {
+    try {
+      final j = json.decode(raw);
+      final e = j is Map ? j['error'] : null;
+      if (e is Map && e['required_scope'] is String) return e['required_scope'] as String;
+    } catch (_) {}
+    return RegExp(r"required scope '([a-z_.]+)'").firstMatch(raw)?.group(1);
+  }
 
   /// رسالة «إذن ناقص» — يعرّف بها البرنامج هذا الخطأ تحديداً.
   static const missingScopeMarker = 'ينقص تطبيق Dropbox إذن';
@@ -533,13 +705,12 @@ class DropboxBackupService {
     try {
       summary = (json.decode(raw)['error_summary'] ?? '').toString();
     } catch (_) {}
-    // Dropbox يرد بنص عادي (لا JSON) حين ينقص تطبيقَه إذنٌ في App Console:
+    // Dropbox يذكر الإذن الناقص: JSON {error: {required_scope}} أو نص عادي
     // «... does not have the required scope 'files.metadata.read' ...»
-    final scope = RegExp(r"required scope '([a-z_.]+)'").firstMatch(raw)?.group(1) ??
-        (summary.contains('missing_scope') ? 'files.content.write' : null);
-    if (scope != null) {
-      return '$missingScopeMarker «$scope». افتح إعدادات تطبيق Dropbox (App Console) ← Permissions، '
-          'وفعّل: ${requiredScopes.join('، ')} ثم «Submit»، ثم اقطع الاتصال في البرنامج واربطه من جديد.';
+    final scope = requiredScopeOf(raw);
+    if (scope != null || summary.contains('missing_scope')) {
+      return '$missingScopeMarker «${scope ?? 'غير محدد'}». افتح شاشة Dropbox في البرنامج ← «فحص الأذونات» '
+          'لترى الناقص بالضبط وطريقة إصلاحه.';
     }
     if (summary.contains('insufficient_space')) return 'لا توجد مساحة كافية في حساب Dropbox.';
     if (summary.contains('too_many_write_operations')) return 'Dropbox مشغول الآن — أعد المحاولة بعد قليل.';
