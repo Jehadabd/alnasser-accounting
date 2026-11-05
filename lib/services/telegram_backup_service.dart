@@ -65,8 +65,8 @@ class TelegramBackupService {
   Future<String> _getBotToken() async {
     // تحقق أولاً من إعدادات المستخدم (AppSettings)
     final settings = await SettingsManager.getAppSettings();
+    // بلا طباعة هنا: تُستدعى كل دقيقة (فحص موعد ملخص المالك) فتملأ السجل بلا فائدة.
     if (settings.telegramBotToken != null && settings.telegramBotToken!.isNotEmpty) {
-      debugPrint('🔑 استخدام توكن البوت من إعدادات المستخدم');
       return settings.telegramBotToken!;
     }
     
@@ -102,7 +102,6 @@ class TelegramBackupService {
     
     // الأولوية لإعدادات المستخدم (telegramChannelId)
     if (settings.telegramChannelId != null && settings.telegramChannelId!.isNotEmpty) {
-      debugPrint('📡 استخدام قناة المستخدم: ${settings.telegramChannelId}');
       return settings.telegramChannelId!;
     }
     return '';

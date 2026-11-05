@@ -127,7 +127,6 @@ class OwnerSummary {
     if (_sending || !deviceCanSend) return;
     try {
       if (!await enabled()) return;
-      if (!await TelegramBackupService().isConfigured) return;
       // بعد فشل: محاولة كل 15 دقيقة لا كل دقيقة
       final lf = _lastFailure;
       if (lf != null && DateTime.now().difference(lf).inMinutes < 15) return;
@@ -145,6 +144,8 @@ class OwnerSummary {
         day = DateTime(now.year, now.month, now.day);
       }
       if (day == null) return;
+      // فحص ربط تيليجرام فقط حين يحين الإرسال، لا كل دقيقة (ما قبله حساب بلا أثر)
+      if (!await TelegramBackupService().isConfigured) return;
       // أول تفعيل: لا نرسل الأمس بأثر رجعي
       if (last == null && day == yesterday) {
         await _markSent(yesterday);
