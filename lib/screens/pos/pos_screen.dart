@@ -13,10 +13,13 @@ import 'package:provider/provider.dart';
 import '../../models/app_settings.dart';
 import '../../models/product.dart';
 import '../../providers/pos_provider.dart';
+import '../../services/barcode/scan_feedback.dart';
+import '../../services/barcode/scan_settings.dart';
+import '../../services/barcode/scanner_wedge.dart';
 import '../../services/settings_manager.dart';
 import '../../widgets/app_side_nav.dart';
 import '../../widgets/camera_barcode_scanner_dialog.dart';
-import '../../widgets/continuous_barcode_scanner.dart';
+import '../../widgets/camera_scan_button.dart';
 import 'pos_receipts_screen.dart';
 import 'widgets/cart_panel.dart';
 import 'widgets/categories_sidebar.dart';
@@ -45,9 +48,18 @@ class _POSScreenState extends State<POSScreen> {
 
   AppSettings? _appSettings;
 
+  /// 🔫 قارئ الباركود من أي مكان في الشاشة (حتى والمؤشر في خانة العميل أو الخصم)
+  late final ScannerWedge _wedge = ScannerWedge(
+    context: () => context,
+    isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true) && TickerMode.valuesOf(context).enabled,
+    onScan: _processBarcode,
+  );
+
   @override
   void initState() {
     super.initState();
+    ScanSettings.ensureLoaded();
+    _wedge.attach();
     _loadSettings();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -63,6 +75,7 @@ class _POSScreenState extends State<POSScreen> {
 
   @override
   void dispose() {
+    _wedge.detach();
     _focusNode.dispose();
     _searchFocus.dispose();
     _searchController.dispose();
@@ -145,8 +158,10 @@ class _POSScreenState extends State<POSScreen> {
     final product = await pos.addProductByBarcode(code);
     if (!mounted) return;
     if (product != null) {
+      ScanFeedback.ok();
       _toast('✓ أُضيفت: ${product.name}', PosColors.cash);
     } else {
+      ScanFeedback.fail();
       _toast(pos.lastErrorMessage ?? 'لم يُعثر على مادة بالباركود: $code', PosColors.credit, ms: 2200);
     }
   }
@@ -287,20 +302,18 @@ class _POSScreenState extends State<POSScreen> {
                 icon: const Icon(Icons.receipt_long_rounded, color: PosColors.primary, size: 20),
                 label: const Text('الإيصالات', style: TextStyle(color: PosColors.primary, fontWeight: FontWeight.w700)),
               ),
-            IconButton(
-              tooltip: 'مسح باركود بالكاميرا',
-              icon: const Icon(Icons.qr_code_scanner_rounded, color: PosColors.primary),
-              onPressed: () async {
-                // الهاتف: كاميرا تبقى مفتوحة (أو تُغلق بعد كل مادة حسب الإعداد). الحاسبة: إدخال يدوي/قارئ USB
-                if (ContinuousScanPrefs.cameraAvailable) {
-                  await ContinuousBarcodeScanner.open(context, _scanToCart);
-                  _searchFocus.requestFocus();
-                  return;
-                }
-                final scanned = await CameraBarcodeScannerDialog.scan(context);
-                if (scanned != null && scanned.isNotEmpty) _processBarcode(scanned);
-              },
-            ),
+            // 📷 الهاتف: الكاميرا (ضغطة أو ضغط مستمر حسب الإعدادات). الحاسبة: إدخال يدوي/قارئ USB
+            if (CameraScanButton.available)
+              CameraScanButton(onCode: _scanToCart, color: PosColors.primary)
+            else
+              IconButton(
+                tooltip: 'إدخال باركود',
+                icon: const Icon(Icons.qr_code_scanner_rounded, color: PosColors.primary),
+                onPressed: () async {
+                  final scanned = await CameraBarcodeScannerDialog.scan(context);
+                  if (scanned != null && scanned.isNotEmpty) _processBarcode(scanned);
+                },
+              ),
             const SizedBox(width: 8),
           ],
         ),

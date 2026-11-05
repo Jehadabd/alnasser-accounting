@@ -1,5 +1,6 @@
 import '../widgets/popup_screens.dart'; // 🪟
 import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
+import '../widgets/scan_settings_tile.dart'; // 🔫
 import 'dart:io';
 import 'invoice_entry_layout_screen.dart'; // 🧩
 import 'package:flutter/material.dart';
@@ -2358,6 +2359,13 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             iconColor: const Color(0xFF1E3A8A),
             title: 'لغة الكتابة في رمز المادة',
             child: const ItemCodeKeyboardTile(),
+          ),
+          // 🔫 قارئ الباركود والكاميرا
+          _buildSettingsCard(
+            icon: Icons.qr_code_scanner_rounded,
+            iconColor: const Color(0xFF4F46E5),
+            title: 'قراءة الباركود (القارئ والكاميرا)',
+            child: const ScanSettingsTile(),
           ),
           // 📦 واجهة إدخال البضاعة
           _buildSettingsCard(

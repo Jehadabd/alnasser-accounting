@@ -63,6 +63,11 @@ import '../services/seat_service.dart';
 import '../owner/founder_invoice_chip.dart'; // 🏷️ خصم السطر
 import '../services/personal_pricing_service.dart'; // 👤 تسعير شخصي 101–103
 import '../services/invoice_staff_service.dart'; // 👷 المجهز والمحاسب
+import '../services/barcode/scanner_wedge.dart'; // 🔫 قارئ الباركود من أي مكان
+import '../services/barcode/scan_lookup.dart';
+import '../services/barcode/scan_settings.dart';
+import '../services/barcode/scan_feedback.dart';
+import '../widgets/camera_scan_button.dart'; // 📷 الكاميرا (أندرويد/آيفون)
 
 // Helper: format product ID - show raw value without zero-padding
 String formatProductId5(int? id) {
@@ -299,6 +304,182 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   final ScrollController _hScrollController = ScrollController(); // 🧩 تمرير أفقي لجدول المواد
   bool _sidePanelOpen = true; // 🧩 اللوحة الجانبية أو الشريط السفلي — يُختار من الإعدادات فقط
   bool _ensuringEmptyRow = false;
+
+  // ═══ 🔫 الباركود من أي مكان في الشاشة (القارئ أو الكاميرا) ═══
+  // المادة المقروءة تمر بمسار السطر نفسه عند اختيارها يدوياً (التسعير، فحص الرصيد،
+  // جلسة البحث الذكي) — لا حساب جديد هنا. المسحات تُعالَج بالترتيب واحدة بعد أخرى.
+  late final ScannerWedge _wedge;
+  Future<void> _scanChain = Future.value();
+  /// أسطر الجدول المبنية الآن (يسجّل كل سطر نفسه) — بلا GlobalKey حتى لا يتعطل
+  /// الجدول إن تكرر رقم سطر في فاتورة قديمة.
+  final Map<String, Object> _rowStates = {};
+
+  /// الشاشة ظاهرة وفي الأعلى (لا حوار فوقها، ولا نافذتها مصغّرة).
+  bool _scanActive() => mounted && (ModalRoute.of(context)?.isCurrent ?? true) && TickerMode.valuesOf(context).enabled;
+
+  Future<T> _enqueueScan<T>(Future<T> Function() job, T onError) {
+    final c = Completer<T>();
+    _scanChain = _scanChain.then((_) async {
+      try {
+        c.complete(await job());
+      } catch (e) {
+        debugPrint('⚠️ مسح الباركود: $e');
+        if (!c.isCompleted) c.complete(onError);
+      }
+    });
+    return c.future;
+  }
+
+  /// القارئ (لوحة مفاتيح): النتيجة في رسالة أسفل الشاشة.
+  void _onWedgeScan(String code) {
+    _enqueueScan(() => _scanCode(code), (name: null, error: 'تعذّرت إضافة الرمز «$code»')).then((r) {
+      if (!mounted || (r.name == null && r.error == null)) return;
+      final m = ScaffoldMessenger.of(context);
+      m.hideCurrentSnackBar();
+      if (r.error == null) {
+        ScanFeedback.ok();
+        m.showSnackBar(SnackBar(
+          content: Text('✓ ${r.name}'),
+          backgroundColor: const Color(0xFF047857),
+          duration: const Duration(milliseconds: 1200),
+        ));
+      } else {
+        ScanFeedback.fail();
+        m.showSnackBar(SnackBar(
+          content: Text(r.error!),
+          backgroundColor: Colors.red.shade700,
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    });
+  }
+
+  /// الكاميرا: النتيجة تظهر في لوحة الكاميرا نفسها.
+  Future<({String? name, String? error})> _cameraScan(String code) =>
+      _enqueueScan(() => _scanCode(code), (name: null, error: 'تعذّرت إضافة الرمز «$code»'));
+
+  Future<({String? name, String? error})> _scanCode(String code) async {
+    if (isViewOnly) return (name: null, error: 'الفاتورة معروضة للقراءة فقط — اضغط «تعديل» أولاً ثم امسح');
+    final match = await ScanLookup.find(await DatabaseService().database, code);
+    if (!mounted) return (name: null, error: null);
+    final Product product;
+    switch (match) {
+      case ScanFound(product: final p):
+        product = p;
+      case ScanAmbiguous(products: final list):
+        final p = await _pickScanned(code, list);
+        if (!mounted) return (name: null, error: null);
+        if (p == null) return (name: null, error: 'لم تُضف مادة — الرمز «$code» لأكثر من مادة ولم تُختر واحدة');
+        product = p;
+      case ScanNotFound():
+        return (name: null, error: 'لا توجد مادة بالباركود أو الرمز «$code»');
+    }
+    return _addScanned(product);
+  }
+
+  Future<Product?> _pickScanned(String code, List<Product> list) => showDialog<Product>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: Text('الرمز «$code» مسجّل لأكثر من مادة — اختر المادة'),
+          children: [
+            for (final p in list)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, p),
+                child: Text('${p.name}   •   المخزون ${NumberFormat('#,##0.###', 'en_US').format(p.stockQuantity)}'),
+              ),
+            SimpleDialogOption(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ],
+        ),
+      );
+
+  Future<({String? name, String? error})> _addScanned(Product p) async {
+    if (!_allowNegativeStock && p.stockQuantity <= 0) {
+      return (name: null, error: '«${p.name}» نافد من المخزون — لم يُضف');
+    }
+    final base = p.translatedUnit;
+    // المادة نفسها بالوحدة نفسها وبلا خصم سطر ⇒ الكمية +1 (لا يُزاد سطر هدية أو مخصوم)
+    if (ScanSettings.current.repeatAddsQty) {
+      final i = invoiceItems.lastIndexWhere((it) =>
+          it.productId != null && it.productId == p.id && it.saleType == base && it.discountType == null);
+      if (i != -1) {
+        final st = await _rowStateAt(i);
+        if (!mounted) return (name: null, error: null);
+        if (st == null) return (name: null, error: 'تعذّر الوصول إلى سطر «${p.name}» — زد الكمية يدوياً');
+        if (!st.addScannedQty(1)) return (name: null, error: 'لم تُزد كمية «${p.name}» — الرصيد غير كافٍ');
+        return (name: '${p.name} — الكمية ${st.quantityText}', error: null);
+      }
+    }
+    // شريط الإدخال العلوي: تُختار المادة ويبقى العدد للكاشير (Enter يضيفها)
+    if (InvoiceEntryLayout.current.showEntryBar) {
+      _onProductSelected(p);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _quantityController.text.trim().isEmpty) _quantityController.text = '1';
+      });
+      return (name: '${p.name} — اضغط Enter للإضافة', error: null);
+    }
+    // الجدول: في آخر سطر فارغ
+    if (invoiceItems.isEmpty || invoiceItems.last.productName.trim().isNotEmpty) {
+      setState(() {
+        invoiceItems.add(InvoiceItem(
+          invoiceId: 0,
+          productName: '',
+          unit: '',
+          unitPrice: 0.0,
+          appliedPrice: 0.0,
+          itemTotal: 0.0,
+          uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+        ));
+        focusNodesList.add(LineItemFocusNodes());
+      });
+    }
+    final idx = invoiceItems.length - 1;
+    final wasHere = idx < focusNodesList.length && focusNodesList[idx].details.hasFocus;
+    final st = await _rowStateAt(idx);
+    if (!mounted) return (name: null, error: null);
+    if (st == null) return (name: null, error: 'تعذّرت إضافة «${p.name}» — أعد المسح');
+    if (!await st.applyScanned(p)) return (name: null, error: 'تعذّرت إضافة «${p.name}»');
+    if (wasHere) _focusTrailingRowSoon();
+    return (name: p.name, error: null);
+  }
+
+  /// المؤشر كان في السطر الذي مُلئ ⇒ ينتقل إلى السطر الفارغ الجديد ليكمل الكاشير.
+  Future<void> _focusTrailingRowSoon() async {
+    for (var i = 0; i < 3; i++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      if (invoiceItems.isNotEmpty && invoiceItems.last.productName.trim().isEmpty && focusNodesList.length >= invoiceItems.length) {
+        _revealRow(invoiceItems.length - 1);
+        focusNodesList[invoiceItems.length - 1].details.requestFocus();
+        return;
+      }
+    }
+  }
+
+  /// حالة السطر [i] (يُمرَّر إليه إن كان خارج الشاشة حتى يُبنى).
+  Future<_EditableInvoiceItemRowState?> _rowStateAt(int i) async {
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (!mounted || i < 0 || i >= invoiceItems.length) return null;
+      final st = _rowStates[invoiceItems[i].uniqueId];
+      _revealRow(i);
+      if (st is _EditableInvoiceItemRowState && st.mounted) return st;
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    return null;
+  }
+
+  void _revealRow(int i) {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final h = InvoiceEntryLayout.current.rowHeight;
+    final top = i * h, bottom = top + h;
+    double? to;
+    if (top < pos.pixels) {
+      to = top;
+    } else if (bottom > pos.pixels + pos.viewportDimension) {
+      to = bottom - pos.viewportDimension + 60;
+    }
+    if (to != null) _scrollController.jumpTo(to.clamp(0.0, pos.maxScrollExtent));
+  }
 
   /// بدون شريط الإدخال العلوي يُكتب في آخر سطر فارغ من الجدول (كما في الإداري)
   void _ensureTrailingEmptyRow() {
@@ -1554,6 +1735,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onOwnerCostPeekKey);
+    ScanSettings.ensureLoaded();
+    _wedge = ScannerWedge(context: () => context, isActive: _scanActive, onScan: _onWedgeScan)..attach();
     _loadHeldCount(); // ⏸️ شارة عدد الفواتير المعلّقة
     // 🧩 تخطيط أعمدة الجدول كما ضبطه المستخدم في الإعدادات
     InvoiceEntryLayout.load().then((_) {
@@ -2028,6 +2211,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   void dispose() {
     DebtReminders.pendingForNewInvoice = null; // 📅 موعد لم يُحفظ مع فاتورة: لا يتعلق بفاتورة أخرى
     HardwareKeyboard.instance.removeHandler(_onOwnerCostPeekKey);
+    _wedge.detach();
     InvoiceSidePanelPref.notifier.removeListener(_onSidePanelPrefChanged);
     try {
       // 1. إلغاء المؤقت أولاً لمنع أي عمليات حفظ متأخرة
@@ -5129,6 +5313,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                 onPressed: isSaving ? null : _cancelEdit,
               ),
             ],
+            // 📷 المسح بالكاميرا (أندرويد/آيفون) — ضغطة أو ضغط مستمر حسب الإعدادات
+            if (!isViewOnly && CameraScanButton.available) CameraScanButton(onCode: _cameraScan),
             // 🧩 الخيارات الأقل استعمالاً في قائمة واحدة
             _buildMoreActionsMenu(),
             const SizedBox(width: 4),
@@ -5245,6 +5431,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                             costDates: _ownerCostPeek ? (_costDates ?? const {}) : null,
                             rowHeight: layout.rowHeight,
                             key: ValueKey(item.uniqueId),
+                            rowRegistry: _rowStates,
                             item: item,
                             index: index,
                             getCurrentInvoiceProductNames: () {
@@ -5425,6 +5612,9 @@ class EditableInvoiceItemRow extends StatefulWidget {
   /// نوع دفع الفاتورة (للتسعير الشخصي 101–103: مراجع نقد للنقد، دين للدين)
   final String paymentType;
 
+  /// 🔫 السطر يسجّل حالته هنا (رقم السطر ← الحالة) لتضيف الشاشة إليه المادة الممسوحة.
+  final Map<String, Object>? rowRegistry;
+
   const EditableInvoiceItemRow({
     Key? key,
     required this.item,
@@ -5449,6 +5639,7 @@ class EditableInvoiceItemRow extends StatefulWidget {
     this.rowHeight = 44,
     this.costDates,
     this.paymentType = 'نقد',
+    this.rowRegistry,
   }) : super(key: key);
 
   @override
@@ -5674,6 +5865,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   void initState() {
     super.initState();
     _currentItem = widget.item;
+    widget.rowRegistry?[widget.item.uniqueId] = this; // 🔫
     // استخدم المتحكمات الجاهزة من كائن الصنف مباشرة
     _quantityController = TextEditingController(
       text: (widget.item.quantityIndividual ??
@@ -5736,6 +5928,8 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
 
   @override
   void dispose() {
+    final reg = widget.rowRegistry;
+    if (reg != null && identical(reg[widget.item.uniqueId], this)) reg.remove(widget.item.uniqueId); // 🔫
     // إزالة الـ listeners قبل التخلص من FocusNode
     _detailsFocusNode.removeListener(_onDetailsFocusChanged);
     _priceFocusNode.removeListener(_onPriceFocusChanged);
@@ -5764,6 +5958,12 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   @override
   void didUpdateWidget(EditableInvoiceItemRow oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // 🔫 تسجيل السطر (إن تغيّر رقمه أو سجلّه)
+    if (oldWidget.item.uniqueId != widget.item.uniqueId || !identical(oldWidget.rowRegistry, widget.rowRegistry)) {
+      final old = oldWidget.rowRegistry;
+      if (old != null && identical(old[oldWidget.item.uniqueId], this)) old.remove(oldWidget.item.uniqueId);
+    }
+    widget.rowRegistry?[widget.item.uniqueId] = this;
     // مزامنة الحالة الداخلية عندما يتم تحديث العنصر من الخارج
     // هذا يحل مشكلة عدم ظهور التحديثات في واجهة المستخدم عند التعديلات المتكررة
     if (oldWidget.item.uniqueId == widget.item.uniqueId) {
@@ -5925,6 +6125,33 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     if (_isRowLocked) setState(() => _isRowLocked = false); // إعادة التعيين عند الاختيار الصحيح
     SmartSearchService.instance.addProductToSession(selection.id, selection.name);
     _pickProduct(selection); // يطبّق المادة ثم ينتقل للخانة التالية حسب الترتيب
+    return true;
+  }
+
+  /// 🔫 مادة من القارئ/الكاميرا لهذا السطر الفارغ: مسار الاختيار نفسه (التسعير وجلسة
+  /// البحث الذكي) دون نقل المؤشر. يعيد false إن رُفضت.
+  Future<bool> applyScanned(Product p) async {
+    if (widget.isViewOnly) return false;
+    if (!widget.allowNegativeStock && p.stockQuantity <= 0) return false;
+    if (_isRowLocked) setState(() => _isRowLocked = false);
+    SmartSearchService.instance.addProductToSession(p.id, p.name);
+    _pickSeq++; // لا ينقل أي Enter معلّق المؤشر
+    await _applyProductSelection(p);
+    return mounted && _currentItem.productId == p.id;
+  }
+
+  String get quantityText => _qtyText(_currentItem.quantityIndividual ?? _currentItem.quantityLargeUnit ?? 0);
+
+  /// 🔫 المادة نفسها مُسحت مرة ثانية: الكمية +[by] بفحص الرصيد نفسه عند كتابتها يدوياً.
+  bool addScannedQty(double by) {
+    if (widget.isViewOnly) return false;
+    final q = _currentItem.quantityIndividual ?? _currentItem.quantityLargeUnit ?? 0;
+    final n = q + by;
+    _updateQuantity(n.toString());
+    final now = _currentItem.quantityIndividual ?? _currentItem.quantityLargeUnit ?? 0;
+    if ((now - n).abs() > 1e-9) return false;
+    final t = _qtyText(n);
+    if (_quantityController.text != t) _quantityController.text = t;
     return true;
   }
 
@@ -7185,7 +7412,8 @@ class _CodeLookupField extends StatefulWidget {
 
 class _CodeLookupFieldState extends State<_CodeLookupField> {
   final TextEditingController _controller = TextEditingController();
-  final FocusNode _focus = FocusNode();
+  // خانة الباركود/الرمز تقرأ الماسح بنفسها (تغيّر مادة سطرها) — الماسح العام لا يتدخل فيها
+  final FocusNode _focus = ScanPassThroughFocusNode();
   List<ProductCodeHit> _lastOptions = const [];
   int _searchSeq = 0;
   bool _picked = false;
