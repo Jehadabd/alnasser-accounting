@@ -23,12 +23,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
-import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../lan/lan_settings.dart' show AppNetworkMode;
 import 'database_service.dart';
 import 'backup_space_planner.dart';
-import 'database/core/database_config.dart';
+import 'backup_files.dart';
+import 'backup_package.dart';
 
 /// 📦 معلومات النسخة الاحتياطية
 class BackupInfo {
@@ -595,62 +595,9 @@ class DropboxBackupService {
     return v.trim().split(RegExp(r'\s+'));
   }
 
-  /// 📸 لقطة متّسقة من القاعدة المفتوحة (تشمل ما في ملف -wal).
-  Future<Uint8List> _snapshotDatabase(String dbPath) async {
-    Directory? tmp;
-    try {
-      tmp = await Directory.systemTemp.createTemp('dbx_snap_');
-      final snapPath = p.join(tmp.path, 'snapshot.db');
-      final db = await DatabaseService().database;
-      await db.execute("VACUUM INTO '${snapPath.replaceAll("'", "''")}'");
-      return await File(snapPath).readAsBytes();
-    } catch (e) {
-      debugPrint('⚠️ Dropbox: VACUUM INTO تعذّر ($e) — checkpoint ثم نسخ الملف');
-      try {
-        final db = await DatabaseService().database;
-        await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
-      } catch (_) {}
-      return await File(dbPath).readAsBytes();
-    } finally {
-      try {
-        await tmp?.delete(recursive: true);
-      } catch (_) {}
-    }
-  }
-
-  String _stampName(DateTime now) =>
+  String _stampName(DateTime now, String extension) =>
       'backup_${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}'
-      '_${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}.db.zip';
-
-  /// 📦 إنشاء نسخة احتياطية محلية (ملف zip مؤقت)
-  Future<File?> _createLocalBackup(String backupName) async {
-    try {
-      final dbPath = await DatabaseConfig.getDatabasePath();
-      final dbFile = File(dbPath);
-
-      if (!await dbFile.exists()) {
-        debugPrint('❌ ملف قاعدة البيانات غير موجود');
-        return null;
-      }
-
-      final dbBytes = await _snapshotDatabase(dbPath);
-      final archive = Archive();
-      archive.addFile(ArchiveFile('database.db', dbBytes.length, dbBytes));
-
-      final zipBytes = ZipEncoder().encode(archive);
-      // ignore: unnecessary_null_comparison
-      if (zipBytes == null) return null;
-
-      final tempDir = await Directory.systemTemp.createTemp('backup_');
-      final zipFile = File(p.join(tempDir.path, backupName));
-      await zipFile.writeAsBytes(zipBytes);
-
-      return zipFile;
-    } catch (e) {
-      debugPrint('❌ خطأ في إنشاء النسخة المحلية: $e');
-      return null;
-    }
-  }
+      '_${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}$extension';
 
   /// ☁️ رفع النسخة إلى Dropbox. يرمي DropboxException برسالة واضحة عند الفشل.
   Future<void> _uploadToDropbox(File file, String remotePath) async {
@@ -842,7 +789,7 @@ class DropboxBackupService {
         error: 'هذا الجهاز طرفية متصلة بالخادم — النسخ الاحتياطي يُؤخذ من جهاز الخادم.',
       );
     }
-    Directory? tempDir;
+    BackupPackage? ownedPkg;
     try {
       final max = maxBackups ?? await getMaxBackups();
 
@@ -858,17 +805,18 @@ class DropboxBackupService {
         );
       }
 
-      // 2. إنشاء النسخة المحلية
-      onProgress?.call(15, 'إنشاء النسخة الاحتياطية...');
-      final remoteName = _stampName(DateTime.now());
-      final localBackup = await _createLocalBackup(remoteName);
-      if (localBackup == null) {
-        return BackupResult(
-          success: false,
-          error: 'فشل في إنشاء النسخة الاحتياطية المحلية.',
-        );
+      // 2. الحزمة الموحّدة (الملف نفسه المرفوع لتيليجرام: لقطة + فحص سلامة + XZ متحقق منه)
+      onProgress?.call(15, 'إنشاء النسخة الاحتياطية (ضغط وتحقق)...');
+      final BackupPackage pkg;
+      try {
+        final got = await BackupPackage.obtain(onProgress: (v) => onProgress?.call(15 + (v * 6).round(), 'ضغط النسخة والتحقق منها...'));
+        pkg = got.pkg;
+        if (got.owned) ownedPkg = pkg;
+      } catch (e) {
+        return BackupResult(success: false, error: 'فشل إنشاء النسخة الاحتياطية: ${'$e'.replaceFirst('Exception: ', '')}');
       }
-      tempDir = localBackup.parent;
+      final localBackup = pkg.file;
+      final remoteName = _stampName(pkg.createdAt, pkg.extension);
       // ⚠️ الحجم يُقرأ قبل حذف الملف المؤقت (كان يُقرأ بعده فيفشل كل نسخ ناجح).
       final size = await localBackup.length();
 
@@ -951,10 +899,8 @@ class DropboxBackupService {
         error: 'خطأ غير متوقع: $e',
       );
     } finally {
-      // 5. تنظيف الملف المؤقت دائماً (نجاحاً أو فشلاً)
-      try {
-        await tempDir?.delete(recursive: true);
-      } catch (_) {}
+      // 5. تنظيف الحزمة إن كانت لهذا الاستدعاء وحده (داخل «رفع البيانات» تحذفها الجلسة)
+      await ownedPkg?.dispose();
     }
   }
 
@@ -997,6 +943,7 @@ class DropboxBackupService {
       return BackupResult(success: false, error: 'هذا الجهاز طرفية — الاستعادة تتم على جهاز الخادم فقط.');
     }
     Directory? workDir;
+    File? extracted;
     try {
       final downloadedFile = await downloadBackup(backup);
       if (downloadedFile == null) {
@@ -1004,18 +951,14 @@ class DropboxBackupService {
       }
       workDir = downloadedFile.parent;
 
-      final archive = ZipDecoder().decodeBytes(await downloadedFile.readAsBytes());
-      File? dbFile;
-      for (final f in archive) {
-        if (f.isFile && f.name.endsWith('.db')) {
-          dbFile = File(p.join(workDir.path, 'restored.db'));
-          await dbFile.writeAsBytes(f.content as List<int>);
-          break;
-        }
+      // القارئ الموحّد: نسخ XZ الجديدة ونسخ ZIP القديمة معاً (يُتعرّف على النوع من المحتوى)
+      final File dbFile;
+      try {
+        dbFile = await BackupFiles.extractDatabase(downloadedFile);
+      } catch (e) {
+        return BackupResult(success: false, error: 'الملف لا يحتوي قاعدة بيانات صالحة: ${'$e'.replaceFirst('Exception: ', '')}');
       }
-      if (dbFile == null) {
-        return BackupResult(success: false, error: 'الملف لا يحتوي قاعدة بيانات صالحة.');
-      }
+      if (dbFile.path != downloadedFile.path) extracted = dbFile;
 
       final ok = await DatabaseService().restoreDatabaseFromFile(dbFile);
       return ok
@@ -1026,6 +969,9 @@ class DropboxBackupService {
     } finally {
       try {
         await workDir?.delete(recursive: true);
+      } catch (_) {}
+      try {
+        await extracted?.delete();
       } catch (_) {}
     }
   }

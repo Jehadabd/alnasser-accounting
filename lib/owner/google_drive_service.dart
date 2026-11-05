@@ -18,7 +18,6 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -28,7 +27,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/backup_space_planner.dart';
-import '../services/database_service.dart';
+import '../services/backup_package.dart';
 import '../services/debt_report_service.dart';
 
 class DriveException implements Exception {
@@ -138,7 +137,7 @@ class GoogleDriveService {
     try {
       final root = await _rootFolder();
       final folder = await _findOrCreateFolder(_deviceFolder(), parent: root);
-      final files = await _list(folder, "name contains '.zip'");
+      final files = await _list(folder, "(name contains '.zip' or name contains '.tar.xz')");
       return (count: files.length, bytes: files.fold<int>(0, (a, f) => a + (int.tryParse('${f['size'] ?? ''}') ?? 0)));
     } catch (_) {
       return null;
@@ -499,37 +498,6 @@ class GoogleDriveService {
       '${d.year}-${_pad2(d.month)}-${_pad2(d.day)}_${_pad2(d.hour)}-${_pad2(d.minute)}-${_pad2(d.second)}';
   static String _pad2(int v) => v.toString().padLeft(2, '0');
 
-  /// للاستعمال خارج Drive (ديسكورد في زر رفع البيانات)
-  Future<Uint8List> zippedDatabase() => _zippedDatabase();
-
-  /// 📸 لقطة متّسقة من القاعدة المفتوحة (تشمل ما في -wal) ثم ضغطها zip
-  Future<Uint8List> _zippedDatabase() async {
-    final db = await DatabaseService().database;
-    final tmp = await Directory.systemTemp.createTemp('gdrive_snap_');
-    try {
-      final snap = '${tmp.path}${Platform.pathSeparator}snapshot.db';
-      Uint8List bytes;
-      try {
-        await db.execute("VACUUM INTO '${snap.replaceAll("'", "''")}'");
-        bytes = await File(snap).readAsBytes();
-      } catch (e) {
-        debugPrint('☁️ Drive: VACUUM INTO تعذّر ($e) — checkpoint ثم نسخ الملف');
-        try {
-          await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
-        } catch (_) {}
-        bytes = await File(db.path).readAsBytes();
-      }
-      final archive = Archive()..addFile(ArchiveFile('database.db', bytes.length, bytes));
-      final zip = ZipEncoder().encode(archive);
-      if (zip == null) throw DriveException('تعذّر ضغط قاعدة البيانات');
-      return Uint8List.fromList(zip);
-    } finally {
-      try {
-        await tmp.delete(recursive: true);
-      } catch (_) {}
-    }
-  }
-
   Future<bool> _deleteFile(String id) async {
     try {
       // DELETE يحذف نهائياً (لا سلة مهملات تشغل المساحة)
@@ -543,15 +511,26 @@ class GoogleDriveService {
   /// يرفع قاعدة البيانات مضغوطة إلى «<المجلد الرئيسي>/<اسم الجهاز>». الأقدم يُحذف عند
   /// تجاوز العدد المحدد (بعد الرفع) أو عند امتلاء المساحة (قبله) — لنسخ هذا الجهاز فقط.
   Future<String> uploadDatabase({void Function(String step)? onStep}) async {
-    onStep?.call('تجهيز نسخة من قاعدة البيانات...');
-    final zip = await _zippedDatabase();
+    onStep?.call('تجهيز نسخة من قاعدة البيانات (ضغط وتحقق)...');
+    // الحزمة الموحّدة: الملف نفسه المرفوع لتيليجرام وDropbox (لقطة + فحص سلامة + XZ متحقق منه)
+    final got = await BackupPackage.obtain();
+    try {
+      return await _uploadPackage(got.pkg, onStep);
+    } finally {
+      if (got.owned) await got.pkg.dispose();
+    }
+  }
+
+  Future<String> _uploadPackage(BackupPackage pkg, void Function(String step)? onStep) async {
+    final zip = await pkg.file.readAsBytes();
     onStep?.call('الاتصال بـ Google Drive...');
     final root = await _rootFolder();
     final folder = await _findOrCreateFolder(_deviceFolder(), parent: root);
-    final name = 'قاعدة_البيانات_${_stamp(DateTime.now())}.zip';
+    final name = 'قاعدة_البيانات_${_stamp(pkg.createdAt)}${pkg.extension}';
 
     onStep?.call('فحص المساحة في Google Drive...');
-    final files = await _list(folder, "name contains '.zip'");
+    // نسخ ZIP القديمة ونسخ XZ الجديدة معاً في حساب العدد والمساحة
+    final files = await _list(folder, "(name contains '.zip' or name contains '.tar.xz')");
     final quota = await storage();
     final plan = BackupSpacePlanner.plan<String>(
       existing: [
@@ -574,7 +553,7 @@ class GoogleDriveService {
     }
 
     onStep?.call('رفع ${(zip.length / 1048576).toStringAsFixed(1)} ميجا...');
-    await _upload(zip, name, 'application/zip', folder);
+    await _upload(zip, name, pkg.mimeType, folder);
 
     if (plan.afterUpload.isNotEmpty) onStep?.call('حذف النسخ الأقدم...');
     for (final b in plan.afterUpload) {

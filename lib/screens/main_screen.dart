@@ -10,7 +10,6 @@ import '../services/database_service.dart';
 import '../services/telegram_backup_service.dart';
 import '../services/telegram_invoice_export_service.dart';
 import '../services/dropbox_backup_service.dart'; // ☁️ Dropbox
-import 'dart:io';
 import '../services/discord_backup_service.dart';
 import '../services/upload_targets.dart';
 import '../owner/google_drive_service.dart';
@@ -40,6 +39,7 @@ import '../widgets/report_kit.dart' show repMoney, repCanSeeProfit;
 import 'custom_range_report_screen.dart';
 import '../services/license_service.dart'; // 🔐 نظام التراخيص
 import '../widgets/invoice_range_dialog.dart';
+import '../services/backup_package.dart';
 // ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
 // تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
 class MainScreen extends StatefulWidget {
@@ -317,6 +317,9 @@ class _MainScreenState extends State<MainScreen> {
         // ديسكورد يستلم نسخة مما يُرسل لتيليغرام فقط إن كان مفعّلاً
         TelegramBackupService.mirrorToDiscord = targets.contains(UploadTargets.discord);
         if (targets.isEmpty) errors.add('كل وجهات الرفع مطفأة (الإعدادات ← النسخ الاحتياطي ← وجهات الرفع)');
+        // 📦 حزمة واحدة (لقطة + فحص سلامة + XZ متحقق منه) تُصنع عند أول وجهة وتُرسل نفسها للكل
+        BackupPackage.beginSession();
+        try {
         for (final target in targets) {
           currentTarget.value = target;
           statusNotifier.value = 'جاري الرفع إلى ${UploadTargets.labels[target] ?? target}...';
@@ -437,17 +440,14 @@ class _MainScreenState extends State<MainScreen> {
                 errors.add('Discord: الرابط (Webhook) غير مضبوط');
               } else {
                 try {
-                  final bytes = await GoogleDriveService.instance.zippedDatabase();
-                  if (bytes.length > 9.5 * 1024 * 1024) {
-                    errors.add('Discord: قاعدة البيانات (${(bytes.length / 1048576).toStringAsFixed(1)} ميغا) أكبر من حد ديسكورد (10 ميغا)');
+                  // الحزمة نفسها المرفوعة لباقي الوجهات (XZ: أصغر بكثير من حد ديسكورد غالباً)
+                  final pkg = (await BackupPackage.obtain()).pkg;
+                  final len = await pkg.length();
+                  if (len > 9.5 * 1024 * 1024) {
+                    errors.add('Discord: قاعدة البيانات المضغوطة (${(len / 1048576).toStringAsFixed(1)} ميغا) أكبر من حد ديسكورد (10 ميغا)');
                   } else {
-                    final tmp = File('${Directory.systemTemp.path}${Platform.pathSeparator}alnaser_db_${DateTime.now().millisecondsSinceEpoch}.zip');
-                    await tmp.writeAsBytes(bytes, flush: true);
                     final ok = await discord.sendDocument(
-                        file: tmp, caption: '💾 قاعدة البيانات — ${DateFormat('yyyy/MM/dd HH:mm').format(DateTime.now())}');
-                    try {
-                      await tmp.delete();
-                    } catch (_) {}
+                        file: pkg.file, caption: '💾 قاعدة البيانات (${pkg.format}) — ${DateFormat('yyyy/MM/dd HH:mm').format(pkg.createdAt)}');
                     if (!ok) errors.add('Discord: فشل إرسال قاعدة البيانات');
                   }
                 } catch (e) {
@@ -485,6 +485,9 @@ class _MainScreenState extends State<MainScreen> {
               target: skipped ? 2 : (errors.length == errBefore ? 1 : 0),
             };
           }
+        }
+        } finally {
+          BackupPackage.endSession();
         }
         currentTarget.value = null;
         TelegramBackupService.mirrorToDiscord = true;

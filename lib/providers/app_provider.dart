@@ -10,16 +10,11 @@ import '../erp/erp_common.dart' show PeriodLock;
 // DriveService removed
 import '../services/financial_audit_service.dart';
 import '../services/telegram_backup_service.dart';
-import '../services/backup_files.dart';
 import '../services/settings_manager.dart';
 import '../services/firebase_sync/sync_event_bus.dart';
 import '../services/firebase_sync/firebase_sync_service.dart'; // 🚀 رفع فوري عند الإنشاء/التعديل
 import '../services/firebase_sync/firebase_sync_config.dart';
-import 'dart:io';
-import 'dart:typed_data';
-import 'package:path_provider/path_provider.dart';
-import 'package:archive/archive_io.dart';
-import '../services/xz/xz_backup.dart'; // 🗜️ ضغط XZ حقيقي متحقق منه لنسخة تيليجرام
+import '../services/backup_package.dart'; // 📦 الحزمة الموحّدة لكل وجهات الرفع
 
 // أنواع ترتيب العملاء
 enum CustomerSortType {
@@ -447,64 +442,19 @@ class AppProvider with ChangeNotifier {
   Future<List<String>> backupDatabaseToTelegram({ValueChanged<double>? onProgress}) async {
     _setLoading(true);
     final problems = <String>[];
-    Directory? workDir;
+    BackupPackage? ownedPkg;
     try {
-      // 1) نسخة متّسقة من القاعدة في مجلد مؤقت
-      onProgress?.call(0.05);
-      final tempDir = await getTemporaryDirectory();
-      final backupRoot = workDir = Directory('${tempDir.path}/backup_${DateTime.now().millisecondsSinceEpoch}');
-      if (!await backupRoot.exists()) {
-        await backupRoot.create(recursive: true);
-      }
-      final dbCopy = File('${backupRoot.path}/debt_book.db');
-      // نسخة متّسقة تشمل ما في WAL (نسخ الملف مباشرة كان يفوّت آخر العمليات)،
-      // مهيّأة لأصغر أرشيف XZ — انظر BackupFiles.snapshotForBackup
-      await BackupFiles.snapshotForBackup(dbCopy.path);
-
-      // 2) أرشيف TAR ثم ضغط XZ
-      onProgress?.call(0.45);
-      final now = DateTime.now();
+      // 1-2) الحزمة الموحّدة (لقطة متّسقة + فحص سلامة + XZ متحقق منه) — الملف نفسه
+      //      الذي يُرفع إلى Dropbox وGoogle Drive وديسكورد في العملية نفسها.
+      final got = await BackupPackage.obtain(onProgress: (p) => onProgress?.call(0.02 + p * 0.66));
+      final pkg = got.pkg;
+      if (got.owned) ownedPkg = pkg;
+      final now = pkg.createdAt;
       final settings = await SettingsManager.getAppSettings();
-      final branchName = settings.branchName;
-      
-      // اسم المجلد الذي سيظهر عند فك الضغط
-      final folderName = '${branchName}_${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-      
-      // إنشاء Archive
-      final archive = Archive();
-      
-      // إضافة ملف قاعدة البيانات
-      final dbBytes = await dbCopy.readAsBytes();
-      archive.addFile(ArchiveFile('$folderName/debt_book.db', dbBytes.length, dbBytes));
-      
-      // تحويل الأرشيف إلى TAR
-      onProgress?.call(0.55);
-      final tarData = TarEncoder().encode(archive);
-      
-      // 🗜️ ضغط XZ حقيقي (LZMA2، قاموس 8MB) في معالج منفصل، ثم فكّه بمسار الاستعادة
-      // نفسه ومقارنته بالأصل بايتاً ببايت — انظر XzBackup.
-      // (XZEncoder في مكتبة archive لا يضغط: كان الملف بحجم القاعدة نفسه)
-      onProgress?.call(0.58);
-      final tarBytes = tarData is Uint8List ? tarData : Uint8List.fromList(tarData);
-      final xzData = await XzBackup.compressVerified(
-        tarBytes,
-        onProgress: (p) => onProgress?.call(0.58 + p * 0.10),
-      );
-      final stamp = '${folderName}_${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}';
-      final File compressedFile;
-      final String format;
-      if (xzData != null) {
-        compressedFile = File('${tempDir.path}/$stamp.tar.xz');
-        await compressedFile.writeAsBytes(xzData, flush: true);
-        format = 'XZ';
-      } else {
-        // بديل آمن نادر: ZIP (deflate) — الاستعادة تقبله أيضاً
-        debugPrint('⚠️ نسخة تيليجرام: تعذّر XZ المتحقق منه — تُرفع ZIP بدلاً منه');
-        compressedFile = File('${tempDir.path}/$stamp.zip');
-        await compressedFile.writeAsBytes(ZipEncoder().encode(archive)!, flush: true);
-        format = 'ZIP';
-      }
-      final sizeNote = '${_mb(dbBytes.length)} ← ${_mb(await compressedFile.length())} MB';
+      final branchName = pkg.branchName;
+      final compressedFile = pkg.file;
+      final format = pkg.format;
+      final sizeNote = '${_mb(pkg.rawSize)} ← ${_mb(await pkg.length())} MB';
 
       // 3) إرسال النسخة إلى Telegram — النتيجة تُفحص ولا تُتجاهل
       onProgress?.call(0.70);
@@ -536,11 +486,10 @@ class AppProvider with ChangeNotifier {
       onProgress?.call(1.0);
       return problems;
     } finally {
-      // نسخة القاعدة المؤقتة لا تبقى على القرص. (الملف المضغوط يبقى: ديسكورد
-      // قد يكون ما زال يقرؤه في الخلفية)
-      try {
-        if (workDir != null && await workDir.exists()) await workDir.delete(recursive: true);
-      } catch (_) {}
+      // حزمة خارج «رفع البيانات» يملكها هذا الاستدعاء: تُحذف بعد مهلة (ديسكورد قد
+      // يكون ما زال يقرؤها في الخلفية). داخل الجلسة تحذفها الجلسة.
+      final own = ownedPkg;
+      if (own != null) Future<void>.delayed(const Duration(minutes: 15), own.dispose);
       _setLoading(false);
     }
   }
