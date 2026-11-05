@@ -60,6 +60,9 @@ class BackupPackage {
   static int lastBuildMs = 0;
   static int lastCompressedBytes = 0;
 
+  /// يُبلغ بتقدّم الصنع (0..1) أياً كان المستدعي — للوقت المتبقي الحيّ.
+  static void Function(double p)? buildListener;
+
   static bool _inSession = false;
   static Future<BackupPackage>? _session;
 
@@ -100,6 +103,11 @@ class BackupPackage {
 
   /// يصنع حزمة جديدة. يرمي Exception برسالة عربية عند أي فشل (لا يُرفع شيء ناقص).
   static Future<BackupPackage> build({void Function(double p)? onProgress}) async {
+    final caller = onProgress;
+    onProgress = (v) {
+      caller?.call(v);
+      buildListener?.call(v);
+    };
     final now = DateTime.now();
     final sw = Stopwatch()..start();
     final settings = await SettingsManager.getAppSettings();

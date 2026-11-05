@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'settings_manager.dart';
+import 'upload_progress.dart'; // 📶 عدّ ما خرج إلى الشبكة
 
 class DiscordBackupService {
   /// التحقق مما إذا كان الديسكورد مُعداً
@@ -44,7 +45,7 @@ class DiscordBackupService {
   }
 
   /// إرسال ملف إلى Discord
-  Future<bool> sendDocument({required File file, String? caption}) async {
+  Future<bool> sendDocument({required File file, String? caption, SentCallback? onSent}) async {
     if (!await isConfigured) return false;
     final url = await SettingsManager.getDiscordWebhookUrl();
 
@@ -58,11 +59,16 @@ class DiscordBackupService {
         request.fields['content'] = discordCaption;
       }
       
-      request.files.add(
-        await http.MultipartFile.fromPath('file', file.path),
-      );
+      final bytes = await file.readAsBytes();
+      request.files.add(http.MultipartFile(
+        'file',
+        countedChunks(bytes, onSent), // 📶 العدّ يتبع ما قبله الاتصال
+        bytes.length,
+        filename: file.uri.pathSegments.last,
+      ));
 
-      final streamedResponse = await request.send().timeout(const Duration(seconds: 60));
+      // المهلة للرفع كله: 60 ثانية كانت تقطع الملفات الكبيرة على إنترنت بطيء
+      final streamedResponse = await request.send().timeout(const Duration(minutes: 10));
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {

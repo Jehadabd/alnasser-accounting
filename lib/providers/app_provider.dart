@@ -15,6 +15,7 @@ import '../services/firebase_sync/sync_event_bus.dart';
 import '../services/firebase_sync/firebase_sync_service.dart'; // 🚀 رفع فوري عند الإنشاء/التعديل
 import '../services/firebase_sync/firebase_sync_config.dart';
 import '../services/backup_package.dart'; // 📦 الحزمة الموحّدة لكل وجهات الرفع
+import '../services/upload_progress.dart' show SentCallback;
 
 // أنواع ترتيب العملاء
 enum CustomerSortType {
@@ -439,7 +440,7 @@ class AppProvider with ChangeNotifier {
   /// رفع قاعدة البيانات (XZ) ثم تقارير PDF إلى Telegram.
   /// يرمي استثناءً إن لم تصل القاعدة نفسها (فلا يظهر «نجح» كذباً)،
   /// ويعيد قائمة بمشاكل غير قاتلة (تقرير PDF لم يُرسل، Telegram غير مضبوط).
-  Future<List<String>> backupDatabaseToTelegram({ValueChanged<double>? onProgress}) async {
+  Future<List<String>> backupDatabaseToTelegram({ValueChanged<double>? onProgress, SentCallback? onSent}) async {
     _setLoading(true);
     final problems = <String>[];
     BackupPackage? ownedPkg;
@@ -463,7 +464,7 @@ class AppProvider with ChangeNotifier {
         problems.add('قاعدة البيانات لم تُرفع: إعدادات Telegram غير مكتملة');
       } else {
         final caption = '📦 نسخة $format ($sizeNote) - $branchName - ${now.year}/${now.month}/${now.day} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
-        final sent = await telegramService.sendDocumentWithDetails(file: compressedFile, caption: caption);
+        final sent = await telegramService.sendDocumentWithDetails(file: compressedFile, caption: caption, onSent: onSent);
         if (!sent.success) {
           throw Exception('لم تُرفع قاعدة البيانات إلى Telegram: ${sent.errorMessage ?? 'خطأ غير معروف'}'
               '${sent.statusCode != null ? ' (كود ${sent.statusCode})' : ''}'

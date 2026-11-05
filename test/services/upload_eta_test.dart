@@ -47,4 +47,38 @@ void main() {
     // 1000×0.6 + 2000×0.4 = 1400
     expect(e.estimateInvoicesMs(1), 1400);
   });
+
+  test('direct network timing splits upload speed from fixed overhead', () async {
+    final e = await UploadEta.load();
+    // 4 ميغا خرجت في 8 ثوانٍ، والوجهة كلها أخذت 11 ⇒ 2000 لكل ميغا + ثابت 3000
+    e.recordTarget(UploadTargets.telegram, ms: 11000, compressed: 4 * mb, withTelegram: true, netMs: 8000);
+    expect(e.uploadMs(UploadTargets.telegram, 4 * mb, withTelegram: true), 8000);
+    expect(e.baseMs(UploadTargets.telegram, withTelegram: true), 3000);
+    // سرعة حية تتقدّم على التاريخ
+    expect(e.uploadMs(UploadTargets.telegram, 4 * mb, withTelegram: true, liveBytesPerSec: 2 * mb.toDouble()), 2000);
+  });
+
+  test('plan: remaining shrinks as work completes', () async {
+    final e = await UploadEta.load();
+    final plan = UploadPlan(
+      eta: e,
+      targets: const [UploadTargets.telegram, UploadTargets.dropbox],
+      dbBytes: 33 * mb,
+      withTelegram: true,
+      pendingInvoices: 0,
+    );
+    final start = plan.remaining()!;
+    expect(start.inMilliseconds, greaterThan(0));
+    plan.startTarget(0);
+    plan.buildFinished(4 * mb);
+    plan.sent(0, 4 * mb);
+    plan.sent(4 * mb, 4 * mb); // خرج الملف كله إلى تيليجرام
+    plan.endTarget();
+    plan.startTarget(1);
+    final mid = plan.remaining()!;
+    expect(mid, lessThan(start));
+    plan.sent(4 * mb, 4 * mb);
+    plan.endTarget();
+    expect(plan.stalled, isFalse);
+  });
 }

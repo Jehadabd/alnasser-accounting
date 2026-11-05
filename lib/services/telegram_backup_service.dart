@@ -2,6 +2,7 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
@@ -12,6 +13,7 @@ import 'pdf_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'debt_report_service.dart'; // import DebtReportService
 import 'discord_backup_service.dart'; // 🆕 Discord Integration
+import 'upload_progress.dart'; // 📶 عدّ ما خرج إلى الشبكة
 import 'reports_service.dart';
 
 /// نتيجة عملية الإرسال مع تفاصيل الخطأ
@@ -157,9 +159,11 @@ class TelegramBackupService {
   }
 
   /// إرسال ملف إلى قناة Telegram مع تفاصيل الخطأ
+  /// [onSent]: ما خرج من الملف إلى الشبكة (للوقت المتبقي الحيّ) — اختياري.
   Future<TelegramSendResult> sendDocumentWithDetails({
     required File file,
     String? caption,
+    SentCallback? onSent,
   }) async {
     _lastError = null;
     
@@ -220,9 +224,11 @@ class TelegramBackupService {
       bodyParts.add(utf8.encode('--$boundary--\r\n'));
       
       // دمج كل الأجزاء
-      final body = bodyParts.expand((x) => x).toList();
+      final body = Uint8List.fromList(bodyParts.expand((x) => x).toList());
       request.contentLength = body.length;
-      request.add(body);
+      // أجزاء متتالية: العدّ يتبع ما قبله الاتصال فعلاً (لا ما وُضع في الذاكرة)
+      await request.addStream(countedChunks(body, onSent)).timeout(const Duration(minutes: 10),
+          onTimeout: () => throw Exception('توقف رفع الملف أكثر من 10 دقائق — تحقق من الإنترنت'));
       
       final response = await request.close().timeout(
         const Duration(seconds: 60),

@@ -29,6 +29,7 @@ import 'database_service.dart';
 import 'backup_space_planner.dart';
 import 'backup_files.dart';
 import 'backup_package.dart';
+import 'upload_progress.dart';
 
 /// 📦 معلومات النسخة الاحتياطية
 class BackupInfo {
@@ -600,17 +601,30 @@ class DropboxBackupService {
       '_${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}$extension';
 
   /// ☁️ رفع النسخة إلى Dropbox. يرمي DropboxException برسالة واضحة عند الفشل.
-  Future<void> _uploadToDropbox(File file, String remotePath) async {
+  Future<void> _uploadToDropbox(File file, String remotePath, {SentCallback? onSent}) async {
     final fileBytes = await file.readAsBytes();
     final commit = {'path': remotePath, 'mode': 'add', 'autorename': true, 'mute': false};
 
     if (fileBytes.length <= _singleUploadLimit) {
-      final r = await _authorizedPost(
-        '$_apiContentUrl/files/upload',
-        headers: {'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': _apiArg(commit)},
-        body: fileBytes,
-        timeout: _transferTimeout,
-      );
+      final headers = {'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': _apiArg(commit)};
+      // رفع بأجزاء متتالية يُبلغ بما خرج فعلاً (للوقت المتبقي الحيّ)؛ عند 401 يُجدَّد الرمز ويُعاد مرة
+      Future<http.Response> send(String t) => sendCounted(
+            http.StreamedRequest('POST', Uri.parse('$_apiContentUrl/files/upload'))
+              ..headers.addAll({'Authorization': 'Bearer $t', ...headers}),
+            fileBytes,
+            onSent,
+            timeout: _transferTimeout,
+          );
+      final token = await getAccessToken();
+      if (token == null || token.isEmpty) {
+        throw DropboxException('لم يتم الاتصال بـ Dropbox. يرجى تسجيل الدخول أولاً.');
+      }
+      var r = await send(token);
+      if (r.statusCode == 401) {
+        final fresh = await _refreshAccessToken();
+        if (fresh == null) throw DropboxException('انتهت صلاحية الاتصال بـ Dropbox — سجّل الدخول من جديد.');
+        r = await send(fresh);
+      }
       if (r.statusCode != 200) throw DropboxException(_describe(r));
       return;
     }
@@ -644,6 +658,7 @@ class DropboxBackupService {
       );
       if (r.statusCode != 200) throw DropboxException(_describe(r));
       offset += chunk.length;
+      onSent?.call(offset, fileBytes.length);
     }
 
     final last = fileBytes.sublist(offset);
@@ -782,6 +797,7 @@ class DropboxBackupService {
   Future<BackupResult> createAndUploadBackup({
     int? maxBackups,
     Function(int progress, String status)? onProgress,
+    SentCallback? onSent,
   }) async {
     if (AppNetworkMode.isClient) {
       return BackupResult(
@@ -866,7 +882,7 @@ class DropboxBackupService {
 
       // 4. رفع إلى Dropbox
       onProgress?.call(30, 'رفع النسخة إلى Dropbox...');
-      await _uploadToDropbox(localBackup, '$_backupFolder/$remoteName');
+      await _uploadToDropbox(localBackup, '$_backupFolder/$remoteName', onSent: onSent);
 
       // 5. الزائد عن عدد النسخ المحدد (بعد نجاح الرفع فقط)
       onProgress?.call(85, 'تنظيف النسخ القديمة...');

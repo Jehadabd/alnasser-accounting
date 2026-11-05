@@ -28,6 +28,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/backup_space_planner.dart';
 import '../services/backup_package.dart';
+import '../services/upload_progress.dart';
 import '../services/debt_report_service.dart';
 
 class DriveException implements Exception {
@@ -405,12 +406,18 @@ class GoogleDriveService {
 
   // ═════════════ Drive REST ═════════════
 
-  Future<http.Response> _api(String method, Uri uri, {Map<String, String>? headers, Object? body}) async {
+  Future<http.Response> _api(String method, Uri uri, {Map<String, String>? headers, Object? body, SentCallback? onSent}) async {
     final token = await _token();
-    final req = http.Request(method, uri)..headers.addAll({'Authorization': 'Bearer $token', ...?headers});
-    if (body is String) req.body = body;
-    if (body is List<int>) req.bodyBytes = body;
+    final h = {'Authorization': 'Bearer $token', ...?headers};
     try {
+      if (onSent != null && body is List<int>) {
+        // 📶 رفع بأجزاء يُبلغ بما خرج فعلاً (للوقت المتبقي الحيّ)
+        return await sendCounted(http.StreamedRequest(method, uri)..headers.addAll(h), body, onSent,
+            client: _http, timeout: const Duration(minutes: 5));
+      }
+      final req = http.Request(method, uri)..headers.addAll(h);
+      if (body is String) req.body = body;
+      if (body is List<int>) req.bodyBytes = body;
       return await http.Response.fromStream(await _http.send(req).timeout(const Duration(minutes: 5)));
     } on SocketException {
       throw DriveException('لا يوجد اتصال بالإنترنت');
@@ -451,7 +458,8 @@ class GoogleDriveService {
   }
 
   /// رفع (أو استبدال [replaceId]) ملف بطريقة الرفع القابل للاستئناف (يناسب الملفات الكبيرة)
-  Future<void> _upload(Uint8List bytes, String name, String mime, String folderId, {String? replaceId}) async {
+  Future<void> _upload(Uint8List bytes, String name, String mime, String folderId,
+      {String? replaceId, SentCallback? onSent}) async {
     final init = await _api(
       replaceId == null ? 'POST' : 'PATCH',
       Uri.https('www.googleapis.com', '/upload/drive/v3/files${replaceId == null ? '' : '/$replaceId'}', {'uploadType': 'resumable'}),
@@ -466,7 +474,7 @@ class GoogleDriveService {
     if (init.statusCode != 200 || location == null) {
       throw DriveException('رفضت Drive بدء الرفع (${init.statusCode}): ${_short(init.body)}');
     }
-    final put = await _api('PUT', Uri.parse(location), headers: {'Content-Type': mime}, body: bytes);
+    final put = await _api('PUT', Uri.parse(location), headers: {'Content-Type': mime}, body: bytes, onSent: onSent);
     if (put.statusCode != 200 && put.statusCode != 201) {
       throw DriveException('فشل الرفع (${put.statusCode}): ${_short(put.body)}');
     }
@@ -510,18 +518,18 @@ class GoogleDriveService {
 
   /// يرفع قاعدة البيانات مضغوطة إلى «<المجلد الرئيسي>/<اسم الجهاز>». الأقدم يُحذف عند
   /// تجاوز العدد المحدد (بعد الرفع) أو عند امتلاء المساحة (قبله) — لنسخ هذا الجهاز فقط.
-  Future<String> uploadDatabase({void Function(String step)? onStep}) async {
+  Future<String> uploadDatabase({void Function(String step)? onStep, SentCallback? onSent}) async {
     onStep?.call('تجهيز نسخة من قاعدة البيانات (ضغط وتحقق)...');
     // الحزمة الموحّدة: الملف نفسه المرفوع لتيليجرام وDropbox (لقطة + فحص سلامة + XZ متحقق منه)
     final got = await BackupPackage.obtain();
     try {
-      return await _uploadPackage(got.pkg, onStep);
+      return await _uploadPackage(got.pkg, onStep, onSent);
     } finally {
       if (got.owned) await got.pkg.dispose();
     }
   }
 
-  Future<String> _uploadPackage(BackupPackage pkg, void Function(String step)? onStep) async {
+  Future<String> _uploadPackage(BackupPackage pkg, void Function(String step)? onStep, SentCallback? onSent) async {
     final zip = await pkg.file.readAsBytes();
     onStep?.call('الاتصال بـ Google Drive...');
     final root = await _rootFolder();
@@ -553,7 +561,7 @@ class GoogleDriveService {
     }
 
     onStep?.call('رفع ${(zip.length / 1048576).toStringAsFixed(1)} ميجا...');
-    await _upload(zip, name, pkg.mimeType, folder);
+    await _upload(zip, name, pkg.mimeType, folder, onSent: onSent);
 
     if (plan.afterUpload.isNotEmpty) onStep?.call('حذف النسخ الأقدم...');
     for (final b in plan.afterUpload) {

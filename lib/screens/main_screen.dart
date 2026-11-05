@@ -295,6 +295,7 @@ class _MainScreenState extends State<MainScreen> {
     final currentTarget = ValueNotifier<String?>(null);
     final targetResults = ValueNotifier<Map<String, int>>(const {});
     final etaEnd = ValueNotifier<DateTime?>(null); // ⏱️ موعد الانتهاء المتوقع (عدّ تنازلي)
+    final etaStalled = ValueNotifier<bool>(false); // الرفع لا يتقدّم (انقطاع/بطء شديد)
     bool uploadSucceeded = false;
 
     // جلب وقت آخر رفع
@@ -322,12 +323,11 @@ class _MainScreenState extends State<MainScreen> {
         // 📦 حزمة واحدة (لقطة + فحص سلامة + XZ متحقق منه) تُصنع عند أول وجهة وتُرسل نفسها للكل
         BackupPackage.beginSession();
 
-        // ⏱️ التقدير: الضغط (مرة) + كل وجهة + الفواتير المنتظرة — من قياس الرفعات السابقة
-        final buildCountAtStart = BackupPackage.buildCount;
+        // ⏱️ الوقت المتبقي: الجاري يُقاس حيّاً (ما خرج فعلاً إلى الشبكة كل ثانية)، والباقي
+        //    بسرعة الإنترنت المقيسة الآن — أو من الرفعات السابقة قبل أن يبدأ أول رفع.
         final eta = await UploadEta.load();
         final dbBytes = await UploadEta.databaseBytes();
         final withTelegram = targets.contains(UploadTargets.telegram);
-        var compEst = eta.estimateCompressed(dbBytes);
         var pendingInvoices = 0;
         if (withTelegram && lastUploadTime != null &&
             !(appSet.telegramRegularInvoicesMode == 'off' && appSet.telegramPosInvoicesMode == 'off')) {
@@ -335,17 +335,31 @@ class _MainScreenState extends State<MainScreen> {
             pendingInvoices = await TelegramInvoiceExportService().countPendingSince(lastUploadTime);
           } catch (_) {}
         }
-        // يعيد ضبط موعد الانتهاء: ما بقي من الوجهات ابتداءً من [from] + [extraMs]
-        void reanchor(int from, {int extraMs = 0}) {
-          var ms = extraMs;
-          if (BackupPackage.buildCount == buildCountAtStart) ms += eta.estimateBuildMs(dbBytes);
-          for (var j = from; j < targets.length; j++) {
-            ms += eta.estimateTargetMs(targets[j], compEst, withTelegram: withTelegram);
-            if (targets[j] == UploadTargets.telegram) ms += eta.estimateInvoicesMs(pendingInvoices);
+        final plan = UploadPlan(
+          eta: eta,
+          targets: targets,
+          dbBytes: dbBytes,
+          withTelegram: withTelegram,
+          pendingInvoices: pendingInvoices,
+        );
+        BackupPackage.buildListener = plan.buildProgress;
+        void showRemaining() {
+          final r = plan.remaining();
+          etaStalled.value = r == null;
+          if (r == null) return;
+          final prev = etaEnd.value;
+          final rawEnd = DateTime.now().add(r);
+          if (prev == null) {
+            etaEnd.value = rawEnd;
+            return;
           }
-          etaEnd.value = DateTime.now().add(Duration(milliseconds: ms));
+          // عدّ تنازلي ثابت: فرق صغير يُترك (لا قفز كل ثانية)، والفرق الحقيقي (بطء/انقطاع/تسارع) يُعتمد فوراً
+          final prevLeft = prev.difference(DateTime.now()).inMilliseconds;
+          final diff = (r.inMilliseconds - prevLeft).abs();
+          if (diff > 3000 && diff > prevLeft.abs() * 0.12) etaEnd.value = rawEnd;
         }
-        reanchor(0);
+        showRemaining();
+        final etaTicker = Timer.periodic(const Duration(seconds: 1), (_) => showRemaining());
 
         try {
         for (var ti = 0; ti < targets.length; ti++) {
@@ -357,6 +371,15 @@ class _MainScreenState extends State<MainScreen> {
           final targetWatch = Stopwatch()..start();
           final builtBefore = BackupPackage.buildCount;
           var invoicesMs = 0;
+          plan.startTarget(ti);
+          // 📶 زمن خروج الملف نفسه إلى هذه الوجهة (لتعلّم سرعة الإنترنت إليها)
+          DateTime? netStartedAt;
+          var netMs = 0;
+          void onSent(int sent, int total) {
+            netStartedAt ??= DateTime.now();
+            if (total > 0 && sent >= total) netMs = DateTime.now().difference(netStartedAt!).inMilliseconds;
+            plan.sent(sent, total);
+          }
           try {
           if (target == UploadTargets.telegram) {
                 // 1) رفع قاعدة البيانات إلى Telegram (محلي + تيليجرام فقط)
@@ -367,6 +390,7 @@ class _MainScreenState extends State<MainScreen> {
                     onProgress: (p) {
                       progressNotifier.value = p * 0.5; // 50% للرفع الأساسي
                     },
+                    onSent: onSent,
                   ));
                 } catch (e) {
                   errors.add('$e'.replaceFirst('Exception: ', ''));
@@ -405,7 +429,7 @@ class _MainScreenState extends State<MainScreen> {
                           n = await exporter.countPendingSince(exportAfterDate);
                         } catch (_) {}
                       }
-                      reanchor(ti + 1, extraMs: eta.estimateInvoicesMs(n) + 2000);
+                      plan.invoicesKnown(n);
                     }
                   }
 
@@ -419,6 +443,7 @@ class _MainScreenState extends State<MainScreen> {
                       afterDate: exportAfterDate,
                       onProgress: (current, total, status) {
                         if (total > 0) {
+                          plan.invoicesProgress(current, total);
                           progressNotifier.value = 0.5 + (current / total) * 0.40;
                           statusNotifier.value = status;
                         }
@@ -464,6 +489,7 @@ class _MainScreenState extends State<MainScreen> {
                     onProgress: (p, s) {
                       progressNotifier.value = 0.90 + (p / 1000); // 0.90 - 0.95
                     },
+                    onSent: onSent,
                   );
           
                   if (dropboxResult.success) {
@@ -490,6 +516,7 @@ class _MainScreenState extends State<MainScreen> {
                     errors.add('Discord: قاعدة البيانات المضغوطة (${(len / 1048576).toStringAsFixed(1)} ميغا) أكبر من حد ديسكورد (10 ميغا)');
                   } else {
                     final ok = await discord.sendDocument(
+                        onSent: onSent,
                         file: pkg.file, caption: '💾 قاعدة البيانات (${pkg.format}) — ${DateFormat('yyyy/MM/dd HH:mm').format(pkg.createdAt)}');
                     if (!ok) errors.add('Discord: فشل إرسال قاعدة البيانات');
                   }
@@ -514,7 +541,7 @@ class _MainScreenState extends State<MainScreen> {
             } else {
               try {
                 statusNotifier.value = 'جاري رفع قاعدة البيانات إلى Google Drive...';
-                await drive.uploadDatabase(onStep: (s) => statusNotifier.value = 'Google Drive: $s');
+                await drive.uploadDatabase(onStep: (s) => statusNotifier.value = 'Google Drive: $s', onSent: onSent);
                 statusNotifier.value = 'جاري رفع سجل الديون إلى Google Drive...';
                 await drive.uploadDebtsPdf(onStep: (s) => statusNotifier.value = 'Google Drive: $s');
               } catch (e) {
@@ -532,21 +559,24 @@ class _MainScreenState extends State<MainScreen> {
             var buildMs = 0;
             if (BackupPackage.buildCount != builtBefore) {
               buildMs = BackupPackage.lastBuildMs;
-              compEst = BackupPackage.lastCompressedBytes;
-              eta.recordBuild(dbBytes: dbBytes, ms: buildMs, compressed: compEst);
+              plan.buildFinished(BackupPackage.lastCompressedBytes);
+              eta.recordBuild(dbBytes: dbBytes, ms: buildMs, compressed: plan.compressed);
             }
             if (ok) {
               eta.recordTarget(target,
                   ms: (targetWatch.elapsedMilliseconds - buildMs - invoicesMs).clamp(0, 1 << 31).toInt(),
-                  compressed: compEst,
-                  withTelegram: withTelegram);
+                  compressed: plan.compressed,
+                  withTelegram: withTelegram,
+                  netMs: netMs > 0 ? netMs : null);
             }
-            if (target == UploadTargets.telegram) pendingInvoices = 0;
-            reanchor(ti + 1);
+            plan.endTarget();
+            showRemaining();
           }
         }
         await eta.save();
         } finally {
+          etaTicker.cancel();
+          BackupPackage.buildListener = null;
           BackupPackage.endSession();
         }
         currentTarget.value = null;
@@ -586,6 +616,7 @@ class _MainScreenState extends State<MainScreen> {
         current: currentTarget,
         results: targetResults,
         etaEnd: etaEnd,
+        stalled: etaStalled,
       ),
     );
 

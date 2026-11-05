@@ -16,6 +16,7 @@ const _blue = Color(0xFF2563EB);
 const _green = Color(0xFF047857);
 const _red = Color(0xFFB91C1C);
 const _muted = Color(0xFF64748B);
+const _amber = Color(0xFFB45309);
 const _text = Color(0xFF1E293B);
 
 const _targetIcons = {
@@ -40,6 +41,7 @@ class UploadProgressDialog extends StatefulWidget {
     required this.current,
     required this.results,
     this.etaEnd,
+    this.stalled,
   });
 
   final ValueNotifier<double> progress;
@@ -52,6 +54,9 @@ class UploadProgressDialog extends StatefulWidget {
 
   /// ⏱️ موعد الانتهاء المتوقع (يُعاد ضبطه بعد كل وجهة). null = لم يُحسب بعد.
   final ValueNotifier<DateTime?>? etaEnd;
+
+  /// الرفع لا يتقدّم الآن (انقطاع الإنترنت أو بطء شديد) — لا يُعرض رقم مضلِّل.
+  final ValueNotifier<bool>? stalled;
 
   @override
   State<UploadProgressDialog> createState() => _UploadProgressDialogState();
@@ -89,12 +94,17 @@ class _UploadProgressDialogState extends State<UploadProgressDialog> with Single
   Widget _eta() {
     final n = widget.etaEnd;
     if (n == null) return const SizedBox.shrink();
-    return ValueListenableBuilder<DateTime?>(
-      valueListenable: n,
-      builder: (_, end, __) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([n, if (widget.stalled != null) widget.stalled!]),
+      builder: (_, __) {
+        final end = n.value;
+        final isStalled = widget.stalled?.value ?? false;
         final String text;
         final IconData icon;
-        if (end == null) {
+        if (isStalled) {
+          text = 'الرفع متوقف — بانتظار الإنترنت...';
+          icon = Icons.wifi_off_rounded;
+        } else if (end == null) {
           text = 'حساب الوقت المتوقع...';
           icon = Icons.hourglass_top_rounded;
         } else {
@@ -108,27 +118,28 @@ class _UploadProgressDialogState extends State<UploadProgressDialog> with Single
           }
         }
         return Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
             decoration: BoxDecoration(
-              color: _blue.withValues(alpha: 0.08),
+              color: (isStalled ? _amber : _blue).withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _blue.withValues(alpha: 0.25)),
+              border: Border.all(color: (isStalled ? _amber : _blue).withValues(alpha: 0.3)),
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(icon, size: 17, color: _blue),
+              Icon(icon, size: 17, color: isStalled ? _amber : _blue),
               const SizedBox(width: 6),
               Text(text,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.w800,
-                    color: _navy,
-                    fontFeatures: [FontFeature.tabularFigures()],
+                    color: isStalled ? _amber : _navy,
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   )),
             ]),
           ),
           const SizedBox(height: 4),
-          const Text('تقدير حسب حجم البيانات وسرعة الإنترنت في الرفعات السابقة',
+          const Text('يُحسب كل ثانية من حجم ما بقي وسرعة الرفع الفعلية الآن',
               style: TextStyle(fontSize: 11, color: _muted)),
         ]);
       },
