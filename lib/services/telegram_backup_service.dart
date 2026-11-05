@@ -128,16 +128,33 @@ class TelegramBackupService {
      return token.isNotEmpty && channel.isNotEmpty;
   }
   
-  /// الحصول على معلومات التشخيص
+  /// الحصول على معلومات التشخيص (التوكن الفعلي المستعمل: إعدادات المستخدم أولاً)
   Future<Map<String, dynamic>> getDiagnostics() async {
+    final settings = await SettingsManager.getAppSettings();
+    final userToken = (settings.telegramBotToken ?? '').isNotEmpty;
     return {
-      'botTokenConfigured': _botToken.isNotEmpty,
-      'botTokenSource': dotenv.env['TELEGRAM_BOT_TOKEN']?.isNotEmpty == true ? '.env' : 'fallback',
-      'channelIdElectric': 'deprecated',
-      'channelIdHealth': 'deprecated',
+      'botTokenConfigured': (await _getBotToken()).isNotEmpty,
+      'botTokenSource': userToken ? 'settings' : (dotenv.env['TELEGRAM_BOT_TOKEN']?.isNotEmpty == true ? '.env' : 'none'),
       'activeChannelId': await _getChannelId(),
+      'monthlySummary': await monthlySummaryEnabled(),
       'lastError': _lastError,
     };
+  }
+
+  /// 📊 إرسال الملخص الشهري مع زر «رفع البيانات» (إعداد هذا الجهاز، افتراضياً مفعّل كما كان).
+  static const _kMonthlySummary = 'telegram_send_monthly_summary';
+  static Future<bool> monthlySummaryEnabled() async {
+    try {
+      return (await SharedPreferences.getInstance()).getBool(_kMonthlySummary) ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static Future<void> setMonthlySummaryEnabled(bool v) async {
+    try {
+      await (await SharedPreferences.getInstance()).setBool(_kMonthlySummary, v);
+    } catch (_) {}
   }
 
   /// إرسال ملف إلى قناة Telegram مع تفاصيل الخطأ

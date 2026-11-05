@@ -34,6 +34,7 @@ class PdfService {
 
     pdf.addPage(
       pw.MultiPage(
+        maxPages: 100000, // الافتراضي 20 صفحة فقط
         pageTheme: pw.PageTheme(
           pageFormat: PdfPageFormat.a4,
           theme: pw.ThemeData.withFont(
@@ -875,6 +876,7 @@ class PdfService {
 
     pdf.addPage(
       pw.MultiPage(
+        maxPages: 100000, // كشف عميل بحركات كثيرة قد يتجاوز 20 صفحة (الافتراضي)
         pageTheme: pw.PageTheme(
           pageFormat: PdfPageFormat.a4,
           theme: pw.ThemeData.withFont(base: ttf, bold: ttf),

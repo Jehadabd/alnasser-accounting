@@ -36,6 +36,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   String? _account;
   String? _listError;
   DropboxSpace? _space; // 💾 مساحة الحساب
+  (bool ok, String msg)? _perm; // 🩺 نتيجة فحص الأذونات
+  bool _checkingPerm = false;
 
   bool _firstLoad = true;
   bool _refreshing = false;
@@ -311,6 +313,10 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
           child: SetBanner(_lastResult!.$2, kind: _lastResult!.$1 ? SetBannerKind.ok : SetBannerKind.error),
         ),
       if (!connected) _authCard() else ...[
+        if ((_listError ?? '').contains(DropboxBackupService.missingScopeMarker) || (_perm != null && !_perm!.$1))
+          _permissionsCard(open: true)
+        else
+          _permissionsCard(open: false),
         _backupCard(),
         _settingsCard(),
         _listCard(),
@@ -364,6 +370,70 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
         text: _account ?? 'احفظ نسخة من قاعدة بياناتك في حسابك على Dropbox، مع حذف النسخ الأقدم تلقائياً.',
         status: _statusPills(),
       );
+
+  Future<void> _checkPermissions() async {
+    setState(() => _checkingPerm = true);
+    final problem = await _backupService.checkPermissions();
+    if (!mounted) return;
+    setState(() {
+      _checkingPerm = false;
+      _perm = problem == null ? (true, 'الأذونات سليمة — القراءة من Dropbox تعمل.') : (false, problem);
+    });
+  }
+
+  /// 🩺 أذونات تطبيق Dropbox: فحص بضغطة، وشرح إصلاحها بالروابط.
+  Widget _permissionsCard({required bool open}) {
+    return SetCard(
+      title: 'أذونات Dropbox',
+      subtitle: open ? 'ينقص تطبيق Dropbox إذن — الإصلاح أدناه' : 'إن فشل الرفع رغم وجود الإنترنت فافحصها',
+      icon: Icons.verified_user_rounded,
+      color: open ? kSetOrange : _dbx,
+      trailing: TextButton.icon(
+        onPressed: _busy || _checkingPerm ? null : _checkPermissions,
+        icon: _checkingPerm
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.health_and_safety_rounded, size: 18),
+        label: const Text('فحص الأذونات'),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (_perm != null) ...[
+          const SizedBox(height: 10),
+          SetBanner(_perm!.$2, kind: _perm!.$1 ? SetBannerKind.ok : SetBannerKind.error),
+        ],
+        GuideToggle(
+          label: 'كيف أصلح أذونات Dropbox؟ (مرة واحدة)',
+          color: _dbx,
+          initiallyOpen: open,
+          child: SetupGuide(color: _dbx, steps: [
+            const GuideStep(
+              'افتح صفحة تطبيقات Dropbox بنفس الحساب الذي أنشأ تطبيق البرنامج (StoreApp)، واضغط على اسم التطبيق.',
+              links: [GuideLink('افتح App Console', DropboxBackupService.appConsoleUrl, icon: Icons.open_in_new_rounded)],
+            ),
+            const GuideStep('افتح تبويب «Permissions / الأذونات» في أعلى الصفحة.'),
+            const GuideStep(
+              'ضع علامة ✔ أمام هذه الأذونات الخمسة (ابحث عنها في الصفحة):',
+              copies: DropboxBackupService.requiredScopes,
+            ),
+            const GuideStep('اضغط «Submit» أسفل الصفحة لحفظ الأذونات.'),
+            GuideStep(
+              'ارجع هنا واضغط «قطع الاتصال» (أيقونة الخروج أعلى الشاشة)، ثم «فتح صفحة Dropbox» واربط من جديد — '
+              'الربط القديم لا يأخذ الأذونات الجديدة.',
+              note: 'إن لم يكن تطبيق Dropbox باسمك فاطلب من صاحبه تفعيل الأذونات.',
+              warn: true,
+              extra: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _logout,
+                  icon: const Icon(Icons.logout_rounded, size: 18),
+                  label: const Text('قطع الاتصال الآن'),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
 
   Widget _authCard() {
     return SetCard(

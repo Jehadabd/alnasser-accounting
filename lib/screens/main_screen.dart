@@ -309,6 +309,7 @@ class _MainScreenState extends State<MainScreen> {
       try {
         // متغير لتتبع نجاح إرسال الفواتير لتيليجرام
         bool allInvoicesSentSuccessfully = true;
+        bool invoicesSent = false; // أُرسلت الفواتير فعلاً في هذا الرفع (لحفظ وقت آخر رفع)
         List<String> errors = [];
         
         // ☁️ الوجهات المفعّلة بالترتيب المختار في الإعدادات ← النسخ الاحتياطي
@@ -343,8 +344,10 @@ class _MainScreenState extends State<MainScreen> {
                 if (isConfigured) {
                   DateTime? exportAfterDate = lastUploadTime;
           
+                  // طريقتا رفع الفواتير «لا ترفع» ⇒ لا فواتير ولا سؤال
+                  final noInvoices = appSet.telegramRegularInvoicesMode == 'off' && appSet.telegramPosInvoicesMode == 'off';
                   // إذا كان الرفع للمرة الأولى، نسأل المستخدم عن المدى الزمني
-                  if (exportAfterDate == null) {
+                  if (exportAfterDate == null && !noInvoices) {
                     statusNotifier.value = 'بانتظار اختيار مدى الفواتير...';
             
                     // الخيارات المتاحة للمستخدم
@@ -388,7 +391,7 @@ class _MainScreenState extends State<MainScreen> {
                     }
                   }
 
-                  if (exportAfterDate != null) {
+                  if (exportAfterDate != null && !noInvoices) {
                     statusNotifier.value = 'جاري إرسال الفواتير...';
                     final exportService = TelegramInvoiceExportService();
                     final exportResult = await exportService.exportAndSendNewInvoices(
@@ -401,6 +404,7 @@ class _MainScreenState extends State<MainScreen> {
                       },
                     );
             
+                    invoicesSent = true;
                     // التحقق من نجاح إرسال جميع الفواتير
                     if (exportResult.failedCount > 0) {
                       allInvoicesSentSuccessfully = false;
@@ -411,8 +415,8 @@ class _MainScreenState extends State<MainScreen> {
                   errors.add('إعدادات Telegram غير مكتملة');
                 }
 
-                // 3) إرسال الملخص الشهري إلى Telegram
-                if (await telegramService.isConfigured) {
+                // 3) إرسال الملخص الشهري إلى Telegram (إن فُعّل في إعدادات تيليجرام)
+                if (await telegramService.isConfigured && await TelegramBackupService.monthlySummaryEnabled()) {
                   statusNotifier.value = 'جاري إرسال الملخص الشهري...';
                   progressNotifier.value = 0.85;
                   final summaryResult = await telegramService.sendMonthlySummaryWithDetails();
@@ -507,8 +511,9 @@ class _MainScreenState extends State<MainScreen> {
         currentTarget.value = null;
         TelegramBackupService.mirrorToDiscord = true;
 
-        // 5) حفظ وقت الرفع الحالي فقط إذا نجح إرسال جميع الفواتير
-        if (allInvoicesSentSuccessfully && errors.isEmpty && targets.contains(UploadTargets.telegram)) {
+        // 5) حفظ وقت آخر رفع للفواتير إذا أُرسلت كلها — بغض النظر عن أخطاء وجهات أخرى
+        //    (كان خطأ Dropbox أو تقرير PDF يمنع الحفظ فيعود سؤال «مدى الفواتير» كل مرة)
+        if (invoicesSent && allInvoicesSentSuccessfully) {
           await telegramService.saveLastUploadTime();
         }
         

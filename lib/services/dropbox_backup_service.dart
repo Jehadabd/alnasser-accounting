@@ -255,6 +255,20 @@ class DropboxBackupService {
     }
   }
 
+  /// 🩺 فحص الأذونات بلا رفع: يجرّب القراءة (قائمة النسخ). null = سليم، وإلا سبب المشكلة.
+  Future<String?> checkPermissions() async {
+    try {
+      await _fetchRemoteBackups();
+      return null;
+    } on DropboxException catch (e) {
+      return e.message;
+    } on SocketException catch (e) {
+      return 'تعذّر الوصول إلى Dropbox: ${e.message}';
+    } catch (e) {
+      return '$e';
+    }
+  }
+
   /// 💾 مساحة الحساب: المستعمل والكلي. null إن تعذّر السؤال (لا يمنع الرفع).
   Future<DropboxSpace?> getSpaceUsage() async {
     try {
@@ -495,16 +509,44 @@ class DropboxBackupService {
     return sb.toString();
   }
 
+  /// صفحة إعدادات تطبيقات Dropbox (لتفعيل الأذونات).
+  static const appConsoleUrl = 'https://www.dropbox.com/developers/apps';
+
+  /// الأذونات التي يحتاجها البرنامج في تبويب «Permissions».
+  static const requiredScopes = [
+    'account_info.read',
+    'files.metadata.read',
+    'files.metadata.write',
+    'files.content.read',
+    'files.content.write',
+  ];
+
+  /// رسالة «إذن ناقص» — يعرّف بها البرنامج هذا الخطأ تحديداً.
+  static const missingScopeMarker = 'ينقص تطبيق Dropbox إذن';
+
   static String _describe(http.Response r) {
     String summary = '';
+    String raw = '';
     try {
-      summary = (json.decode(utf8.decode(r.bodyBytes))['error_summary'] ?? '').toString();
+      raw = utf8.decode(r.bodyBytes, allowMalformed: true).trim();
     } catch (_) {}
+    try {
+      summary = (json.decode(raw)['error_summary'] ?? '').toString();
+    } catch (_) {}
+    // Dropbox يرد بنص عادي (لا JSON) حين ينقص تطبيقَه إذنٌ في App Console:
+    // «... does not have the required scope 'files.metadata.read' ...»
+    final scope = RegExp(r"required scope '([a-z_.]+)'").firstMatch(raw)?.group(1) ??
+        (summary.contains('missing_scope') ? 'files.content.write' : null);
+    if (scope != null) {
+      return '$missingScopeMarker «$scope». افتح إعدادات تطبيق Dropbox (App Console) ← Permissions، '
+          'وفعّل: ${requiredScopes.join('، ')} ثم «Submit»، ثم اقطع الاتصال في البرنامج واربطه من جديد.';
+    }
     if (summary.contains('insufficient_space')) return 'لا توجد مساحة كافية في حساب Dropbox.';
     if (summary.contains('too_many_write_operations')) return 'Dropbox مشغول الآن — أعد المحاولة بعد قليل.';
     if (r.statusCode == 401) return 'انتهت صلاحية الاتصال بـ Dropbox — سجّل الدخول من جديد.';
     if (r.statusCode == 429) return 'طلبات كثيرة على Dropbox — أعد المحاولة بعد قليل.';
-    return 'رفض Dropbox الطلب (${r.statusCode})${summary.isEmpty ? '' : ': $summary'}';
+    final detail = summary.isNotEmpty ? summary : (raw.length > 200 ? '${raw.substring(0, 200)}…' : raw);
+    return 'رفض Dropbox الطلب (${r.statusCode})${detail.isEmpty ? '' : ': $detail'}';
   }
 
   /// 📋 جلب قائمة النسخ من Dropbox. يرمي DropboxException عند الفشل
@@ -598,6 +640,10 @@ class DropboxBackupService {
       try {
         existing = await _fetchRemoteBackups();
         listed = true;
+      } on DropboxException catch (e) {
+        // إذن ناقص: الرفع سيُرفض أيضاً (ويقطع Dropbox الاتصال فيبدو «لا إنترنت») ⇒ نتوقف بالسبب الحقيقي
+        if (e.message.startsWith(missingScopeMarker)) return BackupResult(success: false, error: e.message);
+        debugPrint('⚠️ Dropbox: تعذّرت قائمة النسخ — رفع بلا حذف: ${e.message}');
       } catch (e) {
         debugPrint('⚠️ Dropbox: تعذّرت قائمة النسخ — رفع بلا حذف: $e');
       }
@@ -652,8 +698,13 @@ class DropboxBackupService {
       );
     } on DropboxException catch (e) {
       return BackupResult(success: false, error: e.message);
-    } on SocketException {
-      return BackupResult(success: false, error: 'لا يوجد اتصال بالإنترنت.');
+    } on SocketException catch (e) {
+      // ليس دائماً «لا إنترنت»: Dropbox يقطع الاتصال أثناء الرفع حين يرفض الطلب (مثل إذن ناقص)
+      return BackupResult(
+        success: false,
+        error: 'انقطع الاتصال بـ Dropbox أثناء الرفع (${e.message}${e.osError == null ? '' : ' — ${e.osError!.message}'}). '
+            'إن كان الإنترنت يعمل فالسبب غالباً إذن ناقص في تطبيق Dropbox: افتح إعدادات Dropbox في البرنامج واضغط «فحص الأذونات».',
+      );
     } catch (e) {
       return BackupResult(
         success: false,

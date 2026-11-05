@@ -43,6 +43,8 @@ class DebtReportService {
 
     pdf.addPage(
       pw.MultiPage(
+        // الافتراضي 20 صفحة فقط — كان التقرير يفشل (TooManyPagesException) مع عملاء كثيرين
+        maxPages: 100000,
         pageFormat: PdfPageFormat.a4,
         theme: pw.ThemeData.withFont(
           base: ttf,

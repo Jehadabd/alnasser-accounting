@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/auth_service.dart';
 import '../services/settings_manager.dart';
+import '../services/telegram_backup_service.dart';
 import '../services/telegram_invoice_export_service.dart';
 import '../widgets/owner_summary_card.dart'; // 📊 ملخص المالك اليومي
 import '../widgets/settings_kit.dart';
@@ -26,6 +27,7 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
   bool _backupAccountStatementsPdf = true;
   bool _reportOnlyLocalInvoices = false;
   bool _reportDetailedDivided = false;
+  bool _monthlySummary = true;
 
   // 📤 ما يُرفع إلى تيليجرام مع زر «رفع البيانات» (يُحفظ فور تغييره)
   String _regularMode = 'each'; // each / combined / off
@@ -54,6 +56,7 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
     final settings = await SettingsManager.getAppSettings();
     final onlyLocal = await SettingsManager.isReportOnlyLocalInvoices();
     final detailed = await SettingsManager.isReportDetailedDivided();
+    final summary = await TelegramBackupService.monthlySummaryEnabled();
     
     if (!mounted) return;
     setState(() {
@@ -64,6 +67,7 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
       _backupAccountStatementsPdf = settings.backupAccountStatementsPdf;
       _reportOnlyLocalInvoices = onlyLocal;
       _reportDetailedDivided = detailed;
+      _monthlySummary = summary;
       _regularMode = settings.telegramRegularInvoicesMode;
       _posMode = settings.telegramPosInvoicesMode;
       _resendEdited = settings.telegramResendEdited;
@@ -302,6 +306,31 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
         ),
       ]),
     );
+  }
+
+  /// يحفظ خيارات «محتوى النسخ والتقارير» فور تغييرها (كانت تنتظر زر الحفظ فتبدو كأنها لا تعمل).
+  Future<void> _saveContent({bool? debtPdf, bool? statementsPdf, bool? onlyLocal, bool? detailed, bool? summary}) async {
+    setState(() {
+      _backupDebtRecordsPdf = debtPdf ?? _backupDebtRecordsPdf;
+      _backupAccountStatementsPdf = statementsPdf ?? _backupAccountStatementsPdf;
+      _reportOnlyLocalInvoices = onlyLocal ?? _reportOnlyLocalInvoices;
+      _reportDetailedDivided = detailed ?? _reportDetailedDivided;
+      _monthlySummary = summary ?? _monthlySummary;
+    });
+    try {
+      if (debtPdf != null || statementsPdf != null) {
+        await SettingsManager.saveAppSettings((await SettingsManager.getAppSettings()).copyWith(
+          backupDebtRecordsPdf: _backupDebtRecordsPdf,
+          backupAccountStatementsPdf: _backupAccountStatementsPdf,
+        ));
+      }
+      if (onlyLocal != null) await SettingsManager.setReportOnlyLocalInvoices(onlyLocal);
+      if (detailed != null) await SettingsManager.setReportDetailedDivided(detailed);
+      if (summary != null) await TelegramBackupService.setMonthlySummaryEnabled(summary);
+      if (mounted) _showSnackBar('حُفظ');
+    } catch (e) {
+      _showSnackBar('تعذّر الحفظ: $e', isError: true);
+    }
   }
 
   static Map<String, dynamic>? _map(Object? o) => o is Map ? o.cast<String, dynamic>() : null;
@@ -666,7 +695,7 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
               // 3) المحتوى
               SetCard(
                 title: 'محتوى النسخ والتقارير',
-                subtitle: 'ما يُرفق مع كل نسخة احتياطية',
+                subtitle: 'ما يُرسل مع كل رفع — يُحفظ فور التغيير',
                 icon: Icons.inventory_2_outlined,
                 color: _tg,
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -677,7 +706,7 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                     icon: Icons.receipt_long_rounded,
                     color: _tg,
                     value: _backupDebtRecordsPdf,
-                    onChanged: (v) => setState(() => _backupDebtRecordsPdf = v),
+                    onChanged: (v) => _saveContent(debtPdf: v),
                   ),
                   const Divider(height: 1),
                   SetSwitch(
@@ -686,25 +715,34 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                     icon: Icons.description_outlined,
                     color: _tg,
                     value: _backupAccountStatementsPdf,
-                    onChanged: (v) => setState(() => _backupAccountStatementsPdf = v),
+                    onChanged: (v) => _saveContent(statementsPdf: v),
                   ),
                   const Divider(height: 1),
                   SetSwitch(
-                    title: 'إحصائيات فواتير هذا الجهاز فقط',
-                    subtitle: 'استثناء الفواتير المزامَنة من حواسيب أخرى من التقارير',
+                    title: 'إرسال الملخص الشهري',
+                    subtitle: 'رسالة بمبيعات الشهر وأرباحه مع كل رفع',
+                    icon: Icons.summarize_rounded,
+                    color: _tg,
+                    value: _monthlySummary,
+                    onChanged: (v) => _saveContent(summary: v),
+                  ),
+                  const Divider(height: 1),
+                  SetSwitch(
+                    title: 'الملخص: فواتير هذا الجهاز فقط',
+                    subtitle: 'استثناء الفواتير المزامَنة من حواسيب أخرى من الملخص الشهري',
                     icon: Icons.computer_rounded,
                     color: _tg,
                     value: _reportOnlyLocalInvoices,
-                    onChanged: (v) => setState(() => _reportOnlyLocalInvoices = v),
+                    onChanged: _monthlySummary ? (v) => _saveContent(onlyLocal: v) : null,
                   ),
                   const Divider(height: 1),
                   SetSwitch(
-                    title: 'تقرير مفصّل ومقسّم',
-                    subtitle: 'تقرير لكل قسم بدلاً من إجمالي واحد',
+                    title: 'الملخص: مفصّل حسب الأقسام',
+                    subtitle: 'يضيف إلى الملخص الشهري مبيعات كل قسم',
                     icon: Icons.segment_rounded,
                     color: _tg,
                     value: _reportDetailedDivided,
-                    onChanged: (v) => setState(() => _reportDetailedDivided = v),
+                    onChanged: _monthlySummary ? (v) => _saveContent(detailed: v) : null,
                   ),
                 ]),
               ),

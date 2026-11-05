@@ -520,12 +520,17 @@ class AppProvider with ChangeNotifier {
               '${sent.errorDetails != null && sent.errorDetails!.isNotEmpty ? ' — ${sent.errorDetails}' : ''}');
         }
 
-        // 4) تقارير PDF (تقرير الديون وكشوفات الحسابات) — فشلها لا يلغي رفع القاعدة لكنه يُبلَّغ
+        // 4) تقارير PDF — فقط ما فُعّل في إعدادات تيليجرام («محتوى النسخ والتقارير»).
+        //    كانت تُرسل دائماً متجاهلةً الإعداد. فشلها لا يلغي رفع القاعدة لكنه يُبلَّغ.
         onProgress?.call(0.75);
-        final debtPdf = await telegramService.backupDebtRecordsPdf();
-        if (debtPdf != null) problems.add(debtPdf);
-        final statementsPdf = await telegramService.backupAccountStatementsPdf();
-        if (statementsPdf != null) problems.add(statementsPdf);
+        if (settings.backupDebtRecordsPdf) {
+          final debtPdf = await telegramService.backupDebtRecordsPdf();
+          if (debtPdf != null) problems.add(debtPdf);
+        }
+        if (settings.backupAccountStatementsPdf) {
+          final statementsPdf = await telegramService.backupAccountStatementsPdf();
+          if (statementsPdf != null) problems.add(statementsPdf);
+        }
       }
 
       onProgress?.call(1.0);
