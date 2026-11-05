@@ -374,52 +374,174 @@ class _POSScreenState extends State<POSScreen> {
 }
 
 /// 💰 مستوى السعر (مفرد، جملة…) — يُحفظ على هذا الجهاز
+/// 🏷️ قائمة السعر (مفرد، مفرد 2، منزل، جملة، جملة 2، أخرى) — زر هادئ في الشريط العلوي
+/// يفتح قائمة منسقة: رقم السعر ولونه واسمه، والمحدد مظلل بعلامة ✓.
 class _PriceLevelPicker extends StatelessWidget {
   const _PriceLevelPicker({required this.onChanged});
 
   final VoidCallback onChanged;
 
+  static const _tints = <Color>[
+    Color(0xFF2563EB),
+    Color(0xFF0D9488),
+    Color(0xFF7C3AED),
+    Color(0xFFEA580C),
+    Color(0xFFDB2777),
+    Color(0xFF475569),
+  ];
+
+  static const _hints = <String>[
+    'سعر البيع الأساسي',
+    'سعر مفرد ثانٍ',
+    'سعر التوصيل للمنازل',
+    'سعر البيع بالجملة',
+    'سعر جملة ثانٍ',
+    'سعر خاص',
+  ];
+
+  static Color _tint(int i) => _tints[i.clamp(0, _tints.length - 1)];
+
   @override
   Widget build(BuildContext context) {
     return Consumer<POSProvider>(
-      builder: (context, pos, _) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Container(
-          padding: const EdgeInsetsDirectional.fromSTEB(10, 0, 6, 0),
-          decoration: BoxDecoration(
-            color: PosColors.accentSoft,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFC7D2FE)),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: pos.priceLevel,
-              isDense: true,
-              borderRadius: BorderRadius.circular(12),
-              icon: const Icon(Icons.expand_more_rounded, color: PosColors.accent, size: 20),
-              style: const TextStyle(color: PosColors.primary, fontWeight: FontWeight.w700, fontSize: 13),
-              selectedItemBuilder: (_) => [
-                for (final l in POSProvider.priceLevels)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.sell_outlined, size: 16, color: PosColors.accent),
-                      const SizedBox(width: 6),
-                      Text('السعر: $l'),
-                    ],
+      builder: (context, pos, _) {
+        final levels = POSProvider.priceLevels;
+        final cur = levels.indexOf(pos.priceLevel).clamp(0, levels.length - 1);
+        final c = _tint(cur);
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          child: PopupMenuButton<String>(
+            tooltip: 'قائمة السعر',
+            position: PopupMenuPosition.under,
+            offset: const Offset(0, 6),
+            color: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            elevation: 10,
+            shadowColor: const Color(0x330F172A),
+            constraints: const BoxConstraints(minWidth: 250, maxWidth: 280),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: const BorderSide(color: PosColors.border),
+            ),
+            menuPadding: const EdgeInsets.symmetric(vertical: 6),
+            onSelected: (v) {
+              pos.setPriceLevel(v);
+              onChanged();
+            },
+            onCanceled: onChanged,
+            itemBuilder: (_) => [
+              const PopupMenuItem<String>(
+                enabled: false,
+                height: 34,
+                child: Text('قائمة السعر',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: PosColors.muted)),
+              ),
+              for (var i = 0; i < levels.length; i++)
+                PopupMenuItem<String>(
+                  value: levels[i],
+                  height: 52,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: _LevelRow(
+                    index: i,
+                    name: levels[i],
+                    hint: i < _hints.length ? _hints[i] : '',
+                    color: _tint(i),
+                    selected: i == cur,
                   ),
-              ],
-              items: [
-                for (final l in POSProvider.priceLevels) DropdownMenuItem(value: l, child: Text(l)),
-              ],
-              onChanged: (v) {
-                if (v != null) pos.setPriceLevel(v);
-                onChanged();
-              },
+                ),
+            ],
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsetsDirectional.fromSTEB(6, 0, 10, 0),
+              decoration: BoxDecoration(
+                color: c.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: c.withValues(alpha: 0.28)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(8)),
+                  child: Text('${cur + 1}',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('السعر', style: TextStyle(fontSize: 10.5, height: 1.1, color: PosColors.muted)),
+                    Text(pos.priceLevel,
+                        style: TextStyle(fontSize: 13.5, height: 1.2, fontWeight: FontWeight.w800, color: c)),
+                  ],
+                ),
+                const SizedBox(width: 4),
+                Icon(Icons.expand_more_rounded, size: 20, color: c),
+              ]),
             ),
           ),
-        ),
+        );
+      },
+    );
+  }
+}
+
+class _LevelRow extends StatelessWidget {
+  const _LevelRow({
+    required this.index,
+    required this.name,
+    required this.hint,
+    required this.color,
+    required this.selected,
+  });
+
+  final int index;
+  final String name;
+  final String hint;
+  final Color color;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: selected ? color.withValues(alpha: 0.09) : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
       ),
+      child: Row(children: [
+        Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? color : color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Text('${index + 1}',
+              style: TextStyle(
+                  color: selected ? Colors.white : color, fontWeight: FontWeight.w800, fontSize: 13.5)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(name,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w800, fontSize: 14, color: selected ? color : PosColors.text)),
+              if (hint.isNotEmpty)
+                Text('السعر ${index + 1} • $hint',
+                    style: const TextStyle(fontSize: 11.5, color: PosColors.muted)),
+            ],
+          ),
+        ),
+        if (selected) Icon(Icons.check_circle_rounded, color: color, size: 20),
+      ]),
     );
   }
 }
