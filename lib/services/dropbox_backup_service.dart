@@ -17,6 +17,8 @@
 
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math' show Random;
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -149,9 +151,12 @@ class DropboxBackupService {
   factory DropboxBackupService() => _instance;
   DropboxBackupService._internal();
 
-  // 🔑 بيانات التطبيق
-  static const String _appKey = 'yklmvnhmfsz65yh';
-  static const String _appSecret = 'zxukh96m5s2jd6h';
+  // 🔑 تطبيق Dropbox (App Console). الربط بطريقة PKCE: يكفي «App key» العام — لا سرّ
+  //    (App secret) داخل البرنامج. التطبيق القديم (StoreApp) كان بحساب آخر ولا تُضبط أذوناته.
+  static const String defaultAppKey = '3qcpvyen8wn3cvp';
+  static const String defaultAppName = 'asdfghertyu';
+  static const String _appKeyPref = 'dropbox_app_key';
+  static const String _appNamePref = 'dropbox_app_name';
 
   // 📁 مسار النسخ الاحتياطية في Dropbox
   static const String _backupFolder = '/Apps/StoreApp/backups';
@@ -166,10 +171,58 @@ class DropboxBackupService {
   static const String _tokenKey = 'dropbox_access_token';
   static const String _refreshTokenKey = 'dropbox_refresh_token';
   static const String _grantedScopesKey = 'dropbox_granted_scopes';
+  static const String _tokenAppKeyKey = 'dropbox_token_app_key'; // التطبيق الذي رُبط به الرمز
+  static const String _pkceVerifierKey = 'dropbox_pkce_verifier';
+  String? _pkceVerifier;
 
-  /// مفتاح تطبيق Dropbox الذي يستعمله البرنامج (معرّف عام وليس سرّاً) — ليطابقه المستخدم
-  /// بالتطبيق الذي يعدّل أذوناته في App Console (تبويب Settings ← App key).
-  static const String appKey = _appKey;
+  /// مفتاح تطبيق Dropbox المستعمل (معرّف عام وليس سرّاً) — يطابقه المستخدم بعمود
+  /// «App key» في App Console.
+  Future<String> appKey() async {
+    try {
+      final v = (await SharedPreferences.getInstance()).getString(_appKeyPref)?.trim();
+      if (v != null && v.isNotEmpty) return v;
+    } catch (_) {}
+    return defaultAppKey;
+  }
+
+  /// اسم تطبيق Dropbox كما في App Console (للعرض فقط — Dropbox لا يعطيه عبر الـ API).
+  Future<String> appName() async {
+    try {
+      final v = (await SharedPreferences.getInstance()).getString(_appNamePref)?.trim();
+      if (v != null && v.isNotEmpty) return v;
+    } catch (_) {}
+    return defaultAppName;
+  }
+
+  static final _appKeyPattern = RegExp(r'^[a-z0-9]{8,32}$');
+  static bool isValidAppKey(String k) => _appKeyPattern.hasMatch(k.trim());
+
+  /// تغيير تطبيق Dropbox. تغيير المفتاح يقطع الاتصال الحالي (الرمز مربوط بالتطبيق).
+  Future<void> setApp({required String key, required String name}) async {
+    final k = key.trim();
+    if (!isValidAppKey(k)) throw DropboxException('App key غير صحيح — انسخه من عمود «App key» في App Console.');
+    final changed = k != await appKey();
+    if (changed) await logout();
+    final prefs = await SharedPreferences.getInstance();
+    if (k == defaultAppKey) {
+      await prefs.remove(_appKeyPref);
+    } else {
+      await prefs.setString(_appKeyPref, k);
+    }
+    final n = name.trim();
+    if (n.isEmpty || n == defaultAppName) {
+      await prefs.remove(_appNamePref);
+    } else {
+      await prefs.setString(_appNamePref, n);
+    }
+  }
+
+  /// هل يوجد ربط محفوظ لكن بتطبيق Dropbox آخر (قديم)؟ ⇒ يلزم الربط من جديد مرة.
+  Future<bool> linkedToOtherApp() async {
+    final t = await _secureStorage.read(key: _tokenKey);
+    if (t == null || t.isEmpty) return false;
+    return await _secureStorage.read(key: _tokenAppKeyKey) != await appKey();
+  }
 
   /// آخر ردّ رفض به Dropbox الكود (للعرض).
   String? lastAuthError;
@@ -187,9 +240,12 @@ class DropboxBackupService {
   static const int _singleUploadLimit = 140 * 1024 * 1024;
   static const int _chunkSize = 8 * 1024 * 1024;
 
-  /// 🔑 الحصول على Access Token
+  /// 🔑 الحصول على Access Token (null إن كان مربوطاً بتطبيق Dropbox آخر)
   Future<String?> getAccessToken() async {
-    return await _secureStorage.read(key: _tokenKey);
+    final t = await _secureStorage.read(key: _tokenKey);
+    if (t == null || t.isEmpty) return t;
+    if (await _secureStorage.read(key: _tokenAppKeyKey) != await appKey()) return null;
+    return t;
   }
 
   /// 🔑 حفظ Access Token
@@ -230,8 +286,7 @@ class DropboxBackupService {
       final r = await http.post(Uri.parse(_tokenUrl), body: {
         'grant_type': 'refresh_token',
         'refresh_token': rt,
-        'client_id': _appKey,
-        'client_secret': _appSecret,
+        'client_id': await appKey(), // PKCE: بلا client_secret
       }).timeout(_shortTimeout);
       if (r.statusCode == 200) {
         final data = json.decode(r.body);
@@ -278,6 +333,7 @@ class DropboxBackupService {
   /// 🔌 التحقق من حالة الاتصال
   Future<DropboxAuthStatus> checkAuthStatus() async {
     try {
+      if (await linkedToOtherApp()) return DropboxAuthStatus.needsAuth; // تغيّر التطبيق ⇒ اربط من جديد
       final token = await getAccessToken();
       if (token == null || token.isEmpty) {
         return DropboxAuthStatus.notConfigured;
@@ -430,16 +486,21 @@ class DropboxBackupService {
     }
   }
 
-  /// 🔗 إنشاء رابط OAuth للمصادقة
-  /// [redirectUri] فارغ/null ⇒ بلا إعادة توجيه: يعرض Dropbox الكود في صفحته فينسخه المستخدم.
-  /// (لا يحتاج تسجيل أي عنوان في إعدادات تطبيق Dropbox — كان `http://localhost` غير مسجّل
-  /// فيرفض Dropbox بـ «Invalid redirect_uri».)
-  String getAuthorizationUrl([String? redirectUri]) {
-    final hasRedirect = redirectUri != null && redirectUri.isNotEmpty;
+  /// 🔗 رابط الموافقة في Dropbox (PKCE، بلا إعادة توجيه: يعرض Dropbox الكود فينسخه المستخدم).
+  /// يولّد «code_verifier» عشوائياً ويحفظه حتى لصق الكود (يبقى بعد إعادة فتح البرنامج).
+  Future<String> getAuthorizationUrl() async {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+    final rnd = Random.secure();
+    final verifier = List.generate(64, (_) => chars[rnd.nextInt(chars.length)]).join();
+    _pkceVerifier = verifier;
+    await _secureStorage.write(key: _pkceVerifierKey, value: verifier);
+    final challenge = base64Url.encode(sha256.convert(ascii.encode(verifier)).bytes).replaceAll('=', '');
+    final key = await appKey();
     return 'https://www.dropbox.com/oauth2/authorize?'
-        'client_id=$_appKey&'
+        'client_id=$key&'
         'response_type=code&'
-        '${hasRedirect ? 'redirect_uri=${Uri.encodeComponent(redirectUri)}&' : ''}'
+        'code_challenge=$challenge&'
+        'code_challenge_method=S256&'
         // نطلب الأذونات صراحةً: إن نقص التطبيقَ إذنٌ في App Console يرفض Dropbox من البداية
         // في صفحة الموافقة نفسها بدل ربطٍ «ناجح» يفشل عند الرفع.
         'scope=${Uri.encodeComponent(requiredScopes.join(' '))}&'
@@ -460,8 +521,14 @@ class DropboxBackupService {
   }
 
   /// 🔐 تبديل Authorization Code بـ Access Token
-  Future<bool> exchangeCodeForToken(String code, [String? redirectUri]) async {
+  Future<bool> exchangeCodeForToken(String code) async {
     lastAuthError = null;
+    final verifier = _pkceVerifier ?? await _secureStorage.read(key: _pkceVerifierKey);
+    if (verifier == null || verifier.isEmpty) {
+      lastAuthError = 'اضغط «فتح صفحة Dropbox» من البرنامج أولاً ثم الصق الكود الذي يظهر.';
+      return false;
+    }
+    final key = await appKey();
     try {
       final response = await http.post(
         Uri.parse(_tokenUrl),
@@ -471,10 +538,8 @@ class DropboxBackupService {
         body: {
           'code': extractAuthCode(code),
           'grant_type': 'authorization_code',
-          'client_id': _appKey,
-          'client_secret': _appSecret,
-          // يجب أن يطابق طلب الإذن: بلا إعادة توجيه ⇒ بلا redirect_uri
-          if (redirectUri != null && redirectUri.isNotEmpty) 'redirect_uri': redirectUri,
+          'client_id': key,
+          'code_verifier': verifier, // PKCE بدل client_secret
         },
       ).timeout(_shortTimeout);
 
@@ -484,6 +549,9 @@ class DropboxBackupService {
         if (data['refresh_token'] != null) {
           await saveRefreshToken(data['refresh_token']);
         }
+        await _secureStorage.write(key: _tokenAppKeyKey, value: key);
+        _pkceVerifier = null;
+        await _secureStorage.delete(key: _pkceVerifierKey);
         // Dropbox يذكر الأذونات الممنوحة فعلاً لهذا الربط — نحفظها لفحص الأذونات.
         final sc = data['scope'];
         if (sc is String && sc.trim().isNotEmpty) {
@@ -507,7 +575,7 @@ class DropboxBackupService {
   /// 🚪 تسجيل الخروج (مع إبطال الرمز على خادم Dropbox إن أمكن)
   Future<void> logout() async {
     try {
-      final t = await getAccessToken();
+      final t = await _secureStorage.read(key: _tokenKey); // حتى لو كان بتطبيق قديم
       if (t != null && t.isNotEmpty) {
         await http
             .post(Uri.parse('$_apiUrl/auth/token/revoke'), headers: {'Authorization': 'Bearer $t'})
@@ -517,6 +585,7 @@ class DropboxBackupService {
     await _secureStorage.delete(key: _tokenKey);
     await _secureStorage.delete(key: _refreshTokenKey);
     await _secureStorage.delete(key: _grantedScopesKey);
+    await _secureStorage.delete(key: _tokenAppKeyKey);
   }
 
   /// الأذونات الممنوحة لهذا الربط كما ذكرها Dropbox لحظة الاتصال (null = غير معروفة).

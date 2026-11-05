@@ -36,6 +36,9 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   String? _account;
   String? _listError;
   DropboxSpace? _space; // 💾 مساحة الحساب
+  String _appKey = DropboxBackupService.defaultAppKey; // 🔑 تطبيق Dropbox المستعمل
+  String _appName = DropboxBackupService.defaultAppName;
+  bool _otherApp = false; // ربط محفوظ بتطبيق قديم ⇒ اربط من جديد
   DropboxPermissionReport? _perm; // 🩺 نتيجة فحص الأذونات (يعمل تلقائياً عند الاتصال)
   bool _checkingPerm = false;
 
@@ -63,6 +66,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     _backupService.getMaxBackups().then((v) {
       if (mounted) setState(() => _maxBackups = v);
     });
+    _loadApp();
     _checkAuthAndLoadBackups();
   }
 
@@ -72,9 +76,21 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     super.dispose();
   }
 
+  Future<void> _loadApp() async {
+    final k = await _backupService.appKey();
+    final n = await _backupService.appName();
+    if (!mounted) return;
+    setState(() {
+      _appKey = k;
+      _appName = n;
+    });
+  }
+
   Future<void> _checkAuthAndLoadBackups() async {
     setState(() => _refreshing = true);
     final status = await _backupService.checkAuthStatus();
+    final otherApp = await _backupService.linkedToOtherApp();
+    if (mounted) setState(() => _otherApp = otherApp);
     List<BackupInfo> list = _backups;
     String? listError;
     String? account = _account;
@@ -103,7 +119,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   }
 
   Future<void> _startOAuthFlow() async {
-    final uri = Uri.parse(_backupService.getAuthorizationUrl());
+    final uri = Uri.parse(await _backupService.getAuthorizationUrl());
     setState(() {
       _showCodeInput = true;
       _authError = null;
@@ -314,6 +330,15 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     final connected = _authStatus == DropboxAuthStatus.authenticated;
     return [
       _hero(),
+      _appCard(),
+      if (_otherApp && !connected)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 14),
+          child: SetBanner(
+            'تغيّر تطبيق Dropbox الذي يستعمله البرنامج — اربط حسابك من جديد مرة واحدة (الربط القديم كان بتطبيق آخر).',
+            kind: SetBannerKind.warn,
+          ),
+        ),
       if (_lastResult != null)
         Padding(
           padding: const EdgeInsets.only(bottom: 14),
@@ -370,7 +395,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   Widget _hero() => SetHero(
         icon: Icons.cloud_rounded,
         color: _dbx,
-        title: 'Dropbox',
+        title: 'Dropbox — $_appName',
         text: _account ?? 'احفظ نسخة من قاعدة بياناتك في حسابك على Dropbox، مع حذف النسخ الأقدم تلقائياً.',
         status: _statusPills(),
       );
@@ -455,14 +480,14 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
               'من يستعمل البرنامج لا يدخل App Console أبداً، يضغط «ربط» فقط. '
               'Dropbox لا يسمح لأي برنامج بتعديل أذونات تطبيقه تلقائياً؛ لذلك هذه الخطوة يدوية.',
             ),
-            const GuideStep(
-              'افتح App Console بحساب Dropbox الذي أنشأ التطبيق، واضغط على اسم التطبيق.',
-              links: [GuideLink('افتح App Console', DropboxBackupService.appConsoleUrl, icon: Icons.open_in_new_rounded)],
+            GuideStep(
+              'افتح App Console بحساب Dropbox الذي أنشأ التطبيق «$_appName»، واضغط على اسمه.',
+              links: const [GuideLink('افتح App Console', DropboxBackupService.appConsoleUrl, icon: Icons.open_in_new_rounded)],
             ),
-            const GuideStep(
-              'تأكّد أنه التطبيق الصحيح: في تبويب «Settings» قارن «App key» بهذا المفتاح. '
-              'إن اختلف فأنت تعدّل تطبيقاً آخر — وهذا وحده يفسّر بقاء الخطأ.',
-              copies: [DropboxBackupService.appKey],
+            GuideStep(
+              'تأكّد أنه التطبيق نفسه: عمود «App key» في قائمة Apps يجب أن يساوي هذا المفتاح. '
+              'إن اختلف فأنت تعدّل تطبيقاً آخر — غيّره من بطاقة «تطبيق Dropbox» أعلى الشاشة.',
+              copies: [_appKey],
               warn: true,
             ),
             GuideStep(
@@ -493,6 +518,102 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
           ),
       ]),
     );
+  }
+
+  /// 🔑 تطبيق Dropbox المستعمل (الاسم والمفتاح كما في App Console) وتغييره.
+  Widget _appCard() => SetCard(
+        title: 'تطبيق Dropbox',
+        subtitle: _appName,
+        icon: Icons.apps_rounded,
+        color: _dbx,
+        trailing: TextButton.icon(
+          onPressed: _busy ? null : _changeApp,
+          icon: const Icon(Icons.edit_rounded, size: 18),
+          label: const Text('تغيير'),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(children: [
+            const Text('App key: ', style: TextStyle(fontSize: 12.5, color: kSetMuted)),
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: SelectableText(_appKey,
+                  style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700, fontSize: 13, color: kSetText)),
+            ),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('يجب أن يطابق عمود «App key» في App Console',
+                  style: TextStyle(fontSize: 12, color: kSetMuted), overflow: TextOverflow.ellipsis),
+            ),
+          ]),
+        ),
+      );
+
+  Future<void> _changeApp() async {
+    final keyCtl = TextEditingController(text: _appKey);
+    final nameCtl = TextEditingController(text: _appName);
+    String? err;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => ErpDialog(
+          title: 'تطبيق Dropbox',
+          icon: Icons.apps_rounded,
+          color: _dbx,
+          width: 480,
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SetBanner('انسخ «App key» من قائمة Apps في App Console. لا حاجة لـ App secret إطلاقاً. '
+                'تغيير المفتاح يقطع الاتصال الحالي فتربط من جديد.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: nameCtl,
+              decoration: const InputDecoration(labelText: 'اسم التطبيق (للعرض)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: keyCtl,
+              textDirection: TextDirection.ltr,
+              decoration: InputDecoration(labelText: 'App key', errorText: err, border: const OutlineInputBorder()),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _dbx),
+              onPressed: () {
+                if (!DropboxBackupService.isValidAppKey(keyCtl.text)) {
+                  setD(() => err = 'مفتاح غير صحيح (حروف إنجليزية صغيرة وأرقام فقط)');
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final key = keyCtl.text;
+    final name = nameCtl.text;
+    // بعد انتهاء حركة إغلاق النافذة (الحقول ما زالت مرسومة أثناءها)
+    Future.delayed(const Duration(milliseconds: 400), () {
+      keyCtl.dispose();
+      nameCtl.dispose();
+    });
+    if (ok != true || !mounted) return;
+    try {
+      await _backupService.setApp(key: key, name: name);
+    } on DropboxException catch (e) {
+      if (mounted) setToast(context, e.message, error: true);
+      return;
+    }
+    await _loadApp();
+    if (!mounted) return;
+    setState(() {
+      _perm = null;
+      _lastResult = null;
+    });
+    await _checkAuthAndLoadBackups();
   }
 
   Widget _authCard() {
