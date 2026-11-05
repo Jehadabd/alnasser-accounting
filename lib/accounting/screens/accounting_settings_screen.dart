@@ -16,6 +16,7 @@ import '../../services/database_service.dart';
 import '../accounting_reports.dart';
 import '../posting_engine.dart';
 import 'acc_ui.dart';
+import 'orphan_debts_dialog.dart';
 
 class AccountingSettingsScreen extends StatefulWidget {
   const AccountingSettingsScreen({super.key});
@@ -307,13 +308,25 @@ class _AccountingSettingsScreenState extends State<AccountingSettingsScreen> {
                                       for (final p in _problems!)
                                         Padding(
                                           padding: const EdgeInsets.symmetric(vertical: 2),
-                                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                            const Icon(Icons.error_outline_rounded, size: 18, color: AccColors.red),
-                                            const SizedBox(width: 8),
-                                            Expanded(
-                                              child: Text(p,
-                                                  style: const TextStyle(color: AccColors.red, height: 1.5)),
-                                            ),
+                                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                              const Icon(Icons.error_outline_rounded, size: 18, color: AccColors.red),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(p,
+                                                    style: const TextStyle(color: AccColors.red, height: 1.5)),
+                                              ),
+                                            ]),
+                                            // 👻 عملاء حُذفوا وبقيت معاملاتهم: عرضهم بالاسم والمبلغ (بلا تغيير)
+                                            if (isOrphanDebtsProblem(p))
+                                              Padding(
+                                                padding: const EdgeInsetsDirectional.only(start: 26, top: 4),
+                                                child: OutlinedButton.icon(
+                                                  onPressed: () => showOrphanDebtsDialog(context),
+                                                  icon: const Icon(Icons.person_search_rounded, size: 18),
+                                                  label: const Text('عرض هؤلاء العملاء ومبالغهم'),
+                                                ),
+                                              ),
                                           ]),
                                         ),
                                     ]),

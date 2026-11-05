@@ -178,6 +178,11 @@ class MonthCloseReadiness {
   static Future<ReadinessCheck> _cashCounts(DatabaseExecutor db, DateTime from, DateTime next) async {
     const t = 'عدّ الدرج';
     if (!await _has(db, 'cash_counts')) return ReadinessCheck(t, CheckLevel.na, 'لم يُستعمل عدّ الدرج');
+    // ميزة اختيارية: من لم يسجّل أي عدّ قط لا يُنبَّه على كل يوم بيع (كان يظهر «20 يوم بلا عدّ»)
+    final ever = await db.rawQuery("SELECT 1 FROM cash_counts WHERE status != 'void' LIMIT 1");
+    if (ever.isEmpty) {
+      return ReadinessCheck(t, CheckLevel.na, 'لم تُستعمل بعد — ميزة اختيارية (تُسجَّل من «إقفال اليوم»)');
+    }
     final days = await db.rawQuery('''
       SELECT DISTINCT substr(invoice_date, 1, 10) AS d FROM invoices
       WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(NULLIF(TRIM(status), ''), 'محفوظة') = 'محفوظة'
@@ -207,8 +212,10 @@ class MonthCloseReadiness {
     if (!await _has(db, 'cash_boxes')) return ReadinessCheck(t, CheckLevel.na, 'لا صناديق');
     final banks = await db.rawQuery("SELECT id, name FROM cash_boxes WHERE kind = 'bank' AND COALESCE(is_active, 1) = 1");
     if (banks.isEmpty) return ReadinessCheck(t, CheckLevel.na, 'لا حسابات بنكية');
-    if (!await _has(db, 'bank_recs')) {
-      return ReadinessCheck(t, CheckLevel.warn, '${banks.length} حساب بنكي لم يُطابق أبداً',
+    // ميزة اختيارية: إن لم تُستعمل لأي حساب قط فلا تنبيه (يُشرح في الشاشة كيف تُستعمل)
+    if (!await _has(db, 'bank_recs') ||
+        (await db.rawQuery("SELECT 1 FROM bank_recs WHERE status = 'final' LIMIT 1")).isEmpty) {
+      return ReadinessCheck(t, CheckLevel.na, 'لم تُستعمل بعد — ميزة اختيارية (${banks.length} حساب بنكي)',
           items: [for (final b in banks) '${b['name']}']);
     }
     final monthEnd = _day(next.subtract(const Duration(days: 1)));

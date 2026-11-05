@@ -25,6 +25,7 @@ import 'cash_boxes_screen.dart';
 import 'chart_of_accounts_screen.dart';
 import 'journal_screen.dart';
 import 'vouchers_screen.dart';
+import 'orphan_debts_dialog.dart';
 
 class AccountingHomeScreen extends StatefulWidget {
   const AccountingHomeScreen({super.key});
@@ -613,11 +614,21 @@ class _ProblemsCard extends StatelessWidget {
               const Text('تنبيهات الدفتر',
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: AccColors.orange)),
               const SizedBox(height: 4),
-              for (final p in problems)
+              for (final p in problems) ...[
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: Text('• $p', style: const TextStyle(fontSize: 13, height: 1.5, color: AccColors.text)),
                 ),
+                if (isOrphanDebtsProblem(p))
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton.icon(
+                      onPressed: () => showOrphanDebtsDialog(context),
+                      icon: const Icon(Icons.person_search_rounded, size: 18),
+                      label: const Text('عرض هؤلاء العملاء ومبالغهم'),
+                    ),
+                  ),
+              ],
             ]),
           ),
           TextButton.icon(

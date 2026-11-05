@@ -313,6 +313,34 @@ class AccountingReports {
   }
 
   /// فحص سلامة: هل يطابق الدفترُ سجلَّ الديون؟ يعيد رسالة لكل اختلاف.
+  /// 👻 معاملات عملاء لا يوجدون في سجل الديون (حُذف صف العميل وبقيت معاملاته) — قراءة فقط.
+  /// الاسم من فواتيره إن وُجدت. للعرض والقرار اليدوي؛ لا يغيّر شيئاً.
+  Future<List<OrphanCustomerDebt>> orphanCustomerDebts() async {
+    final db = await _getDb();
+    final rows = await db.rawQuery('''
+      SELECT t.customer_id AS id, COUNT(*) AS n, COALESCE(SUM(t.amount_changed), 0) AS total,
+             MIN(t.transaction_date) AS first, MAX(t.transaction_date) AS last,
+             (SELECT i.customer_name FROM invoices i WHERE i.customer_id = t.customer_id
+                AND COALESCE(TRIM(i.customer_name), '') != '' LIMIT 1) AS name,
+             (SELECT c2.is_deleted FROM customers c2 WHERE c2.id = t.customer_id) AS soft_deleted
+      FROM transactions t LEFT JOIN customers c ON c.id = t.customer_id
+      WHERE COALESCE(t.is_deleted, 0) = 0 AND (c.id IS NULL OR COALESCE(c.is_deleted, 0) = 1)
+      GROUP BY t.customer_id
+      ORDER BY ABS(COALESCE(SUM(t.amount_changed), 0)) DESC''');
+    return [
+      for (final r in rows)
+        OrphanCustomerDebt(
+          customerId: (r['id'] as num?)?.toInt(),
+          name: (r['name'] as String?)?.trim(),
+          count: (r['n'] as num).toInt(),
+          total: (r['total'] as num).toDouble(),
+          first: DateTime.tryParse('${r['first'] ?? ''}'),
+          last: DateTime.tryParse('${r['last'] ?? ''}'),
+          softDeleted: r['soft_deleted'] != null,
+        ),
+    ];
+  }
+
   Future<List<String>> integrityCheck() async {
     final db = await _getDb();
     final problems = <String>[];
@@ -360,4 +388,26 @@ class AccountingReports {
     } catch (_) {}
     return problems;
   }
+}
+
+/// عميل غير موجود في سجل الديون وله معاملات ما زالت تُحسب في الدفتر.
+class OrphanCustomerDebt {
+  const OrphanCustomerDebt({
+    required this.customerId,
+    required this.name,
+    required this.count,
+    required this.total,
+    required this.first,
+    required this.last,
+    required this.softDeleted,
+  });
+  final int? customerId;
+  final String? name;
+  final int count;
+  final double total;
+  final DateTime? first;
+  final DateTime? last;
+
+  /// صفه موجود لكن معلَّم محذوفاً (وإلا فالصف نفسه غير موجود).
+  final bool softDeleted;
 }
