@@ -5,7 +5,7 @@
 //   • دروب بوكس: نسخة احتياطية كاملة.
 //   • ديسكورد: يستلم نسخة من كل ما يُرسل لتيليغرام؛ إن أُوقف تيليغرام تُرسل
 //     له قاعدة البيانات مضغوطة مباشرة.
-//   • Google Drive (حساب المالك فقط): قاعدة البيانات مضغوطة + سجل الديون PDF.
+//   • Google Drive (لكل المستخدمين): قاعدة البيانات مضغوطة + سجل الديون PDF.
 
 import '../models/app_settings.dart';
 
@@ -30,22 +30,21 @@ class UploadTargets {
     telegram: 'قاعدة البيانات، الفواتير، والملخص الشهري',
     dropbox: 'نسخة احتياطية كاملة',
     discord: 'نسخة مما يُرسل لتيليغرام (أو قاعدة البيانات وحدها إن أُوقف تيليغرام)',
-    gdrive: 'قاعدة البيانات مضغوطة + سجل الديون PDF (حساب المالك)',
+    gdrive: 'قاعدة البيانات مضغوطة + سجل الديون PDF',
   };
 
-  /// الترتيب المحفوظ مكمّلاً بأي وجهة ناقصة؛ Google Drive لحساب المالك فقط
-  static List<String> ordered(List<String> saved, {required bool owner}) {
+  /// الترتيب المحفوظ مكمّلاً بأي وجهة ناقصة.
+  static List<String> ordered(List<String> saved) {
     final out = <String>[
       for (final t in saved)
         if (all.contains(t)) t,
       for (final t in all)
         if (!saved.contains(t)) t,
     ];
-    if (!owner) out.remove(gdrive);
     return out;
   }
 
   /// الوجهات المفعّلة بالترتيب
-  static List<String> enabledInOrder(AppSettings s, {required bool owner}) =>
-      ordered(s.uploadOrder, owner: owner).where((t) => !s.uploadDisabled.contains(t)).toList();
+  static List<String> enabledInOrder(AppSettings s) =>
+      ordered(s.uploadOrder).where((t) => !s.uploadDisabled.contains(t)).toList();
 }

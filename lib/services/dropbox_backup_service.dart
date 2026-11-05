@@ -25,6 +25,7 @@ import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../lan/lan_settings.dart' show AppNetworkMode;
 import 'database_service.dart';
+import 'backup_space_planner.dart';
 import 'database/core/database_config.dart';
 
 /// 📦 معلومات النسخة الاحتياطية
@@ -61,13 +62,25 @@ class BackupResult {
   final int? backupSize;
   final int? deletedCount;
 
+  /// حُذفت قبل الرفع لإفساح المكان.
+  final int freedForSpace;
+
   BackupResult({
     required this.success,
     this.error,
     this.backupName,
     this.backupSize,
     this.deletedCount,
+    this.freedForSpace = 0,
   });
+}
+
+/// 💾 مساحة حساب Dropbox (بايت). [allocated] null = غير معروفة.
+class DropboxSpace {
+  const DropboxSpace({required this.used, this.allocated});
+  final int used;
+  final int? allocated;
+  int? get free => allocated == null ? null : (allocated! - used).clamp(0, allocated!).toInt();
 }
 
 /// 🔐 حالة الاتصال بـ Dropbox
@@ -238,6 +251,38 @@ class DropboxBackupService {
       final email = data['email']?.toString();
       return [if (name != null && name.isNotEmpty) name, if (email != null && email.isNotEmpty) email].join(' • ');
     } catch (_) {
+      return null;
+    }
+  }
+
+  /// 💾 مساحة الحساب: المستعمل والكلي. null إن تعذّر السؤال (لا يمنع الرفع).
+  Future<DropboxSpace?> getSpaceUsage() async {
+    try {
+      final r = await _authorizedPost('$_apiUrl/users/get_space_usage');
+      if (r.statusCode != 200) return null;
+      final data = json.decode(utf8.decode(r.bodyBytes));
+      final used = (data['used'] as num?)?.toInt() ?? 0;
+      final a = data['allocation'];
+      int? allocated;
+      if (a is Map) {
+        final tag = a['.tag'];
+        if (tag == 'individual') {
+          allocated = (a['allocated'] as num?)?.toInt();
+        } else if (tag == 'team') {
+          // حساب فريق: المساحة المشتركة، أو حصة المستخدم إن حُدّدت له
+          final teamAlloc = (a['allocated'] as num?)?.toInt();
+          final teamUsed = (a['used'] as num?)?.toInt() ?? used;
+          final userCap = (a['user_within_team_space_allocated'] as num?)?.toInt() ?? 0;
+          if (teamAlloc != null) {
+            final teamFree = teamAlloc - teamUsed;
+            final userFree = userCap > 0 ? userCap - used : teamFree;
+            return DropboxSpace(used: used, allocated: used + (teamFree < userFree ? teamFree : userFree));
+          }
+        }
+      }
+      return DropboxSpace(used: used, allocated: allocated);
+    } catch (e) {
+      debugPrint('⚠️ Dropbox: تعذّر جلب المساحة: $e');
       return null;
     }
   }
@@ -483,16 +528,6 @@ class DropboxBackupService {
     }
   }
 
-  /// نسخة آمنة للتدوير: عند أي خطأ قائمة فارغة (فلا يُحذف شيء).
-  Future<List<BackupInfo>> _listRemoteBackups() async {
-    try {
-      return await _fetchRemoteBackups();
-    } catch (e) {
-      debugPrint('❌ خطأ في جلب القائمة: $e');
-      return [];
-    }
-  }
-
   /// 🗑️ حذف ملف من Dropbox
   Future<bool> _deleteFromDropbox(String path) async {
     try {
@@ -505,36 +540,6 @@ class DropboxBackupService {
     } catch (e) {
       debugPrint('❌ خطأ في الحذف: $e');
       return false;
-    }
-  }
-
-  /// 🔄 تنفيذ تدوير النسخ (حذف القديمة)
-  Future<int> _rotateBackups(int maxBackups) async {
-    try {
-      final backups = await _listRemoteBackups();
-
-      if (backups.length <= maxBackups) {
-        return 0; // لا حاجة للحذف
-      }
-
-      // ترتيب من الأقدم للأحدث
-      backups.sort((a, b) => a.modifiedTime.compareTo(b.modifiedTime));
-
-      int deletedCount = 0;
-      final toDelete = backups.length - maxBackups;
-
-      for (int i = 0; i < toDelete; i++) {
-        final success = await _deleteFromDropbox(backups[i].path);
-        if (success) {
-          deletedCount++;
-          debugPrint('🗑️ تم حذف النسخة القديمة: ${backups[i].name}');
-        }
-      }
-
-      return deletedCount;
-    } catch (e) {
-      debugPrint('❌ خطأ في تدوير النسخ: $e');
-      return 0;
     }
   }
 
@@ -580,13 +585,56 @@ class DropboxBackupService {
       // ⚠️ الحجم يُقرأ قبل حذف الملف المؤقت (كان يُقرأ بعده فيفشل كل نسخ ناجح).
       final size = await localBackup.length();
 
-      // 3. رفع إلى Dropbox
+      // 3. خطة الحذف: الأقدم فالأقدم للمساحة (قبل الرفع) وللعدد (بعده)، ولا تُمسّ أحدث نسختين
+      onProgress?.call(22, 'فحص المساحة في Dropbox...');
+      // تعذّرت القائمة ⇒ لا حذف إطلاقاً (لا نحذف على قائمة لا نعرفها)، ويُكمل الرفع كما كان
+      List<BackupInfo> existing = const [];
+      var listed = false;
+      try {
+        existing = await _fetchRemoteBackups();
+        listed = true;
+      } catch (e) {
+        debugPrint('⚠️ Dropbox: تعذّرت قائمة النسخ — رفع بلا حذف: $e');
+      }
+      final space = listed ? await getSpaceUsage() : null;
+      final plan = BackupSpacePlanner.plan<BackupInfo>(
+        existing: [for (final b in existing) BackupItem(b, b.modifiedTime, b.size)],
+        newSize: size,
+        free: space?.free,
+        maxCount: max,
+      );
+      if (!plan.fits) {
+        return BackupResult(
+          success: false,
+          error: 'المساحة في Dropbox لا تكفي حتى بعد حذف النسخ القديمة '
+              '(الفارغ ${BackupSpacePlanner.human(plan.freeBefore ?? 0)}، المطلوب ${BackupSpacePlanner.human(plan.needed)}). '
+              'المساحة تشغلها ملفات أخرى في حسابك — احذف بعضها من Dropbox. لم يُحذف شيء.',
+        );
+      }
+      var freed = 0;
+      for (final b in plan.beforeUpload) {
+        onProgress?.call(26, 'إفساح المكان: حذف الأقدم ${b.ref.name}...');
+        if (await _deleteFromDropbox(b.ref.path)) freed++;
+      }
+      if (plan.beforeUpload.isNotEmpty && freed < plan.beforeUpload.length) {
+        return BackupResult(
+          success: false,
+          error: 'تعذّر حذف بعض النسخ القديمة لإفساح المكان — أعد المحاولة.',
+          deletedCount: freed,
+          freedForSpace: freed,
+        );
+      }
+
+      // 4. رفع إلى Dropbox
       onProgress?.call(30, 'رفع النسخة إلى Dropbox...');
       await _uploadToDropbox(localBackup, '$_backupFolder/$remoteName');
 
-      // 4. تدوير النسخ القديمة
-      onProgress?.call(80, 'تنظيف النسخ القديمة...');
-      final deletedCount = await _rotateBackups(max);
+      // 5. الزائد عن عدد النسخ المحدد (بعد نجاح الرفع فقط)
+      onProgress?.call(85, 'تنظيف النسخ القديمة...');
+      var deletedCount = freed;
+      for (final b in plan.afterUpload) {
+        if (await _deleteFromDropbox(b.ref.path)) deletedCount++;
+      }
 
       onProgress?.call(100, 'تم بنجاح!');
 
@@ -595,6 +643,7 @@ class DropboxBackupService {
         backupName: remoteName,
         backupSize: size,
         deletedCount: deletedCount,
+        freedForSpace: freed,
       );
     } on DropboxException catch (e) {
       return BackupResult(success: false, error: e.message);

@@ -1,6 +1,6 @@
 // lib/owner/google_drive_settings_screen.dart
 //
-// ☁️ إعدادات Google Drive (ميزة المالك) — تُفتح من «زر رفع البيانات: الوجهات والترتيب»:
+// ☁️ إعدادات Google Drive (لكل المستخدمين) — تُفتح من «زر رفع البيانات: الوجهات والترتيب»:
 //   1) مفاتيح Google: شرح خطوة بخطوة بروابط مباشرة، ولصق ملف JSON أو المفتاحين.
 //   2) الحساب: ربط، وإعادة ربط بنفس الحساب بضغطة، وفصل.
 //   3) الرفع الآن: قاعدة البيانات مضغوطة وسجل الديون PDF.
@@ -13,6 +13,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../services/backup_space_planner.dart';
 import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart';
 import 'google_drive_service.dart';
@@ -34,6 +35,9 @@ class _GoogleDriveSettingsScreenState extends State<GoogleDriveSettingsScreen> {
   final _jsonCtl = TextEditingController();
 
   DriveStatus? _st;
+  ({int used, int? total})? _quota; // 💾 مساحة الحساب
+  ({int count, int bytes})? _ours; // نسخ هذا الجهاز
+  int _maxBackups = GoogleDriveService.keepBackups;
   String? _busy; // نص الخطوة الجارية
   (bool ok, String msg)? _result;
   bool _showSecret = false;
@@ -55,12 +59,25 @@ class _GoogleDriveSettingsScreenState extends State<GoogleDriveSettingsScreen> {
   Future<void> _load() async {
     final (id, secret) = await _drive.savedKeys();
     final st = await _drive.status();
+    final max = await _drive.getMaxBackups();
     if (!mounted) return;
     setState(() {
       if (_idCtl.text.isEmpty) _idCtl.text = id;
       if (_secretCtl.text.isEmpty) _secretCtl.text = secret;
       _st = st;
+      _maxBackups = max;
     });
+    if (st.signedIn) {
+      // من الإنترنت — بعد ظهور الشاشة، ولا يوقفها إن فشل
+      final quota = await _drive.storage();
+      final ours = await _drive.deviceBackupsUsage();
+      if (mounted) {
+        setState(() {
+          _quota = quota;
+          _ours = ours;
+        });
+      }
+    }
   }
 
   Future<void> _run(String start, Future<String?> Function() fn) async {
@@ -209,7 +226,7 @@ class _GoogleDriveSettingsScreenState extends State<GoogleDriveSettingsScreen> {
       icon: Icons.add_to_drive_rounded,
       color: _g,
       title: 'Google Drive',
-      text: 'نسخة مضغوطة من قاعدة البيانات (يُحتفظ بآخر ${GoogleDriveService.keepBackups} نسخ لكل جهاز) وسجل الديون PDF '
+      text: 'نسخة مضغوطة من قاعدة البيانات (يُحتفظ بآخر $_maxBackups نسخ لكل جهاز، ويُحذف الأقدم عند امتلاء المساحة) وسجل الديون PDF '
           'في مجلد خاص على حسابك. البرنامج لا يرى من Drive إلا الملفات التي رفعها هو.',
       status: Wrap(spacing: 8, runSpacing: 6, children: [
         SetStatusPill(label, ok: ok),
@@ -417,11 +434,35 @@ class _GoogleDriveSettingsScreenState extends State<GoogleDriveSettingsScreen> {
         color: _g,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const SizedBox(height: 10),
+          if (_quota != null) ...[_spaceBar(_quota!, _ours), const SizedBox(height: 12)],
+          const Text('أقصى عدد للنسخ لهذا الجهاز:', style: TextStyle(fontWeight: FontWeight.w700, color: kSetText)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final n in GoogleDriveService.maxBackupsChoices)
+              ChoiceChip(
+                label: Text('$n نسخ'),
+                selected: _maxBackups == n,
+                showCheckmark: false,
+                selectedColor: _g.withValues(alpha: 0.12),
+                side: BorderSide(color: _maxBackups == n ? _g : kSetBorder),
+                labelStyle: TextStyle(fontWeight: FontWeight.w700, color: _maxBackups == n ? _g : kSetText),
+                onSelected: _busy != null
+                    ? null
+                    : (_) {
+                        setState(() => _maxBackups = n);
+                        _drive.setMaxBackups(n);
+                      },
+              ),
+          ]),
+          const SizedBox(height: 6),
+          const Text('تُحذف الأقدم تلقائياً عند تجاوز العدد أو امتلاء المساحة — ولا تُحذف أحدث نسختين أبداً.',
+              style: TextStyle(fontSize: 12, color: kSetMuted, height: 1.5)),
+          const SizedBox(height: 12),
           _uploadTile(
             icon: Icons.storage_rounded,
             color: _g,
             title: 'رفع قاعدة البيانات (مضغوطة)',
-            subtitle: 'يُحتفظ بآخر ${GoogleDriveService.keepBackups} نسخ لكل جهاز ويُحذف الأقدم',
+            subtitle: 'يُحتفظ بآخر $_maxBackups نسخ لهذا الجهاز ويُحذف الأقدم',
             last: st.lastDb,
             onTap: _busy != null
                 ? null
@@ -446,6 +487,59 @@ class _GoogleDriveSettingsScreenState extends State<GoogleDriveSettingsScreen> {
           ),
         ]),
       );
+
+  /// 💾 شريط المساحة: المستعمل من الكلي (مشترك مع Gmail والصور)، وما تشغله نسخ هذا الجهاز.
+  Widget _spaceBar(({int used, int? total}) q, ({int count, int bytes})? ours) {
+    final total = q.total;
+    final frac = (total == null || total <= 0) ? null : (q.used / total).clamp(0.0, 1.0);
+    final mine = (total == null || total <= 0 || ours == null) ? 0.0 : (ours.bytes / total).clamp(0.0, 1.0);
+    final color = frac != null && frac > 0.9 ? kSetRed : (frac != null && frac > 0.75 ? kSetOrange : _g);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        const Icon(Icons.storage_rounded, size: 18, color: kSetMuted),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            total == null
+                ? 'المستعمل ${BackupSpacePlanner.human(q.used)} (بلا حد معروف)'
+                : 'مستعمل ${BackupSpacePlanner.human(q.used)} من ${BackupSpacePlanner.human(total)}'
+                    ' — الفارغ ${BackupSpacePlanner.human((total - q.used).clamp(0, total).toInt())}',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: kSetText, fontSize: 13),
+          ),
+        ),
+      ]),
+      if (frac != null) ...[
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            height: 10,
+            child: Stack(fit: StackFit.expand, children: [
+              Container(color: const Color(0xFFE8EEF7)),
+              FractionallySizedBox(
+                alignment: AlignmentDirectional.centerStart,
+                widthFactor: frac,
+                child: Container(color: color.withValues(alpha: 0.35)),
+              ),
+              FractionallySizedBox(
+                alignment: AlignmentDirectional.centerStart,
+                widthFactor: mine,
+                child: Container(color: color),
+              ),
+            ]),
+          ),
+        ),
+      ],
+      const SizedBox(height: 6),
+      Text(
+        ours == null
+            ? 'مساحة Google مشتركة بين Drive و Gmail والصور.'
+            : 'نسخ هذا الجهاز تشغل ${BackupSpacePlanner.human(ours.bytes)} (${ours.count} نسخة) — اللون الغامق. '
+                'المساحة مشتركة بين Drive و Gmail والصور.',
+        style: const TextStyle(fontSize: 12, color: kSetMuted, height: 1.5),
+      ),
+    ]);
+  }
 
   Widget _uploadTile({
     required IconData icon,

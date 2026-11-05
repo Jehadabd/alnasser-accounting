@@ -1,7 +1,8 @@
 // lib/owner/google_drive_service.dart
 //
-// ☁️ الرفع إلى Google Drive (ميزة حساب المالك):
-//   • قاعدة البيانات مضغوطة (zip) — يُحتفظ بآخر [keepBackups] نسخ ويُحذف الأقدم.
+// ☁️ الرفع إلى Google Drive (متاح لكل المستخدمين):
+//   • قاعدة البيانات مضغوطة (zip) — يُحذف الأقدم عند تجاوز عدد النسخ المحدد أو امتلاء
+//     المساحة (BackupSpacePlanner)، ولا تُحذف أحدث نسختين أبداً.
 //   • سجل الديون PDF — ملف واحد يُستبدل في كل رفع (أحدث نسخة دائماً).
 //
 // بلا أي حزمة إضافية: OAuth 2.0 (PKCE + loopback) ثم Drive REST v3 عبر http.
@@ -26,6 +27,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../services/backup_space_planner.dart';
 import '../services/database_service.dart';
 import '../services/debt_report_service.dart';
 
@@ -73,7 +75,10 @@ class GoogleDriveService {
   GoogleDriveService._();
   static final GoogleDriveService instance = GoogleDriveService._();
 
+  /// الافتراضي لعدد النسخ لكل جهاز (يغيّره المستخدم من الإعدادات).
   static const keepBackups = 5;
+  static const maxBackupsChoices = [5, 10, 20, 30, 50];
+  static const _kMaxBackups = 'gdrive_max_backups';
   static const _rootFolderName = 'الناصر للحسابات — نسخ احتياطية';
   static const _debtsFileName = 'سجل الديون.pdf';
   static const _scopes = 'openid email https://www.googleapis.com/auth/drive.file';
@@ -95,6 +100,50 @@ class GoogleDriveService {
   final _http = http.Client();
 
   bool get isSupported => !kIsWeb;
+
+  Future<int> getMaxBackups() async {
+    try {
+      final v = (await SharedPreferences.getInstance()).getInt(_kMaxBackups);
+      return (v != null && maxBackupsChoices.contains(v)) ? v : keepBackups;
+    } catch (_) {
+      return keepBackups;
+    }
+  }
+
+  Future<void> setMaxBackups(int n) async {
+    try {
+      await (await SharedPreferences.getInstance()).setInt(_kMaxBackups, n);
+    } catch (_) {}
+  }
+
+  /// 💾 مساحة حساب Google (المستعمل والكلي، بايت) — المساحة مشتركة مع Gmail والصور.
+  /// null إن تعذّر السؤال؛ total null = بلا حد معروف.
+  Future<({int used, int? total})?> storage() async {
+    try {
+      final r = await _api('GET', Uri.https('www.googleapis.com', '/drive/v3/about', {'fields': 'storageQuota'}));
+      if (r.statusCode != 200) return null;
+      final q = (jsonDecode(r.body) as Map)['storageQuota'];
+      if (q is! Map) return null;
+      final used = int.tryParse('${q['usage'] ?? ''}') ?? 0;
+      final total = int.tryParse('${q['limit'] ?? ''}');
+      return (used: used, total: total);
+    } catch (e) {
+      debugPrint('☁️ Drive: تعذّر جلب المساحة: $e');
+      return null;
+    }
+  }
+
+  /// حجم نسخ قاعدة البيانات لهذا الجهاز على Drive (للعرض).
+  Future<({int count, int bytes})?> deviceBackupsUsage() async {
+    try {
+      final root = await _rootFolder();
+      final folder = await _findOrCreateFolder(_deviceFolder(), parent: root);
+      final files = await _list(folder, "name contains '.zip'");
+      return (count: files.length, bytes: files.fold<int>(0, (a, f) => a + (int.tryParse('${f['size'] ?? ''}') ?? 0)));
+    } catch (_) {
+      return null;
+    }
+  }
 
   // ═════════════ المفاتيح ═════════════
 
@@ -427,7 +476,7 @@ class GoogleDriveService {
   Future<List<Map<String, dynamic>>> _list(String folderId, String extraQ) async {
     final r = await _api('GET', Uri.https('www.googleapis.com', '/drive/v3/files', {
       'q': "'$folderId' in parents and trashed = false and $extraQ",
-      'fields': 'files(id,name,createdTime)',
+      'fields': 'files(id,name,createdTime,size)',
       'orderBy': 'createdTime desc',
       'pageSize': '100',
     }));
@@ -481,7 +530,18 @@ class GoogleDriveService {
     }
   }
 
-  /// يرفع قاعدة البيانات مضغوطة إلى «<المجلد الرئيسي>/<اسم الجهاز>»، ويبقي آخر [keepBackups] نسخ.
+  Future<bool> _deleteFile(String id) async {
+    try {
+      // DELETE يحذف نهائياً (لا سلة مهملات تشغل المساحة)
+      final r = await _api('DELETE', Uri.https('www.googleapis.com', '/drive/v3/files/$id'));
+      return r.statusCode == 204 || r.statusCode == 200 || r.statusCode == 404;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// يرفع قاعدة البيانات مضغوطة إلى «<المجلد الرئيسي>/<اسم الجهاز>». الأقدم يُحذف عند
+  /// تجاوز العدد المحدد (بعد الرفع) أو عند امتلاء المساحة (قبله) — لنسخ هذا الجهاز فقط.
   Future<String> uploadDatabase({void Function(String step)? onStep}) async {
     onStep?.call('تجهيز نسخة من قاعدة البيانات...');
     final zip = await _zippedDatabase();
@@ -489,15 +549,36 @@ class GoogleDriveService {
     final root = await _rootFolder();
     final folder = await _findOrCreateFolder(_deviceFolder(), parent: root);
     final name = 'قاعدة_البيانات_${_stamp(DateTime.now())}.zip';
+
+    onStep?.call('فحص المساحة في Google Drive...');
+    final files = await _list(folder, "name contains '.zip'");
+    final quota = await storage();
+    final plan = BackupSpacePlanner.plan<String>(
+      existing: [
+        for (final f in files)
+          BackupItem('${f['id']}', DateTime.tryParse('${f['createdTime'] ?? ''}') ?? DateTime(2000),
+              int.tryParse('${f['size'] ?? ''}') ?? 0),
+      ],
+      newSize: zip.length,
+      free: (quota == null || quota.total == null) ? null : (quota.total! - quota.used).clamp(0, quota.total!).toInt(),
+      maxCount: await getMaxBackups(),
+    );
+    if (!plan.fits) {
+      throw DriveException('المساحة في Google Drive لا تكفي حتى بعد حذف النسخ القديمة '
+          '(الفارغ ${BackupSpacePlanner.human(plan.freeBefore ?? 0)}، المطلوب ${BackupSpacePlanner.human(plan.needed)}). '
+          'المساحة مشتركة مع Gmail والصور — أفرغ بعضها. لم يُحذف شيء.');
+    }
+    for (final b in plan.beforeUpload) {
+      onStep?.call('إفساح المكان: حذف نسخة أقدم...');
+      if (!await _deleteFile(b.ref)) throw DriveException('تعذّر حذف نسخة قديمة لإفساح المكان — أعد المحاولة');
+    }
+
     onStep?.call('رفع ${(zip.length / 1048576).toStringAsFixed(1)} ميجا...');
     await _upload(zip, name, 'application/zip', folder);
 
-    onStep?.call('حذف النسخ الأقدم...');
-    final files = await _list(folder, "name contains '.zip'");
-    for (final f in files.skip(keepBackups)) {
-      try {
-        await _api('DELETE', Uri.https('www.googleapis.com', '/drive/v3/files/${f['id']}'));
-      } catch (_) {}
+    if (plan.afterUpload.isNotEmpty) onStep?.call('حذف النسخ الأقدم...');
+    for (final b in plan.afterUpload) {
+      await _deleteFile(b.ref);
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kLastDb, DateTime.now().toIso8601String());

@@ -15,7 +15,6 @@ import '../services/discord_backup_service.dart';
 import '../services/upload_targets.dart';
 import '../owner/google_drive_service.dart';
 import '../owner/google_drive_settings_screen.dart' show checkGoogleDriveOnStart;
-import '../owner/owner_access.dart';
 import '../services/seat_service.dart';
 import '../services/auth_service.dart'; // 👤
 import '../models/app_user.dart'; // 👤 AppPermissions
@@ -71,7 +70,7 @@ class _MainScreenState extends State<MainScreen> {
       OwnerSummary.start();
       // ☁️ تجديد ربط Google Drive بصمت (مرة كل 12 ساعة)، وتنبيه بزر «إعادة الربط» إن ألغته Google
       Future.delayed(const Duration(seconds: 20), () async {
-        if (!mounted || !OwnerAccess.enabled || !SeatService.isPrimary) return;
+        if (!mounted || !SeatService.isPrimary) return;
         try {
           await checkGoogleDriveOnStart(context);
         } catch (e) {
@@ -300,7 +299,7 @@ class _MainScreenState extends State<MainScreen> {
         
         // ☁️ الوجهات المفعّلة بالترتيب المختار في الإعدادات ← النسخ الاحتياطي
         final appSet = await SettingsManager.getAppSettings();
-        final targets = UploadTargets.enabledInOrder(appSet, owner: OwnerAccess.enabled);
+        final targets = UploadTargets.enabledInOrder(appSet);
         // ديسكورد يستلم نسخة مما يُرسل لتيليغرام فقط إن كان مفعّلاً
         TelegramBackupService.mirrorToDiscord = targets.contains(UploadTargets.discord);
         if (targets.isEmpty) errors.add('كل وجهات الرفع مطفأة (الإعدادات ← النسخ الاحتياطي ← وجهات الرفع)');
@@ -456,8 +455,11 @@ class _MainScreenState extends State<MainScreen> {
             final drive = GoogleDriveService.instance;
             if (!drive.isSupported) continue;
             final st = await drive.status();
-            if (!st.signedIn) {
-              errors.add('Google Drive: الحساب غير مربوط (الإعدادات ← ميزات المالك)');
+            if (st.needsRelink) {
+              errors.add('Google Drive: انتهى الربط — الإعدادات ← النسخ الاحتياطي ← إعدادات Google Drive ← «إعادة الربط بنفس الحساب»');
+            } else if (!st.signedIn) {
+              // غير مربوط أصلاً ⇒ تُتخطّى كباقي الوجهات غير المربوطة
+              continue;
             } else {
               try {
                 statusNotifier.value = 'جاري رفع قاعدة البيانات إلى Google Drive...';
@@ -527,7 +529,7 @@ class _MainScreenState extends State<MainScreen> {
     if (result?['success'] == true) {
       // التحقق من حالة Dropbox لعرض رسالة مناسبة
       final dropboxStatus = await DropboxBackupService().checkAuthStatus();
-      final okTargets = UploadTargets.enabledInOrder(await SettingsManager.getAppSettings(), owner: OwnerAccess.enabled);
+      final okTargets = UploadTargets.enabledInOrder(await SettingsManager.getAppSettings());
       String successMessage = 'تم رفع البيانات: ${okTargets.map((t) => UploadTargets.labels[t]).join(' ← ')}';
       if (okTargets.contains(UploadTargets.dropbox) && dropboxStatus != DropboxAuthStatus.authenticated) {
         successMessage += '\n(دروب بوكس غير مربوط فتُخطّي)';

@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../erp/erp_kit.dart' show ErpDialog;
 import '../services/dropbox_backup_service.dart';
+import '../services/backup_space_planner.dart';
 import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 import '../widgets/migration_guard_views.dart' show restoreSummaryText;
@@ -35,6 +36,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   List<BackupInfo> _backups = [];
   String? _account;
   String? _listError;
+  DropboxSpace? _space; // 💾 مساحة الحساب
 
   bool _firstLoad = true;
   bool _refreshing = false;
@@ -82,6 +84,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
         listError = 'تعذّر جلب قائمة النسخ: $e';
       }
       account ??= await _backupService.getAccountLabel();
+      final space = await _backupService.getSpaceUsage();
+      if (mounted) setState(() => _space = space);
     }
     if (!mounted) return;
     setState(() {
@@ -157,7 +161,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
         _lastResult = (
           true,
           'تم رفع النسخة ${result.backupName} (${_size(result.backupSize ?? 0)})'
-              '${deleted > 0 ? ' — وحُذفت $deleted نسخة قديمة' : ''}.'
+              '${deleted > 0 ? ' — وحُذفت $deleted نسخة قديمة' : ''}'
+              '${result.freedForSpace > 0 ? ' (${result.freedForSpace} منها لإفساح المكان)' : ''}.'
         );
       } else {
         _lastResult = (false, result.error ?? 'فشل النسخ');
@@ -510,13 +515,17 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
 
   Widget _settingsCard() {
     return SetCard(
-      title: 'عدد النسخ المحتفظ بها',
-      subtitle: 'تُحذف الأقدم تلقائياً عند تجاوز العدد',
+      title: 'المساحة وعدد النسخ',
+      subtitle: 'تُحذف الأقدم تلقائياً عند تجاوز العدد أو امتلاء المساحة — ولا تُحذف أحدث نسختين أبداً',
       icon: Icons.layers_rounded,
       color: _dbx,
       child: Padding(
         padding: const EdgeInsets.only(top: 12),
-        child: Wrap(spacing: 8, runSpacing: 8, children: [
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (_space != null) ...[_spaceBar(_space!), const SizedBox(height: 14)],
+          const Text('أقصى عدد للنسخ:', style: TextStyle(fontWeight: FontWeight.w700, color: kSetText)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
           for (final n in DropboxBackupService.maxBackupsChoices)
             ChoiceChip(
               label: Text('$n نسخة'),
@@ -532,9 +541,59 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
                       _backupService.setMaxBackups(n);
                     },
             ),
+          ]),
         ]),
       ),
     );
+  }
+
+  /// 💾 شريط المساحة: المستعمل من الكلي، وما تشغله النسخ منه.
+  Widget _spaceBar(DropboxSpace sp) {
+    final total = sp.allocated;
+    final backups = _backups.fold<int>(0, (a, b) => a + b.size);
+    final frac = (total == null || total <= 0) ? null : (sp.used / total).clamp(0.0, 1.0);
+    final ours = (total == null || total <= 0) ? 0.0 : (backups / total).clamp(0.0, 1.0);
+    final color = frac != null && frac > 0.9 ? kSetRed : (frac != null && frac > 0.75 ? kSetOrange : _dbx);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        const Icon(Icons.storage_rounded, size: 18, color: kSetMuted),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            total == null
+                ? 'المستعمل ${BackupSpacePlanner.human(sp.used)}'
+                : 'مستعمل ${BackupSpacePlanner.human(sp.used)} من ${BackupSpacePlanner.human(total)}'
+                    ' — الفارغ ${BackupSpacePlanner.human(sp.free ?? 0)}',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: kSetText, fontSize: 13),
+          ),
+        ),
+      ]),
+      if (frac != null) ...[
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            height: 10,
+            child: Stack(fit: StackFit.expand, children: [
+              Container(color: const Color(0xFFE8EEF7)),
+              FractionallySizedBox(
+                alignment: AlignmentDirectional.centerStart,
+                widthFactor: frac,
+                child: Container(color: color.withValues(alpha: 0.35)),
+              ),
+              FractionallySizedBox(
+                alignment: AlignmentDirectional.centerStart,
+                widthFactor: ours,
+                child: Container(color: color),
+              ),
+            ]),
+          ),
+        ),
+      ],
+      const SizedBox(height: 6),
+      Text('النسخ الاحتياطية تشغل ${BackupSpacePlanner.human(backups)} (${_backups.length} نسخة) — اللون الغامق في الشريط.',
+          style: const TextStyle(fontSize: 12, color: kSetMuted)),
+    ]);
   }
 
   Widget _listCard() {

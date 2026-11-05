@@ -218,7 +218,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     _wholesaleCustomerLimitController.text = _appSettings.wholesaleCustomerLimit.toString();
     _showSideNav = _appSettings.showSideNav;
     _enableSmartSearchRamCache = _appSettings.enableSmartSearchRamCache;
-    _uploadOrder = UploadTargets.ordered(_appSettings.uploadOrder, owner: true);
+    _uploadOrder = UploadTargets.ordered(_appSettings.uploadOrder);
     _uploadDisabled = _appSettings.uploadDisabled.toSet();
     
     // تحميل رقم الجهاز للفواتير
@@ -844,8 +844,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   /// اسحب ⠿ للترتيب، والمفتاح للتفعيل؛ تحت كل وجهة مفعّلة زر يفتح شاشة إعداداتها
   /// (الربط، والشرح خطوة بخطوة، وما يُرفع إليها).
   Widget _uploadTargetsCard() {
-    final owner = OwnerAccess.enabled;
-    final list = UploadTargets.ordered(_uploadOrder, owner: owner);
+    final list = UploadTargets.ordered(_uploadOrder);
     final enabled = list.where((t) => !_uploadDisabled.contains(t)).toList();
     return _buildSettingsCard(
       icon: Icons.cloud_upload_rounded,
@@ -865,7 +864,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           onReorderItem: (oldI, newI) => setState(() {
             final t = list.removeAt(oldI);
             list.insert(newI, t);
-            // Google Drive المخفي لغير المالك يبقى في آخر الترتيب المحفوظ
+            // أي وجهة غير ظاهرة تبقى في آخر الترتيب المحفوظ
             _uploadOrder = [...list, ...UploadTargets.all.where((x) => !list.contains(x))];
           }),
           children: [
@@ -899,10 +898,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             (st.telegramBotToken ?? '').trim().isNotEmpty && (st.telegramChannelId ?? '').trim().isNotEmpty;
         _targetLinked[UploadTargets.discord] = (discord ?? '').trim().startsWith('http');
       });
-      if (OwnerAccess.enabled) {
-        final drive = await GoogleDriveService.instance.status(); // محلي: بلا إنترنت
-        if (mounted) setState(() => _targetLinked[UploadTargets.gdrive] = drive.signedIn);
-      }
+      final drive = await GoogleDriveService.instance.status(); // محلي: بلا إنترنت
+      if (mounted) setState(() => _targetLinked[UploadTargets.gdrive] = drive.signedIn);
     } catch (_) {}
   }
 
