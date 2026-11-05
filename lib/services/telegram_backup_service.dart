@@ -180,11 +180,9 @@ class TelegramBackupService {
       final channelId = await _getChannelId();
       debugPrint('📤 إرسال ملف إلى القناة: $channelId');
       
-      // استخدام HttpClient مخصص لتجاوز مشاكل SSL
-      final httpClient = HttpClient()
-        ..badCertificateCallback = (X509Certificate cert, String host, int port) {
-          return host.contains('telegram.org') || host.contains('api.telegram.org');
-        };
+      // 🔒 تحقق كامل من شهادة الأمان (كان يُقبل أي شهادة «لتجاوز مشاكل SSL»: من يتحكم بالشبكة
+      //    كان يستطيع انتحال خادم تيليجرام وقراءة توكن البوت والملفات المرسلة)
+      final httpClient = HttpClient();
       
       final botToken = await _getBotToken();
       final uri = Uri.parse('https://api.telegram.org/bot$botToken/sendDocument');
@@ -251,6 +249,11 @@ class TelegramBackupService {
             details: responseBody,
             statusCode: response.statusCode);
       }
+    } on HandshakeException catch (e) {
+      _lastError = 'شهادة أمان غير صالحة: $e';
+      debugPrint('❌ $_lastError');
+      return TelegramSendResult.error('تعذّر التحقق من شهادة أمان تيليجرام',
+          details: 'الاتصال غير آمن أو تاريخ الحاسوب خاطئ أو شهادات ويندوز قديمة — صحّح التاريخ وحدّث ويندوز. ($e)');
     } catch (e) {
       _lastError = 'خطأ في إرسال الملف: $e';
       debugPrint('❌ $_lastError');
@@ -283,11 +286,9 @@ class TelegramBackupService {
       final channelId = await _getChannelId();
       debugPrint('📤 إرسال رسالة إلى القناة: $channelId');
       
-      // استخدام HttpClient مخصص لتجاوز مشاكل SSL
-      final httpClient = HttpClient()
-        ..badCertificateCallback = (X509Certificate cert, String host, int port) {
-          return host.contains('telegram.org') || host.contains('api.telegram.org');
-        };
+      // 🔒 تحقق كامل من شهادة الأمان (كان يُقبل أي شهادة «لتجاوز مشاكل SSL»: من يتحكم بالشبكة
+      //    كان يستطيع انتحال خادم تيليجرام وقراءة توكن البوت والملفات المرسلة)
+      final httpClient = HttpClient();
       
       final botToken = await _getBotToken();
       final uri = Uri.parse('https://api.telegram.org/bot$botToken/sendMessage');
@@ -318,6 +319,11 @@ class TelegramBackupService {
             details: responseBody,
             statusCode: response.statusCode);
       }
+    } on HandshakeException catch (e) {
+      _lastError = 'شهادة أمان غير صالحة: $e';
+      debugPrint('❌ $_lastError');
+      return TelegramSendResult.error('تعذّر التحقق من شهادة أمان تيليجرام',
+          details: 'الاتصال غير آمن أو تاريخ الحاسوب خاطئ أو شهادات ويندوز قديمة — صحّح التاريخ وحدّث ويندوز. ($e)');
     } catch (e) {
       _lastError = 'خطأ في إرسال الرسالة: $e';
       debugPrint('❌ $_lastError');

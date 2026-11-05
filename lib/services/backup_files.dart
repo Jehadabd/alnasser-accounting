@@ -81,6 +81,13 @@ class BackupFiles {
         await batch.commit(noResult: true);
       }
       debugPrint('📦 نسخة الرفع: فُكّت $inflated لقطة نصاً لضغط أفضل');
+      if (inflated > 0) {
+        // إعادة ترتيب صفحات النسخة بعد استبدال اللقطات (القاعدة الحية لا تُمسّ):
+        // البيانات نفسها بلا بقايا الصفحات القديمة، فيصغر الأرشيف ويُضغط أسرع.
+        final before = await File(path).length();
+        await db.execute('VACUUM');
+        debugPrint('📦 نسخة الرفع: إعادة ترتيب $before ← ${await File(path).length()} بايت');
+      }
     } catch (e) {
       // النسخة صالحة كما هي (اللقطات المضغوطة يقرأها البرنامج) — فقط أكبر قليلاً
       debugPrint('⚠️ نسخة الرفع: تعذّر فكّ اللقطات ($e) — تُرفع كما هي');

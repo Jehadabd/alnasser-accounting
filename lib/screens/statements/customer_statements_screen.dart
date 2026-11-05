@@ -637,7 +637,11 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 14, 14, 0),
       decoration: BoxDecoration(color: _paper, borderRadius: BorderRadius.circular(14), border: Border.all(color: _line)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      clipBehavior: Clip.antiAlias,
+      // ListTile داخل ExpansionTile يحتاج Material فوقه مباشرة (لا خلفية الصندوق) — تحذير Flutter
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
           child: Text('$title — ${list.length}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _ink)),
@@ -684,6 +688,7 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
               ),
             ),
       ]),
+      ),
     );
   }
 }

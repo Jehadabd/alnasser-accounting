@@ -201,7 +201,11 @@ class _MonthCloseScreenState extends State<MonthCloseScreen> {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: c.level == CheckLevel.ok || c.level == CheckLevel.na ? kSetBorder : color.withValues(alpha: 0.4)),
       ),
-      child: Theme(
+      clipBehavior: Clip.antiAlias,
+      // ListTile يرسم خلفيته وأثر الضغط على أقرب Material — بدونه تخفيها خلفية الصندوق (تحذير Flutter)
+      child: Material(
+        type: MaterialType.transparency,
+        child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           leading: Icon(icon, color: color),
@@ -214,6 +218,7 @@ class _MonthCloseScreenState extends State<MonthCloseScreen> {
             for (final i in c.items) Text('• $i', style: const TextStyle(fontSize: 12.5, color: kSetText, height: 1.6)),
           ],
         ),
+      ),
       ),
     );
   }

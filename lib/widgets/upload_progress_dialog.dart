@@ -212,8 +212,9 @@ class _UploadProgressDialogState extends State<UploadProgressDialog> with Single
           final v = p.clamp(0.0, 1.0);
           return TweenAnimationBuilder<double>(
             tween: Tween(end: v),
-            duration: const Duration(milliseconds: 450),
-            curve: Curves.easeOutCubic,
+            // تحديث كل ثانية + حركة خطية بطول الثانية ⇒ تقدّم متصل بلا قفزات
+            duration: const Duration(milliseconds: 950),
+            curve: Curves.linear,
             builder: (_, a, __) => SizedBox(
               width: 132,
               height: 132,

@@ -343,10 +343,18 @@ class _MainScreenState extends State<MainScreen> {
           pendingInvoices: pendingInvoices,
         );
         BackupPackage.buildListener = plan.buildProgress;
+        // 📊 النسبة = ما مضى ÷ (ما مضى + ما بقي) — من العدّاد نفسه، فالنسبة والوقت متّسقان دائماً.
+        //    لا تتراجع، ولا تبلغ 100% إلا عند الانتهاء فعلاً. وقت انتظار نافذة الفواتير لا يُحسب.
+        final workWatch = Stopwatch()..start();
+        var shownProgress = 0.0;
         void showRemaining() {
           final r = plan.remaining();
           etaStalled.value = r == null;
-          if (r == null) return;
+          if (r == null) return; // متوقف: النسبة تثبت مكانها
+          final el = workWatch.elapsedMilliseconds;
+          final frac = el + r.inMilliseconds <= 0 ? 0.0 : el / (el + r.inMilliseconds);
+          if (frac > shownProgress) shownProgress = frac > 0.99 ? 0.99 : frac;
+          progressNotifier.value = shownProgress;
           final prev = etaEnd.value;
           final rawEnd = DateTime.now().add(r);
           if (prev == null) {
@@ -387,9 +395,6 @@ class _MainScreenState extends State<MainScreen> {
                 // الخطأ يُسجَّل ويكمل باقي الوجهات (Dropbox/Discord...) بدل أن يوقفها.
                 try {
                   errors.addAll(await appProvider.backupDatabaseToTelegram(
-                    onProgress: (p) {
-                      progressNotifier.value = p * 0.5; // 50% للرفع الأساسي
-                    },
                     onSent: onSent,
                   ));
                 } catch (e) {
@@ -410,11 +415,13 @@ class _MainScreenState extends State<MainScreen> {
                     // الخيارات المتاحة للمستخدم
                     if (!mounted) return;
                     final exporter = TelegramInvoiceExportService();
+                    workWatch.stop(); // انتظار المستخدم ليس جزءاً من العمل
                     final rangeChoice = await showDialog<String>(
                       context: context,
                       barrierDismissible: false,
                       builder: (_) => InvoiceRangeDialog(countSince: exporter.countPendingSince),
                     );
+                    workWatch.start();
                     if (rangeChoice != null) {
                       // يُحفظ فوراً ⇒ لا يُسأل مرة أخرى مهما حدث في باقي الرفع.
                       // (كان يُحفظ فقط إن نجحت كل الفواتير، و«إلغاء» لا يحفظ شيئاً ⇒ السؤال كل مرة)
@@ -444,7 +451,6 @@ class _MainScreenState extends State<MainScreen> {
                       onProgress: (current, total, status) {
                         if (total > 0) {
                           plan.invoicesProgress(current, total);
-                          progressNotifier.value = 0.5 + (current / total) * 0.40;
                           statusNotifier.value = status;
                         }
                       },
@@ -467,7 +473,6 @@ class _MainScreenState extends State<MainScreen> {
                 // 3) إرسال الملخص الشهري إلى Telegram (إن فُعّل في إعدادات تيليجرام)
                 if (await telegramService.isConfigured && await TelegramBackupService.monthlySummaryEnabled()) {
                   statusNotifier.value = 'جاري إرسال الملخص الشهري...';
-                  progressNotifier.value = 0.85;
                   final summaryResult = await telegramService.sendMonthlySummaryWithDetails();
                   if (!summaryResult.success) {
                     errors.add('فشل إرسال الملخص الشهري: ${summaryResult.errorMessage}');
@@ -482,13 +487,9 @@ class _MainScreenState extends State<MainScreen> {
                 final dropboxStatus = await dropboxService.checkAuthStatus();
                 if (dropboxStatus == DropboxAuthStatus.authenticated) {
                   statusNotifier.value = 'جاري رفع النسخة إلى Dropbox...';
-                  progressNotifier.value = 0.90;
           
                   final dropboxResult = await dropboxService.createAndUploadBackup(
                     // بلا maxBackups: يُستعمل العدد المحفوظ في شاشة Dropbox (كان ثابتاً 20)
-                    onProgress: (p, s) {
-                      progressNotifier.value = 0.90 + (p / 1000); // 0.90 - 0.95
-                    },
                     onSent: onSent,
                   );
           
