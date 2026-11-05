@@ -17,10 +17,7 @@ import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 
 class DiscordSettingsScreen extends StatefulWidget {
-  const DiscordSettingsScreen({super.key, this.embedded = false});
-
-  /// داخل «النسخ الاحتياطي والمزامنة» تحت مفتاح ديسكورد (بلا شريط علوي).
-  final bool embedded;
+  const DiscordSettingsScreen({super.key});
 
   @override
   State<DiscordSettingsScreen> createState() => _DiscordSettingsScreenState();
@@ -202,7 +199,6 @@ class _DiscordSettingsScreenState extends State<DiscordSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.embedded) return SetEmbedded(loading: !_loaded, children: _loaded ? _content() : const []);
     return SettingsScaffold(
       title: 'إعدادات Discord',
       subtitle: 'استقبال التقارير والفواتير في قناة Discord',
@@ -215,23 +211,14 @@ class _DiscordSettingsScreenState extends State<DiscordSettingsScreen> {
   List<Widget> _content() {
     final busy = _isLoading || _testing;
     return [
-              if (widget.embedded)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: SetStatusPill(_configured ? 'مرتبط' : 'غير مرتبط', ok: _configured),
-                  ),
-                )
-              else
-                SetHero(
-                  icon: Icons.discord,
-                  color: _discord,
-                  title: 'النسخ والتقارير عبر Discord',
-                  text: 'أنشئ Webhook في قناة على سيرفرك والصق رابطه هنا؛ يرسل التطبيق التقارير '
-                      'والملخصات إلى تلك القناة بجانب تيليجرام.',
-                  status: SetStatusPill(_configured ? 'مرتبط' : 'غير مرتبط', ok: _configured),
-                ),
+              SetHero(
+                icon: Icons.discord,
+                color: _discord,
+                title: 'النسخ والتقارير عبر Discord',
+                text: 'أنشئ Webhook في قناة على سيرفرك والصق رابطه هنا؛ يرسل التطبيق التقارير '
+                    'والملخصات إلى تلك القناة بجانب تيليجرام.',
+                status: SetStatusPill(_configured ? 'مرتبط' : 'غير مرتبط', ok: _configured),
+              ),
               SetCard(
                 title: 'رابط Webhook',
                 subtitle: 'يُحفظ على هذا الجهاز فقط',

@@ -17,10 +17,7 @@ import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 import '../widgets/migration_guard_views.dart' show restoreSummaryText;
 
 class DropboxBackupScreen extends StatefulWidget {
-  const DropboxBackupScreen({super.key, this.embedded = false});
-
-  /// داخل «النسخ الاحتياطي والمزامنة» تحت مفتاح دروب بوكس (بلا شريط علوي).
-  final bool embedded;
+  const DropboxBackupScreen({super.key});
 
   @override
   State<DropboxBackupScreen> createState() => _DropboxBackupScreenState();
@@ -303,26 +300,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   List<Widget> _content() {
     final connected = _authStatus == DropboxAuthStatus.authenticated;
     return [
-      if (widget.embedded)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Row(children: [
-            Expanded(child: Align(alignment: AlignmentDirectional.centerStart, child: _statusPills())),
-            IconButton(
-              tooltip: 'تحديث',
-              onPressed: _busy ? null : _checkAuthAndLoadBackups,
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-            if (connected)
-              IconButton(
-                tooltip: 'قطع الاتصال',
-                onPressed: _busy ? null : _logout,
-                icon: const Icon(Icons.logout_rounded),
-              ),
-          ]),
-        )
-      else
-        _hero(),
+      _hero(),
       if (_lastResult != null)
         Padding(
           padding: const EdgeInsets.only(bottom: 14),
@@ -339,7 +317,6 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   @override
   Widget build(BuildContext context) {
     final connected = _authStatus == DropboxAuthStatus.authenticated;
-    if (widget.embedded) return SetEmbedded(loading: _firstLoad, children: _firstLoad ? const [] : _content());
     return SettingsScaffold(
       title: 'النسخ الاحتياطي السحابي',
       subtitle: 'Dropbox — نسخ قاعدة البيانات مع تدوير تلقائي',

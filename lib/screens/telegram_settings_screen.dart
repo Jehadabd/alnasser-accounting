@@ -11,10 +11,7 @@ import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 
 class TelegramSettingsScreen extends StatefulWidget {
-  const TelegramSettingsScreen({super.key, this.embedded = false});
-
-  /// داخل «النسخ الاحتياطي والمزامنة» تحت مفتاح تيليجرام (بلا شريط علوي).
-  final bool embedded;
+  const TelegramSettingsScreen({super.key});
 
   @override
   State<TelegramSettingsScreen> createState() => _TelegramSettingsScreenState();
@@ -29,6 +26,11 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
   bool _backupAccountStatementsPdf = true;
   bool _reportOnlyLocalInvoices = false;
   bool _reportDetailedDivided = false;
+
+  // 📤 ما يُرفع إلى تيليجرام مع زر «رفع البيانات» (يُحفظ فور تغييره)
+  String _regularMode = 'each'; // each / combined / off
+  String _posMode = 'each';
+  bool _resendEdited = true;
 
   bool _isLoading = false;
   bool _loaded = false;
@@ -62,6 +64,9 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
       _backupAccountStatementsPdf = settings.backupAccountStatementsPdf;
       _reportOnlyLocalInvoices = onlyLocal;
       _reportDetailedDivided = detailed;
+      _regularMode = settings.telegramRegularInvoicesMode;
+      _posMode = settings.telegramPosInvoicesMode;
+      _resendEdited = settings.telegramResendEdited;
     });
     // إذا كانت البيانات موجودة، حاول جلب الأسماء بشكل صامت
     if (_botTokenController.text.isNotEmpty) {
@@ -235,6 +240,68 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
     if (d.contains('unauthorized')) return 'التوكن غير صحيح — انسخه من جديد من BotFather.';
     if (d.contains('webhook')) return 'هذا البوت مربوط ببرنامج آخر (Webhook) — أنشئ بوتاً جديداً خاصاً بهذا التطبيق.';
     return desc;
+  }
+
+  /// يحفظ طريقة رفع الفواتير فوراً (لا ينتظر زر الحفظ — لا تحتاج توكناً).
+  Future<void> _saveUploadModes({String? regular, String? pos, bool? resend}) async {
+    setState(() {
+      _regularMode = regular ?? _regularMode;
+      _posMode = pos ?? _posMode;
+      _resendEdited = resend ?? _resendEdited;
+    });
+    try {
+      final s = (await SettingsManager.getAppSettings()).copyWith(
+        telegramRegularInvoicesMode: _regularMode,
+        telegramPosInvoicesMode: _posMode,
+        telegramResendEdited: _resendEdited,
+      );
+      await SettingsManager.saveAppSettings(s);
+      if (mounted) _showSnackBar('حُفظ');
+    } catch (e) {
+      _showSnackBar('تعذّر الحفظ: $e', isError: true);
+    }
+  }
+
+  Widget _modeRow({
+    required IconData icon,
+    required String title,
+    required String value,
+    required ValueChanged<String> onChanged,
+  }) {
+    const labels = {'each': 'كل فاتورة وحدها', 'combined': 'ملف PDF واحد', 'off': 'لا ترفع'};
+    const hints = {
+      'each': 'لكل فاتورة ملف، وفوقه رقمها والفرع والمبلغ والربح',
+      'combined': 'كل الفواتير في ملف واحد، وفوقه رسالة بأرقامها ومجموعها',
+      'off': 'لا تُرفع هذه الفواتير إلى تيليجرام',
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(color: _tg.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(11)),
+          child: Icon(icon, size: 20, color: _tg),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w700, color: kSetText)),
+            Text(hints[value] ?? '', style: const TextStyle(fontSize: 12, color: kSetMuted, height: 1.4)),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        DropdownButton<String>(
+          value: labels.containsKey(value) ? value : 'each',
+          underline: const SizedBox.shrink(),
+          borderRadius: BorderRadius.circular(12),
+          items: [for (final e in labels.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+          onChanged: (v) {
+            if (v != null) onChanged(v);
+          },
+        ),
+      ]),
+    );
   }
 
   static Map<String, dynamic>? _map(Object? o) => o is Map ? o.cast<String, dynamic>() : null;
@@ -481,7 +548,6 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.embedded) return SetEmbedded(loading: !_loaded, children: _loaded ? _content() : const []);
     return SettingsScaffold(
       title: 'النسخ الاحتياطي عبر تيليجرام',
       subtitle: 'رفع قاعدة البيانات والتقارير إلى قناتك الخاصة',
@@ -500,17 +566,14 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
     final connected = _botName != null && _channelName != null;
     final busy = _isLoading || _testing || _detecting;
     return [
-              if (widget.embedded)
-                Padding(padding: const EdgeInsets.only(bottom: 12), child: _statusPills())
-              else
-                SetHero(
-                  icon: Icons.telegram,
-                  color: _tg,
-                  title: 'ربط مع تيليجرام',
-                  text: 'احصل على نسخ احتياطية وتقارير فورية على قناتك الخاصة. '
-                      'تحتاج بوتاً (توكن) وقناة يكون البوت مشرفاً فيها — الشرح أدناه خطوة بخطوة.',
-                  status: _statusPills(),
-                ),
+              SetHero(
+                icon: Icons.telegram,
+                color: _tg,
+                title: 'ربط مع تيليجرام',
+                text: 'احصل على نسخ احتياطية وتقارير فورية على قناتك الخاصة. '
+                    'تحتاج بوتاً (توكن) وقناة يكون البوت مشرفاً فيها — الشرح أدناه خطوة بخطوة.',
+                status: _statusPills(),
+              ),
 
               // 1) التوكن
               SetCard(
@@ -670,6 +733,39 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                 ),
               ]),
               const SizedBox(height: 16),
+
+              // 📤 ما يُرفع مع زر «رفع البيانات»
+              SetCard(
+                title: 'ما يُرفع مع زر «رفع البيانات»',
+                subtitle: 'يُحفظ فور التغيير',
+                icon: Icons.upload_file_rounded,
+                color: _tg,
+                child: Column(children: [
+                  const SizedBox(height: 4),
+                  _modeRow(
+                    icon: Icons.receipt_long_rounded,
+                    title: 'الفواتير العادية والجملة',
+                    value: _regularMode,
+                    onChanged: (v) => _saveUploadModes(regular: v),
+                  ),
+                  const Divider(height: 1),
+                  _modeRow(
+                    icon: Icons.point_of_sale_rounded,
+                    title: 'إيصالات الكاشير',
+                    value: _posMode,
+                    onChanged: (v) => _saveUploadModes(pos: v),
+                  ),
+                  const Divider(height: 1),
+                  SetSwitch(
+                    title: 'إعادة رفع الفاتورة بعد تعديلها',
+                    subtitle: 'فاتورة رُفعت ثم عُدّلت تُرفع نسختها الجديدة مع علامة «معدّلة»',
+                    icon: Icons.edit_note_rounded,
+                    color: _tg,
+                    value: _resendEdited,
+                    onChanged: (v) => _saveUploadModes(resend: v),
+                  ),
+                ]),
+              ),
 
               // 📊 ملخص المالك اليومي
               OwnerSummaryCard(telegramReady: connected),

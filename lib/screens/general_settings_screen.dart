@@ -154,9 +154,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   bool _scanningUsb = false;
   bool _showSideNav = false;
   bool _enableSmartSearchRamCache = true; // 🧠
-  String _tgRegularMode = 'each'; // 📤 each / combined / off
-  String _tgPosMode = 'each';
-  bool _tgResendEdited = true;
   List<String> _uploadOrder = List.of(UploadTargets.all); // ☁️ ترتيب وجهات زر الرفع
   Set<String> _uploadDisabled = {};
   String _screenOrientation = 'landscape';
@@ -176,6 +173,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
+    _refreshTargetLinks(); // 🔗 حالة ربط تيليجرام/ديسكورد في بطاقة الوجهات
     _appSettings = await SettingsManager.getAppSettings();
     
     // تحميل الترخيص والاتجاه
@@ -218,9 +216,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     _wholesaleCustomerLimitController.text = _appSettings.wholesaleCustomerLimit.toString();
     _showSideNav = _appSettings.showSideNav;
     _enableSmartSearchRamCache = _appSettings.enableSmartSearchRamCache;
-    _tgRegularMode = _appSettings.telegramRegularInvoicesMode;
-    _tgPosMode = _appSettings.telegramPosInvoicesMode;
-    _tgResendEdited = _appSettings.telegramResendEdited;
     _uploadOrder = UploadTargets.ordered(_appSettings.uploadOrder, owner: true);
     _uploadDisabled = _appSettings.uploadDisabled.toSet();
     
@@ -289,9 +284,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _branchName,
         _showSideNav,
         _enableSmartSearchRamCache,
-        _tgRegularMode,
-        _tgPosMode,
-        _tgResendEdited,
         _uploadOrder.join(','),
         (_uploadDisabled.toList()..sort()).join(','),
       ].join('§');
@@ -626,9 +618,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       branchName: _branchName,
       showSideNav: _showSideNav,
       enableSmartSearchRamCache: _enableSmartSearchRamCache,
-      telegramRegularInvoicesMode: _tgRegularMode,
-      telegramPosInvoicesMode: _tgPosMode,
-      telegramResendEdited: _tgResendEdited,
       uploadOrder: List.of(_uploadOrder),
       uploadDisabled: _uploadDisabled.toList(),
     );
@@ -849,22 +838,13 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     ]);
   }
 
-  /// ☁️ وجهات زر «رفع البيانات» وترتيبها: اسحب ⠿ لتغيير الترتيب، والمفتاح للتفعيل
+  /// ☁️ وجهات زر «رفع البيانات» وترتيبها — المكان الوحيد لتفعيل كل وجهة.
+  /// اسحب ⠿ للترتيب، والمفتاح للتفعيل؛ تحت كل وجهة مفعّلة زر يفتح شاشة إعداداتها
+  /// (الربط، والشرح خطوة بخطوة، وما يُرفع إليها).
   Widget _uploadTargetsCard() {
     final owner = OwnerAccess.enabled;
     final list = UploadTargets.ordered(_uploadOrder, owner: owner);
-    const icons = {
-      UploadTargets.telegram: Icons.telegram,
-      UploadTargets.dropbox: Icons.cloud_rounded,
-      UploadTargets.discord: Icons.forum_rounded,
-      UploadTargets.gdrive: Icons.add_to_drive_rounded,
-    };
-    const colors = {
-      UploadTargets.telegram: Color(0xFF229ED9),
-      UploadTargets.dropbox: Color(0xFF0061FE),
-      UploadTargets.discord: Color(0xFF5865F2),
-      UploadTargets.gdrive: Color(0xFF1A73E8),
-    };
+    final enabled = list.where((t) => !_uploadDisabled.contains(t)).toList();
     return _buildSettingsCard(
       icon: Icons.cloud_upload_rounded,
       iconColor: Colors.indigo,
@@ -872,8 +852,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Text('يرفع إلى المفعّل فقط، من الأعلى إلى الأسفل. اسحب ⠿ لتغيير الترتيب. '
-              'التفعيل وبيانات الربط في بطاقة كل وجهة أدناه. الوجهة غير المربوطة تُتخطّى.',
+          child: Text('فعّل الوجهة بالمفتاح، ثم اضغط «إعدادات…» تحتها لربطها. يرفع إلى المفعّل فقط، '
+              'من الأعلى إلى الأسفل — اسحب ⠿ لتغيير الترتيب. الوجهة غير المربوطة تُتخطّى.',
               style: TextStyle(fontSize: 12.5, color: Colors.black54, height: 1.5)),
         ),
         ReorderableListView(
@@ -888,55 +868,15 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           }),
           children: [
             for (var i = 0; i < list.length; i++)
-              Material(
+              _UploadTargetRow(
                 key: ValueKey('ut-${list[i]}'),
-                color: Colors.transparent,
-                child: ListTile(
-                  leading: CircleAvatar(
-                    radius: 14,
-                    backgroundColor: _uploadDisabled.contains(list[i]) ? Colors.grey.shade300 : colors[list[i]],
-                    child: _uploadDisabled.contains(list[i])
-                        ? const Icon(Icons.block_rounded, size: 15, color: Colors.white)
-                        : Text('${list.where((t) => !_uploadDisabled.contains(t)).toList().indexOf(list[i]) + 1}',
-                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-                  ),
-                  title: Row(children: [
-                    Icon(icons[list[i]], size: 18, color: colors[list[i]]),
-                    const SizedBox(width: 8),
-                    Text(UploadTargets.labels[list[i]]!, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  ]),
-                  subtitle: Text(UploadTargets.hints[list[i]]!, style: const TextStyle(fontSize: 12)),
-                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                    // تيليجرام/ديسكورد/دروب بوكس تُفعَّل من بطاقاتها أدناه (مفتاح واحد لكل وجهة)
-                    if (list[i] == UploadTargets.gdrive)
-                      Switch(
-                        value: !_uploadDisabled.contains(list[i]),
-                        onChanged: (v) => setState(() {
-                          if (v) {
-                            _uploadDisabled.remove(list[i]);
-                          } else {
-                            _uploadDisabled.add(list[i]);
-                          }
-                        }),
-                      )
-                    else
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Text(_uploadDisabled.contains(list[i]) ? 'متوقف' : 'مفعّل',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: _uploadDisabled.contains(list[i]) ? Colors.black38 : const Color(0xFF047857))),
-                      ),
-                    ReorderableDragStartListener(
-                      index: i,
-                      child: const MouseRegion(
-                        cursor: SystemMouseCursors.grab,
-                        child: Padding(padding: EdgeInsets.all(6), child: Icon(Icons.drag_indicator_rounded, color: Colors.black38)),
-                      ),
-                    ),
-                  ]),
-                ),
+                target: list[i],
+                index: i,
+                order: enabled.indexOf(list[i]) + 1,
+                on: !_uploadDisabled.contains(list[i]),
+                linked: _targetLinked[list[i]],
+                onToggle: (v) => setState(() => v ? _uploadDisabled.remove(list[i]) : _uploadDisabled.add(list[i])),
+                onSettings: _targetScreen(list[i]) == null ? null : () => _openTargetSettings(list[i]),
               ),
           ],
         ),
@@ -944,122 +884,37 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     );
   }
 
-  /// ☁️ وجهة نسخ احتياطي: المفتاح في رأس البطاقة يفعّلها (ضمن زر «رفع البيانات»)،
-  /// وعند تفعيلها تظهر إعداداتها كاملة تحتها — لا شاشة ثانية ولا إعدادات مكررة.
-  Widget _serviceCard({
-    required String target,
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String subtitle,
-    required Widget panel,
-    List<Widget> extra = const [],
-  }) {
-    final on = !_uploadDisabled.contains(target);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: on ? color.withValues(alpha: 0.35) : const Color(0xFFE6EBF2), width: on ? 1.4 : 1),
-        boxShadow: [
-          BoxShadow(color: on ? color.withValues(alpha: 0.10) : const Color(0x0A0F172A), blurRadius: 14, offset: const Offset(0, 4)),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          InkWell(
-            onTap: () => setState(() => on ? _uploadDisabled.add(target) : _uploadDisabled.remove(target)),
-            child: Padding(
-              padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 10, 14),
-              child: Row(children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: on ? color : color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(13),
-                  ),
-                  child: Icon(icon, color: on ? Colors.white : color, size: 22),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(title, style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800, color: Color(0xFF1E293B))),
-                    Text(on ? subtitle : 'متوقف — فعّله لتظهر إعداداته وشرح الربط',
-                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF64748B), height: 1.4)),
-                  ]),
-                ),
-                Switch(
-                  value: on,
-                  activeThumbColor: color,
-                  onChanged: (v) => setState(() => v ? _uploadDisabled.remove(target) : _uploadDisabled.add(target)),
-                ),
-              ]),
-            ),
-          ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 260),
-            curve: Curves.easeOutCubic,
-            alignment: AlignmentDirectional.topStart,
-            child: !on
-                ? const SizedBox(width: double.infinity)
-                : Container(
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.035),
-                      border: const Border(top: BorderSide(color: Color(0xFFEEF2F7))),
-                    ),
-                    padding: const EdgeInsets.fromLTRB(12, 14, 12, 6),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      KeyedSubtree(key: ValueKey('panel-$target'), child: panel),
-                      if (extra.isNotEmpty)
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: const Color(0xFFE6EBF2)),
-                          ),
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: extra),
-                        ),
-                    ]),
-                  ),
-          ),
-        ]),
-      ),
-    );
+  /// حالة الربط لكل وجهة (null = غير معروفة) — تُقرأ من الإعدادات المحلية فقط، بلا إنترنت.
+  final Map<String, bool?> _targetLinked = {};
+
+  Future<void> _refreshTargetLinks() async {
+    try {
+      final st = await SettingsManager.getAppSettings();
+      final discord = await SettingsManager.getDiscordWebhookUrl();
+      if (!mounted) return;
+      setState(() {
+        _targetLinked[UploadTargets.telegram] =
+            (st.telegramBotToken ?? '').trim().isNotEmpty && (st.telegramChannelId ?? '').trim().isNotEmpty;
+        _targetLinked[UploadTargets.discord] = (discord ?? '').trim().startsWith('http');
+      });
+    } catch (_) {}
   }
 
-  /// 📤 طريقة رفع نوع من الفواتير: فاتورة فاتورة، ملف PDF واحد، أو بلا رفع
-  Widget _invoiceUploadModeTile({
-    required IconData icon,
-    required String title,
-    required String value,
-    required ValueChanged<String> onChanged,
-  }) {
-    const labels = {'each': 'كل فاتورة وحدها', 'combined': 'ملف PDF واحد', 'off': 'لا ترفع'};
-    const hints = {
-      'each': 'كما الآن: لكل فاتورة ملف، وفوقه رقمها والفرع والمبلغ والربح',
-      'combined': 'كل الفواتير في ملف واحد، وفوقه رسالة بأرقامها ومجموعها',
-      'off': 'لا تُرفع هذه الفواتير إلى تيليغرام',
-    };
-    return ListTile(
-      leading: Icon(icon, color: Colors.blue),
-      title: Text(title),
-      subtitle: Text(hints[value] ?? ''),
-      trailing: DropdownButton<String>(
-        value: labels.containsKey(value) ? value : 'each',
-        underline: const SizedBox.shrink(),
-        items: [for (final e in labels.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
-        onChanged: (v) {
-          if (v != null) onChanged(v);
-        },
-      ),
-    );
+  /// شاشة إعدادات الوجهة (Google Drive إعداداته في «إعدادات المالك»).
+  Widget? _targetScreen(String target) => switch (target) {
+        UploadTargets.telegram => const TelegramSettingsScreen(),
+        UploadTargets.discord => const DiscordSettingsScreen(),
+        UploadTargets.dropbox => const DropboxBackupScreen(),
+        _ => null,
+      };
+
+  Future<void> _openTargetSettings(String target) async {
+    final screen = _targetScreen(target);
+    if (screen == null) return;
+    // لا نعيد تحميل إعدادات هذه الشاشة بعد الرجوع: قد يكون فيها تعديل لم يُحفظ بعد
+    // (مثل تفعيل الوجهة نفسها). الحفظ هنا يبدأ من المحفوظ فلا يمسح ما حُفظ هناك.
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+    await _refreshTargetLinks();
   }
 
   Widget _buildSettingsCard({
@@ -2293,57 +2148,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 ),
               ],
             ),
-          ),
-          // 📤 تيليجرام / ديسكورد / دروب بوكس — مكان واحد: المفتاح يفعّل الوجهة، وتحته إعداداتها
-          _serviceCard(
-            target: UploadTargets.telegram,
-            icon: Icons.telegram,
-            color: const Color(0xFF229ED9),
-            title: 'تيليجرام',
-            subtitle: 'قاعدة البيانات والفواتير والتقارير إلى قناتك الخاصة',
-            panel: const TelegramSettingsScreen(embedded: true),
-            extra: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(4, 6, 4, 2),
-                child: Text('ما يُرفع إلى تيليجرام مع زر «رفع البيانات»',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Color(0xFF1E293B))),
-              ),
-              _invoiceUploadModeTile(
-                icon: Icons.receipt_long_rounded,
-                title: 'رفع الفواتير العادية والجملة',
-                value: _tgRegularMode,
-                onChanged: (v) => setState(() => _tgRegularMode = v),
-              ),
-              _invoiceUploadModeTile(
-                icon: Icons.point_of_sale_rounded,
-                title: 'رفع إيصالات الكاشير',
-                value: _tgPosMode,
-                onChanged: (v) => setState(() => _tgPosMode = v),
-              ),
-              SwitchListTile(
-                secondary: const Icon(Icons.edit_note_rounded, color: Colors.blue),
-                title: const Text('إعادة رفع الفاتورة بعد تعديلها'),
-                subtitle: const Text('فاتورة رُفعت ثم عُدّلت تُرفع نسختها الجديدة مع علامة «معدّلة»'),
-                value: _tgResendEdited,
-                onChanged: (v) => setState(() => _tgResendEdited = v),
-              ),
-            ],
-          ),
-          _serviceCard(
-            target: UploadTargets.discord,
-            icon: Icons.discord,
-            color: const Color(0xFF5865F2),
-            title: 'Discord',
-            subtitle: 'التقارير والنسخ إلى قناة على سيرفرك (بديل سهل لتيليجرام)',
-            panel: const DiscordSettingsScreen(embedded: true),
-          ),
-          _serviceCard(
-            target: UploadTargets.dropbox,
-            icon: Icons.cloud_rounded,
-            color: const Color(0xFF0061FE),
-            title: 'Dropbox',
-            subtitle: 'نسخ قاعدة البيانات إلى حسابك السحابي مع حذف الأقدم تلقائياً',
-            panel: const DropboxBackupScreen(embedded: true),
           ),
           // 🔥 إعدادات مزامنة Firebase (تظهر فقط إذا كانت المزامنة مشمولة في الترخيص)
           if (_isSyncAllowed)
@@ -3964,6 +3768,172 @@ class _SettingsRailItemState extends State<_SettingsRailItem> {
                       style: const TextStyle(fontSize: 11.5, color: Color(0xFF64748B), height: 1.35)),
                 ]),
               ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// ☁️ صف وجهة في بطاقة «زر رفع البيانات»: الترتيب والاسم والمفتاح، وتحتها — إن
+/// كانت مفعّلة — زر يفتح شاشة إعداداتها.
+class _UploadTargetRow extends StatelessWidget {
+  const _UploadTargetRow({
+    super.key,
+    required this.target,
+    required this.index,
+    required this.order,
+    required this.on,
+    required this.linked,
+    required this.onToggle,
+    required this.onSettings,
+  });
+
+  final String target;
+  final int index;
+  final int order;
+  final bool on;
+  final bool? linked;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback? onSettings;
+
+  static const _icons = {
+    UploadTargets.telegram: Icons.telegram,
+    UploadTargets.dropbox: Icons.cloud_rounded,
+    UploadTargets.discord: Icons.discord,
+    UploadTargets.gdrive: Icons.add_to_drive_rounded,
+  };
+  static const _colors = {
+    UploadTargets.telegram: Color(0xFF229ED9),
+    UploadTargets.dropbox: Color(0xFF0061FE),
+    UploadTargets.discord: Color(0xFF5865F2),
+    UploadTargets.gdrive: Color(0xFF1A73E8),
+  };
+  static const _names = {
+    UploadTargets.telegram: 'تيليجرام',
+    UploadTargets.dropbox: 'دروب بوكس',
+    UploadTargets.discord: 'ديسكورد',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _colors[target] ?? Colors.indigo;
+    return Material(
+      type: MaterialType.transparency,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        ListTile(
+          leading: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: on ? color : Colors.grey.shade300, shape: BoxShape.circle),
+            child: on
+                ? Text('$order', style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w800))
+                : const Icon(Icons.block_rounded, size: 15, color: Colors.white),
+          ),
+          title: Row(children: [
+            Icon(_icons[target], size: 18, color: on ? color : Colors.black38),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(UploadTargets.labels[target] ?? target,
+                  style: TextStyle(fontWeight: FontWeight.w700, color: on ? null : Colors.black45)),
+            ),
+          ]),
+          subtitle: Text(UploadTargets.hints[target] ?? '', style: const TextStyle(fontSize: 12)),
+          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+            Switch(value: on, activeThumbColor: color, onChanged: onToggle),
+            ReorderableDragStartListener(
+              index: index,
+              child: const MouseRegion(
+                cursor: SystemMouseCursors.grab,
+                child: Padding(padding: EdgeInsets.all(6), child: Icon(Icons.drag_indicator_rounded, color: Colors.black38)),
+              ),
+            ),
+          ]),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          alignment: AlignmentDirectional.topStart,
+          child: !(on && onSettings != null)
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(60, 0, 16, 12),
+                  child: _SettingsLink(
+                    color: color,
+                    label: 'إعدادات ${_names[target] ?? ''}',
+                    hint: target == UploadTargets.telegram
+                        ? 'الربط بالبوت والقناة، ما يُرفع من الفواتير، والشرح خطوة بخطوة'
+                        : 'الربط والشرح خطوة بخطوة',
+                    linked: linked,
+                    onTap: onSettings!,
+                  ),
+                ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// زر «إعدادات …» تحت الوجهة المفعّلة: يفتح شاشتها، ويُظهر هل هي مربوطة.
+class _SettingsLink extends StatelessWidget {
+  const _SettingsLink({required this.color, required this.label, required this.hint, required this.linked, required this.onTap});
+  final Color color;
+  final String label;
+  final String hint;
+  final bool? linked;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final (String? pill, Color pillColor) = switch (linked) {
+      true => ('مربوط ✓', const Color(0xFF047857)),
+      false => ('غير مربوط — اضغط للربط', const Color(0xFFC2410C)),
+      null => (null, color),
+    };
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: color.withValues(alpha: 0.06),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: color.withValues(alpha: 0.22)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+            child: Row(children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(color: color.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(10)),
+                child: Icon(Icons.tune_rounded, size: 19, color: color),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(label, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5, color: color)),
+                  Text(hint, style: const TextStyle(fontSize: 12, color: Colors.black54, height: 1.35)),
+                ]),
+              ),
+              if (pill != null) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: pillColor.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(pill, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: pillColor)),
+                ),
+              ],
+              const SizedBox(width: 4),
+              Icon(Icons.arrow_forward_ios_rounded, size: 14, color: color.withValues(alpha: 0.7)),
             ]),
           ),
         ),
