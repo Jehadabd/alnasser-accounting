@@ -35,6 +35,8 @@ import '../owner/owner_settings_cards.dart';
 import '../widgets/database_location_card.dart'; // 📂 مكان قاعدة البيانات
 import 'discord_settings_screen.dart'; // 💬 إعدادات Discord
 import 'dropbox_backup_screen.dart'; // ☁️ النسخ الاحتياطي السحابي
+import '../owner/google_drive_settings_screen.dart'; // ☁️ Google Drive
+import '../owner/google_drive_service.dart';
 import 'firebase_sync_settings_screen.dart';
 import 'firebase_custom_setup_screen.dart';
 import 'web_hosting_guide_screen.dart'; // 🌐 استضافة الويب
@@ -897,14 +899,19 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             (st.telegramBotToken ?? '').trim().isNotEmpty && (st.telegramChannelId ?? '').trim().isNotEmpty;
         _targetLinked[UploadTargets.discord] = (discord ?? '').trim().startsWith('http');
       });
+      if (OwnerAccess.enabled) {
+        final drive = await GoogleDriveService.instance.status(); // محلي: بلا إنترنت
+        if (mounted) setState(() => _targetLinked[UploadTargets.gdrive] = drive.signedIn);
+      }
     } catch (_) {}
   }
 
-  /// شاشة إعدادات الوجهة (Google Drive إعداداته في «إعدادات المالك»).
+  /// شاشة إعدادات الوجهة.
   Widget? _targetScreen(String target) => switch (target) {
         UploadTargets.telegram => const TelegramSettingsScreen(),
         UploadTargets.discord => const DiscordSettingsScreen(),
         UploadTargets.dropbox => const DropboxBackupScreen(),
+        UploadTargets.gdrive => const GoogleDriveSettingsScreen(),
         _ => null,
       };
 
@@ -1540,10 +1547,10 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             iconColor: Colors.red.shade700,
             title: 'السندات: قبض، صرف، إشعار مدين ودائن',
             child: Column(children: [
-              ListTile(
-                leading: const Icon(Icons.help_outline_rounded, color: Colors.indigo),
-                title: const Text('الإعداد العام لطباعة السندات بعد الحفظ'),
-                subtitle: const Padding(
+              const ListTile(
+                leading: Icon(Icons.help_outline_rounded, color: Colors.indigo),
+                title: Text('الإعداد العام لطباعة السندات بعد الحفظ'),
+                subtitle: Padding(
                   padding: EdgeInsets.only(top: 4, bottom: 8),
                   child: Text('يتبعه كل نوع سند لم تحدد له إعداداً في «مصمم السندات»، ومستند مرتجع المبيعات'),
                 ),
@@ -3814,6 +3821,7 @@ class _UploadTargetRow extends StatelessWidget {
     UploadTargets.telegram: 'تيليجرام',
     UploadTargets.dropbox: 'دروب بوكس',
     UploadTargets.discord: 'ديسكورد',
+    UploadTargets.gdrive: 'Google Drive',
   };
 
   @override
@@ -3864,9 +3872,11 @@ class _UploadTargetRow extends StatelessWidget {
                   child: _SettingsLink(
                     color: color,
                     label: 'إعدادات ${_names[target] ?? ''}',
-                    hint: target == UploadTargets.telegram
-                        ? 'الربط بالبوت والقناة، ما يُرفع من الفواتير، والشرح خطوة بخطوة'
-                        : 'الربط والشرح خطوة بخطوة',
+                    hint: switch (target) {
+                      UploadTargets.telegram => 'الربط بالبوت والقناة، ما يُرفع من الفواتير، والشرح خطوة بخطوة',
+                      UploadTargets.gdrive => 'مفاتيح Google، ربط الحساب وإعادة ربطه، والرفع الآن',
+                      _ => 'الربط والشرح خطوة بخطوة',
+                    },
                     linked: linked,
                     onTap: onSettings!,
                   ),

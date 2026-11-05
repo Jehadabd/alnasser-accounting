@@ -14,7 +14,9 @@ import 'dart:io';
 import '../services/discord_backup_service.dart';
 import '../services/upload_targets.dart';
 import '../owner/google_drive_service.dart';
+import '../owner/google_drive_settings_screen.dart' show checkGoogleDriveOnStart;
 import '../owner/owner_access.dart';
+import '../services/seat_service.dart';
 import '../services/auth_service.dart'; // 👤
 import '../models/app_user.dart'; // 👤 AppPermissions
 import '../services/debt_reminders.dart'; // 📅
@@ -67,6 +69,15 @@ class _MainScreenState extends State<MainScreen> {
       });
       // 📊 ملخص المالك اليومي على تيليجرام (إن فُعّل على هذا الجهاز)
       OwnerSummary.start();
+      // ☁️ تجديد ربط Google Drive بصمت (مرة كل 12 ساعة)، وتنبيه بزر «إعادة الربط» إن ألغته Google
+      Future.delayed(const Duration(seconds: 20), () async {
+        if (!mounted || !OwnerAccess.enabled || !SeatService.isPrimary) return;
+        try {
+          await checkGoogleDriveOnStart(context);
+        } catch (e) {
+          debugPrint('☁️ فحص Google Drive: $e');
+        }
+      });
     });
   }
 

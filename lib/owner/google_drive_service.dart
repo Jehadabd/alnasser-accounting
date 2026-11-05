@@ -37,13 +37,37 @@ class DriveException implements Exception {
 }
 
 class DriveStatus {
-  const DriveStatus({required this.configured, required this.signedIn, this.email, this.lastDb, this.lastDebts});
+  const DriveStatus({
+    required this.configured,
+    required this.signedIn,
+    this.email,
+    this.lastDb,
+    this.lastDebts,
+    this.expiredAt,
+    this.lastCheck,
+    this.likelyTestingMode = false,
+  });
   final bool configured;
   final bool signedIn;
   final String? email;
   final DateTime? lastDb;
   final DateTime? lastDebts;
+
+  /// متى رفضت Google تجديد الربط (null = لم يحدث).
+  final DateTime? expiredAt;
+
+  /// آخر فحص تلقائي ناجح للربط.
+  final DateTime? lastCheck;
+
+  /// انتهى الربط بعد نحو 7 أيام من تسجيل الدخول — العلامة المعروفة لتطبيق في وضع «Testing».
+  final bool likelyTestingMode;
+
+  /// كان مربوطاً بحساب ثم انتهى الربط: يكفي «إعادة الربط بنفس الحساب».
+  bool get needsRelink => !signedIn && (email ?? '').isNotEmpty;
 }
+
+/// نتيجة الفحص التلقائي للربط.
+enum DriveHealth { ok, expired, offline, notLinked, skipped }
 
 class GoogleDriveService {
   GoogleDriveService._();
@@ -63,6 +87,9 @@ class GoogleDriveService {
   static const _kFolder = 'gdrive_root_folder_id';
   static const _kLastDb = 'gdrive_last_db_upload';
   static const _kLastDebts = 'gdrive_last_debts_upload';
+  static const _kSignedInAt = 'gdrive_signed_in_at';
+  static const _kExpiredAt = 'gdrive_expired_at';
+  static const _kLastCheck = 'gdrive_last_check';
 
   final _store = const FlutterSecureStorage();
   final _http = http.Client();
@@ -101,6 +128,23 @@ class GoogleDriveService {
     await _store.write(key: _kClientSecret, value: secret.trim());
   }
 
+  /// يقرأ المفتاحين من محتوى ملف JSON الذي تنزّله Google («Download JSON») —
+  /// {"installed": {"client_id": …, "client_secret": …}} أو "web". null إن لم يكن ملفاً صالحاً.
+  static (String id, String secret)? parseClientJson(String text) {
+    try {
+      final j = jsonDecode(text.trim());
+      if (j is! Map) return null;
+      final m = j['installed'] ?? j['web'] ?? j;
+      if (m is! Map) return null;
+      final id = '${m['client_id'] ?? ''}'.trim();
+      final secret = '${m['client_secret'] ?? ''}'.trim();
+      if (!id.endsWith('.apps.googleusercontent.com') || secret.isEmpty) return null;
+      return (id, secret);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<DriveStatus> status() async {
     final prefs = await SharedPreferences.getInstance();
     DateTime? t(String k) {
@@ -109,13 +153,45 @@ class GoogleDriveService {
     }
 
     final refresh = await _store.read(key: _kRefresh);
+    final expiredAt = DateTime.tryParse(await _store.read(key: _kExpiredAt) ?? '');
+    final signedInAt = DateTime.tryParse(await _store.read(key: _kSignedInAt) ?? '');
+    final life = (expiredAt != null && signedInAt != null) ? expiredAt.difference(signedInAt) : null;
     return DriveStatus(
       configured: await isConfigured(),
       signedIn: refresh != null && refresh.isNotEmpty,
       email: await _store.read(key: _kEmail),
       lastDb: t(_kLastDb),
       lastDebts: t(_kLastDebts),
+      expiredAt: expiredAt,
+      lastCheck: t(_kLastCheck),
+      likelyTestingMode: life != null && life.inHours >= 6 * 24 && life.inHours <= 8 * 24 + 12,
     );
+  }
+
+  /// 🔄 فحص تلقائي (مرة كل [every] على الأكثر): يجدّد رمز الدخول بصمت ما دام الربط صالحاً،
+  /// فلا يبقى الربط بلا استعمال حتى تُلغيه Google. لا يفتح المتصفح أبداً.
+  Future<DriveHealth> keepAlive({Duration every = const Duration(hours: 12)}) async {
+    if (!isSupported) return DriveHealth.skipped;
+    final refresh = await _store.read(key: _kRefresh);
+    if (refresh == null || refresh.isEmpty) {
+      final email = await _store.read(key: _kEmail);
+      return (email ?? '').isEmpty ? DriveHealth.notLinked : DriveHealth.expired;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final last = DateTime.tryParse(prefs.getString(_kLastCheck) ?? '');
+    if (last != null && DateTime.now().difference(last) < every) return DriveHealth.skipped;
+    try {
+      await _token(forceRefresh: true);
+      await prefs.setString(_kLastCheck, DateTime.now().toIso8601String());
+      return DriveHealth.ok;
+    } on DriveException catch (e) {
+      final gone = (await _store.read(key: _kRefresh) ?? '').isEmpty;
+      debugPrint('☁️ Google Drive keepAlive: $e');
+      return gone ? DriveHealth.expired : DriveHealth.offline;
+    } catch (e) {
+      debugPrint('☁️ Google Drive keepAlive: $e');
+      return DriveHealth.offline;
+    }
   }
 
   // ═════════════ تسجيل الدخول (PKCE + loopback) ═════════════
@@ -127,12 +203,14 @@ class GoogleDriveService {
   }
 
   /// يفتح المتصفح لتسجيل الدخول بحساب Google ثم يعود. يرمي DriveException برسالة واضحة.
-  Future<String?> signIn() async {
+  /// [sameAccount]: إعادة الربط بالحساب السابق (يُختار تلقائياً في صفحة Google).
+  Future<String?> signIn({bool sameAccount = true}) async {
     if (!isSupported) throw DriveException('الرفع إلى Google Drive غير متاح في نسخة المتصفح');
     final (clientId, secret) = await _client();
     if (clientId.isEmpty || secret.isEmpty) {
       throw DriveException('مفاتيح Google غير مضبوطة: أضف GOOGLE_CLIENT_ID و GOOGLE_CLIENT_SECRET');
     }
+    final hint = sameAccount ? (await _store.read(key: _kEmail))?.trim() ?? '' : '';
     final verifier = _random(64);
     final challenge = base64Url.encode(sha256.convert(ascii.encode(verifier)).bytes).replaceAll('=', '');
     final state = _random(24);
@@ -149,6 +227,7 @@ class GoogleDriveService {
         'access_type': 'offline',
         'prompt': 'consent',
         'state': state,
+        if (hint.isNotEmpty) 'login_hint': hint,
       });
       if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
         throw DriveException('تعذّر فتح المتصفح لتسجيل الدخول');
@@ -195,6 +274,11 @@ class GoogleDriveService {
       await _store.write(key: _kRefresh, value: refresh);
       await _saveAccess(j);
       await _store.delete(key: _kFolder);
+      await _store.write(key: _kSignedInAt, value: DateTime.now().toIso8601String());
+      await _store.delete(key: _kExpiredAt);
+      try {
+        (await SharedPreferences.getInstance()).setString(_kLastCheck, DateTime.now().toIso8601String());
+      } catch (_) {}
 
       String? email;
       try {
@@ -220,7 +304,7 @@ class GoogleDriveService {
         await _http.post(Uri.parse('https://oauth2.googleapis.com/revoke'), body: {'token': refresh}).timeout(const Duration(seconds: 10));
       } catch (_) {}
     }
-    for (final k in [_kRefresh, _kAccess, _kExpiry, _kEmail, _kFolder]) {
+    for (final k in [_kRefresh, _kAccess, _kExpiry, _kEmail, _kFolder, _kSignedInAt, _kExpiredAt]) {
       await _store.delete(key: k);
     }
   }
@@ -231,10 +315,10 @@ class GoogleDriveService {
     await _store.write(key: _kExpiry, value: DateTime.now().add(Duration(seconds: secs - 60)).toIso8601String());
   }
 
-  Future<String> _token() async {
+  Future<String> _token({bool forceRefresh = false}) async {
     final at = await _store.read(key: _kAccess);
     final exp = DateTime.tryParse(await _store.read(key: _kExpiry) ?? '');
-    if (at != null && at.isNotEmpty && exp != null && DateTime.now().isBefore(exp)) return at;
+    if (!forceRefresh && at != null && at.isNotEmpty && exp != null && DateTime.now().isBefore(exp)) return at;
     final refresh = await _store.read(key: _kRefresh);
     if (refresh == null || refresh.isEmpty) throw DriveException('اربط حساب Google Drive أولاً');
     final (clientId, secret) = await _client();
@@ -252,8 +336,18 @@ class GoogleDriveService {
       throw DriveException('انتهت مهلة الاتصال بـ Google');
     }
     if (res.statusCode == 400 || res.statusCode == 401) {
+      String err = '';
+      try {
+        err = '${(jsonDecode(res.body) as Map)['error'] ?? ''}';
+      } catch (_) {}
+      // مفاتيح خاطئة ليست انتهاء ربط: لا نمسح الربط
+      if (err == 'invalid_client' || err == 'unauthorized_client') {
+        throw DriveException('مفاتيح Google (Client ID / Client secret) غير صحيحة — صحّحها من إعدادات Google Drive');
+      }
       await _store.delete(key: _kRefresh);
-      throw DriveException('انتهى ربط Google Drive (أُلغيت الصلاحية أو تغيّرت كلمة السر) — اربط الحساب من جديد');
+      await _store.delete(key: _kAccess);
+      await _store.write(key: _kExpiredAt, value: DateTime.now().toIso8601String());
+      throw DriveException('انتهى ربط Google Drive — اضغط «إعادة الربط بنفس الحساب» في إعدادات Google Drive');
     }
     if (res.statusCode != 200) throw DriveException('خطأ من Google (${res.statusCode})');
     final j = jsonDecode(res.body) as Map<String, dynamic>;
