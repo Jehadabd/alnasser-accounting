@@ -288,11 +288,15 @@ class DropboxBackupService {
   }
 
   /// 🔗 إنشاء رابط OAuth للمصادقة
-  String getAuthorizationUrl(String redirectUri) {
+  /// [redirectUri] فارغ/null ⇒ بلا إعادة توجيه: يعرض Dropbox الكود في صفحته فينسخه المستخدم.
+  /// (لا يحتاج تسجيل أي عنوان في إعدادات تطبيق Dropbox — كان `http://localhost` غير مسجّل
+  /// فيرفض Dropbox بـ «Invalid redirect_uri».)
+  String getAuthorizationUrl([String? redirectUri]) {
+    final hasRedirect = redirectUri != null && redirectUri.isNotEmpty;
     return 'https://www.dropbox.com/oauth2/authorize?'
         'client_id=$_appKey&'
         'response_type=code&'
-        'redirect_uri=${Uri.encodeComponent(redirectUri)}&'
+        '${hasRedirect ? 'redirect_uri=${Uri.encodeComponent(redirectUri)}&' : ''}'
         'token_access_type=offline';
   }
 
@@ -310,7 +314,7 @@ class DropboxBackupService {
   }
 
   /// 🔐 تبديل Authorization Code بـ Access Token
-  Future<bool> exchangeCodeForToken(String code, String redirectUri) async {
+  Future<bool> exchangeCodeForToken(String code, [String? redirectUri]) async {
     try {
       final response = await http.post(
         Uri.parse(_tokenUrl),
@@ -322,7 +326,8 @@ class DropboxBackupService {
           'grant_type': 'authorization_code',
           'client_id': _appKey,
           'client_secret': _appSecret,
-          'redirect_uri': redirectUri,
+          // يجب أن يطابق طلب الإذن: بلا إعادة توجيه ⇒ بلا redirect_uri
+          if (redirectUri != null && redirectUri.isNotEmpty) 'redirect_uri': redirectUri,
         },
       ).timeout(_shortTimeout);
 

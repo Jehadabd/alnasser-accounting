@@ -26,7 +26,6 @@ class DropboxBackupScreen extends StatefulWidget {
 
 class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   static const _dbx = Color(0xFF0061FE);
-  static const _redirectUri = 'http://localhost';
 
   final DropboxBackupService _backupService = DropboxBackupService();
   final _codeController = TextEditingController();
@@ -99,7 +98,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   }
 
   Future<void> _startOAuthFlow() async {
-    final uri = Uri.parse(_backupService.getAuthorizationUrl(_redirectUri));
+    final uri = Uri.parse(_backupService.getAuthorizationUrl());
     setState(() {
       _showCodeInput = true;
       _authError = null;
@@ -118,7 +117,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
       _connecting = true;
       _authError = null;
     });
-    final success = await _backupService.exchangeCodeForToken(input, _redirectUri);
+    final success = await _backupService.exchangeCodeForToken(input);
     if (!mounted) return;
     setState(() => _connecting = false);
     if (success) {
@@ -396,12 +395,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
           GuideStep('اضغط الزر الأزرق «فتح صفحة Dropbox» أدناه — يفتح المتصفح. سجّل الدخول إن طُلب منك.'),
           GuideStep('تظهر صفحة تسأل: هل تسمح لهذا التطبيق بالوصول؟ اضغط «Continue / متابعة» ثم «Allow / السماح».'),
           GuideStep(
-            'يفتح المتصفح صفحة عنوانها يبدأ بـ http://localhost وقد يكتب «لا يمكن الوصول إلى هذا الموقع» — هذا طبيعي ومطلوب.',
-            note: 'لا تغلق هذه الصفحة: المطلوب منها هو العنوان المكتوب في أعلاها فقط.',
-          ),
-          GuideStep(
-            'اضغط على شريط العنوان أعلى المتصفح، ثم Ctrl+A ثم Ctrl+C لنسخه كاملاً، وارجع هنا والصقه في الخانة '
-            '(Ctrl+V) ثم اضغط «تأكيد».',
+            'تظهر صفحة فيها «Access Code Generated» وتحتها كود طويل. اضغط زر النسخ بجانبه (أو ظلّله وانسخه Ctrl+C)، '
+            'وارجع هنا والصقه في الخانة (Ctrl+V) ثم اضغط «تأكيد».',
             note: 'الكود صالح دقائق قليلة فقط. إن ظهر أنه مرفوض اضغط «فتح صفحة Dropbox مجدداً» وكرّر.',
             warn: true,
           ),
@@ -426,8 +421,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
                       controller: _codeController,
                       textDirection: TextDirection.ltr,
                       decoration: const InputDecoration(
-                        labelText: 'الكود أو رابط الصفحة',
-                        hintText: 'http://localhost/?code=...',
+                        labelText: 'الكود من صفحة Dropbox',
+                        hintText: 'الصق الكود هنا',
                         prefixIcon: Icon(Icons.key_rounded),
                       ),
                       onSubmitted: (_) => _submitAuthCode(),
