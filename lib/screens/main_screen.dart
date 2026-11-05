@@ -14,6 +14,8 @@ import 'dart:io';
 import '../services/discord_backup_service.dart';
 import '../services/upload_targets.dart';
 import '../owner/google_drive_service.dart';
+import '../widgets/upload_progress_dialog.dart'; // ☁️ نافذة الرفع
+import '../services/alert_service.dart'; // 🔔 تنبيهات المخزون
 import '../owner/google_drive_settings_screen.dart' show checkGoogleDriveOnStart;
 import '../services/seat_service.dart';
 import '../services/auth_service.dart'; // 👤
@@ -65,6 +67,14 @@ class _MainScreenState extends State<MainScreen> {
       Future.delayed(const Duration(milliseconds: 1500), () async {
         if (!mounted) return;
         await DebtReminders.checkOnStartup(context, showDueRemindersDialog);
+        // 🔔 تنبيهات المخزون (النفاد، الصلاحية، الركود) حسب «تكرار التنبيه» — بعد المطالبات
+        //    حتى لا تتراكب النافذتان. كانت النافذة موجودة بلا أي استدعاء عند التشغيل.
+        if (!mounted) return;
+        try {
+          await AlertService().checkAndShowAlerts(context);
+        } catch (e) {
+          debugPrint('🔔 تنبيهات المخزون: $e');
+        }
       });
       // 📊 ملخص المالك اليومي على تيليجرام (إن فُعّل على هذا الجهاز)
       OwnerSummary.start();
@@ -278,6 +288,10 @@ class _MainScreenState extends State<MainScreen> {
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('جاري تحضير النسخة الاحتياطية...');
     final errorNotifier = ValueNotifier<String?>(''); // لتتبع الأخطاء
+    // 🎯 لنافذة التقدّم: الوجهات بالترتيب، والجارية الآن، ونتيجة كل منها (1 نجح، 0 فشل، 2 تُخطّيت)
+    final targetsNotifier = ValueNotifier<List<String>>(const []);
+    final currentTarget = ValueNotifier<String?>(null);
+    final targetResults = ValueNotifier<Map<String, int>>(const {});
     bool uploadSucceeded = false;
 
     // جلب وقت آخر رفع
@@ -300,10 +314,16 @@ class _MainScreenState extends State<MainScreen> {
         // ☁️ الوجهات المفعّلة بالترتيب المختار في الإعدادات ← النسخ الاحتياطي
         final appSet = await SettingsManager.getAppSettings();
         final targets = UploadTargets.enabledInOrder(appSet);
+        targetsNotifier.value = targets;
         // ديسكورد يستلم نسخة مما يُرسل لتيليغرام فقط إن كان مفعّلاً
         TelegramBackupService.mirrorToDiscord = targets.contains(UploadTargets.discord);
         if (targets.isEmpty) errors.add('كل وجهات الرفع مطفأة (الإعدادات ← النسخ الاحتياطي ← وجهات الرفع)');
         for (final target in targets) {
+          currentTarget.value = target;
+          statusNotifier.value = 'جاري الرفع إلى ${UploadTargets.labels[target] ?? target}...';
+          final errBefore = errors.length;
+          var skipped = false;
+          try {
           if (target == UploadTargets.telegram) {
                 // 1) رفع قاعدة البيانات إلى Telegram (محلي + تيليجرام فقط)
                 // يرمي إن لم تصل القاعدة؛ ويعيد مشاكل غير قاتلة (تقارير PDF لم تُرسل...).
@@ -423,6 +443,8 @@ class _MainScreenState extends State<MainScreen> {
                   } else {
                     errors.add('Dropbox: ${dropboxResult.error}');
                   }
+                } else {
+                  skipped = true; // غير مربوط ⇒ تُتخطّى
                 }
           } else if (target == UploadTargets.discord) {
             // مع تيليغرام: استلم نسخة من كل ما أُرسل هناك. بدونه: قاعدة البيانات مباشرة
@@ -453,12 +475,16 @@ class _MainScreenState extends State<MainScreen> {
             }
           } else if (target == UploadTargets.gdrive) {
             final drive = GoogleDriveService.instance;
-            if (!drive.isSupported) continue;
+            if (!drive.isSupported) {
+              skipped = true;
+              continue;
+            }
             final st = await drive.status();
             if (st.needsRelink) {
               errors.add('Google Drive: انتهى الربط — الإعدادات ← النسخ الاحتياطي ← إعدادات Google Drive ← «إعادة الربط بنفس الحساب»');
             } else if (!st.signedIn) {
               // غير مربوط أصلاً ⇒ تُتخطّى كباقي الوجهات غير المربوطة
+              skipped = true;
               continue;
             } else {
               try {
@@ -471,7 +497,14 @@ class _MainScreenState extends State<MainScreen> {
               }
             }
           }
+          } finally {
+            targetResults.value = {
+              ...targetResults.value,
+              target: skipped ? 2 : (errors.length == errBefore ? 1 : 0),
+            };
+          }
         }
+        currentTarget.value = null;
         TelegramBackupService.mirrorToDiscord = true;
 
         // 5) حفظ وقت الرفع الحالي فقط إذا نجح إرسال جميع الفواتير
@@ -504,90 +537,45 @@ class _MainScreenState extends State<MainScreen> {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('رفع قاعدة البيانات'),
-        content: ValueListenableBuilder<double>(
-          valueListenable: progressNotifier,
-          builder: (context, progress, _) => ValueListenableBuilder<String>(
-            valueListenable: statusNotifier,
-            builder: (context, status, _) => Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                LinearProgressIndicator(value: progress <= 0 || progress >= 1 ? null : progress),
-                const SizedBox(height: 12),
-                Text('${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%'),
-                const SizedBox(height: 8),
-                Text(status, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-              ],
-            ),
-          ),
-        ),
+      barrierColor: const Color(0x8C0F172A),
+      builder: (ctx) => UploadProgressDialog(
+        progress: progressNotifier,
+        status: statusNotifier,
+        targets: targetsNotifier,
+        current: currentTarget,
+        results: targetResults,
       ),
     );
 
     if (!mounted) return;
     if (result?['success'] == true) {
-      // التحقق من حالة Dropbox لعرض رسالة مناسبة
-      final dropboxStatus = await DropboxBackupService().checkAuthStatus();
-      final okTargets = UploadTargets.enabledInOrder(await SettingsManager.getAppSettings());
-      String successMessage = 'تم رفع البيانات: ${okTargets.map((t) => UploadTargets.labels[t]).join(' ← ')}';
-      if (okTargets.contains(UploadTargets.dropbox) && dropboxStatus != DropboxAuthStatus.authenticated) {
-        successMessage += '\n(دروب بوكس غير مربوط فتُخطّي)';
-      }
-      if (!mounted) return;
+      // من نتائج الرفع نفسه (بلا فحص جديد عبر الإنترنت)
+      final res = targetResults.value;
+      String names(int v) => [for (final e in res.entries) if (e.value == v) UploadTargets.labels[e.key] ?? e.key].join(' ← ');
+      final done = names(1), skipped = names(2);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(successMessage),
-        duration: const Duration(seconds: 4),
-        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        content: Row(children: [
+          const Icon(Icons.cloud_done_rounded, color: Colors.white),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${done.isEmpty ? 'تم الرفع' : 'تم رفع البيانات: $done'}'
+              '${skipped.isEmpty ? '' : '\nتُخطّيت (غير مربوطة): $skipped'}',
+            ),
+          ),
+        ]),
+        duration: const Duration(seconds: 5),
+        backgroundColor: const Color(0xFF047857),
       ));
     } else {
       final errorMsg = result?['error'] as String?;
-      // عرض dialog مفصل للخطأ
-      showDialog(
+      showDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.error_outline, color: Colors.red),
-              SizedBox(width: 8),
-              Text('فشل الإرسال'),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('حدث خطأ أثناء رفع البيانات (ما نجح من الوجهات الأخرى رُفع فعلاً):',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
-                  ),
-                  child: Text(
-                    errorMsg ?? 'خطأ غير معروف - تحقق من اتصال الإنترنت',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text('الحلول المقترحة:', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                const Text('• تأكد من اتصال الإنترنت'),
-                const Text('• تأكد من ربط الوجهة المذكورة في الخطأ (الإعدادات ← النسخ الاحتياطي)'),
-                const Text('• حاول مرة أخرى بعد قليل'),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('حسناً'),
-            ),
-          ],
+        builder: (ctx) => UploadFailedDialog(
+          error: errorMsg ?? 'خطأ غير معروف — تحقق من اتصال الإنترنت',
+          results: targetResults.value,
         ),
       );
     }

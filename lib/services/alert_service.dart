@@ -36,8 +36,9 @@ class AlertService {
           await _updateLastShownDate(settings);
           
           if (!context.mounted) return;
-          showDialog(
+          await showDialog<void>(
             context: context,
+            barrierColor: const Color(0x8C0F172A),
             builder: (context) => AlertsDisplayDialog(
               lowStockProducts: lowStockProducts,
               stagnantProducts: stagnantProducts,

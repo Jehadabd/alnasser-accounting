@@ -10,6 +10,7 @@ import '../services/database_service.dart';
 import '../services/debt_reminders.dart';
 import '../services/settings_manager.dart';
 import '../services/whatsapp/claim_message.dart'; // 📨 مطالبة رسمية عبر واتساب
+import '../widgets/app_dialog_shell.dart'; // 🪟 شكل النوافذ الموحّد
 import '../widgets/debt_reminder_editor.dart';
 import '../widgets/settings_kit.dart';
 import 'customer_details_screen.dart';
@@ -417,73 +418,43 @@ class _DueDialogState extends State<_DueDialog> {
   Widget build(BuildContext context) {
     final list = widget.due;
     final total = list.fold<double>(0, (s, d) => s + (d.member.amount ?? d.balance));
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      backgroundColor: Colors.white,
-      surfaceTintColor: Colors.transparent,
-      clipBehavior: Clip.antiAlias,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640, maxHeight: 660),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Container(
-            padding: const EdgeInsetsDirectional.fromSTEB(20, 18, 8, 16),
-            decoration: BoxDecoration(
-              color: _accent.withValues(alpha: 0.06),
-              border: const Border(bottom: BorderSide(color: kSetBorder)),
-            ),
-            child: Row(children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(color: _accent.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(14)),
-                child: const Icon(Icons.notifications_active_rounded, color: _accent),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('المطالبات المستحقة اليوم (${list.length})',
-                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kSetText)),
-                  Text('إجمالي المبالغ المستحقة ${_money(total)} دينار', style: const TextStyle(fontSize: 12.5, color: kSetMuted)),
-                ]),
-              ),
-              IconButton(
-                  tooltip: 'إغلاق',
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded, color: kSetMuted)),
-            ]),
-          ),
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              padding: const EdgeInsets.all(14),
-              itemCount: list.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (context, i) => _row(list[i]),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-            child: Row(children: [
-              TextButton.icon(
-                onPressed: () {
-                  final nav = Navigator.of(context);
-                  nav.pop();
-                  nav.push(MaterialPageRoute(builder: (_) => const DebtRemindersScreen()));
-                },
-                icon: const Icon(Icons.tune_rounded, size: 18),
-                label: const Text('إدارة مواعيد المطالبة'),
-              ),
-              const Spacer(),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _accent, minimumSize: const Size(110, 46)),
-                onPressed: () => Navigator.pop(context),
-                child: const Text('إغلاق'),
-              ),
-            ]),
-          ),
-        ]),
+    final withPhone = list.where((d) => _phones.containsKey(d.member.customerId)).length;
+    return AppDialogShell(
+      icon: Icons.notifications_active_rounded,
+      color: _accent,
+      title: 'المطالبات المستحقة اليوم',
+      subtitle: 'تذكير بمواعيد المطالبة بالسداد التي حلّ موعدها',
+      onClose: () => Navigator.pop(context),
+      maxWidth: 660,
+      headerExtra: Wrap(spacing: 8, runSpacing: 8, children: [
+        HeaderStat(value: '${list.length}', label: 'مطالبة اليوم', icon: Icons.people_alt_rounded),
+        HeaderStat(value: _money(total), label: 'دينار مستحق', icon: Icons.payments_rounded),
+        if (withPhone > 0) HeaderStat(value: '$withPhone', label: 'برقم واتساب', icon: Icons.chat_rounded),
+      ]),
+      body: ListView.separated(
+        shrinkWrap: true,
+        padding: const EdgeInsets.all(14),
+        itemCount: list.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (context, i) => _row(list[i]),
       ),
+      actions: [
+        TextButton.icon(
+          onPressed: () {
+            final nav = Navigator.of(context);
+            nav.pop();
+            nav.push(MaterialPageRoute(builder: (_) => const DebtRemindersScreen()));
+          },
+          icon: const Icon(Icons.tune_rounded, size: 18),
+          label: const Text('إدارة مواعيد المطالبة'),
+        ),
+        const Spacer(),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: _accent, minimumSize: const Size(110, 46)),
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إغلاق'),
+        ),
+      ],
     );
   }
 
@@ -514,7 +485,8 @@ class _DueDialogState extends State<_DueDialog> {
             [
               if ((r.title ?? '').trim().isNotEmpty) r.title!.trim(),
               if (m.amount != null) 'رصيده الحالي ${_money(d.balance)}',
-              if (m.invoiceId != null) 'فاتورة #${m.invoiceId}',
+              // الرقم المطبوع على الفاتورة (لا المعرّف الداخلي)
+              if (m.invoiceId != null && _invoiceNo[m.invoiceId] != null) 'فاتورة رقم ${_invoiceNo[m.invoiceId]}',
               d.lastPaid == null ? 'لا سداد سابق' : 'آخر سداد ${DateFormat('yyyy/MM/dd').format(d.lastPaid!)}',
               r.daysText(),
               if ((r.note ?? '').isNotEmpty) r.note!,
