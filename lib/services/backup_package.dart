@@ -55,6 +55,11 @@ class BackupPackage {
 
   // ─────────────────────────── جلسة «رفع البيانات» ───────────────────────────
 
+  /// للتقدير الزمني: عدد الحزم المصنوعة، وزمن آخرها، وحجمها المضغوط.
+  static int buildCount = 0;
+  static int lastBuildMs = 0;
+  static int lastCompressedBytes = 0;
+
   static bool _inSession = false;
   static Future<BackupPackage>? _session;
 
@@ -96,6 +101,7 @@ class BackupPackage {
   /// يصنع حزمة جديدة. يرمي Exception برسالة عربية عند أي فشل (لا يُرفع شيء ناقص).
   static Future<BackupPackage> build({void Function(double p)? onProgress}) async {
     final now = DateTime.now();
+    final sw = Stopwatch()..start();
     final settings = await SettingsManager.getAppSettings();
     final branch = settings.branchName;
     final dir = await Directory.systemTemp.createTemp('alnaser_backup_');
@@ -138,7 +144,11 @@ class BackupPackage {
         await dbCopy.delete();
       } catch (_) {}
       onProgress?.call(1.0);
-      debugPrint('📦 حزمة النسخ: $format ${dbBytes.length} ← ${await out.length()} بايت');
+      final outLen = await out.length();
+      buildCount++;
+      lastBuildMs = sw.elapsedMilliseconds;
+      lastCompressedBytes = outLen;
+      debugPrint('📦 حزمة النسخ: $format ${dbBytes.length} ← $outLen بايت في $lastBuildMs ms');
       return BackupPackage._(out, format, dbBytes.length, now, branch);
     } catch (e) {
       try {

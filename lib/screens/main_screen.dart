@@ -40,6 +40,7 @@ import 'custom_range_report_screen.dart';
 import '../services/license_service.dart'; // 🔐 نظام التراخيص
 import '../widgets/invoice_range_dialog.dart';
 import '../services/backup_package.dart';
+import '../services/upload_eta.dart';
 // ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
 // تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
 class MainScreen extends StatefulWidget {
@@ -293,6 +294,7 @@ class _MainScreenState extends State<MainScreen> {
     final targetsNotifier = ValueNotifier<List<String>>(const []);
     final currentTarget = ValueNotifier<String?>(null);
     final targetResults = ValueNotifier<Map<String, int>>(const {});
+    final etaEnd = ValueNotifier<DateTime?>(null); // ⏱️ موعد الانتهاء المتوقع (عدّ تنازلي)
     bool uploadSucceeded = false;
 
     // جلب وقت آخر رفع
@@ -319,12 +321,42 @@ class _MainScreenState extends State<MainScreen> {
         if (targets.isEmpty) errors.add('كل وجهات الرفع مطفأة (الإعدادات ← النسخ الاحتياطي ← وجهات الرفع)');
         // 📦 حزمة واحدة (لقطة + فحص سلامة + XZ متحقق منه) تُصنع عند أول وجهة وتُرسل نفسها للكل
         BackupPackage.beginSession();
+
+        // ⏱️ التقدير: الضغط (مرة) + كل وجهة + الفواتير المنتظرة — من قياس الرفعات السابقة
+        final buildCountAtStart = BackupPackage.buildCount;
+        final eta = await UploadEta.load();
+        final dbBytes = await UploadEta.databaseBytes();
+        final withTelegram = targets.contains(UploadTargets.telegram);
+        var compEst = eta.estimateCompressed(dbBytes);
+        var pendingInvoices = 0;
+        if (withTelegram && lastUploadTime != null &&
+            !(appSet.telegramRegularInvoicesMode == 'off' && appSet.telegramPosInvoicesMode == 'off')) {
+          try {
+            pendingInvoices = await TelegramInvoiceExportService().countPendingSince(lastUploadTime);
+          } catch (_) {}
+        }
+        // يعيد ضبط موعد الانتهاء: ما بقي من الوجهات ابتداءً من [from] + [extraMs]
+        void reanchor(int from, {int extraMs = 0}) {
+          var ms = extraMs;
+          if (BackupPackage.buildCount == buildCountAtStart) ms += eta.estimateBuildMs(dbBytes);
+          for (var j = from; j < targets.length; j++) {
+            ms += eta.estimateTargetMs(targets[j], compEst, withTelegram: withTelegram);
+            if (targets[j] == UploadTargets.telegram) ms += eta.estimateInvoicesMs(pendingInvoices);
+          }
+          etaEnd.value = DateTime.now().add(Duration(milliseconds: ms));
+        }
+        reanchor(0);
+
         try {
-        for (final target in targets) {
+        for (var ti = 0; ti < targets.length; ti++) {
+          final target = targets[ti];
           currentTarget.value = target;
           statusNotifier.value = 'جاري الرفع إلى ${UploadTargets.labels[target] ?? target}...';
           final errBefore = errors.length;
           var skipped = false;
+          final targetWatch = Stopwatch()..start();
+          final builtBefore = BackupPackage.buildCount;
+          var invoicesMs = 0;
           try {
           if (target == UploadTargets.telegram) {
                 // 1) رفع قاعدة البيانات إلى Telegram (محلي + تيليجرام فقط)
@@ -366,6 +398,14 @@ class _MainScreenState extends State<MainScreen> {
                       await telegramService.saveInvoiceStart(start);
                       // «من الآن فقط»: لا فواتير في هذا الرفع
                       exportAfterDate = rangeChoice == InvoiceRange.fromNow ? null : start;
+                      // ⏱️ وقت الانتظار عند النافذة لا يُحسب؛ والآن نعرف عدد الفواتير
+                      var n = 0;
+                      if (exportAfterDate != null) {
+                        try {
+                          n = await exporter.countPendingSince(exportAfterDate);
+                        } catch (_) {}
+                      }
+                      reanchor(ti + 1, extraMs: eta.estimateInvoicesMs(n) + 2000);
                     }
                   }
 
@@ -373,6 +413,7 @@ class _MainScreenState extends State<MainScreen> {
                     statusNotifier.value = 'جاري إرسال الفواتير...';
                     // وقت البدء لا وقت الانتهاء: فاتورة تُنشأ أثناء الرفع تبقى للرفع التالي
                     final exportStartedAt = DateTime.now();
+                    final invoicesWatch = Stopwatch()..start();
                     final exportService = TelegramInvoiceExportService();
                     final exportResult = await exportService.exportAndSendNewInvoices(
                       afterDate: exportAfterDate,
@@ -384,6 +425,8 @@ class _MainScreenState extends State<MainScreen> {
                       },
                     );
             
+                    invoicesMs = invoicesWatch.elapsedMilliseconds;
+                    if (exportResult.failedCount == 0) eta.recordInvoices(count: exportResult.sentCount, ms: invoicesMs);
                     // التحقق من نجاح إرسال جميع الفواتير
                     if (exportResult.failedCount > 0) {
                       errors.add('فشل إرسال ${exportResult.failedCount} فاتورة');
@@ -480,12 +523,29 @@ class _MainScreenState extends State<MainScreen> {
             }
           }
           } finally {
+            final ok = !skipped && errors.length == errBefore;
             targetResults.value = {
               ...targetResults.value,
-              target: skipped ? 2 : (errors.length == errBefore ? 1 : 0),
+              target: skipped ? 2 : (ok ? 1 : 0),
             };
+            // ⏱️ تعلّم من هذا الرفع (الناجح فقط)، ثم أعد ضبط العدّ لما بقي
+            var buildMs = 0;
+            if (BackupPackage.buildCount != builtBefore) {
+              buildMs = BackupPackage.lastBuildMs;
+              compEst = BackupPackage.lastCompressedBytes;
+              eta.recordBuild(dbBytes: dbBytes, ms: buildMs, compressed: compEst);
+            }
+            if (ok) {
+              eta.recordTarget(target,
+                  ms: (targetWatch.elapsedMilliseconds - buildMs - invoicesMs).clamp(0, 1 << 31).toInt(),
+                  compressed: compEst,
+                  withTelegram: withTelegram);
+            }
+            if (target == UploadTargets.telegram) pendingInvoices = 0;
+            reanchor(ti + 1);
           }
         }
+        await eta.save();
         } finally {
           BackupPackage.endSession();
         }
@@ -525,6 +585,7 @@ class _MainScreenState extends State<MainScreen> {
         targets: targetsNotifier,
         current: currentTarget,
         results: targetResults,
+        etaEnd: etaEnd,
       ),
     );
 

@@ -4,6 +4,8 @@
 // (تيليجرام، دروب بوكس، Google Drive، ديسكورد) بحالتها: تنتظر / جارية / تمت / فشلت /
 // تُخطّيت. ونافذة النتيجة عند الفشل بالشكل نفسه.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/upload_targets.dart';
@@ -37,6 +39,7 @@ class UploadProgressDialog extends StatefulWidget {
     required this.targets,
     required this.current,
     required this.results,
+    this.etaEnd,
   });
 
   final ValueNotifier<double> progress;
@@ -47,6 +50,9 @@ class UploadProgressDialog extends StatefulWidget {
   /// 1 نجح، 0 فشل، 2 تُخطّي.
   final ValueNotifier<Map<String, int>> results;
 
+  /// ⏱️ موعد الانتهاء المتوقع (يُعاد ضبطه بعد كل وجهة). null = لم يُحسب بعد.
+  final ValueNotifier<DateTime?>? etaEnd;
+
   @override
   State<UploadProgressDialog> createState() => _UploadProgressDialogState();
 }
@@ -55,10 +61,78 @@ class _UploadProgressDialogState extends State<UploadProgressDialog> with Single
   late final AnimationController _pulse =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat(reverse: true);
 
+  // عدّاد ثانية بثانية للوقت المتبقي
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && widget.etaEnd?.value != null) setState(() {});
+    });
+  }
+
   @override
   void dispose() {
+    _tick?.cancel();
     _pulse.dispose();
     super.dispose();
+  }
+
+  static String _fmt(Duration d) {
+    final s = d.inSeconds;
+    final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
+    String two(int v) => v.toString().padLeft(2, '0');
+    return h > 0 ? '$h:${two(m)}:${two(sec)}' : '$m:${two(sec)}';
+  }
+
+  Widget _eta() {
+    final n = widget.etaEnd;
+    if (n == null) return const SizedBox.shrink();
+    return ValueListenableBuilder<DateTime?>(
+      valueListenable: n,
+      builder: (_, end, __) {
+        final String text;
+        final IconData icon;
+        if (end == null) {
+          text = 'حساب الوقت المتوقع...';
+          icon = Icons.hourglass_top_rounded;
+        } else {
+          final left = end.difference(DateTime.now());
+          if (left.inSeconds <= 0) {
+            text = 'يوشك على الانتهاء...';
+            icon = Icons.hourglass_bottom_rounded;
+          } else {
+            text = 'الوقت المتبقي تقريباً ${_fmt(left)}';
+            icon = Icons.timer_outlined;
+          }
+        }
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+              color: _blue.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _blue.withValues(alpha: 0.25)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 17, color: _blue),
+              const SizedBox(width: 6),
+              Text(text,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: _navy,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  )),
+            ]),
+          ),
+          const SizedBox(height: 4),
+          const Text('تقدير حسب حجم البيانات وسرعة الإنترنت في الرفعات السابقة',
+              style: TextStyle(fontSize: 11, color: _muted)),
+        ]);
+      },
+    );
   }
 
   @override
@@ -83,7 +157,9 @@ class _UploadProgressDialogState extends State<UploadProgressDialog> with Single
           padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Center(child: _ring()),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            Center(child: _eta()),
+            const SizedBox(height: 12),
             ValueListenableBuilder<String>(
               valueListenable: widget.status,
               builder: (_, status, __) => AnimatedSwitcher(
