@@ -2207,19 +2207,39 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     }
   }
 
+  /// خطوة تنظيف معزولة: فشلها يُسجَّل باسمها ولا يمنع ما بعدها (خاصة حفظ المسودة).
+  void _disposeStep(String what, void Function() step) {
+    try {
+      step();
+    } catch (e) {
+      debugPrint('⚠️ إغلاق شاشة الفاتورة — $what: $e');
+    }
+  }
+
   @override
   void dispose() {
     DebtReminders.pendingForNewInvoice = null; // 📅 موعد لم يُحفظ مع فاتورة: لا يتعلق بفاتورة أخرى
-    HardwareKeyboard.instance.removeHandler(_onOwnerCostPeekKey);
-    _wedge.detach();
-    InvoiceSidePanelPref.notifier.removeListener(_onSidePanelPrefChanged);
-    try {
-      // 1. إلغاء المؤقت أولاً لمنع أي عمليات حفظ متأخرة
+    _disposeStep('مفاتيح', () => HardwareKeyboard.instance.removeHandler(_onOwnerCostPeekKey));
+    _disposeStep('قارئ الباركود', _wedge.detach);
+    _disposeStep('تفضيل اللوحة', () => InvoiceSidePanelPref.notifier.removeListener(_onSidePanelPrefChanged));
+
+    // 1. إلغاء المؤقتات أولاً لمنع أي عمليات حفظ متأخرة
+    _disposeStep('المؤقتات', () {
       debounceTimer?.cancel();
       _custClaimDebounce?.cancel();
-      _custClaim.release(); // 🔒 تحرير اسم العميل للأجهزة الأخرى
+      _invoiceLockHeartbeat?.cancel();
+    });
+    _disposeStep('تحرير اسم العميل', _custClaim.release); // 🔒 للأجهزة الأخرى
 
-      // 2. إزالة جميع المستمعين لمنع استدعاء logic بعد التخلص من الكائنات
+    // 2. الحفظ الفوري للمسودة — قبل أي إتلاف، ولا يتخطاه فشل خطوة أخرى
+    _disposeStep('حفظ المسودة', () {
+      if (!savedOrSuspended && widget.existingInvoice == null && !isViewOnly) {
+        _saveDataImmediately();
+      }
+    });
+
+    // 3. إزالة المستمعين
+    _disposeStep('المستمعون', () {
       customerNameController.removeListener(_onFieldChanged);
       customerNameController.removeListener(_onCustomerChanged);
       customerPhoneController.removeListener(_onFieldChanged);
@@ -2229,63 +2249,53 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       paidAmountController.removeListener(_onFieldChanged);
       discountController.removeListener(_onFieldChanged);
       discountController.removeListener(_onDiscountChanged);
-      _quantityFocusNode.removeListener(_onFieldChanged);
       _productSearchController.removeListener(_onFieldChanged);
+    });
+    _disposeStep('مستمع الكمية', () => _quantityFocusNode.removeListener(_onFieldChanged));
 
-      // 3. الحفظ الفوري عند إغلاق الشاشة إذا لزم الأمر
-      if (!savedOrSuspended &&
-          widget.existingInvoice == null &&
-          !isViewOnly) {
-        _saveDataImmediately();
-      }
-
-      // 🔒 [Locking System] Release Locks
-      _invoiceLockHeartbeat?.cancel();
-      
-      // Release Invoice Lock if we held it
+    // 🔒 [Locking System] تحرير الأقفال
+    _disposeStep('الأقفال', () {
       if (invoiceToManage?.id != null && !isViewOnly) {
-         db.lockingService.releaseLock(resourceType: 'invoice', resourceId: invoiceToManage!.id!);
+        db.lockingService.releaseLock(resourceType: 'invoice', resourceId: invoiceToManage!.id!);
       }
-      
-      // Release Customer Lock if we held it (New Invoice scenario) or generally just cleanup
       if (invoiceToManage?.customerId != null) {
-         db.lockingService.releaseLock(resourceType: 'customer', resourceId: invoiceToManage!.customerId!);
+        db.lockingService.releaseLock(resourceType: 'customer', resourceId: invoiceToManage!.customerId!);
       }
-      
-      // 4. التخلص من المتحكمات (Controllers)
-      customerNameController.dispose();
-      customerPhoneController.dispose();
-      customerAddressController.dispose();
-      preparerController.dispose();
-      accountantController.dispose();
-      installerNameController.dispose();
+    });
 
-      _productSearchController.dispose();
-      _quantityController.dispose();
-      _itemsController.dispose();
-      _totalAmountController.dispose();
-      paidAmountController.dispose();
-      discountController.dispose();
-      loadingFeeController.dispose();
-      _productIdController.dispose();
-      
-      // 5. التخلص من عقد التركيز (FocusNodes)
-      _quantityFocusNode.dispose();
-      _searchFocusNode.dispose();
-      _scrollController.dispose();
-      _hScrollController.dispose();
-
-      // 6. التخلص من عقد التركيز لصفوف الفاتورة
-      for (final node in focusNodesList) {
-        node.dispose();
-      }
-      focusNodesList.clear();
-      
-    } catch (e) {
-      debugPrint('Error in dispose: $e');
-    } finally {
-      super.dispose();
+    // 4. المتحكمات — كلٌّ وحده
+    for (final c in <ChangeNotifier>[
+      customerNameController,
+      customerPhoneController,
+      customerAddressController,
+      preparerController,
+      accountantController,
+      installerNameController,
+      _productSearchController,
+      _quantityController,
+      _itemsController,
+      _totalAmountController,
+      paidAmountController,
+      discountController,
+      _productIdController,
+      _scrollController,
+      _hScrollController,
+    ]) {
+      _disposeStep('متحكم', c.dispose);
     }
+    // late: قد لا يكون أُنشئ إن أُغلقت الشاشة مبكراً — داخل الخطوة كي لا يوقف الباقي
+    _disposeStep('أجور النقل', () => loadingFeeController.dispose());
+
+    // 5. عقد التركيز (ومنها عقدة السعر التي لم تكن تُتلف)
+    _disposeStep('عقدة الكمية', _quantityFocusNode.dispose);
+    _disposeStep('عقدة البحث', _searchFocusNode.dispose);
+    _disposeStep('عقدة السعر', _priceFocusNode.dispose);
+    for (final node in focusNodesList) {
+      _disposeStep('عقد صف', node.dispose);
+    }
+    focusNodesList.clear();
+
+    super.dispose();
   }
 
   Future<void> _selectDate(BuildContext context) async {
@@ -5652,6 +5662,13 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   late FocusNode _quantityFocusNode;
   late FocusNode _priceFocusNode;
   late FocusNode _detailsFocusNode;
+  // ملكية عقد التركيز تُحدَّد مرة عند الإنشاء: الصف يتلف ما أنشأه هو فقط.
+  // (كان يقرّر عند الإتلاف من widget الحالي؛ بعد الحفظ تصير الشاشة «عرض فقط» فتصل الصفَّ
+  //  عقدٌ null، فيتلف عقد الشاشة التي أعطته إياها ثم تتلفها الشاشة ثانية ⇒
+  //  «FocusNode was used after being disposed» ويتوقف تنظيف الشاشة في منتصفه)
+  late final bool _ownsDetailsNode;
+  late final bool _ownsQuantityNode;
+  late final bool _ownsPriceNode;
   late FocusNode _saleTypeFocusNode;
   final FocusNode _discountFocusNode = FocusNode(); // 🏷️ خانة الخصم حين تكون ضمن مسار Enter
   final TextEditingController _discountController = TextEditingController();
@@ -5874,6 +5891,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
           .toString(),
     );
     _priceController = widget.item.appliedPriceController;
+    _ownsDetailsNode = widget.detailsFocusNode == null;
+    _ownsQuantityNode = widget.quantityFocusNode == null;
+    _ownsPriceNode = widget.priceFocusNode == null;
     _detailsFocusNode = widget.detailsFocusNode ?? FocusNode();
     _quantityFocusNode = widget.quantityFocusNode ?? FocusNode();
     _priceFocusNode = widget.priceFocusNode ?? FocusNode();
@@ -5941,15 +5961,9 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     // تنظيف الـ controller الذي نملكه
     _ownedDetailsController?.dispose();
     
-    if (widget.detailsFocusNode == null) {
-      _detailsFocusNode.dispose();
-    }
-    if (widget.quantityFocusNode == null) {
-      _quantityFocusNode.dispose();
-    }
-    if (widget.priceFocusNode == null) {
-      _priceFocusNode.dispose();
-    }
+    if (_ownsDetailsNode) _detailsFocusNode.dispose();
+    if (_ownsQuantityNode) _quantityFocusNode.dispose();
+    if (_ownsPriceNode) _priceFocusNode.dispose();
     _saleTypeFocusNode.dispose();
     _rowIdDebounce?.cancel();
     super.dispose();
