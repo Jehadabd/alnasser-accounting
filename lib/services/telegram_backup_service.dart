@@ -353,6 +353,13 @@ class TelegramBackupService {
     await prefs.setString(_lastUploadTimeKey, DateTime.now().toIso8601String());
   }
 
+  /// 🧾 نقطة بداية إرسال الفواتير: تُحفظ فور اختيار المدى أول مرة (فلا يتكرر السؤال)،
+  /// وتتقدّم إلى وقت بدء آخر إرسال نجح كله. سجل telegram_sent يمنع التكرار.
+  Future<void> saveInvoiceStart(DateTime start) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastUploadTimeKey, start.toIso8601String());
+  }
+
   /// الحصول على وقت آخر رفع
   Future<DateTime?> getLastUploadTime() async {
     final prefs = await SharedPreferences.getInstance();

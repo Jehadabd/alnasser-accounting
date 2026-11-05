@@ -39,6 +39,7 @@ import '../erp/currency_service.dart' show CurrencyService;
 import '../widgets/report_kit.dart' show repMoney, repCanSeeProfit;
 import 'custom_range_report_screen.dart';
 import '../services/license_service.dart'; // 🔐 نظام التراخيص
+import '../widgets/invoice_range_dialog.dart';
 // ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
 // تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
 class MainScreen extends StatefulWidget {
@@ -307,9 +308,6 @@ class _MainScreenState extends State<MainScreen> {
     if (!mounted) return;
     Future(() async {
       try {
-        // متغير لتتبع نجاح إرسال الفواتير لتيليجرام
-        bool allInvoicesSentSuccessfully = true;
-        bool invoicesSent = false; // أُرسلت الفواتير فعلاً في هذا الرفع (لحفظ وقت آخر رفع)
         List<String> errors = [];
         
         // ☁️ الوجهات المفعّلة بالترتيب المختار في الإعدادات ← النسخ الاحتياطي
@@ -352,47 +350,26 @@ class _MainScreenState extends State<MainScreen> {
             
                     // الخيارات المتاحة للمستخدم
                     if (!mounted) return;
+                    final exporter = TelegramInvoiceExportService();
                     final rangeChoice = await showDialog<String>(
                       context: context,
                       barrierDismissible: false,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('أول عملية رفع للفواتير'),
-                        content: const Text('يرجى اختيار مدى الفواتير التي ترغب في إرسالها إلى Telegram للمرة الأولى:'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, '24h'),
-                            child: const Text('آخر 24 ساعة'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, 'week'),
-                            child: const Text('آخر أسبوع'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, 'all'),
-                            child: const Text('الكل (قد يستغرق وقتاً)'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, 'cancel'),
-                            child: const Text('إلغاء رفع الفواتير', style: TextStyle(color: Colors.red)),
-                          ),
-                        ],
-                      ),
+                      builder: (_) => InvoiceRangeDialog(countSince: exporter.countPendingSince),
                     );
-
-                    if (rangeChoice == 'cancel' || rangeChoice == null) {
-                      // تخطي رفع الفواتير ولكن استمر في الباقي
-                      exportAfterDate = null; 
-                    } else if (rangeChoice == '24h') {
-                      exportAfterDate = DateTime.now().subtract(const Duration(days: 1));
-                    } else if (rangeChoice == 'week') {
-                      exportAfterDate = DateTime.now().subtract(const Duration(days: 7));
-                    } else if (rangeChoice == 'all') {
-                      exportAfterDate = DateTime(2000); // تاريخ قديم جداً يشمل الكل
+                    if (rangeChoice != null) {
+                      // يُحفظ فوراً ⇒ لا يُسأل مرة أخرى مهما حدث في باقي الرفع.
+                      // (كان يُحفظ فقط إن نجحت كل الفواتير، و«إلغاء» لا يحفظ شيئاً ⇒ السؤال كل مرة)
+                      final start = InvoiceRange.startOf(rangeChoice, DateTime.now());
+                      await telegramService.saveInvoiceStart(start);
+                      // «من الآن فقط»: لا فواتير في هذا الرفع
+                      exportAfterDate = rangeChoice == InvoiceRange.fromNow ? null : start;
                     }
                   }
 
                   if (exportAfterDate != null && !noInvoices) {
                     statusNotifier.value = 'جاري إرسال الفواتير...';
+                    // وقت البدء لا وقت الانتهاء: فاتورة تُنشأ أثناء الرفع تبقى للرفع التالي
+                    final exportStartedAt = DateTime.now();
                     final exportService = TelegramInvoiceExportService();
                     final exportResult = await exportService.exportAndSendNewInvoices(
                       afterDate: exportAfterDate,
@@ -404,11 +381,12 @@ class _MainScreenState extends State<MainScreen> {
                       },
                     );
             
-                    invoicesSent = true;
                     // التحقق من نجاح إرسال جميع الفواتير
                     if (exportResult.failedCount > 0) {
-                      allInvoicesSentSuccessfully = false;
                       errors.add('فشل إرسال ${exportResult.failedCount} فاتورة');
+                    } else if (exportResult.success) {
+                      // نجح الكل ⇒ تتقدّم نقطة البداية (وإلا تبقى فيُعاد ما فشل في الرفع التالي)
+                      await telegramService.saveInvoiceStart(exportStartedAt);
                     }
                   }
                 } else {
@@ -511,11 +489,6 @@ class _MainScreenState extends State<MainScreen> {
         currentTarget.value = null;
         TelegramBackupService.mirrorToDiscord = true;
 
-        // 5) حفظ وقت آخر رفع للفواتير إذا أُرسلت كلها — بغض النظر عن أخطاء وجهات أخرى
-        //    (كان خطأ Dropbox أو تقرير PDF يمنع الحفظ فيعود سؤال «مدى الفواتير» كل مرة)
-        if (invoicesSent && allInvoicesSentSuccessfully) {
-          await telegramService.saveLastUploadTime();
-        }
         
         progressNotifier.value = 1.0;
         

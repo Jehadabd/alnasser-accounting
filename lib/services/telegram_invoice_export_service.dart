@@ -30,6 +30,19 @@ class TelegramInvoiceExportService {
     return _exportInvoicesInternal(afterDate: afterDate, onProgress: onProgress);
   }
 
+  /// عدد الفواتير المحفوظة التي لم تُرسل بعد والمُنشأة بعد [after] (لنافذة اختيار المدى).
+  Future<int> countPendingSince(DateTime after) async {
+    final db = await _db.database;
+    await InvoiceUploadTracker.ensure(db);
+    final r = await db.rawQuery("""
+      SELECT COUNT(*) AS c
+      FROM invoices i LEFT JOIN telegram_sent s ON s.invoice_id = i.id
+      WHERE i.status = 'محفوظة' AND COALESCE(i.is_deleted, 0) = 0
+        AND s.invoice_id IS NULL AND i.created_at > ?
+    """, [after.toIso8601String()]);
+    return (r.first['c'] as num?)?.toInt() ?? 0;
+  }
+
   /// تصدير جميع الفواتير وإرسالها إلى Telegram
   Future<TelegramExportResult> exportAndSendAllInvoices({
     Function(int current, int total, String status)? onProgress,
