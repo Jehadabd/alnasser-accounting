@@ -14,6 +14,7 @@ import '../../services/settings_manager.dart';
 import '../arabic_words.dart';
 import '../erp_common.dart';
 import '../report_export.dart';
+import '../../services/receipt_paper.dart';
 
 /// إعداد نوع طباعة فاتورة البيع: a4 (الافتراضي) أو 80mm.
 class InvoicePrintFormat {
@@ -62,15 +63,19 @@ class RollInvoicePdf {
     final total = roundMoney(gross + loadingFee - discount);
     final isCash = paymentType == 'نقد';
     final paidShown = isCash ? total : paid;
+    // 🧻 عرض الورق من الإعدادات (80 أو 58 ملم) — الخطوط تصغر بالمعامل نفسه
+    final paper = await ReceiptPaper.get();
+    final k = ReceiptPaper.scale(paper);
     pw.TextStyle st(double s, {bool bold = false}) =>
-        pw.TextStyle(font: f, fontSize: s, fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal);
+        pw.TextStyle(font: f, fontSize: s * k, fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal);
     pw.Widget kv(String k, String v, {double size = 9, bool bold = false}) => pw.Row(
           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
           children: [pw.Text(k, style: st(size, bold: bold)), pw.Text(v, style: st(size, bold: bold))],
         );
     final doc = pw.Document();
     doc.addPage(pw.Page(
-      pageFormat: PdfPageFormat.roll80.copyWith(marginLeft: 8, marginRight: 8, marginTop: 8, marginBottom: 8),
+      pageFormat: (paper == 58 ? PdfPageFormat.roll57 : PdfPageFormat.roll80)
+          .copyWith(marginLeft: 8 * k, marginRight: 8 * k, marginTop: 8, marginBottom: 8),
       textDirection: pw.TextDirection.rtl,
       theme: pw.ThemeData.withFont(base: f, bold: f),
       build: (_) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [

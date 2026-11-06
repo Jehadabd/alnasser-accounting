@@ -57,6 +57,7 @@ import '../models/account_statement_item.dart';
 import 'data_import_screen.dart'; // 📥 استيراد من Excel
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
 import '../widgets/loading_dialog.dart';
+import '../services/receipt_paper.dart';
 
 
 class GeneralSettingsScreen extends StatefulWidget {
@@ -245,6 +246,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     // 🖨️ تحميل إعدادات الطابعات
     _posThermalPrinter = await SettingsManager.getPosThermalPrinter();
     _invoicePrinter = await SettingsManager.getInvoicePrinter();
+    await ReceiptPaper.get();
     final printingService = getPlatformPrintingService();
     final systemPrinters = await printingService.findSystemPrinters();
     final manualPrinters = await SettingsManager.getManualPrinters();
@@ -1822,6 +1824,27 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                     printers: _availablePrinters,
                     onSelected: (p) => _selectPosThermalPrinter(p),
                     color: Colors.teal,
+                  ),
+                  const SizedBox(height: 10),
+                  // 🧻 عرض ورق الطابعة الحرارية (80 / 58 ملم) — يُحفظ فوراً
+                  ValueListenableBuilder<int>(
+                    valueListenable: ReceiptPaper.current,
+                    builder: (_, mm, __) => Row(children: [
+                      const Icon(Icons.straighten_rounded, color: Colors.teal, size: 20),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text('عرض ورق الطابعة الحرارية',
+                            style: TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                      SegmentedButton<int>(
+                        segments: const [
+                          ButtonSegment(value: 80, label: Text('80 ملم')),
+                          ButtonSegment(value: 58, label: Text('58 ملم')),
+                        ],
+                        selected: {mm},
+                        onSelectionChanged: (v) => ReceiptPaper.set(v.first),
+                      ),
+                    ]),
                   ),
                   
                   const SizedBox(height: 16),

@@ -13,6 +13,7 @@ import 'package:printing/printing.dart';
 import 'package:flutter/services.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:intl/intl.dart';
+import 'receipt_paper.dart';
 
 /// 🎨 بيانات الإيصال لتصميم من «مصمم الفاتورة»
 InvoicePrintData designedReceiptData(ReceiptData r, PrintCompany company) {
@@ -194,42 +195,45 @@ class ThermalReceiptService {
 
   /// إنشاء PDF للإيصال
   Future<Uint8List> _buildReceiptPdf(ReceiptData receipt, String companyName, String phoneNumber) async {
-    // إعدادات الورق للطابعة الحرارية (80mm - عرض الطباعة الفعلي ~72-75mm)
-    const receiptWidth = 72.0 * PdfPageFormat.mm;
+    // 🧻 عرض الورق من الإعدادات (80 أو 58 ملم): مساحة الطباعة الفعلية، ومعامل تصغير k
+    //    لكل الخطوط والأعمدة كي يبقى الإيصال نفسه مقروءاً على 58 ملم.
+    final paper = await ReceiptPaper.get();
+    final receiptWidth = ReceiptPaper.printableMm(paper) * PdfPageFormat.mm;
+    final k = ReceiptPaper.scale(paper);
     
     final pdf = pw.Document();
 
     final baseStyle = pw.TextStyle(
       font: _arabicFont,
-      fontSize: 9, // تصغير الخط ليناسب 58mm
+      fontSize: 9 * k, // تصغير الخط ليناسب 58mm
     );
     
     final boldStyle = pw.TextStyle(
       font: _arabicFont,
-      fontSize: 10,
+      fontSize: 10 * k,
       fontWeight: pw.FontWeight.bold,
     );
     
     final titleStyle = pw.TextStyle(
       font: _arabicFont,
-      fontSize: 12,
+      fontSize: 12 * k,
       fontWeight: pw.FontWeight.bold,
     );
 
     final smallStyle = pw.TextStyle(
       font: _arabicFont,
-      fontSize: 8,
+      fontSize: 8 * k,
     );
     
     final tableHeaderStyle = pw.TextStyle(
       font: _arabicFont,
-      fontSize: 9,
+      fontSize: 9 * k,
       fontWeight: pw.FontWeight.bold,
     );
 
     pdf.addPage(
       pw.Page(
-        pageFormat: const PdfPageFormat(receiptWidth, double.infinity, marginAll: 0.5), // هوامش شبه معدومة (0.5mm)
+        pageFormat: PdfPageFormat(receiptWidth, double.infinity, marginAll: 0.5), // هوامش شبه معدومة (0.5mm)
         textDirection: pw.TextDirection.rtl,
         build: (context) {
           return pw.Column(
@@ -257,19 +261,19 @@ class ThermalReceiptService {
                       ],
                     ),
                   ),
-                  pw.SizedBox(width: 5),
+                  pw.SizedBox(width: 5 * k),
                   // اللوجو (يسار)
                   if (_logoImage != null)
                     pw.Container(
-                      width: 55, // تكبير عرض اللوجو
-                      height: 55,
+                      width: 55 * k, // تكبير عرض اللوجو
+                      height: 55 * k,
                       child: pw.Image(_logoImage!),
                     ),
                 ],
               ),
-              pw.SizedBox(height: 5),
+              pw.SizedBox(height: 5 * k),
               pw.Divider(thickness: 1),
-              pw.SizedBox(height: 2),
+              pw.SizedBox(height: 2 * k),
               
               // ═══════════════════════════════════════════════════════════
               // رقم الفاتورة والتاريخ (كل واحد في سطر)
@@ -292,7 +296,7 @@ class ThermalReceiptService {
                         pw.Text('نسخة', style: boldStyle, textDirection: pw.TextDirection.rtl),
                     ],
                   ),
-                  pw.SizedBox(height: 1),
+                  pw.SizedBox(height: 1 * k),
                   // التاريخ والوقت (يمين - تحت رقم الفاتورة)
                   pw.Text(_formatDateTime(receipt.dateTime), 
                     style: smallStyle, 
@@ -310,9 +314,9 @@ class ThermalReceiptService {
                     style: baseStyle, 
                     textDirection: pw.TextDirection.rtl),
                 ),
-              pw.SizedBox(height: 4),
+              pw.SizedBox(height: 4 * k),
               pw.Divider(thickness: 1),
-              pw.SizedBox(height: 2),
+              pw.SizedBox(height: 2 * k),
               
               // ═══════════════════════════════════════════════════════════
               // رأس الجدول: الصنف | العدد | السعر (سعر القطعة)
@@ -329,11 +333,11 @@ class ThermalReceiptService {
                       child: pw.Text('الصنف', style: tableHeaderStyle, textAlign: pw.TextAlign.right, textDirection: pw.TextDirection.rtl),
                     ),
                     pw.SizedBox(
-                      width: 25,
+                      width: 25 * k,
                       child: pw.Text('عدد', style: tableHeaderStyle, textAlign: pw.TextAlign.center),
                     ),
                     pw.SizedBox(
-                      width: 45, // زيادة العرض قليلاً للأرقام الكبيرة
+                      width: 45 * k, // زيادة العرض قليلاً للأرقام الكبيرة
                       child: pw.Text('سعر', style: tableHeaderStyle, textAlign: pw.TextAlign.center),
                     ),
                   ],
@@ -358,11 +362,11 @@ class ThermalReceiptService {
                       ),
                     ),
                     pw.SizedBox(
-                      width: 25,
+                      width: 25 * k,
                       child: pw.Text(_formatNumber(item.quantity.toDouble()), style: baseStyle, textAlign: pw.TextAlign.center),
                     ),
                     pw.SizedBox(
-                      width: 45,
+                      width: 45 * k,
                       // عرض سعر القطعة الواحدة كما طلب المستخدم
                       child: pw.Text(_formatNumber(item.price), style: baseStyle, textAlign: pw.TextAlign.center),
                     ),
@@ -371,7 +375,7 @@ class ThermalReceiptService {
               )),
               
               pw.Divider(thickness: 1),
-              pw.SizedBox(height: 2),
+              pw.SizedBox(height: 2 * k),
               
               // ═══════════════════════════════════════════════════════════
               // المجاميع (محاذاة التسميات تحت عمود الصنف - يمين)
@@ -397,7 +401,7 @@ class ThermalReceiptService {
               ),
               
               // الإجمالي النهائي
-              pw.SizedBox(height: 4),
+              pw.SizedBox(height: 4 * k),
               pw.Container(
                 padding: const pw.EdgeInsets.symmetric(vertical: 2),
                 decoration: const pw.BoxDecoration(
@@ -407,14 +411,14 @@ class ThermalReceiptService {
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
                     pw.Text('الإجمالي:', style: boldStyle, textDirection: pw.TextDirection.rtl),
-                    pw.Text(_formatNumber(receipt.total), style: pw.TextStyle(font: _arabicFont, fontSize: 13, fontWeight: pw.FontWeight.bold)),
+                    pw.Text(_formatNumber(receipt.total), style: pw.TextStyle(font: _arabicFont, fontSize: 13 * k, fontWeight: pw.FontWeight.bold)),
                   ],
                 ),
               ),
               
               // المدفوع والمتبقي (للدين)
               if (receipt.paymentType == 'دين' && receipt.remainingAmount > 0) ...[
-                pw.SizedBox(height: 2),
+                pw.SizedBox(height: 2 * k),
                 pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
@@ -432,15 +436,15 @@ class ThermalReceiptService {
               ],
               
               pw.Divider(thickness: 1),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 10 * k),
               
               // ═══════════════════════════════════════════════════════════
               // ذيل الإيصال
               // ═══════════════════════════════════════════════════════════
               pw.Center(child: pw.Text('شكراً لتعاملكم معنا', style: smallStyle, textDirection: pw.TextDirection.rtl)),
-              pw.SizedBox(height: 2),
+              pw.SizedBox(height: 2 * k),
               pw.Center(child: pw.Text('تطبيق الناصر', style: boldStyle, textDirection: pw.TextDirection.rtl)),
-              pw.SizedBox(height: 20), // مسافة للقطع
+              pw.SizedBox(height: 20 * k), // مسافة للقطع
             ],
           );
         },

@@ -14,6 +14,8 @@ import 'database_service.dart';
 import 'settings_manager.dart';
 import 'telegram_backup_service.dart';
 import 'invoice_pdf_service.dart'; // 🔄 استخدام InvoicePdfService الموحد
+import 'printed_invoice_pdf.dart'; // 🖨️ نفس شكل الطباعة
+import '../models/invoice_adjustment.dart';
 import 'invoice_upload_tracker.dart'; // 📤 ما رُفع، وأي فاتورة من الكاشير
 import 'logo_service.dart'; // 🖼️ Custom logo loading
 import 'font_manager.dart'; // 🔡 Font management
@@ -188,45 +190,39 @@ class TelegramInvoiceExportService {
               }
               final itemsTotal = items.fold(0.0, (sum, item) => sum + item.itemTotal);
               final afterDiscount = (itemsTotal + invoice.loadingFee) - invoice.discount;
-              final remaining = afterDiscount - invoice.amountPaidOnInvoice;
               final invoiceProfit = _calculateInvoiceProfit(items, productMap, invoice.discount);
 
-              double previousDebt = 0.0, currentDebt = 0.0;
+              double currentDebt = 0.0;
               String? customerPhone;
               String invoiceCustomerAddress = '';
               if (invoice.customerId != null) {
                 final customer = await _db.getCustomerById(invoice.customerId!);
                 if (customer != null) {
                   currentDebt = customer.currentTotalDebt;
-                  previousDebt = currentDebt - remaining; // تقديري
                   customerPhone = customer.phone;
                   invoiceCustomerAddress = customer.address ?? '';
                 }
               }
 
-              final pdf = await InvoicePdfService.generateInvoicePdf(
-                into: doc,
-                invoiceItems: items,
+              // 🖨️ الشكل المطبوع نفسه: المصدر الموحّد الذي تطبع منه شاشة الفاتورة (A4)
+              var adjs = <InvoiceAdjustment>[];
+              try {
+                adjs = await _db.getInvoiceAdjustments(invoice.id!);
+              } catch (_) {}
+              final pdf = doc ?? pw.Document();
+              await PrintedInvoicePdf.addSavedInvoice(
+                pdf,
+                invoice: invoice,
+                items: items,
+                adjs: adjs,
                 allProducts: allProducts,
-                customerName: invoice.customerName,
-                customerAddress: invoiceCustomerAddress,
-                customerPhone: customerPhone,
-                invoiceId: invoice.id!,
-                createdAt: invoice.invoiceDate,
-                selectedDate: invoice.invoiceDate,
-                discount: invoice.discount,
-                paid: invoice.amountPaidOnInvoice,
-                loadingFee: invoice.loadingFee,
-                paymentType: invoice.paymentType,
-                invoiceToManage: invoice,
-                afterDiscount: afterDiscount,
-                remaining: remaining,
+                appSettings: appSettings,
                 font: font,
                 alnaserFont: alnaserFont,
                 logoImage: logoImage,
-                appSettings: appSettings,
-                previousDebt: previousDebt,
-                currentDebt: currentDebt,
+                customerCurrentDebt: currentDebt,
+                customerPhone: (customerPhone ?? '').trim(),
+                customerAddress: invoiceCustomerAddress,
               );
 
               numbers.add('${invoice.formattedInvoiceNumber}${edited ? ' (معدّلة)' : ''}');

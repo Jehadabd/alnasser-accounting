@@ -22,6 +22,7 @@ import 'invoice_layout_templates.dart';
 import 'invoice_print_data.dart';
 import 'layout_canvas.dart';
 import 'layout_pdf_renderer.dart';
+import 'print_choices_dialog.dart';
 
 class _C {
   _C._();
@@ -426,50 +427,14 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
     if (!mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('ما يُطبع الآن'),
-          content: SizedBox(
-            width: 460,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final t in _modeTargets) ...[
-                    Text(t.label, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    Text(t.hint, style: const TextStyle(fontSize: 11.5, color: _C.muted)),
-                    const SizedBox(height: 6),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('print_target_${t.key}_${_targets[t.key] ?? ''}'),
-                      initialValue: _layouts.any((l) => l.id == _targets[t.key] && t.accepts(l))
-                          ? _targets[t.key]
-                          : '',
-                      isExpanded: true,
-                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('التصميم الأصلي للبرنامج')),
-                        for (final l in _layouts.where(t.accepts))
-                          DropdownMenuItem(value: l.id, child: Text(l.name, overflow: TextOverflow.ellipsis)),
-                      ],
-                      onChanged: (v) async {
-                        final id = v ?? '';
-                        await InvoiceLayoutStore.setTarget(t.key, id);
-                        if (!mounted) return;
-                        setState(() => _targets[t.key] = id);
-                        setLocal(() {});
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('تم')),
-          ],
-        ),
+      builder: (_) => PrintChoicesDialog(
+        targets: _modeTargets,
+        layouts: _layouts,
+        current: {for (final t in _modeTargets) t.key: _targets[t.key] ?? ''},
+        onChange: (t, id) async {
+          await InvoiceLayoutStore.setTarget(t.key, id);
+          if (mounted) setState(() => _targets[t.key] = id);
+        },
       ),
     );
   }
