@@ -40,6 +40,7 @@ import '../services/auth_service.dart';
 import '../services/database_service.dart';
 import '../widgets/formatters.dart';
 import 'item_card_screen.dart' show ItemCardService, ItemCardScreen, ErpStockReserved, itemTypeLabels;
+import '../services/keyboard_layout/english_code_focus.dart'; // ⌨️ رمز المادة بالإنجليزية
 
 // ─────────────────────────── ألوان الواجهة ───────────────────────────
 class _C {
@@ -195,6 +196,9 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   Map<String, Object?>? _lastPurchase;
 
   final _nameFocus = FocusNode();
+  // ⌨️ «رمز المادة»: لوحة المفاتيح إنجليزية تلقائياً إن فُعّل الإعداد
+  final _codeFocus = FocusNode();
+  late final EnglishCodeFocus _codeKeyboard = EnglishCodeFocus(_codeFocus);
   final _price1Focus = FocusNode();
 
   // 💲 كلفة/مفرد الوحدة الأساسية داخل بطاقة الوحدات + «المرساة»: آخر وحدة كُتب
@@ -223,6 +227,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
 
   @override
   void dispose() {
+    _codeKeyboard.dispose();
+    _codeFocus.dispose();
     for (final c in [_name, _code, _barcode, _baseUnit, _cost, _costUsd, _openQty, _weight, _alertQty, ..._price, ..._markup]) {
       c.dispose();
     }
@@ -1394,6 +1400,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     final idFields = [
       _field('رمز المادة', _code,
           hint: 'تلقائي',
+          focus: (_codeKeyboard.node),
           suffix: IconButton(
             tooltip: 'رمز تلقائي جديد',
             icon: const Icon(Icons.auto_awesome, size: 17, color: _C.cyan),

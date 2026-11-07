@@ -31,6 +31,7 @@ import '../services/database_service.dart';
 import 'item_card_editor_screen.dart';
 import 'product_delete.dart';
 import 'product_lookup.dart';
+import '../services/keyboard_layout/english_code_focus.dart'; // ⌨️ رمز المادة بالإنجليزية
 
 const Map<String, String> itemTypeLabels = {
   'trade': 'للمتاجرة',
@@ -755,11 +756,22 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
   String _pricingMode = 'fixed';
   String? _defaultUnit;
 
+  // ⌨️ «رمز المادة»: لوحة المفاتيح إنجليزية تلقائياً إن فُعّل الإعداد
+  final _codeFocus = FocusNode();
+  late final EnglishCodeFocus _codeKeyboard = EnglishCodeFocus(_codeFocus);
+
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 7, vsync: this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _codeKeyboard.dispose();
+    _codeFocus.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -917,10 +929,13 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
 
   // ─────────────── عناصر مساعدة ───────────────
 
-  Widget _tf(String k, String label, {double width = 220, bool number = false, int maxLines = 1}) => SizedBox(
+  Widget _tf(String k, String label,
+          {double width = 220, bool number = false, int maxLines = 1, FocusNode? focus}) =>
+      SizedBox(
         width: width,
         child: TextField(
           controller: _c[k],
+          focusNode: focus,
           maxLines: maxLines,
           keyboardType: number ? const TextInputType.numberWithOptions(decimal: true) : null,
           inputFormatters: number ? [ThousandSeparatorDecimalInputFormatter()] : null,
@@ -1061,7 +1076,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
             SizedBox(
               width: 220,
               child: Row(children: [
-                Expanded(child: _tf('item_code', 'رمز المادة')),
+                Expanded(child: _tf('item_code', 'رمز المادة', focus: _codeKeyboard.node)),
                 IconButton(
                   tooltip: 'رمز تلقائي',
                   icon: const Icon(Icons.auto_fix_high, color: ErpColors.cyan),

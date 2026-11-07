@@ -7,4 +7,8 @@ class KeyboardLayoutSwitcher {
 
   /// يُرجع اللغة السابقة
   static void restore(int? previous) {}
+
+  static String? lastProblem;
+
+  static Future<String> selfTest() async => 'متاح على ويندوز فقط.';
 }
