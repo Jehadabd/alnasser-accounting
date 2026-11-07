@@ -8,6 +8,8 @@
 // لكل سند: كم مرة طُبع، من طبعه ومتى، رمز التحقق، وحال العملية الآن (سليمة، تغيّر مبلغها،
 // حُذفت، عُدّلت الفاتورة بعده). إعادة الطباعة تُسجَّل نسخة جديدة («نسخة 2»).
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/widgets.dart' as pw;
@@ -94,18 +96,18 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
 
   // ───────────────────────── إعادة الطباعة ─────────────────────────
 
-  Future<void> _reprint(PrintedVoucher v) async {
+  Future<void> _reprint(PrintedVoucher v, {bool share = false}) async {
     try {
       switch (v.refType) {
         case PrintedRef.customerReceipt:
-          await _reprintReceipt(v.refId!);
+          await _reprintReceipt(v.refId!, share: share);
         case PrintedRef.editEvent:
           await VoucherPrint.printEditEvent(context, v.refId!);
         case PrintedRef.legacyReceipt:
           final db = await controlDb();
           final r = await db.query('customer_receipt_vouchers', where: 'id = ?', whereArgs: [v.refId], limit: 1);
           if (r.isEmpty) throw ErpException('السند غير موجود في الأرشيف القديم');
-          await _reprintLegacy(r.first);
+          await _reprintLegacy(r.first, share: share);
       }
     } catch (e) {
       if (mounted) showError(context, e);
@@ -113,7 +115,17 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
     _load();
   }
 
-  Future<void> _reprintReceipt(int receiptId) async {
+  /// 📤 فتح للطباعة أو مشاركة — كلاهما نسخة مسجّلة (رقمها على الورقة)
+  Future<void> _deliver(Uint8List bytes, String name, {required bool share, String? text}) async {
+    if (!mounted) return;
+    if (share) {
+      await ReportExport.sharePdf(context, bytes, name, text: text);
+    } else {
+      await ReportExport.openPdf(context, bytes, name);
+    }
+  }
+
+  Future<void> _reprintReceipt(int receiptId, {bool share = false}) async {
     final db = await controlDb();
     final h = await db.rawQuery('''
       SELECT r.*, b.name AS box_name FROM customer_receipts r LEFT JOIN cash_boxes b ON b.id = r.cash_box_id
@@ -136,10 +148,11 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       recordedBy: r['created_by'] as String?,
       stamp: stamp,
     );
-    if (mounted) await ReportExport.openPdf(context, bytes, 'وصل_قبض_${r['receipt_no']}_نسخة_${stamp.copyNo}');
+    await _deliver(bytes, 'وصل_قبض_${r['receipt_no']}_نسخة_${stamp.copyNo}',
+        share: share, text: 'وصل قبض رقم ${r['receipt_no']}');
   }
 
-  Future<void> _reprintLegacy(Map<String, Object?> r) async {
+  Future<void> _reprintLegacy(Map<String, Object?> r, {bool share = false}) async {
     final stamp = await PrintedVouchers.forLegacyReceipt(
       archiveId: r['id'] as int,
       receiptNumber: (r['receipt_number'] as num).toInt(),
@@ -175,7 +188,8 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       stamp: stamp,
     );
     final bytes = await pdf.save();
-    if (mounted) await ReportExport.openPdf(context, bytes, 'سند_قبض_${r['receipt_number']}_نسخة_${stamp.copyNo}');
+    await _deliver(bytes, 'سند_قبض_${r['receipt_number']}_نسخة_${stamp.copyNo}',
+        share: share, text: 'سند قبض رقم ${r['receipt_number']} — ${r['customer_name'] ?? ''}');
   }
 
   // ───────────────────────── التفاصيل والتحقق ─────────────────────────
@@ -191,7 +205,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       VoucherState.unknown => ErpColors.muted,
     };
     final d = v.details;
-    final again = await showDialog<bool>(
+    final again = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Row(children: [
@@ -246,17 +260,24 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إغلاق')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
+          // 📤 مشاركة وصل القبض (سندات التعديل تُطبع فقط)
+          if (state != VoucherState.deleted && v.refType == PrintedRef.customerReceipt)
+            OutlinedButton.icon(
+              onPressed: () => Navigator.pop(ctx, 'share'),
+              icon: const Icon(Icons.share_rounded),
+              label: Text('مشاركة (نسخة ${prints.length + 1})'),
+            ),
           if (state != VoucherState.deleted)
             FilledButton.icon(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () => Navigator.pop(ctx, 'print'),
               icon: const Icon(Icons.print_rounded),
               label: Text('إعادة الطباعة (نسخة ${prints.length + 1})'),
             ),
         ],
       ),
     );
-    if (again == true) await _reprint(v);
+    if (again != null) await _reprint(v, share: again == 'share');
   }
 
   Widget _kv(String k, String v) => Padding(
@@ -268,18 +289,30 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       );
 
   Future<void> _legacyTap(Map<String, Object?> r) async {
-    final ok = await confirmDialog(
-      context,
-      'سند قبض رقم ${r['receipt_number']} — الأرشيف القديم',
-      'المبلغ ${fmtMoney(d0(r['paid_amount']))} — ${r['customer_name'] ?? ''}\n'
-          'طُبع في ${_dt(parseDate(r['created_at']))}\n'
-          'الرصيد ${fmtMoney(d0(r['before_payment']))} ← ${fmtMoney(d0(r['after_payment']))}\n\n'
-          'طُبع قبل سجل السندات: بلا رمز تحقق. إعادة طباعته تسجّله نسخة جديدة برمز.',
-      ok: 'إعادة الطباعة',
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('سند قبض رقم ${r['receipt_number']} — الأرشيف القديم'),
+        content: Text('المبلغ ${fmtMoney(d0(r['paid_amount']))} — ${r['customer_name'] ?? ''}\n'
+            'طُبع في ${_dt(parseDate(r['created_at']))}\n'
+            'الرصيد ${fmtMoney(d0(r['before_payment']))} ← ${fmtMoney(d0(r['after_payment']))}\n\n'
+            'طُبع قبل سجل السندات: بلا رمز تحقق. إعادة طباعته أو مشاركته تسجّله نسخة جديدة برمز.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
+          OutlinedButton.icon(
+              onPressed: () => Navigator.pop(ctx, 'share'),
+              icon: const Icon(Icons.share_rounded),
+              label: const Text('مشاركة')),
+          FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, 'print'),
+              icon: const Icon(Icons.print_rounded),
+              label: const Text('إعادة الطباعة')),
+        ],
+      ),
     );
-    if (!ok) return;
+    if (choice == null) return;
     try {
-      await _reprintLegacy(r);
+      await _reprintLegacy(r, share: choice == 'share');
     } catch (e) {
       if (mounted) showError(context, e);
     }

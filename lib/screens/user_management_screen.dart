@@ -33,13 +33,26 @@ const List<(String, IconData, List<String>)> _permissionGroups = [
     AppPermissions.posAccess,
     AppPermissions.createInvoice,
     AppPermissions.editInvoices,
-    AppPermissions.debtRegister,
-    AppPermissions.addCustomer,
-    AppPermissions.addTransaction,
-    AppPermissions.lateCustomers,
-    AppPermissions.shareDebtsPdf,
     AppPermissions.productEntry,
     AppPermissions.suppliers,
+  ]),
+  // 📒 كل زر في سجل الديون وصفحة العميل على حدة
+  ('سجل الديون', Icons.menu_book_rounded, [
+    AppPermissions.debtRegister,
+    AppPermissions.drAddCustomer,
+    AppPermissions.drAddDebt,
+    AppPermissions.drPayment,
+    AppPermissions.drEditTx,
+    AppPermissions.drStatement,
+    AppPermissions.drReceipts,
+    AppPermissions.drEditCustomer,
+    AppPermissions.drMessage,
+    AppPermissions.drReminders,
+    AppPermissions.drAudit,
+    AppPermissions.drRepair,
+    AppPermissions.drDeleteCustomer,
+    AppPermissions.lateCustomers,
+    AppPermissions.shareDebtsPdf,
   ]),
   ('المبيعات والتحصيل', Icons.point_of_sale_rounded, [
     AppPermissions.salesDocs,
@@ -78,6 +91,8 @@ const List<(String, IconData, List<String>)> _permissionGroups = [
 /// أيقونة ولون لكل قالب جاهز (والافتراضي لأي قالب يُضاف لاحقاً).
 (IconData, Color) _templateLook(String name) => switch (name) {
       'كاشير' => (Icons.point_of_sale_rounded, const Color(0xFF0E7490)),
+      'محصّل ديون' => (Icons.payments_rounded, const Color(0xFF15803D)),
+      'مشاهد سجل الديون' => (Icons.visibility_rounded, const Color(0xFF475569)),
       'أمين مخزن' => (Icons.inventory_2_rounded, const Color(0xFFB45309)),
       'محاسب' => (Icons.calculate_rounded, const Color(0xFF6D28D9)),
       'مدير فرع' => (Icons.store_mall_directory_rounded, const Color(0xFF047857)),
@@ -132,6 +147,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         text: oldSalary == null || oldSalary <= 0 ? '' : NumberFormat('#,##0.##', 'en_US').format(oldSalary));
     // الموظف القديم الذي يملك «التقارير» فقط: تظهر كل التقارير مختارة صراحةً
     final perms = AppPermissions.expandLegacy(user?.permissions ?? AppPermissions.roleTemplates['كاشير']!);
+    // 📒 «سجل الديون» يفتح الشاشة (ومعه «العرض» دائماً)، وأزراره تحدد ما يظهر داخلها.
+    //    بلا «العرض» كان الموظف المحفوظ بلا أي زر يُعامل كموظف قديم فيأخذ كل الأزرار.
+    void normalizeDebt(String changed, bool on) {
+      if (AppPermissions.isDebtKey(changed) && on) perms.add(AppPermissions.debtRegister);
+      if (perms.contains(AppPermissions.debtRegister)) {
+        perms.add(AppPermissions.drView);
+      } else {
+        perms.removeWhere(AppPermissions.isDebtKey);
+      }
+    }
+
     // «التقارير» تفتح الشاشة، والتقارير المحددة تحدد ما يظهر داخلها
     void normalizeReports(String changed, bool on) {
       if (AppPermissions.isReportKey(changed) && on) perms.add(AppPermissions.reports);
@@ -142,6 +168,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       if (AppPermissions.isReportKey(changed) && !on && !perms.any(AppPermissions.isReportKey)) {
         perms.remove(AppPermissions.reports);
       }
+      normalizeDebt(changed, on);
     }
     String? err;
     bool busy = false;
@@ -161,6 +188,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               setD(() => err = 'كلمة السر قصيرة — 4 أحرف على الأقل');
               return;
             }
+            normalizeDebt('', false); // «العرض» مع «سجل الديون» دائماً قبل الحفظ
             if (perms.isEmpty) {
               setD(() => err = 'اختر صلاحية واحدة على الأقل');
               return;

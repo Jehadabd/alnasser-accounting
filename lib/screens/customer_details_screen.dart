@@ -23,7 +23,6 @@ import '../services/password_service.dart';
 import '../services/settings_manager.dart'; // 📋 For company info in WhatsApp message
 import '../erp/debts/customer_card_screen.dart';
 import '../erp/debts/receipt_screen.dart';
-import '../erp/pickers.dart' show PartyLite;
 import '../widgets/edit_transaction_dialog.dart'; // ✏️
 import 'debt_reminders_screen.dart'; // 📅
 import '../accounting/screens/acc_ui.dart' show accAppBar;
@@ -48,6 +47,9 @@ class CustomerDetailsScreen extends StatefulWidget {
 }
 
 class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
+  // 🔐 أزرار سجل الديون: كل زر بصلاحيته (شاشة الموظفين ← سجل الديون)
+  static bool _can(String key) => AuthService().hasPermission(key);
+
   // 📊 تقارير العميل: صلاحية «التقارير» + التقرير المحدد (تقارير الأشخاص / البضاعة)
   bool get _canPeopleReport =>
       AuthService().hasPermission(AppPermissions.reports) && AuthService().hasPermission(AppPermissions.repPeople);
@@ -230,6 +232,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
   // دالة إرسال رسالة واتساب
   Future<void> _sendWhatsAppMessage() async {
+    if (!_can(AppPermissions.drMessage)) return;
     final provider = context.read<AppProvider>();
     final customer = provider.selectedCustomer ?? widget.customer;
     
@@ -382,6 +385,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
   /// دالة تعديل بيانات العميل
   Future<void> _editCustomerDetails() async {
+    if (!_can(AppPermissions.drEditCustomer)) return;
     final nameController = TextEditingController(text: widget.customer.name);
     final phoneController = TextEditingController(text: widget.customer.phone ?? '');
     final addressController = TextEditingController(text: widget.customer.address ?? '');
@@ -469,6 +473,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
   /// دالة حذف العميل مع التحقق والأمان
   Future<void> _handleDeleteCustomer() async {
+    if (!_can(AppPermissions.drDeleteCustomer)) return;
     final provider = context.read<AppProvider>();
     final customer = provider.selectedCustomer ?? widget.customer;
     final hasDebt = customer.currentTotalDebt > 0.01;
@@ -638,6 +643,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   }
 
   Future<void> _openTransaction(Customer customer, {required bool isDebt}) async {
+    if (!_can(isDebt ? AppPermissions.drAddDebt : AppPermissions.drPayment)) return;
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -754,50 +760,46 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   MaterialPageRoute(builder: (_) => CustomerCardScreen(customerId: widget.customer.id!)),
                 ),
               ),
-            // 🧾 وصل قبض (مع حسم وعملة وطباعة)
-            if (widget.customer.id != null)
-              IconButton(
-                icon: const Icon(Icons.payments_outlined, color: Colors.white),
-                tooltip: 'وصل قبض',
-                onPressed: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ReceiptScreen(
-                        customer: PartyLite(widget.customer.id!, widget.customer.name, widget.customer.phone,
-                            widget.customer.currentTotalDebt),
-                      ),
-                    ),
-                  );
-                  if (!context.mounted) return;
-                  await context.read<AppProvider>().selectCustomer(widget.customer);
-                  if (!context.mounted) return;
-                  await context.read<AppProvider>().loadCustomerTransactions(widget.customer.id!);
-                },
-              ),
+            // 🧾 «وصل قبض» دُمج في زر «تسديد» (التسديد يُنشئ وصل القبض نفسه؛
+            //    والحسم والعملة الأخرى من «وصل قبض متقدم» داخل شاشة التسديد)
             // ✏️ تعديل معلومات العميل
-            IconButton(
-              icon: const Icon(Icons.edit, color: Colors.white),
-              tooltip: 'تعديل معلومات العميل',
-              onPressed: _editCustomerDetails,
-            ),
+            if (_can(AppPermissions.drEditCustomer))
+              IconButton(
+                icon: const Icon(Icons.edit, color: Colors.white),
+                tooltip: 'تعديل معلومات العميل',
+                onPressed: _editCustomerDetails,
+              ),
             // 💬 إرسال واتساب
-            IconButton(
-              icon: const Icon(Icons.message, color: Colors.white),
-              tooltip: 'إرسال رسالة واتساب',
-              onPressed: _sendWhatsAppMessage,
-            ),
+            if (_can(AppPermissions.drMessage))
+              IconButton(
+                icon: const Icon(Icons.message, color: Colors.white),
+                tooltip: 'إرسال رسالة واتساب',
+                onPressed: _sendWhatsAppMessage,
+              ),
             // 📄 كشف الحساب
-            IconButton(
-              icon: const Icon(Icons.receipt_long, color: Colors.white),
-              tooltip: 'كشف الحساب',
-              onPressed: () => _openStatements(),
-            ),
+            if (_can(AppPermissions.drStatement))
+              IconButton(
+                icon: const Icon(Icons.receipt_long, color: Colors.white),
+                tooltip: 'كشف الحساب',
+                onPressed: () => _openStatements(),
+              ),
             // ⋯ المزيد من الخيارات
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: Colors.white),
               tooltip: 'خيارات إضافية',
               onSelected: (value) {
+                // 🔐 لا يُنفَّذ خيار بلا صلاحيته (حتى لو ظهر بطريقة ما)
+                const need = {
+                  'commercial_statement': AppPermissions.drStatement,
+                  'debt_reminders': AppPermissions.drReminders,
+                  'customer_receipts': AppPermissions.drReceipts,
+                  'receipt_archive': AppPermissions.drReceipts,
+                  'financial_integrity': AppPermissions.drRepair,
+                  'audit_log': AppPermissions.drAudit,
+                  'delete_customer': AppPermissions.drDeleteCustomer,
+                };
+                final k = need[value];
+                if (k != null && !_can(k)) return;
                 switch (value) {
                   case 'commercial_statement':
                     _openStatements(tab: StatementTab.commercial);
@@ -894,6 +896,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                 if (_canPeopleReport ||
                     (widget.customer.id != null && _canGoodsReport))
                   const PopupMenuDivider(),
+                if (_can(AppPermissions.drStatement))
                 const PopupMenuItem(
                   value: 'commercial_statement',
                   child: Row(
@@ -904,6 +907,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     ],
                   ),
                 ),
+                if (_can(AppPermissions.drReminders))
                 const PopupMenuItem(
                   value: 'debt_reminders',
                   child: Row(
@@ -914,6 +918,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     ],
                   ),
                 ),
+                if (_can(AppPermissions.drReceipts))
                 const PopupMenuItem(
                   value: 'customer_receipts',
                   child: Row(
@@ -924,6 +929,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     ],
                   ),
                 ),
+                if (_can(AppPermissions.drReceipts))
                 const PopupMenuItem(
                   value: 'receipt_archive',
                   child: Row(
@@ -934,6 +940,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     ],
                   ),
                 ),
+                if (_can(AppPermissions.drRepair))
                 const PopupMenuItem(
                   value: 'financial_integrity',
                   child: Row(
@@ -944,6 +951,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     ],
                   ),
                 ),
+                if (_can(AppPermissions.drAudit))
                 const PopupMenuItem(
                   value: 'audit_log',
                   child: Row(
@@ -954,7 +962,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                     ],
                   ),
                 ),
-                const PopupMenuDivider(),
+                if (_can(AppPermissions.drDeleteCustomer)) const PopupMenuDivider(),
+                if (_can(AppPermissions.drDeleteCustomer))
                 const PopupMenuItem(
                   value: 'delete_customer',
                   child: Row(
@@ -1023,6 +1032,14 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                               ],
                             ),
                             const SizedBox(height: 8),
+                            // 🔧 الإصلاح قد يضيف معاملة تصحيحية: لصاحب صلاحيته فقط
+                            if (!_can(AppPermissions.drRepair))
+                              const Align(
+                                alignment: Alignment.centerRight,
+                                child: Text('أبلغ المدير أو المحاسب لمعالجته.',
+                                    style: TextStyle(fontSize: 12, color: Colors.black54)),
+                              )
+                            else
                             Align(
                               alignment: Alignment.centerLeft,
                               child: TextButton.icon(
@@ -1208,6 +1225,14 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                               ],
                             ),
                             const SizedBox(height: 8),
+                            // 🔧 الإصلاح قد يضيف معاملة تصحيحية: لصاحب صلاحيته فقط
+                            if (!_can(AppPermissions.drRepair))
+                              const Align(
+                                alignment: Alignment.centerRight,
+                                child: Text('أبلغ المدير أو المحاسب لمعالجته.',
+                                    style: TextStyle(fontSize: 12, color: Colors.black54)),
+                              )
+                            else
                             Align(
                               alignment: Alignment.centerLeft,
                               child: TextButton.icon(
@@ -1350,7 +1375,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                 return TransactionListTile(
                                   transaction: transaction,
                                   invoiceNumber: _invoiceNumberMap[transaction.invoiceId],
-                                  onEdit: (updated) => SaveLock.run(() async {
+                                  onEdit: !_can(AppPermissions.drEditTx) ? null : (updated) => SaveLock.run(() async {
                                     // 🚫 سقف الدين: تعديل يرفع الرصيد (زيادة دين أو إنقاص تسديد)
                                     final rise = updated.amountChanged - transaction.amountChanged;
                                     if (rise > 0.5) {
@@ -1388,7 +1413,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                                       }
                                     }
                                   }, message: 'جارٍ تعديل المعاملة…'),
-                                  onConvertType: (transactionId) async {
+                                  onConvertType: !_can(AppPermissions.drEditTx) ? null : (transactionId) async {
                                 try {
                                   final db = DatabaseService();
                                   final updatedCustomer = await db.convertTransactionType(transactionId);
@@ -1606,19 +1631,21 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             ],
             const SizedBox(height: 14),
             Wrap(spacing: 8, runSpacing: 8, children: [
+              if (_can(AppPermissions.drAddDebt))
               FilledButton.icon(
                 style: FilledButton.styleFrom(backgroundColor: _red, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
                 onPressed: () => _openTransaction(customer, isDebt: true),
                 icon: const Icon(Icons.add_circle_outline_rounded),
                 label: const Text('إضافة دين', style: TextStyle(fontWeight: FontWeight.w800)),
               ),
+              if (_can(AppPermissions.drPayment))
               FilledButton.icon(
                 style: FilledButton.styleFrom(backgroundColor: _green, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
                 onPressed: () => _openTransaction(customer, isDebt: false),
                 icon: const Icon(Icons.payments_outlined),
                 label: const Text('تسديد', style: TextStyle(fontWeight: FontWeight.w800)),
               ),
-              if ((customer.phone ?? '').trim().isNotEmpty)
+              if ((customer.phone ?? '').trim().isNotEmpty && _can(AppPermissions.drMessage))
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
                   onPressed: _sendWhatsAppMessage,
@@ -1634,6 +1661,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
   // 🛡️ دالة عرض تقرير السلامة المالية
   Future<void> _showFinancialIntegrityReport() async {
+    if (!_can(AppPermissions.drRepair)) return;
     try {
       // إظهار مؤشر التحميل
       LoadingDialog.show(
@@ -2182,6 +2210,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   /// 📊 عرض كشف الحساب التجاري
   /// 📄 كشوفات الحساب: شامل / من آخر رصيد صفر / فترة × تفصيلي أو ملخص، والكشف التجاري
   void _openStatements({StatementTab tab = StatementTab.account}) {
+    if (!_can(AppPermissions.drStatement)) return;
     final id = widget.customer.id;
     if (id == null) return;
     Navigator.push(
@@ -2292,7 +2321,7 @@ class TransactionListTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               // 🔒 المعاملات المرتبطة بالفواتير لا يتم تعديلها من سجل المعاملات لمنع تضارب الحسابات
-              if (transaction.isCreatedByMe && !isInvoiceRelated)
+              if (transaction.isCreatedByMe && !isInvoiceRelated && onEdit != null)
                 IconButton(
                   icon: const Icon(Icons.edit, size: 18),
                   visualDensity: VisualDensity.compact,

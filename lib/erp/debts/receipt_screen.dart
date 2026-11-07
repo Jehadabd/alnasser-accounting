@@ -354,7 +354,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
           ],
       ];
 
-  Future<void> _print(Map<String, Object?> r) async {
+  Future<void> _print(Map<String, Object?> r, {bool share = false}) async {
     final lines = await ReceiptsService().receiptLines(r['id'] as int);
     // 🧾 إعادة الطباعة = نسخة جديدة في سجل السندات المطبوعة
     final PrintStamp stamp;
@@ -378,7 +378,14 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
       commission: d0(r['commission']),
       recordedBy: r['created_by'] as String?, // 👤 المحاسب = من سجّل الوصل
     );
-    if (mounted) await ReportExport.openPdf(context, bytes, 'وصل_قبض_${r['receipt_no']}');
+    if (!mounted) return;
+    if (share) {
+      // 📤 المشاركة نسخة مسجّلة في سجل السندات المطبوعة مثل الطباعة
+      await ReportExport.sharePdf(context, bytes, 'وصل_قبض_${r['receipt_no']}',
+          text: 'وصل قبض رقم ${r['receipt_no']} — ${r['customers'] ?? ''}');
+    } else {
+      await ReportExport.openPdf(context, bytes, 'وصل_قبض_${r['receipt_no']}');
+    }
   }
 
   @override
@@ -440,7 +447,11 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
                                     style: const TextStyle(fontSize: 11, color: ErpColors.orange)),
                             ],
                           ),
-                          IconButton(icon: const Icon(Icons.print_outlined), onPressed: () => _print(r)),
+                          IconButton(
+                              tooltip: 'مشاركة',
+                              icon: const Icon(Icons.share_outlined),
+                              onPressed: () => _print(r, share: true)),
+                          IconButton(tooltip: 'طباعة', icon: const Icon(Icons.print_outlined), onPressed: () => _print(r)),
                         ]),
                       ),
                     );

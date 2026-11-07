@@ -282,6 +282,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: const Icon(Icons.keyboard_arrow_up_rounded, size: 28),
               ),
             ),
+          // 🔐 إضافة عميل بصلاحيتها (شاشة الموظفين ← سجل الديون)
+          if (AuthService().hasPermission(AppPermissions.drAddCustomer))
           FloatingActionButton.extended(
             heroTag: 'add_customer',
             backgroundColor: _K.navy,

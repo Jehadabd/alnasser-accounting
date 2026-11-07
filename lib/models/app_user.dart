@@ -39,6 +39,10 @@ class AppUser {
     if (AppPermissions.isReportKey(permissionKey)) {
       return permissions.contains(AppPermissions.reports) && !permissions.any(AppPermissions.isReportKey);
     }
+    // 📒 أزرار سجل الديون: الموظف القديم (بلا أي صلاحية سجل ديون محددة) يبقى كما كان
+    if (AppPermissions.isDebtKey(permissionKey) && !permissions.any(AppPermissions.isDebtKey)) {
+      return AppPermissions.legacyDebtKeys(permissions).contains(permissionKey);
+    }
     return false;
   }
 
@@ -148,10 +152,49 @@ class AppPermissions {
 
   static bool isReportKey(String k) => k.startsWith('rep_');
 
-  /// صلاحيات موظف قديم: «التقارير» بلا تقارير محددة = كل التقارير (تُكتب صريحة عند التعديل)
+  // 📒 سجل الديون زراً زراً (تحتاج معها «سجل الديون» لفتح الشاشة)
+  static const String drView = 'dr_view'; // عرض السجل والعملاء وأرصدتهم (يُضاف تلقائياً مع «سجل الديون»)
+  static const String drAddCustomer = 'dr_add_customer';
+  static const String drAddDebt = 'dr_add_debt';
+  static const String drPayment = 'dr_payment';
+  static const String drEditTx = 'dr_edit_tx';
+  static const String drStatement = 'dr_statement';
+  static const String drReceipts = 'dr_receipts';
+  static const String drEditCustomer = 'dr_edit_customer';
+  static const String drMessage = 'dr_message';
+  static const String drReminders = 'dr_reminders';
+  static const String drAudit = 'dr_audit';
+  static const String drRepair = 'dr_repair';
+  static const String drDeleteCustomer = 'dr_delete_customer';
+
+  /// المعروضة في شاشة الموظفين (drView لا يظهر: يتبع «سجل الديون»)
+  static const List<String> debtKeys = [
+    drAddCustomer, drAddDebt, drPayment, drEditTx, drStatement, drReceipts,
+    drEditCustomer, drMessage, drReminders, drAudit, drRepair, drDeleteCustomer,
+  ];
+
+  static bool isDebtKey(String k) => k.startsWith('dr_');
+
+  /// ما كان يستطيعه موظف قديم في سجل الديون قبل هذه الصلاحيات (لم تكن تُفحص):
+  /// كل الأزرار لمن له «سجل الديون»، ما عدا أدوات إصلاح الرصيد: لمن له المحاسبة فقط.
+  static Set<String> legacyDebtKeys(Iterable<String> perms) {
+    final s = perms.toSet();
+    final out = <String>{};
+    if (s.contains(debtRegister)) {
+      out.addAll([drView, ...debtKeys]..remove(drRepair));
+      if (s.contains(accounting) || s.contains(accountingPost)) out.add(drRepair);
+    } else if (s.contains(addCustomer)) {
+      out.add(drAddCustomer);
+    }
+    return out;
+  }
+
+  /// صلاحيات موظف قديم تُكتب صريحة عند فتحه للتعديل:
+  /// «التقارير» بلا تقارير محددة = كل التقارير، و«سجل الديون» بلا أزرار محددة = ما كان يستطيعه.
   static Set<String> expandLegacy(Iterable<String> perms) {
     final s = perms.toSet();
     if (s.contains(reports) && !s.any(isReportKey)) s.addAll(reportKeys);
+    if (!s.any(isDebtKey)) s.addAll(legacyDebtKeys(s));
     return s;
   }
 
@@ -203,25 +246,53 @@ class AppPermissions {
     repPeople: 'تقارير الأشخاص',
     repReturns: 'تقرير المرتجعات',
     repFounders: 'تقارير المؤسسين',
+    // سجل الديون زراً زراً
+    drView: 'عرض سجل الديون والعملاء وأرصدتهم',
+    drAddCustomer: 'إضافة عميل جديد',
+    drAddDebt: 'إضافة دين يدوي (بلا فاتورة)',
+    drPayment: 'تسديد دين (يُنشئ وصل قبض بالصندوق)',
+    drEditTx: 'تعديل معاملة يدوية (مبلغ، تاريخ، ملاحظة)',
+    drStatement: 'كشف الحساب: عرض وطباعة ومشاركة',
+    drReceipts: 'وصولات القبض والسندات المطبوعة: عرض وإعادة طباعة ومشاركة',
+    drEditCustomer: 'تعديل بيانات العميل (الاسم، الهاتف، العنوان)',
+    drMessage: 'مراسلة العميل (واتساب)',
+    drReminders: 'مواعيد المطالبة بالسداد',
+    drAudit: 'سجل التدقيق المالي للعميل',
+    drRepair: 'فحص السلامة وأدوات إصلاح الرصيد (قد تضيف معاملة تصحيحية)',
+    drDeleteCustomer: 'حذف العميل',
   };
 
   /// قوالب الأدوار الجاهزة — تملأ الصلاحيات بضغطة، ويمكن تعديلها بعدها.
   static const Map<String, List<String>> roleTemplates = {
-    'كاشير': [posAccess, createInvoice, debtRegister, addCustomer, addTransaction, collection],
+    // 🧾 الكاشير: يبيع ويقبض ويطبع الوصل — لا دين يدوي ولا تعديل معاملات (فصل المهام:
+    //    من يقبض المال لا يغيّر الأرصدة)
+    'كاشير': [
+      posAccess, createInvoice, debtRegister, drView, drAddCustomer, drPayment, drStatement, drReceipts,
+      drMessage, collection,
+    ],
+    // 💰 محصّل الديون: يرى السجل ويقبض ويرسل الكشوفات والتذكيرات فقط
+    'محصّل ديون': [
+      debtRegister, drView, drPayment, drStatement, drReceipts, drMessage, drReminders, lateCustomers,
+      collection,
+    ],
+    // 👁️ مشاهد: يرى الأرصدة ويطبع الكشف — لا يغيّر شيئاً
+    'مشاهد سجل الديون': [debtRegister, drView, drStatement],
     'أمين مخزن': [
       productEntry, editProducts, monthlyInventory, stockTransfer, itemCard, suppliers,
       inventoryDocs, inventoryReports,
     ],
+    // 📚 المحاسب: كل سجل الديون عدا حذف العميل، والمحاسبة والتقارير
     'محاسب': [
-      debtRegister, lateCustomers, shareDebtsPdf, reports, suppliers, addCustomer,
-      addTransaction, editInvoices, accounting, accountingPost, viewCostProfit,
+      debtRegister, drView, drAddCustomer, drAddDebt, drPayment, drEditTx, drStatement, drReceipts,
+      drEditCustomer, drMessage, drReminders, drAudit, drRepair,
+      lateCustomers, shareDebtsPdf, reports, suppliers, editInvoices, accounting, accountingPost, viewCostProfit,
       dashboard, salesDocs, collection, debtReports, customerCard, currencies, inventoryReports,
       ...reportKeys,
     ],
     'مدير فرع': [
-      posAccess, debtRegister, productEntry, createInvoice, lateCustomers, shareDebtsPdf,
-      editInvoices, editProducts, monthlyInventory, reports, suppliers, addCustomer,
-      addTransaction, accounting, accountingPost, viewCostProfit, manageBranches,
+      posAccess, debtRegister, drView, ...debtKeys, productEntry, createInvoice, lateCustomers, shareDebtsPdf,
+      editInvoices, editProducts, monthlyInventory, reports, suppliers,
+      accounting, accountingPost, viewCostProfit, manageBranches,
       stockTransfer, itemCard, dashboard, salesDocs, collection, debtReports, customerCard,
       inventoryDocs, priceTools, inventoryReports, currencies,
       ...reportKeys,

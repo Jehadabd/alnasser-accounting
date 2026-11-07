@@ -33,6 +33,10 @@ import '../erp/debts/customer_money.dart';
 import '../owner/founder_service.dart';
 import '../services/debt_return_service.dart';
 import '../services/printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة
+import '../models/app_user.dart' show AppPermissions; // 🔐 دين يدوي / تسديد كلٌّ بصلاحيته
+import '../services/auth_service.dart';
+import '../erp/debts/receipt_screen.dart' show ReceiptScreen; // 🧾 وصل قبض متقدم
+import '../erp/pickers.dart' show PartyLite;
 
 class AddTransactionScreen extends StatefulWidget {
   final Customer customer;
@@ -129,6 +133,19 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     return NumberFormat('#,##0', 'en_US').format(value);
   }
 
+  bool get _canDebt => AuthService().hasPermission(AppPermissions.drAddDebt);
+  bool get _canPay => AuthService().hasPermission(AppPermissions.drPayment);
+
+  /// 🧾 وصل قبض متقدم (حسم، عملة أخرى، صندوق آخر) — يبقى مستند التسديد نفسه.
+  Future<void> _openAdvancedReceipt() async {
+    final c = widget.customer;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ReceiptScreen(customer: PartyLite(c.id!, c.name, c.phone, c.currentTotalDebt))),
+    );
+    if (mounted) Navigator.pop(context, true);
+  }
+
   // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط (القفل قبل أي انتظار)
   Future<void> _saveTransaction() async {
     await SaveLock.run(() => _saveTransactionUnlocked(), message: 'جارٍ حفظ المعاملة…');
@@ -136,6 +153,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   Future<void> _saveTransactionUnlocked() async {
     // 🔒 منع الضغط المزدوج - إذا كانت العملية جارية، لا تفعل شيئاً
     if (_isSaving) return;
+    // 🔐 الدين اليدوي والتسديد كلٌّ بصلاحيته
+    if (!(_isDebt ? _canDebt : _canPay)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_isDebt ? 'ليس لديك صلاحية إضافة دين' : 'ليس لديك صلاحية التسديد'),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
     
     if (_formKey.currentState!.validate()) {
       // 🔒 تفعيل حالة الحفظ فوراً قبل أي عملية async
@@ -621,26 +646,36 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     // 🧾 اسألني / اطبع دائماً / لا تُظهر — من «مصمم السندات» (سند قبض)
     final pmode = await VoucherPrint.modeFor(VoucherKinds.receipt);
     if (!mounted) return;
-    final shouldPrint = pmode == 'always'
-        ? true
+    // طباعة / مشاركة / لا شيء — وصل القبض محفوظ في كل الأحوال (سجل الوصولات)
+    final choice = pmode == 'always'
+        ? 'print'
         : pmode == 'never'
-            ? false
-            : await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('طباعة سند قبض'),
-        content: const Text('هل تريد طباعة سند القبض لهذا التسديد؟'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('لا')),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('نعم')),
-        ],
-      ),
-    );
-    if (shouldPrint == true && mounted) {
-      // الطباعة بعد الحفظ: فشلها لا يعني أن التسديد لم يُحفظ
+            ? null
+            : await showDialog<String>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: Text('وصل قبض رقم ${res.receiptNo}'),
+                  content: const Text('حُفظ التسديد ووصل القبض. هل تريد طباعته أو مشاركته؟'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('لا')),
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.of(ctx).pop('share'),
+                      icon: const Icon(Icons.share_rounded, size: 18),
+                      label: const Text('مشاركة'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.of(ctx).pop('print'),
+                      icon: const Icon(Icons.print_rounded, size: 18),
+                      label: const Text('طباعة'),
+                    ),
+                  ],
+                ),
+              );
+    if (choice != null && mounted) {
+      // الطباعة/المشاركة بعد الحفظ: فشلها لا يعني أن التسديد لم يُحفظ
       try {
         final lines = await ReceiptsService().receiptLines(res.receiptId);
-        // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة (فشله يوقفها)
+        // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة أو المشاركة (فشله يوقفها)
         final stamp = await PrintedVouchers.forCustomerReceipt(res.receiptId);
         final bytes = await ReceiptPdf.build(
           title: 'وصل قبض',
@@ -653,11 +688,17 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           notes: note.isEmpty ? null : note,
           stamp: stamp,
         );
-        if (mounted) await ReportExport.openPdf(context, bytes, 'وصل_قبض_${res.receiptNo}');
+        if (!mounted) return;
+        if (choice == 'share') {
+          await ReportExport.sharePdf(context, bytes, 'وصل_قبض_${res.receiptNo}',
+              text: 'وصل قبض رقم ${res.receiptNo} — ${widget.customer.name}');
+        } else {
+          await ReportExport.openPdf(context, bytes, 'وصل_قبض_${res.receiptNo}');
+        }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('حُفظ التسديد، لكن تعذّرت الطباعة: $e — أعد الطباعة من سجل الوصولات'),
+            content: Text('حُفظ التسديد، لكن تعذّرت ${choice == 'share' ? 'المشاركة' : 'الطباعة'}: $e — أعدها من سجل الوصولات'),
             backgroundColor: Colors.orange,
           ));
         }
@@ -752,17 +793,18 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     Widget modeTab(bool debtTab) {
       final on = _isDebt == debtTab;
       final c = debtTab ? _debtC : _payC;
+      final allowed = debtTab ? _canDebt : _canPay;
       return Expanded(
         child: Material(
           color: on ? c : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
           child: InkWell(
             borderRadius: BorderRadius.circular(12),
-            onTap: () => setState(() => _isDebt = debtTab),
+            onTap: allowed ? () => setState(() => _isDebt = debtTab) : null,
             child: SizedBox(
               height: 54,
               child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(debtTab ? Icons.north_east_rounded : Icons.south_west_rounded,
+                Icon(!allowed ? Icons.lock_outline_rounded : (debtTab ? Icons.north_east_rounded : Icons.south_west_rounded),
                     size: 20, color: on ? Colors.white : _muted),
                 const SizedBox(width: 8),
                 Text(debtTab ? 'إضافة دين' : 'تسديد',
@@ -899,6 +941,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         if (!_isDebt) ...[
           const SizedBox(height: 16),
           _returnSection(entered),
+          // 🧾 الحسم والعملة الأخرى والصندوق الآخر: وصل القبض المتقدم (صلاحية «التحصيل»)
+          if (!_isReturn && AuthService().hasPermission(AppPermissions.collection))
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: _isSaving ? null : _openAdvancedReceipt,
+                icon: const Icon(Icons.tune_rounded, size: 18),
+                label: const Text('وصل قبض متقدم: حسم، أو عملة أخرى، أو صندوق آخر'),
+              ),
+            ),
         ],
         const SizedBox(height: 20),
         const Text.rich(TextSpan(children: [

@@ -460,8 +460,9 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
       child: Wrap(children: [
         a('وصل قبض', Icons.receipt_long, ErpColors.green,
             () => _open(ReceiptScreen(customer: _party), permission: AppPermissions.collection)),
-        a('كشف حساب', Icons.list_alt, ErpColors.navy,
-            () => _open(CustomerStatementScreen(customerId: widget.customerId, customerName: '${_customer!['name']}'))),
+        if (AuthService().hasPermission(AppPermissions.drStatement))
+          a('كشف حساب', Icons.list_alt, ErpColors.navy,
+              () => _open(CustomerStatementScreen(customerId: widget.customerId, customerName: '${_customer!['name']}'))),
         a('استحقاق / تقسيط', Icons.event_note, ErpColors.gold,
             () => _open(
                 DueItemFormScreen(partyType: 'customer', partyId: widget.customerId, partyName: '${_customer!['name']}'),
