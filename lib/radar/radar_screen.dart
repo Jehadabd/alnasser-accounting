@@ -37,7 +37,7 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
   Future<List<RadarAlert>>? _alerts;
   Future<CashFlows>? _flows;
   Future<List<CollectionTarget>>? _collect;
-  Future<List<BuySuggestion>>? _buy;
+  Future<BuyPlan>? _buy;
 
   // سيناريوهات السيولة
   double _delay = 0, _salesChange = 0, _usdChange = 0;
@@ -432,21 +432,38 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
   // ───────────────────────── الشراء الذكي ─────────────────────────
 
   Widget _buyTab() {
-    return FutureBuilder<List<BuySuggestion>>(
+    return FutureBuilder<BuyPlan>(
       future: _buy,
       builder: (context, s) {
         if (s.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
         if (s.hasError) return _error('${s.error}');
-        final list = s.data ?? const [];
+        final plan = s.data;
+        final list = plan?.items ?? const <BuySuggestion>[];
         if (list.isEmpty) {
           return _empty(Icons.inventory_rounded, 'المخزون يكفي', 'لا توجد مادة يُتوقع أن تنقص خلال 30 يوماً بحسب بيعك الأخير.', _cGood);
         }
+        final known = list.where((b) => b.stockKnown).toList();
+        final unknown = list.where((b) => !b.stockKnown).toList();
         final total = list.fold<double>(0, (s, b) => s + b.value);
-        return ListView(padding: const EdgeInsets.fromLTRB(14, 14, 14, 30), children: [
+        final header = <Widget>[
+          if (unknown.isNotEmpty)
+            _banner(
+              plan!.purchasesRecorded
+                  ? '${unknown.length} مادة لا تُسجَّل مشترياتها، فرصيدها غير معروف: الكمية لها = ما يُتوقع أن تبيعه '
+                      'في 30 يوماً. اطرح منها ما على الرف قبل الطلب.'
+                  : 'لا تُسجَّل فواتير شراء في البرنامج، فالرصيد غير معروف. الكمية هنا = ما يُتوقع أن تبيعه في 30 يوماً '
+                      '(بيعك الأخير × الموسم) — اطرح منها ما على الرف. تسجيل المشتريات يجعل الاقتراح دقيقاً ويُظهر الناقص فعلاً.',
+              _cMid,
+              Icons.info_outline_rounded,
+            ),
           Row(children: [
             Expanded(
               child: Text(
-                '${list.length} مادة يُتوقع أن تنقص خلال 30 يوماً • كلفة الشراء المقترح ${fmtMoney(total)}',
+                [
+                  if (known.isNotEmpty) '${known.length} مادة يُتوقع أن تنقص',
+                  if (unknown.isNotEmpty) '${unknown.length} مادة حسب البيع وحده',
+                  'كلفة المقترح ${fmtMoney(total)}',
+                ].join(' • '),
                 style: const TextStyle(color: _muted, fontSize: 12.5),
               ),
             ),
@@ -464,21 +481,34 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
             ),
           ]),
           const SizedBox(height: 6),
-          for (final b in list) _buyCard(b),
-          const SizedBox(height: 8),
-          const Text(
-            'الكمية = بيعك الشهري في آخر 3 أشهر × معامل موسم هذا الشهر (من مبيعات السنوات السابقة) + 20% أمان − الرصيد الحالي. '
-            'المسودة لا تُرسل لأحد ولا تُنشئ فاتورة شراء.',
+        ];
+        const footer = Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: Text(
+            'المتوقع = مستوى بيعك في آخر 3 أشهر بعد إزالة أثر موسمها × معامل موسم الثلاثين يوماً القادمة. '
+            'الموسم منسوب إلى نشاط المحل (عدد فواتيره كل شهر)، فنمو المحل لا يُحسب موسماً. '
+            'مادة رصيدها معروف: المتوقع + 20% أمان − الرصيد. المسودة لا تُرسل لأحد ولا تُنشئ فاتورة شراء.',
             style: TextStyle(color: _muted, fontSize: 12, height: 1.5),
           ),
-        ]);
+        );
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 30),
+          itemCount: header.length + list.length + 1,
+          itemBuilder: (_, i) {
+            if (i < header.length) return header[i];
+            final j = i - header.length;
+            if (j < list.length) return _buyCard(list[j]);
+            return footer;
+          },
+        );
       },
     );
   }
 
   Widget _buyCard(BuySuggestion b) {
-    final urgent = (b.coverDays ?? 999) < 7;
-    final c = urgent ? _cHigh : ((b.coverDays ?? 999) < 15 ? _cMid : _cInfo);
+    final urgent = b.stockKnown && (b.coverDays ?? 999) < 7;
+    final c = !b.stockKnown ? _cInfo : (urgent ? _cHigh : ((b.coverDays ?? 999) < 15 ? _cMid : _cInfo));
+    final seasonNote = b.seasonYears == 1 ? ' (سنة واحدة)' : '';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
@@ -488,11 +518,19 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
           width: 46,
           padding: const EdgeInsets.symmetric(vertical: 6),
           decoration: BoxDecoration(color: c.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(12)),
-          child: Column(children: [
-            Text(b.coverDays == null ? '—' : b.coverDays!.toStringAsFixed(0),
-                style: TextStyle(fontWeight: FontWeight.w900, color: c, fontSize: 16)),
-            Text('يوم', style: TextStyle(fontSize: 10, color: c)),
-          ]),
+          child: b.stockKnown
+              ? Column(children: [
+                  Text(b.coverDays == null ? '—' : b.coverDays!.toStringAsFixed(0),
+                      style: TextStyle(fontWeight: FontWeight.w900, color: c, fontSize: 16)),
+                  Text('يوم', style: TextStyle(fontSize: 10, color: c)),
+                ])
+              : Tooltip(
+                  message: 'رصيد غير مسجّل — الكمية من البيع وحده',
+                  child: Column(children: [
+                    Icon(Icons.help_outline_rounded, color: c, size: 20),
+                    Text('رصيد؟', style: TextStyle(fontSize: 10, color: c)),
+                  ]),
+                ),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -500,13 +538,14 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
             Row(children: [
               Expanded(child: Text(b.name, style: const TextStyle(fontWeight: FontWeight.w800, color: _ink))),
               if (b.seasonIndex >= 1.15)
-                _tag('موسم ↑ ×${b.seasonIndex.toStringAsFixed(1)}', _cMid)
+                _tag('موسم ↑ ×${b.seasonIndex.toStringAsFixed(1)}$seasonNote', _cMid)
               else if (b.seasonIndex <= 0.85)
-                _tag('موسم ↓ ×${b.seasonIndex.toStringAsFixed(1)}', _cInfo),
+                _tag('موسم ↓ ×${b.seasonIndex.toStringAsFixed(1)}$seasonNote', _cInfo),
             ]),
             const SizedBox(height: 4),
             Text(
-              'الرصيد ${fmtQty(b.stock)} • يبيع ${fmtQty(b.recentMonthly)} شهرياً • المتوقع ${fmtQty(b.forecast30)}',
+              '${b.stockKnown ? 'الرصيد ${fmtQty(b.stock)}' : 'الرصيد غير مسجّل'} • يبيع ${fmtQty(b.recentMonthly)} شهرياً '
+              '• المتوقع ${fmtQty(b.forecast30.ceilToDouble())}',
               style: const TextStyle(fontSize: 12, color: _muted),
             ),
           ]),

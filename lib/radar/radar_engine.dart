@@ -18,6 +18,7 @@ import '../accounting/vouchers_service.dart' show VouchersService;
 import '../erp/debts/debt_analytics.dart';
 import '../erp/erp_common.dart';
 import '../erp/inventory/usd_cost_service.dart';
+import 'demand_signals.dart';
 
 // ───────────────────────── نماذج ─────────────────────────
 
@@ -161,6 +162,8 @@ class BuySuggestion {
     required this.suggestQty,
     required this.coverDays,
     required this.cost,
+    this.stockKnown = true,
+    this.seasonYears = 0,
   });
   final int productId;
   final String name;
@@ -170,9 +173,64 @@ class BuySuggestion {
   final double seasonIndex;
   final double forecast30;
   final double suggestQty;
-  final double? coverDays; // null = لا بيع
+  final double? coverDays; // null = لا بيع أو رصيد غير معروف
   final double cost;
+
+  /// هل رصيد المادة معروف؟ (تُسجَّل مشترياتها أو لها رصيد موجب). غير المعروف:
+  /// الكمية المقترحة = المتوقع بيعه وحده، بلا طرح رصيد.
+  final bool stockKnown;
+
+  /// عدد السنوات التي بُني عليها معامل الموسم (0 = لا موسم محسوب).
+  final int seasonYears;
   double get value => suggestQty * cost;
+}
+
+/// نتيجة «الشراء الذكي» مع حال تسجيل المشتريات في المحل.
+class BuyPlan {
+  BuyPlan({required this.items, required this.purchasesRecorded});
+  final List<BuySuggestion> items;
+
+  /// سُجّلت فاتورة شراء أو استلام بضاعة في آخر 180 يوماً؟
+  final bool purchasesRecorded;
+  int get unknownCount => items.where((b) => !b.stockKnown).length;
+}
+
+/// بيانات الطلب المشتركة بين التنبيهات والشراء الذكي (قراءة واحدة).
+class _Demand {
+  _Demand({
+    required this.qty,
+    required this.shop,
+    required this.info,
+    required this.lastInflow,
+    required this.purchasesRecorded,
+    required this.activeDays,
+    required this.saleDays,
+  });
+
+  /// المادة ← الشهر ← الكمية بالوحدة الأساسية (آخر سنتين)
+  final Map<int, Map<String, double>> qty;
+
+  /// الشهر ← عدد فواتير المحل المحفوظة
+  final Map<String, int> shop;
+  final Map<int, Map<String, Object?>> info;
+
+  /// sync_uuid ← آخر دخول بضاعة مسجّل (شراء، رصيد افتتاحي، تعديل بالزيادة)
+  final Map<String, String> lastInflow;
+  final bool purchasesRecorded;
+
+  /// أيام العمل (فيها فاتورة) في آخر 120 يوماً، وأيام بيع كل مادة فيها
+  final List<String> activeDays;
+  final Map<int, List<String>> saleDays;
+
+  /// الرصيد معروف إن كان موجباً أو دخلت بضاعة للمادة في آخر 180 يوماً.
+  bool stockKnown(int pid) {
+    final p = info[pid];
+    if (p == null) return false;
+    if (d0(p['stock_quantity']) > 0) return true;
+    final last = lastInflow['${p['sync_uuid']}'];
+    if (last == null) return false;
+    return last.compareTo(isoDay(DateTime.now().subtract(const Duration(days: 180)))) >= 0;
+  }
 }
 
 // ───────────────────────── المحرك ─────────────────────────
@@ -196,6 +254,105 @@ class RadarEngine {
   static const _saved = "i.status = 'محفوظة' AND COALESCE(i.is_deleted, 0) = 0";
 
   static String _m(double v) => fmtMoneyCompact(v);
+
+  static const _monthNames = [
+    'كانون الثاني', 'شباط', 'آذار', 'نيسان', 'أيار', 'حزيران',
+    'تموز', 'آب', 'أيلول', 'تشرين الأول', 'تشرين الثاني', 'كانون الأول',
+  ];
+  static String _month(int m) => 'شهر $m (${_monthNames[(m - 1) % 12]})';
+
+  // ═════════════ بيانات الطلب (مشتركة، تُقرأ مرة لكل تحديث) ═════════════
+
+  Future<_Demand>? _demand;
+  DateTime? _demandAt;
+
+  Future<_Demand> _demandData() {
+    final at = _demandAt;
+    if (_demand == null || at == null || DateTime.now().difference(at).inSeconds > 20) {
+      _demandAt = DateTime.now();
+      final f = _loadDemand();
+      _demand = f;
+      // فشل القراءة لا يبقى مخزّناً: التحديث التالي يقرأ من جديد
+      f.then<void>((_) {}, onError: (Object _) {
+        if (identical(_demand, f)) _demand = null;
+      });
+    }
+    return _demand!;
+  }
+
+  Future<_Demand> _loadDemand() async {
+    final db = await erpDb();
+    final now = DateTime.now();
+    final from = isoDay(DateTime(now.year - 2, now.month, 1));
+    final qty = <int, Map<String, double>>{};
+    for (final r in await db.rawQuery('''
+      SELECT p.id AS pid, strftime('%Y-%m', i.invoice_date) AS ym, SUM($_baseQty) AS q
+      FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+      JOIN products p ON p.name = ii.product_name
+      WHERE $_saved AND i.invoice_date >= ? AND COALESCE(p.is_deleted, 0) = 0
+      GROUP BY p.id, ym''', [from])) {
+      if (r['pid'] is! int || r['ym'] == null) continue;
+      qty.putIfAbsent(r['pid'] as int, () => {})['${r['ym']}'] = d0(r['q']);
+    }
+    final shop = <String, int>{};
+    for (final r in await db.rawQuery('''
+      SELECT strftime('%Y-%m', i.invoice_date) AS ym, COUNT(*) AS n FROM invoices i
+      WHERE $_saved AND i.invoice_date >= ? GROUP BY ym''', [from])) {
+      if (r['ym'] != null) shop['${r['ym']}'] = (r['n'] as num?)?.toInt() ?? 0;
+    }
+    final info = <int, Map<String, Object?>>{};
+    for (final p in await db.rawQuery('SELECT id, name, unit, stock_quantity, cost_price, sync_uuid '
+        'FROM products WHERE COALESCE(is_deleted, 0) = 0')) {
+      if (p['id'] is int) info[p['id'] as int] = p;
+    }
+    final lastInflow = <String, String>{};
+    var purchases = false;
+    final since180 = isoDay(now.subtract(const Duration(days: 180)));
+    try {
+      for (final r in await db.rawQuery('''
+        SELECT product_sync_uuid AS u, MAX(created_at) AS t FROM stock_movements
+        WHERE delta > 0 AND kind != 'sales_return' GROUP BY product_sync_uuid''')) {
+        if (r['u'] != null && r['t'] != null) lastInflow['${r['u']}'] = '${r['t']}';
+      }
+      final m = await db.rawQuery(
+          "SELECT COUNT(*) AS n FROM stock_movements WHERE kind = 'purchase' AND created_at >= ?", [since180]);
+      purchases = ((m.first['n'] as num?) ?? 0) > 0;
+    } catch (_) {}
+    if (!purchases) {
+      try {
+        final r = await db.rawQuery(
+            "SELECT COUNT(*) AS n FROM purchase_invoices WHERE COALESCE(status, '') != 'draft' AND date >= ?",
+            [since180]);
+        purchases = ((r.first['n'] as num?) ?? 0) > 0;
+      } catch (_) {}
+    }
+    final since120 = isoDay(now.subtract(const Duration(days: 120)));
+    final active = [
+      for (final r in await db.rawQuery('''
+        SELECT DISTINCT date(i.invoice_date) AS d FROM invoices i
+        WHERE $_saved AND i.invoice_date >= ? ORDER BY d''', [since120]))
+        if (r['d'] != null) '${r['d']}'
+    ];
+    final saleDays = <int, List<String>>{};
+    for (final r in await db.rawQuery('''
+      SELECT p.id AS pid, date(i.invoice_date) AS d
+      FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+      JOIN products p ON p.name = ii.product_name
+      WHERE $_saved AND i.invoice_date >= ? AND COALESCE(p.is_deleted, 0) = 0
+      GROUP BY p.id, d ORDER BY d''', [since120])) {
+      if (r['pid'] is! int || r['d'] == null) continue;
+      saleDays.putIfAbsent(r['pid'] as int, () => []).add('${r['d']}');
+    }
+    return _Demand(
+      qty: qty,
+      shop: shop,
+      info: info,
+      lastInflow: lastInflow,
+      purchasesRecorded: purchases,
+      activeDays: active,
+      saleDays: saleDays,
+    );
+  }
 
   // ═════════════ ملخص ═════════════
 
@@ -263,6 +420,8 @@ class RadarEngine {
     await run(_shrinkage);
     await run(_lowMarginBestSellers);
     await run(_outOfStockSellers);
+    await run(_stoppedSellers);
+    await run(_seasonAhead);
     out.sort((a, b) => a.level.index.compareTo(b.level.index));
     return out;
   }
@@ -497,15 +656,22 @@ class RadarEngine {
     );
   }
 
+  /// مواد رصيدها صفر وهي تُباع — للمواد التي رصيدها معروف فقط. مادة لا تُسجَّل
+  /// مشترياتها رصيدها صفر دائماً، فوضعها هنا يملأ التنبيه بكل ما يُباع
+  /// (لها تنبيه «توقف بيعها» بدلاً منه).
   Future<RadarAlert?> _outOfStockSellers() async {
     final db = await erpDb();
-    final rows = await db.rawQuery('''
-      SELECT p.name AS n, p.stock_quantity AS s, SUM($_baseQty) AS q
+    final d = await _demandData();
+    final rows = [
+      for (final r in await db.rawQuery('''
+      SELECT p.id AS pid, p.name AS n, p.stock_quantity AS s, SUM($_baseQty) AS q
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
       JOIN products p ON p.name = ii.product_name
       WHERE $_saved AND i.invoice_date >= ? AND COALESCE(p.stock_quantity, 0) <= 0
         AND COALESCE(p.is_deleted, 0) = 0
-      GROUP BY p.id ORDER BY q DESC''', [isoDay(DateTime.now().subtract(const Duration(days: 30)))]);
+      GROUP BY p.id ORDER BY q DESC''', [isoDay(DateTime.now().subtract(const Duration(days: 30)))]))
+        if (r['pid'] is int && d.stockKnown(r['pid'] as int)) r
+    ];
     if (rows.isEmpty) return null;
     return RadarAlert(
       id: 'out_of_stock',
@@ -515,6 +681,72 @@ class RadarEngine {
       action: 'اطلبها من المورد — كل يوم بلا بضاعة مبيعات ضائعة. الكميات المقترحة في تبويب «الشراء الذكي».',
       items: [
         for (final r in rows.take(10)) RadarItem('${r['n']}', 'بِيع ${fmtQty(d0(r['q']))}', sub: 'الرصيد ${fmtQty(d0(r['s']))}'),
+      ],
+    );
+  }
+
+  /// 🔎 مواد لا يُعرف رصيدها، كانت تُباع بانتظام وتوقف بيعها على غير عادتها —
+  /// أقرب تفسير أنها نفدت من الرف (الحساب في [DemandSignals.stopped]).
+  Future<RadarAlert?> _stoppedSellers() async {
+    final d = await _demandData();
+    final hits = <(String, ({int silence, double everyDays, int saleDays}))>[];
+    d.saleDays.forEach((pid, days) {
+      if (d.stockKnown(pid)) return;
+      final s = DemandSignals.stopped(d.activeDays, days);
+      if (s != null) hits.add(('${d.info[pid]?['name'] ?? ''}', s));
+    });
+    if (hits.isEmpty) return null;
+    hits.sort((a, b) => b.$2.saleDays.compareTo(a.$2.saleDays));
+    return RadarAlert(
+      id: 'stopped_sellers',
+      level: RadarLevel.medium,
+      title: 'مواد كانت تُباع بانتظام وتوقف بيعها',
+      body: '${hits.length} مادة لا تُسجَّل مشترياتها، كانت تُباع بانتظام ولم تُبع منذ عدد من أيام العمل '
+          'يندر أن يحدث صدفة (أقل من 2%) — غالباً نفدت من المحل.',
+      action: 'افحص الرف: إن نفدت فاطلبها؛ وإن كانت موجودة فربما قلّ الطلب عليها أو يبيعها غيرك بسعر أقل.',
+      items: [
+        for (final h in hits.take(12))
+          RadarItem(h.$1, 'لا بيع منذ ${h.$2.silence} يوم عمل',
+              sub: 'عادةً تُباع كل ${h.$2.everyDays.toStringAsFixed(1)} يوم عمل • بيعت في ${h.$2.saleDays} يوماً'),
+      ],
+    );
+  }
+
+  /// 📅 مواد يرتفع بيعها في الشهر القادم عادةً — للشراء قبل الموسم لا بعده.
+  Future<RadarAlert?> _seasonAhead() async {
+    final d = await _demandData();
+    final now = DateTime.now();
+    final cur = DemandSignals.ym(now.year, now.month);
+    final next = DateTime(now.year, now.month + 1, 1).month;
+    final last3 = [for (var k = 1; k <= 3; k++) DemandSignals.ym(now.year, now.month - k)];
+    final hits = <(String, double, double, int, double)>[]; // اسم، معامل، توقع، سنوات، قيمة
+    d.qty.forEach((pid, months) {
+      final p = d.info[pid];
+      if (p == null) return;
+      if (last3.every((k) => (months[k] ?? 0) <= 0)) return; // لم تعد تُباع
+      final s = DemandSignals.seasonIndex(months, d.shop, cur);
+      final ni = s.index[next];
+      if (ni == null || ni < 1.4) return;
+      if (ni < (s.index[now.month] ?? 1.0) * 1.2) return; // الموسم بدأ فعلاً أو لا ارتفاع
+      final f = DemandSignals.forecast(qty: months, last3: last3, index: s.index, targetMonth: next);
+      if (f <= 0) return;
+      hits.add(('${p['name']}', ni, f, s.years[next] ?? 0, f * d0(p['cost_price'])));
+    });
+    if (hits.isEmpty) return null;
+    hits.sort((a, b) => b.$5 != a.$5 ? b.$5.compareTo(a.$5) : b.$2.compareTo(a.$2));
+    final maxYears = hits.fold<int>(0, (m, h) => math.max(m, h.$4));
+    return RadarAlert(
+      id: 'season_ahead',
+      level: maxYears >= 2 ? RadarLevel.medium : RadarLevel.info,
+      title: 'موسم قادم: اشترِ قبل ${_month(next)}',
+      body: '${hits.length} مادة يرتفع بيعها عادةً في ${_month(next)} مقارنة بباقي السنة '
+          '(منسوباً إلى نشاط المحل، فلا يُحسب نمو المحل موسماً).'
+          '${maxYears < 2 ? ' مبني على سنة واحدة من البيانات — تخمين يقوى مع كل سنة جديدة.' : ''}',
+      action: 'جهّز طلبيتها من الآن: الشراء بعد بداية الموسم يعني رفوفاً فارغة وأسعار موردين أعلى.',
+      items: [
+        for (final h in hits.take(12))
+          RadarItem(h.$1, '×${h.$2.toStringAsFixed(1)} عن المعتاد',
+              sub: 'المتوقع بيعه في الشهر القادم ${fmtQty(h.$3.ceilToDouble())} • من ${h.$4} سنة'),
       ],
     );
   }
@@ -693,52 +925,37 @@ class RadarEngine {
 
   // ═════════════ 4) الشراء الذكي (الموسم + البيع الأخير) ═════════════
 
-  Future<List<BuySuggestion>> buySuggestions() async {
-    final db = await erpDb();
+  /// الكمية المقترحة لكل مادة تُباع:
+  ///   • رصيدها معروف: المتوقع بيعه في 30 يوماً × 1.2 (أمان) − الرصيد.
+  ///   • رصيدها غير معروف (لا تُسجَّل مشترياتها): المتوقع بيعه وحده — يطرح التاجر ما على الرف.
+  /// المتوقع = مستوى بيع آخر 3 أشهر بعد إزالة موسمها × معامل موسم الثلاثين يوماً القادمة
+  /// (انظر [DemandSignals]).
+  Future<BuyPlan> buySuggestions() async {
+    final d = await _demandData();
     final now = DateTime.now();
-    final from = DateTime(now.year - 2, now.month, 1);
-    final rows = await db.rawQuery('''
-      SELECT p.id AS pid, strftime('%Y-%m', i.invoice_date) AS ym, SUM($_baseQty) AS q
-      FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-      JOIN products p ON p.name = ii.product_name
-      WHERE $_saved AND i.invoice_date >= ? AND COALESCE(p.is_deleted, 0) = 0
-      GROUP BY p.id, ym''', [isoDay(from)]);
-    final byProduct = <int, Map<String, double>>{};
-    for (final r in rows) {
-      if (r['pid'] is! int || r['ym'] == null) continue;
-      byProduct.putIfAbsent(r['pid'] as int, () => {})['${r['ym']}'] = d0(r['q']);
-    }
-    if (byProduct.isEmpty) return const [];
-    final info = <int, Map<String, Object?>>{};
-    for (final p in await db.rawQuery(
-        'SELECT id, name, unit, stock_quantity, cost_price FROM products WHERE COALESCE(is_deleted, 0) = 0')) {
-      info[p['id'] as int] = p;
-    }
-    String ym(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}';
-    // آخر 3 أشهر كاملة + الشهر الجاري حتى اليوم (مُقدّراً لشهر كامل)
-    final last3 = [for (var k = 1; k <= 3; k++) ym(DateTime(now.year, now.month - k, 1))];
-    final target = DateTime(now.year, now.month, now.day).add(const Duration(days: 15)).month; // الأيام الثلاثون القادمة
+    final cur = DemandSignals.ym(now.year, now.month);
+    final last3 = [for (var k = 1; k <= 3; k++) DemandSignals.ym(now.year, now.month - k)];
+    final target = DateTime(now.year, now.month, now.day).add(const Duration(days: 15)).month;
     final out = <BuySuggestion>[];
-    byProduct.forEach((pid, months) {
-      final p = info[pid];
+    d.qty.forEach((pid, months) {
+      final p = d.info[pid];
       if (p == null) return;
       final recent = last3.fold<double>(0, (s, k) => s + (months[k] ?? 0.0)) / 3;
       if (recent <= 0) return;
-      // معامل الموسم: متوسط هذا الشهر في السنوات السابقة ÷ المتوسط الشهري العام
-      final all = months.values.toList();
-      final avg = all.fold<double>(0, (s, v) => s + v) / math.max(1, _monthsSpan(months.keys));
-      final same = [
-        for (final e in months.entries)
-          if (int.tryParse(e.key.substring(5)) == target && e.key != ym(now)) e.value
-      ];
-      var index = 1.0;
-      if (same.isNotEmpty && avg > 0) {
-        index = (same.fold<double>(0, (s, v) => s + v) / same.length / avg).clamp(0.5, 2.5).toDouble();
-      }
-      final forecast = recent * index;
+      final season = DemandSignals.seasonIndex(months, d.shop, cur);
+      final forecast = DemandSignals.forecast(qty: months, last3: last3, index: season.index, targetMonth: target);
+      if (forecast <= 0) return;
+      final known = d.stockKnown(pid);
       final stock = d0(p['stock_quantity']);
-      final need = forecast * 1.2 - stock; // 20% هامش أمان
-      final cover = forecast > 0 ? (stock <= 0 ? 0.0 : stock / (forecast / 30)) : null;
+      final double need;
+      final double? cover;
+      if (known) {
+        need = forecast * 1.2 - stock; // 20% هامش أمان
+        cover = stock <= 0 ? 0.0 : stock / (forecast / 30);
+      } else {
+        need = forecast;
+        cover = null;
+      }
       if (need <= 0.0001) return;
       out.add(BuySuggestion(
         productId: pid,
@@ -746,25 +963,22 @@ class RadarEngine {
         unit: p['unit'] == 'piece' ? 'قطعة' : (p['unit'] == 'meter' ? 'متر' : '${p['unit'] ?? ''}'),
         stock: stock,
         recentMonthly: recent,
-        seasonIndex: index,
+        seasonIndex: season.index[target] ?? 1.0,
         forecast30: forecast,
         suggestQty: need.ceilToDouble(),
         coverDays: cover,
         cost: d0(p['cost_price']),
+        stockKnown: known,
+        seasonYears: season.years[target] ?? 0,
       ));
     });
-    out.sort((a, b) => (a.coverDays ?? 1e9).compareTo(b.coverDays ?? 1e9));
-    return out;
-  }
-
-  /// عدد الأشهر من أول شهر بيع حتى الشهر الماضي (الأشهر بلا بيع تُحسب صفراً)
-  static int _monthsSpan(Iterable<String> keys) {
-    if (keys.isEmpty) return 1;
-    final ks = keys.toList()..sort();
-    final y = int.tryParse(ks.first.substring(0, 4)) ?? 0, m = int.tryParse(ks.first.substring(5)) ?? 1;
-    final now = DateTime.now();
-    final n = (now.year - y) * 12 + (now.month - m); // بلا الشهر الجاري (غير مكتمل)
-    return math.max(1, n);
+    out.sort((a, b) {
+      if (a.stockKnown != b.stockKnown) return a.stockKnown ? -1 : 1;
+      if (a.stockKnown) return (a.coverDays ?? 1e9).compareTo(b.coverDays ?? 1e9);
+      final v = b.value.compareTo(a.value);
+      return v != 0 ? v : b.forecast30.compareTo(a.forecast30);
+    });
+    return BuyPlan(items: out, purchasesRecorded: d.purchasesRecorded);
   }
 }
 

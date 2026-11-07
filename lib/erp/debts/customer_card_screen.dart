@@ -12,7 +12,9 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../accounting/screens/acc_ui.dart';
 import '../../models/app_user.dart';
+import '../../screens/person_details_screen.dart'; // 📊 تقرير هذا العميل
 import '../../screens/product_reports_screen.dart'; // 📦 بضاعة هذا العميل
+import '../../services/auth_service.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
@@ -126,6 +128,9 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
 
   PartyLite get _party => PartyLite(
       widget.customerId, (_customer?['name'] as String?) ?? '', _customer?['phone'] as String?, _sum?.balance ?? 0);
+
+  static bool _canReport(String key) =>
+      AuthService().hasPermission(AppPermissions.reports) && AuthService().hasPermission(key);
 
   void _open(Widget w, {String? permission}) {
     if (permission != null && !requirePermission(context, permission)) return;
@@ -463,10 +468,16 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
                 permission: AppPermissions.collection)),
         a('الفواتير غير المسددة', Icons.receipt_outlined, ErpColors.orange,
             () => _open(OpenInvoicesScreen(customerId: widget.customerId))),
-        a('تقارير البضاعة لهذا العميل', Icons.inventory_2_rounded, ErpColors.green,
-            () => _open(
-                ProductReportsScreen(customerId: widget.customerId, customerName: '${_customer!['name']}'),
-                permission: AppPermissions.repProducts)),
+        // 📊 تقارير هذا العميل — تظهر لمن له صلاحية «التقارير» والتقرير المحدد فقط
+        if (_canReport(AppPermissions.repPeople))
+          a('تقرير العميل (سنوات ← أشهر ← فواتير)', Icons.insights_rounded, ErpColors.purple,
+              () => _open(PersonDetailsScreen.fromReport(
+                  customerId: widget.customerId,
+                  name: '${_customer!['name']}',
+                  phone: _customer!['phone'] as String?))),
+        if (_canReport(AppPermissions.repProducts))
+          a('تقارير البضاعة لهذا العميل', Icons.inventory_2_rounded, ErpColors.green,
+              () => _open(ProductReportsScreen(customerId: widget.customerId, customerName: '${_customer!['name']}'))),
       ]),
     );
   }

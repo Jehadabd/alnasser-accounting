@@ -6,6 +6,10 @@
 import 'package:flutter/material.dart';
 
 import '../accounting/screens/acc_ui.dart' show accRoute;
+import '../inventory/item_card_editor_screen.dart'; // ✏️ تعديل المادة
+import '../inventory/item_card_screen.dart'; // 🗂️ بطاقة المادة
+import '../models/app_user.dart' show AppPermissions;
+import '../services/auth_service.dart';
 import '../services/database_service.dart';
 import '../services/reports_service.dart';
 import '../widgets/report_kit.dart';
@@ -112,7 +116,28 @@ class _ProductReportDetailsScreenState extends State<ProductReportDetailsScreen>
         widget.customerId == null ? 'تقرير المادة' : 'للعميل ${widget.customerName ?? ''} فقط',
       ].join(' • '),
       icon: Icons.inventory_2_rounded,
-      actions: [IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
+      actions: [
+        // 🗂️ / ✏️ من التقرير إلى المادة نفسها — بصلاحيتها فقط
+        if (widget.productId != null && AuthService().hasPermission(AppPermissions.itemCard))
+          IconButton(
+            tooltip: 'بطاقة المادة',
+            icon: const Icon(Icons.badge_outlined),
+            onPressed: () => Navigator.push(context, accRoute(ItemCardScreen(productId: widget.productId!)))
+                .then((_) {
+              if (mounted) _load();
+            }),
+          ),
+        if (widget.productId != null && AuthService().hasPermission(AppPermissions.editProducts))
+          IconButton(
+            tooltip: 'تعديل المادة',
+            icon: const Icon(Icons.edit_rounded),
+            onPressed: () => Navigator.push(context, accRoute(ItemCardEditorScreen(productId: widget.productId)))
+                .then((_) {
+              if (mounted) _load();
+            }),
+          ),
+        IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
+      ],
       loading: _loading,
       children: _loading
           ? null

@@ -146,27 +146,28 @@ class InvoiceController {
       item.productName.isNotEmpty && !_isInvoiceItemComplete(item)
     ).toList();
     
-    if (completeItems.isEmpty) {
-      if (incompleteItems.isNotEmpty) {
-        final problems = <String>[];
-        for (final item in incompleteItems) {
-          final itemProblems = <String>[];
-          final hasQty = (item.quantityIndividual != null && item.quantityIndividual! > 0) ||
-                         (item.quantityLargeUnit != null && item.quantityLargeUnit! > 0);
-          if (!hasQty) itemProblems.add('الكمية');
-          if (item.appliedPrice <= 0 && !item.isGift) itemProblems.add('السعر');
-          if (item.saleType == null || item.saleType!.isEmpty) itemProblems.add('نوع البيع');
-          if (itemProblems.isNotEmpty) {
-            problems.add('${item.productName}: ينقص ${itemProblems.join('، ')}');
-          }
-        }
-        if (problems.isNotEmpty) {
-          return InvoiceValidationResult(
-            isValid: false, 
-            errorMessage: 'أصناف غير مكتملة:\n${problems.take(3).join('\n')}${problems.length > 3 ? '\n... و${problems.length - 3} أصناف أخرى' : ''}'
-          );
-        }
+    // 🛡️ سطر فيه اسم مادة وناقص (كمية/سعر/نوع بيع) يمنع الحفظ — حتى مع وجود أسطر
+    //    مكتملة. كان يُسقَط بصمت: يراه المستخدم في الفاتورة، والمحفوظ (والدين) بدونه.
+    if (incompleteItems.isNotEmpty) {
+      final problems = <String>[];
+      for (final item in incompleteItems) {
+        final itemProblems = <String>[];
+        final hasQty = (item.quantityIndividual != null && item.quantityIndividual! > 0) ||
+                       (item.quantityLargeUnit != null && item.quantityLargeUnit! > 0);
+        if (!hasQty) itemProblems.add('الكمية');
+        if (item.appliedPrice <= 0 && !item.isGift) itemProblems.add('السعر');
+        if (item.saleType == null || item.saleType!.isEmpty) itemProblems.add('نوع البيع');
+        if (itemProblems.isEmpty) itemProblems.add('المبلغ');
+        problems.add('${item.productName}: ينقص ${itemProblems.join('، ')}');
       }
+      return InvoiceValidationResult(
+        isValid: false,
+        errorMessage: 'أصناف غير مكتملة — أكملها أو احذف سطرها قبل الحفظ:\n'
+            '${problems.take(3).join('\n')}${problems.length > 3 ? '\n... و${problems.length - 3} أصناف أخرى' : ''}',
+      );
+    }
+
+    if (completeItems.isEmpty) {
       return InvoiceValidationResult(isValid: false, errorMessage: 'لا يمكن حفظ فاتورة بدون أصناف. أضف صنفاً واحداً على الأقل مع الكمية والسعر ونوع البيع.');
     }
     

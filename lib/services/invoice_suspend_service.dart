@@ -28,6 +28,12 @@ class InvoiceSuspendService {
     required void Function(String) onError,
     required TextEditingController returnAmountController,
   }) async {
+    // 🛡️ فاتورة محفوظة لا تُعلَّق من هنا: هذا المسار يكتب الإجمالي والمسدد بلا
+    //    الحارس المحاسبي، فيبقى دينها في السجل وهي «معلقة» (HeldInvoices.hold يرفضها أيضاً)
+    if (invoiceToManage != null && invoiceToManage.status != 'معلقة') {
+      onError('فاتورة محفوظة لا تُعلَّق: احفظ تعديلها أو ألغِه');
+      return;
+    }
     if (!formKey.currentState!.validate()) return;
     for (int i = invoiceItems.length - 1; i >= 0; i--) {
       if (invoiceItems[i].productName.isEmpty) {
@@ -108,6 +114,10 @@ class InvoiceSuspendService {
     required GetStorage storage,
     required TextEditingController loadingFeeController,
   }) async {
+    // 🛡️ انظر suspendInvoice: لا تعليق لفاتورة محفوظة بلا الحارس المحاسبي
+    if (invoiceToManage != null && invoiceToManage.status != 'معلقة') {
+      throw StateError('فاتورة محفوظة لا تُعلَّق: احفظ تعديلها أو ألغِه');
+    }
     if (!formKey.currentState!.validate()) return null;
     for (int i = invoiceItems.length - 1; i >= 0; i--) {
       if (invoiceItems[i].productName.isEmpty) {

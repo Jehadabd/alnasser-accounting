@@ -30,6 +30,10 @@ import '../accounting/screens/acc_ui.dart' show accAppBar;
 import 'statements/customer_statements_screen.dart';
 import '../widgets/loading_dialog.dart';
 import '../erp/control/printed_vouchers_screen.dart'; // 🧾 أرشيف السندات المطبوعة
+import '../models/app_user.dart' show AppPermissions; // 🔐 صلاحيات التقارير والبطاقة
+import '../services/auth_service.dart';
+import 'person_details_screen.dart'; // 📊 تقرير العميل
+import 'product_reports_screen.dart'; // 📦 بضاعة العميل
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
@@ -44,6 +48,12 @@ class CustomerDetailsScreen extends StatefulWidget {
 }
 
 class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
+  // 📊 تقارير العميل: صلاحية «التقارير» + التقرير المحدد (تقارير الأشخاص / البضاعة)
+  bool get _canPeopleReport =>
+      AuthService().hasPermission(AppPermissions.reports) && AuthService().hasPermission(AppPermissions.repPeople);
+  bool get _canGoodsReport =>
+      AuthService().hasPermission(AppPermissions.reports) && AuthService().hasPermission(AppPermissions.repProducts);
+
 
   
   // 📊 المعاملات المجمعة (فواتير مجمعة + معاملات يدوية)
@@ -733,8 +743,9 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
           icon: Icons.person_rounded,
           subtitle: 'حساب العميل',
           actions: [
-            // 🗂️ بطاقة العميل الموسّعة (سقف، مجموعة، أعمار ديون، مستندات)
-            if (widget.customer.id != null)
+            // 🗂️ بطاقة العميل الموسّعة (سقف، مجموعة، أعمار ديون، مستندات) — بصلاحيتها:
+            //    فيها سقف الدين والخصم الدائم وإيقاف الآجل (كانت تُفتح من هنا بلا صلاحية)
+            if (widget.customer.id != null && AuthService().hasPermission(AppPermissions.customerCard))
               IconButton(
                 icon: const Icon(Icons.badge_outlined, color: Colors.white),
                 tooltip: 'بطاقة العميل',
@@ -820,6 +831,25 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   case 'financial_integrity':
                     _showFinancialIntegrityReport();
                     break;
+                  case 'customer_report':
+                    // 📊 تقرير العميل: السنوات ← الأشهر ← الفواتير
+                    if (!_canPeopleReport) break;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => PersonDetailsScreen(customer: widget.customer)),
+                    );
+                    break;
+                  case 'customer_goods':
+                    // 📦 كل ما اشتراه: الكميات والمبالغ (والربح لمن يرى الكلفة)
+                    if (widget.customer.id == null || !_canGoodsReport) break;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ProductReportsScreen(
+                            customerId: widget.customer.id, customerName: widget.customer.name),
+                      ),
+                    );
+                    break;
                   case 'audit_log':
                     Navigator.push(
                       context,
@@ -838,6 +868,32 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                 }
               },
               itemBuilder: (context) => [
+                // 📊 تقارير هذا العميل — تظهر لمن له صلاحيتها فقط
+                if (_canPeopleReport)
+                  const PopupMenuItem(
+                    value: 'customer_report',
+                    child: Row(
+                      children: [
+                        Icon(Icons.insights_rounded, color: Color(0xFF4F46E5), size: 20),
+                        SizedBox(width: 12),
+                        Text('تقرير العميل (سنوات ← أشهر ← فواتير)'),
+                      ],
+                    ),
+                  ),
+                if (widget.customer.id != null && _canGoodsReport)
+                  const PopupMenuItem(
+                    value: 'customer_goods',
+                    child: Row(
+                      children: [
+                        Icon(Icons.inventory_2_rounded, color: Color(0xFF047857), size: 20),
+                        SizedBox(width: 12),
+                        Text('بضاعة العميل (ما اشتراه)'),
+                      ],
+                    ),
+                  ),
+                if (_canPeopleReport ||
+                    (widget.customer.id != null && _canGoodsReport))
+                  const PopupMenuDivider(),
                 const PopupMenuItem(
                   value: 'commercial_statement',
                   child: Row(
