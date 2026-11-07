@@ -174,6 +174,22 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
     return ['', 'المجموع', '', fmtMoney(st.totalDebit), fmtMoney(st.totalCredit), fmtMoney(st.closing)];
   }
 
+  String get _subtitle => 'من ${_from == null ? 'البداية' : fmtDate(_from!)} إلى ${fmtDate(_to)}';
+
+  Future<void> _share() async {
+    try {
+      final bytes = await ReportExport.tablePdf(
+          title: 'كشف حساب $_customerName', subtitle: _subtitle, headers: _headers, rows: _data, footer: _footer);
+      if (!mounted) return;
+      await ReportExport.sharePdf(context, bytes, 'كشف_حساب_$_customerName', text: 'كشف حساب $_customerName');
+    } catch (e) {
+      if (mounted) showError(context, 'تعذّرت المشاركة: $e');
+    }
+  }
+
+  /// 🔒 فُتح الكشف من صفحة عميل: يبقى لهذا العميل وحده (لا تنقّل إلى عميل آخر)
+  bool get _locked => widget.customerId != null;
+
   @override
   Widget build(BuildContext context) {
     final st = _st;
@@ -183,12 +199,18 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
       icon: Icons.list_alt,
       actions: [
         IconButton(tooltip: 'مطابقة رصيد', icon: const Icon(Icons.handshake_outlined), onPressed: _reconcile),
+        // 📤 مشاركة الكشف PDF — مثل مشاركة الفاتورة (نفس ملف «طباعة / PDF»)
+        IconButton(
+          tooltip: 'مشاركة',
+          icon: const Icon(Icons.share_rounded),
+          onPressed: _st == null ? null : _share,
+        ),
         ...exportActions(context,
             title: 'كشف حساب $_customerName',
             headers: () => _headers,
             rows: () => _data,
             footer: () => _footer,
-            subtitle: () => 'من ${_from == null ? 'البداية' : fmtDate(_from!)} إلى ${fmtDate(_to)}'),
+            subtitle: () => _subtitle),
       ],
       headerExtra: st == null
           ? null
@@ -203,6 +225,12 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
           color: Colors.white,
           padding: const EdgeInsets.all(8),
           child: Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            if (_locked)
+              Chip(
+                avatar: const Icon(Icons.person_rounded, size: 18),
+                label: Text(_customerName),
+              )
+            else
             OutlinedButton.icon(
               icon: const Icon(Icons.person_search),
               label: Text(_customerName.isEmpty ? 'اختيار العميل' : _customerName),

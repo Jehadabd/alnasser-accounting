@@ -306,6 +306,7 @@ class _AccountingHomeScreenState extends State<AccountingHomeScreen> {
                   child: _ProblemsCard(
                     problems: _problems,
                     onCheck: () => _open(const AccountingSettingsScreen(), permission: AppPermissions.accountingPost),
+                    onRecheck: _check,
                   ),
                 ),
               const _SectionHeader('إجراءات سريعة', Icons.bolt_rounded),
@@ -589,9 +590,12 @@ class _HubCardState extends State<_HubCard> {
 }
 
 class _ProblemsCard extends StatelessWidget {
-  const _ProblemsCard({required this.problems, required this.onCheck});
+  const _ProblemsCard({required this.problems, required this.onCheck, required this.onRecheck});
   final List<String> problems;
   final VoidCallback onCheck;
+
+  /// إعادة الفحص بعد إعادة عملاء إلى سجل الديون (onCheck يفتح الإعدادات، لا يعيد الفحص)
+  final VoidCallback onRecheck;
   @override
   Widget build(BuildContext context) => Container(
         margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -624,7 +628,7 @@ class _ProblemsCard extends StatelessWidget {
                     alignment: AlignmentDirectional.centerStart,
                     child: TextButton.icon(
                       onPressed: () async {
-                        if (await showOrphanDebtsDialog(context)) _check();
+                        if (await showOrphanDebtsDialog(context)) onRecheck();
                       },
                       icon: const Icon(Icons.person_search_rounded, size: 18),
                       label: const Text('عرض هؤلاء العملاء ومبالغهم'),

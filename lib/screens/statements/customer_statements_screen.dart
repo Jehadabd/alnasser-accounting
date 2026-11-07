@@ -4,10 +4,13 @@
 //   • كشف الحساب: شامل / من آخر رصيد صفر / فترة — تفصيلي أو ملخص
 //   • الكشف التجاري: كم سحب بالدين وبالنقد، بالفواتير وباليد، وكم سدّد، وكل فاتورة
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection; // TextDirection من Flutter
 
 import '../../accounting/screens/acc_ui.dart';
+import '../../erp/report_export.dart' show ReportExport;
 import '../../services/invoice_edit_log.dart';
 import 'statement_engine.dart';
 import 'statement_pdf.dart';
@@ -107,26 +110,35 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
     }
   }
 
-  Future<void> _print() async {
+  /// ملف الكشف المعروض الآن (نفسه للطباعة والمشاركة). null = لم يُحمَّل بعد.
+  Future<(Uint8List, String)?> _pdf() async {
+    if (_tab == StatementTab.account && _acc != null) {
+      return (await buildAccountStatementPdf(_acc!), 'كشف_حساب_${widget.customerName}');
+    }
+    if (_tab == StatementTab.commercial && _com != null) {
+      return (await buildCommercialStatementPdf(_com!), 'كشف_تجاري_${widget.customerName}');
+    }
+    return null;
+  }
+
+  Future<void> _print({bool share = false}) async {
     setState(() => _printing = true);
     try {
-      if (_tab == StatementTab.account && _acc != null) {
-        final bytes = await buildAccountStatementPdf(_acc!);
-        final path = await deliverStatementPdf(bytes, 'كشف_حساب_${widget.customerName}');
-        if (path != null && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('حُفظ الكشف وفُتح: $path')));
-        }
-      } else if (_tab == StatementTab.commercial && _com != null) {
-        final bytes = await buildCommercialStatementPdf(_com!);
-        final path = await deliverStatementPdf(bytes, 'كشف_تجاري_${widget.customerName}');
-        if (path != null && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('حُفظ الكشف وفُتح: $path')));
-        }
+      final f = await _pdf();
+      if (f == null || !mounted) return;
+      if (share) {
+        await ReportExport.sharePdf(context, f.$1, f.$2,
+            text: '${_tab == StatementTab.account ? 'كشف حساب' : 'الكشف التجاري'} ${widget.customerName}');
+        return;
+      }
+      final path = await deliverStatementPdf(f.$1, f.$2);
+      if (path != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('حُفظ الكشف وفُتح: $path')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('تعذّرت الطباعة: $e'), backgroundColor: _debt));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${share ? 'تعذّرت المشاركة' : 'تعذّرت الطباعة'}: $e'), backgroundColor: _debt));
       }
     } finally {
       if (mounted) setState(() => _printing = false);
@@ -164,6 +176,17 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
           icon: Icons.receipt_long_rounded,
           subtitle: _tab == StatementTab.account ? 'كشف الحساب' : 'الكشف التجاري',
           actions: [
+            // 📤 مشاركة الكشف PDF — مثل مشاركة الفاتورة
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 6),
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white, side: const BorderSide(color: Colors.white70)),
+                onPressed: _loading || _printing ? null : () => _print(share: true),
+                icon: const Icon(Icons.share_rounded, size: 19),
+                label: const Text('مشاركة'),
+              ),
+            ),
             Padding(
               padding: const EdgeInsetsDirectional.only(end: 10),
               child: FilledButton.icon(

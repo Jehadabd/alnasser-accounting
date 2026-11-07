@@ -175,6 +175,27 @@ class ReportExport {
     }
   }
 
+  /// 📤 مشاركة PDF (واتساب، تيليجرام، بريد...) بنفس طريقة مشاركة الفاتورة: ملف مؤقت
+  /// باسم واضح ثم نافذة المشاركة. على المتصفح: تنزيل/مشاركة مباشرة.
+  static Future<void> sharePdf(BuildContext context, Uint8List bytes, String name, {String? text}) async {
+    try {
+      final stamp = DateTime.now().toIso8601String().substring(0, 10);
+      final fileName = '${_safeName(name)}_$stamp.pdf';
+      if (kIsWeb) {
+        await Printing.sharePdf(bytes: bytes, filename: fileName);
+        return;
+      }
+      final tmp = await getTemporaryDirectory();
+      final dir = Directory('${tmp.path}${Platform.pathSeparator}statements_share_cache');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final path = '${dir.path}${Platform.pathSeparator}$fileName';
+      await File(path).writeAsBytes(bytes, flush: true);
+      await Share.shareXFiles([XFile(path, mimeType: 'application/pdf', name: fileName)], text: text ?? name);
+    } catch (e) {
+      if (context.mounted) showError(context, 'تعذّرت المشاركة: $e');
+    }
+  }
+
   static Future<void> exportPdf(
     BuildContext context, {
     required String title,
