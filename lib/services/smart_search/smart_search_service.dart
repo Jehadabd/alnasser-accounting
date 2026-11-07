@@ -8,6 +8,7 @@ import 'smart_search_db.dart';
 import 'smart_search_models.dart';
 import 'smart_search_trainer.dart';
 import '../settings_manager.dart';
+import 'recency_score.dart';
 
 /// منتج مع نقاط الترتيب
 class _ScoredProduct {
@@ -511,25 +512,25 @@ class SmartSearchService {
       if (productId != null) {
         final assocData = associations[productId];
         if (assocData != null) {
-           final count = assocData['count'] as int;
-           final updatedAtStr = assocData['updated_at'] as String;
-           final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
-           
-           // حساب نسبة الخصم: تقل النقاط بنسبة 100% خلال 12 شهر
-           final monthsPassed = DateTime.now().difference(updatedAt).inDays / 30.0;
-           double decayFactor = 1.0 - (monthsPassed * (1.0 / 12.0));
-           if (decayFactor < 0) decayFactor = 0; // انقضت العلاقة
-           
-           score += (count * 3) * decayFactor;
+           // ⏳ قوة العلاقة الآن من تاريخ كل مرة اشتُريتا فيها معاً (RecencyScore)،
+           //    لا «العدد كله × قِدم آخر مرة» (كان 100 مرة قديمة + مرة أمس = 100 كاملة).
+           final s = assocData['score'];
+           if (s is double) {
+             score += s * 3;
+           } else {
+             final count = assocData['count'] as int;
+             final updatedAt = DateTime.tryParse(assocData['updated_at'] as String) ?? DateTime.now();
+             score += RecencyScore.valueAt(count.toDouble(), updatedAt, DateTime.now()) * 3;
+           }
         }
         
         // 🆕 3.5 نقاط الترتيب التراكمية (Sequence) مع التقادم الزمني والمسافة
         // المنتج الحالي يجمع نقاطاً من جميع المنتجات التي سبقته في الفاتورة الحالية
         final productSequences = sequencesMap[productId] ?? [];
         for (final sequence in productSequences) {
-          final monthsPassed = DateTime.now().difference(sequence.lastOccurred).inDays / 30.0;
-          double decayFactor = 1.0 - (monthsPassed * (1.0 / 12.0));
-          if (decayFactor < 0) decayFactor = 0;
+          // ⏳ التكرار الفعّال الآن (تاريخ كل مرة) — بدل العدد × قِدم آخر مرة
+          final effective = RecencyScore.valueAt(
+              sequence.recencyScore ?? sequence.count.toDouble(), sequence.lastOccurred, DateTime.now());
           
           // وزن المسافة: يتلاشى بسرعة ويموت بعد مسافة 3
           // distance = 1 (يليه مباشرة) -> وزن 1.5 (15 نقطة لكل تكرار)
@@ -549,7 +550,7 @@ class SmartSearchService {
           
           // إعطاء وزن قوي للترتيب يتناسب مع المسافة والتكرار والزمن
           if (distanceWeight > 0) {
-            score += (sequence.count * 10 * distanceWeight) * decayFactor;
+            score += effective * 10 * distanceWeight;
           }
         }
       }

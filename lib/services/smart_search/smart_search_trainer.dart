@@ -133,6 +133,7 @@ class SmartSearchTrainer {
               productIdB: productIdB,
               productNameA: itemA.productName,
               productNameB: itemB.productName,
+              occurredAt: invoice.invoiceDate, // ⏳ تاريخ الفاتورة لا «الآن»
             );
             totalAssociationsBuilt++;
           }
@@ -159,6 +160,7 @@ class SmartSearchTrainer {
               fromProductId: productIdA,
               toProductId: productIdB,
               distance: offset, // المسافة: 1 = يليه مباشرة، 2 = بعده بمنتج، وهكذا
+              occurredAt: invoice.invoiceDate,
             );
           }
         }
@@ -318,6 +320,7 @@ class SmartSearchTrainer {
             productIdB: itemB.productId!,
             productNameA: itemA.productName,
             productNameB: itemB.productName,
+            occurredAt: invoice.invoiceDate, // ⏳ تاريخ الفاتورة لا «الآن»
           );
         }
       }
@@ -338,6 +341,7 @@ class SmartSearchTrainer {
             fromProductId: itemA.productId!,
             toProductId: itemB.productId!,
             distance: offset,
+            occurredAt: invoice.invoiceDate,
           );
         }
       }

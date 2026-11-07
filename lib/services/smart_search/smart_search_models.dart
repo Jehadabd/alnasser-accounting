@@ -47,12 +47,16 @@ class ProductSequence {
   final int count;
   final DateTime lastOccurred;
 
+  /// قوة التتابع حسب تاريخ كل مرة (RecencyScore) مرجعها [lastOccurred]؛ null = بيانات قديمة.
+  final double? recencyScore;
+
   ProductSequence({
     required this.fromProductId,
     required this.toProductId,
     required this.distance,
     required this.count,
     required this.lastOccurred,
+    this.recencyScore,
   });
 
   Map<String, dynamic> toMap() => {
@@ -69,6 +73,7 @@ class ProductSequence {
     distance: (map['distance'] as int?) ?? 1,
     count: map['count'] as int,
     lastOccurred: DateTime.parse(map['last_occurred'] as String),
+    recencyScore: (map['recency_score'] as num?)?.toDouble(),
   );
 }
 

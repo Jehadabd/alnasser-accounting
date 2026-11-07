@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'smart_search_models.dart';
 import 'smart_search_prune.dart';
+import 'recency_score.dart';
 
 class SmartSearchDatabase {
   static SmartSearchDatabase? _instance;
@@ -44,7 +45,7 @@ class SmartSearchDatabase {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -182,7 +183,21 @@ class SmartSearchDatabase {
       )
     ''');
 
+    await _addRecencyColumns(db);
     debugPrint('✅ Smart Search database tables created successfully');
+  }
+
+  /// ⏳ v4: قوة العلاقة حسب تاريخ كل مرة (RecencyScore). العلاقات الموجودة تبدأ من عددها
+  /// (أفضل تقدير بلا تواريخها)؛ «إعادة التدريب» تحسبها بدقة من تواريخ الفواتير.
+  static Future<void> _addRecencyColumns(Database db) async {
+    for (final t in const ['product_associations', 'product_sequences']) {
+      final cols = await db.rawQuery('PRAGMA table_info($t)');
+      if (!cols.any((c) => c['name'] == 'recency_score')) {
+        await db.execute('ALTER TABLE $t ADD COLUMN recency_score REAL');
+      }
+    }
+    await db.execute('UPDATE product_associations SET recency_score = co_occurrence_count WHERE recency_score IS NULL');
+    await db.execute('UPDATE product_sequences SET recency_score = count WHERE recency_score IS NULL');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -227,21 +242,30 @@ class SmartSearchDatabase {
       ''');
       debugPrint('✅ Upgrade to version 3 completed.');
     }
+
+    if (oldVersion < 4) {
+      await _addRecencyColumns(db);
+      debugPrint('✅ Upgrade to version 4 completed (recency_score).');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // دوال علاقات المنتجات
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// إضافة أو تحديث علاقة بين منتجين
+  /// إضافة أو تحديث علاقة بين منتجين.
+  /// [occurredAt]: تاريخ الفاتورة (التدريب يمرّره؛ كان يُسجَّل «الآن» فتبدو كل العلاقات حديثة
+  /// بعد إعادة التدريب ولا يعمل التقادم).
   Future<void> upsertProductAssociation({
     required int productIdA,
     required int productIdB,
     required String productNameA,
     required String productNameB,
+    DateTime? occurredAt,
   }) async {
     final db = await database;
-    final now = DateTime.now().toIso8601String();
+    final nowDt = DateTime.now();
+    final at = occurredAt == null || occurredAt.isAfter(nowDt) ? nowDt : occurredAt;
 
     // ترتيب المنتجات لتجنب التكرار (A,B) و (B,A)
     final int idA = productIdA < productIdB ? productIdA : productIdB;
@@ -249,15 +273,30 @@ class SmartSearchDatabase {
     final String nameA = productIdA < productIdB ? productNameA : productNameB;
     final String nameB = productIdA < productIdB ? productNameB : productNameA;
 
-    await db.rawInsert('''
-      INSERT INTO product_associations 
-        (product_id_a, product_id_b, product_name_a, product_name_b, 
-         co_occurrence_count, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?)
-      ON CONFLICT(product_id_a, product_id_b) DO UPDATE SET
-        co_occurrence_count = co_occurrence_count + 1,
-        updated_at = ?
-    ''', [idA, idB, nameA, nameB, now, now, now]);
+    final old = await db.rawQuery(
+        'SELECT recency_score, co_occurrence_count, updated_at FROM product_associations WHERE product_id_a = ? AND product_id_b = ?',
+        [idA, idB]);
+    if (old.isEmpty) {
+      final iso = at.toIso8601String();
+      await db.rawInsert('''
+        INSERT OR IGNORE INTO product_associations
+          (product_id_a, product_id_b, product_name_a, product_name_b,
+           co_occurrence_count, created_at, updated_at, recency_score)
+        VALUES (?, ?, ?, ?, 1, ?, ?, 1.0)
+      ''', [idA, idB, nameA, nameB, iso, iso]);
+      return;
+    }
+    final o = old.first;
+    final (score, ref) = RecencyScore.add(
+      (o['recency_score'] as num?)?.toDouble() ?? (o['co_occurrence_count'] as num?)?.toDouble(),
+      DateTime.tryParse('${o['updated_at']}'),
+      at,
+    );
+    await db.rawUpdate('''
+      UPDATE product_associations
+      SET co_occurrence_count = co_occurrence_count + 1, recency_score = ?, updated_at = ?
+      WHERE product_id_a = ? AND product_id_b = ?
+    ''', [score, ref.toIso8601String(), idA, idB]);
   }
 
   /// جلب المنتجات المرتبطة بمنتج معين
@@ -273,38 +312,43 @@ class SmartSearchDatabase {
     return results.map((m) => ProductAssociation.fromMap(m)).toList();
   }
 
-  /// جلب المنتجات المرتبطة بقائمة منتجات
+  /// جلب المنتجات المرتبطة بقائمة منتجات.
+  /// لكل مادة: 'score' = مجموع قوة علاقاتها الآن (RecencyScore)، و'count'/'updated_at' كما كانا.
   Future<Map<int, Map<String, dynamic>>> getAssociatedProductsForList(List<int> productIds) async {
     if (productIds.isEmpty) return {};
-    
+
     final db = await database;
     final placeholders = productIds.map((_) => '?').join(',');
-    
+
     final results = await db.rawQuery('''
-      SELECT 
-        CASE 
-          WHEN product_id_a IN ($placeholders) THEN product_id_b 
-          ELSE product_id_a 
+      SELECT
+        CASE
+          WHEN product_id_a IN ($placeholders) THEN product_id_b
+          ELSE product_id_a
         END as associated_product_id,
-        SUM(co_occurrence_count) as total_count,
-        MAX(updated_at) as last_updated
-      FROM product_associations 
+        co_occurrence_count, recency_score, updated_at
+      FROM product_associations
       WHERE product_id_a IN ($placeholders) OR product_id_b IN ($placeholders)
-      GROUP BY associated_product_id
-      ORDER BY total_count DESC
     ''', [...productIds, ...productIds, ...productIds]);
 
+    final now = DateTime.now();
     final Map<int, Map<String, dynamic>> associations = {};
     for (final row in results) {
       final productId = row['associated_product_id'] as int;
-      final count = row['total_count'] as int;
-      final lastUpdated = row['last_updated'] as String;
       // تجاهل المنتجات الموجودة في القائمة الأصلية
-      if (!productIds.contains(productId)) {
-        associations[productId] = {
-          'count': count,
-          'updated_at': lastUpdated,
-        };
+      if (productIds.contains(productId)) continue;
+      final count = (row['co_occurrence_count'] as num?)?.toInt() ?? 0;
+      final updated = '${row['updated_at']}';
+      final ref = DateTime.tryParse(updated) ?? now;
+      final value = RecencyScore.valueAt(
+          (row['recency_score'] as num?)?.toDouble() ?? count.toDouble(), ref, now);
+      final cur = associations[productId];
+      if (cur == null) {
+        associations[productId] = {'count': count, 'updated_at': updated, 'score': value};
+      } else {
+        cur['count'] = (cur['count'] as int) + count;
+        cur['score'] = (cur['score'] as double) + value;
+        if (updated.compareTo(cur['updated_at'] as String) > 0) cur['updated_at'] = updated;
       }
     }
     return associations;
@@ -314,23 +358,38 @@ class SmartSearchDatabase {
   // 🆕 دوال تتابع المنتجات
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// إضافة أو تحديث تتابع منتجين
+  /// إضافة أو تحديث تتابع منتجين ([occurredAt] = تاريخ الفاتورة).
   Future<void> upsertProductSequence({
     required int fromProductId,
     required int toProductId,
     int distance = 1,
+    DateTime? occurredAt,
   }) async {
     final db = await database;
-    final now = DateTime.now().toIso8601String();
+    final nowDt = DateTime.now();
+    final at = occurredAt == null || occurredAt.isAfter(nowDt) ? nowDt : occurredAt;
 
-    await db.rawInsert('''
-      INSERT INTO product_sequences 
-        (from_product_id, to_product_id, distance, count, last_occurred)
-      VALUES (?, ?, ?, 1, ?)
-      ON CONFLICT(from_product_id, to_product_id, distance) DO UPDATE SET
-        count = count + 1,
-        last_occurred = ?
-    ''', [fromProductId, toProductId, distance, now, now]);
+    final old = await db.rawQuery(
+        'SELECT recency_score, count, last_occurred FROM product_sequences WHERE from_product_id = ? AND to_product_id = ? AND distance = ?',
+        [fromProductId, toProductId, distance]);
+    if (old.isEmpty) {
+      await db.rawInsert('''
+        INSERT OR IGNORE INTO product_sequences
+          (from_product_id, to_product_id, distance, count, last_occurred, recency_score)
+        VALUES (?, ?, ?, 1, ?, 1.0)
+      ''', [fromProductId, toProductId, distance, at.toIso8601String()]);
+      return;
+    }
+    final o = old.first;
+    final (score, ref) = RecencyScore.add(
+      (o['recency_score'] as num?)?.toDouble() ?? (o['count'] as num?)?.toDouble(),
+      DateTime.tryParse('${o['last_occurred']}'),
+      at,
+    );
+    await db.rawUpdate('''
+      UPDATE product_sequences SET count = count + 1, recency_score = ?, last_occurred = ?
+      WHERE from_product_id = ? AND to_product_id = ? AND distance = ?
+    ''', [score, ref.toIso8601String(), fromProductId, toProductId, distance]);
   }
 
   /// جلب المنتجات التي تلي منتجاً معيناً

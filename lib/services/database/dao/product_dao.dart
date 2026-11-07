@@ -1,7 +1,7 @@
 // lib/services/database/dao/product_dao.dart
 // عمليات CRUD للمنتجات
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show compute, debugPrint;
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,6 +9,10 @@ import '../../../services/firebase_sync/uuid_helper.dart';
 import '../../../services/firebase_sync/firebase_sync_config.dart';
 import '../../../models/product.dart';
 import '../core/database_helpers.dart';
+import '../../search/fuzzy_match.dart';
+
+/// للمعالج المنفصل (دالة عليا).
+List<int> _fuzzyInIsolate((String, List<MapEntry<int, String>>) m) => FuzzyMatch.search(m.$1, m.$2);
 
 /// DAO للمنتجات - عمليات CRUD الأساسية
 class ProductDao {
@@ -347,8 +351,12 @@ class ProductDao {
     try {
       // المحاولة 1: البحث باستخدام FTS5
       List<Product> results = await _searchWithFTS(db, normalizedQuery);
-      if (results.isNotEmpty) return results;
-      
+      // 🔤 نتائج قليلة أو لا شيء: قد يكون في الكلمة خطأ حرف أو حرفين — نضيف ما يقاربها.
+      //    (المطابق تماماً يبقى أولاً؛ والترتيب الذكي يقدّم المطابقة الحرفية على التقريبية)
+      if (results.length >= 10) return results;
+      final fuzzy = await _searchFuzzy(db, normalizedQuery);
+      if (results.isNotEmpty || fuzzy.isNotEmpty) return _mergeUnique(results, fuzzy);
+
       // المحاولة 2: البحث باستخدام LIKE subsequence
       results = await _searchWithLike(db, normalizedQuery);
       if (results.isNotEmpty) return results;
@@ -359,6 +367,61 @@ class ProductDao {
       debugPrint('Error in smart search: $e');
       return await _fallbackSearch(db, query);
     }
+  }
+
+  // ─────────────── 🔤 بحث يتحمّل خطأ حرف أو حرفين (FuzzyMatch) ───────────────
+  // أسماء المواد المطبَّعة في الذاكرة (تُحدَّث كل دقيقة) — بلا قراءة الجدول مع كل حرف.
+  static List<MapEntry<int, String>>? _fuzzyNames;
+  static DateTime? _fuzzyLoadedAt;
+
+  Future<List<MapEntry<int, String>>> _fuzzyIndex(Database db) async {
+    final at = _fuzzyLoadedAt;
+    if (_fuzzyNames != null && at != null && DateTime.now().difference(at) < const Duration(minutes: 1)) {
+      return _fuzzyNames!;
+    }
+    final rows = await db.rawQuery('SELECT id, name, name_norm FROM products');
+    _fuzzyNames = [
+      for (final r in rows)
+        MapEntry(
+          r['id'] as int,
+          (((r['name_norm'] as String?)?.isNotEmpty ?? false)
+                  ? r['name_norm'] as String
+                  : DatabaseHelpers.normalizeArabic('${r['name'] ?? ''}'))
+              .toLowerCase(),
+        ),
+    ];
+    _fuzzyLoadedAt = DateTime.now();
+    return _fuzzyNames!;
+  }
+
+  Future<List<Product>> _searchFuzzy(Database db, String normalizedQuery) async {
+    try {
+      final q = normalizedQuery.toLowerCase().trim();
+      if (q.length < 3) return const []; // حرفان: لا تسامح أصلاً
+      final names = await _fuzzyIndex(db);
+      // قوائم كبيرة جداً: في معالج منفصل كي لا تتجمد الواجهة
+      final ids = names.length > 20000
+          ? await compute(_fuzzyInIsolate, (q, names))
+          : FuzzyMatch.search(q, names);
+      if (ids.isEmpty) return const [];
+      final rows = await db.rawQuery(
+          'SELECT * FROM products WHERE id IN (${List.filled(ids.length, '?').join(',')})', ids);
+      final byId = {for (final r in rows) r['id'] as int: Product.fromMap(r)};
+      return [for (final id in ids) if (byId[id] != null) byId[id]!];
+    } catch (e) {
+      debugPrint('Fuzzy search failed: $e');
+      return const [];
+    }
+  }
+
+  static List<Product> _mergeUnique(List<Product> first, List<Product> second) {
+    final seen = <int?>{};
+    final out = <Product>[];
+    for (final p in [...first, ...second]) {
+      if (seen.add(p.id)) out.add(p);
+      if (out.length >= 50) break;
+    }
+    return out;
   }
 
   /// البحث باستخدام FTS5
