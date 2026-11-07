@@ -322,7 +322,9 @@ class _AccountingSettingsScreenState extends State<AccountingSettingsScreen> {
                                               Padding(
                                                 padding: const EdgeInsetsDirectional.only(start: 26, top: 4),
                                                 child: OutlinedButton.icon(
-                                                  onPressed: () => showOrphanDebtsDialog(context),
+                                                  onPressed: () async {
+                                                    if (await showOrphanDebtsDialog(context)) _check();
+                                                  },
                                                   icon: const Icon(Icons.person_search_rounded, size: 18),
                                                   label: const Text('عرض هؤلاء العملاء ومبالغهم'),
                                                 ),

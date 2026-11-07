@@ -24,6 +24,8 @@ import '../owner/ai_invoice/ai_alias_store.dart';
 import '../owner/ai_invoice/ai_purchase_prefill.dart';
 import '../owner/owner_access.dart';
 import '../erp/purchases/purchase_price_history.dart'; // 🏷️ سجل أسعار الشراء
+import '../erp/inventory/margin_alert.dart'; // 📉 مواد نزل ربحها
+import '../erp/inventory/margin_review.dart';
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
@@ -1258,6 +1260,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         attachmentPath: _attachmentPath,
       );
 
+      // 📉 كلفة المواد قبل الحفظ — لمعرفة ما نزل ربحه بعده (قراءة فقط)
+      final dbs = DatabaseService();
+      final costBefore = <int, double>{};
+      if (confirm) {
+        for (final id in _items.map((i) => i.productId).toSet()) {
+          try {
+            costBefore[id] = (await dbs.getProductById(id))?.costPrice ?? 0;
+          } catch (_) {}
+        }
+      }
+
       if (existing != null && existing.id != null) {
         final oldItems = await purchaseService.getInvoiceItems(existing.id!);
         await purchaseService.updatePurchaseInvoiceWithReversal(
@@ -1280,6 +1293,21 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             backgroundColor: Colors.green,
           ),
         );
+        // 📉 مواد ارتفعت كلفتها وسعر بيعها كما هو: عرضها مع سعر مقترح (لا يتغير شيء بلا ضغطة)
+        if (costBefore.isNotEmpty) {
+          try {
+            final after = <Product>[];
+            for (final id in costBefore.keys) {
+              final p = await dbs.getProductById(id);
+              if (p != null) after.add(p);
+            }
+            final rows = MarginAlert.afterCostRise(costBefore, after);
+            if (rows.isNotEmpty && mounted) await showMarginDropDialog(context, rows);
+          } catch (e) {
+            debugPrint('📉 فحص الربح بعد الشراء: $e');
+          }
+        }
+        if (!mounted) return;
         Navigator.pop(context, true);
         return;
       }

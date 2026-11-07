@@ -329,7 +329,8 @@ class OwnerSummary {
 
   static String money(Object? v) {
     final n = v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
-    return NumberFormat('#,##0.##', 'en_US').format(n);
+    // الدينار العراقي بلا كسور: يُقرَّب للعرض (القيود نفسها لا تتغيّر)
+    return NumberFormat('#,##0', 'en_US').format(n.roundToDouble());
   }
 
   /// تيليجرام يقرأ الرسالة HTML: < > & تُهرَّب.

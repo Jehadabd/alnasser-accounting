@@ -15,6 +15,9 @@ import '../erp_ui.dart';
 import '../stock_helpers.dart';
 import 'barcode_labels.dart';
 import 'price_tools.dart';
+import 'margin_alert.dart';
+import 'margin_review.dart';
+import '../../services/database_service.dart';
 
 class PriceToolsScreen extends StatefulWidget {
   const PriceToolsScreen({super.key});
@@ -54,7 +57,7 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 3, vsync: this);
     _init();
   }
 
@@ -238,9 +241,18 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
         tabs: const [
           Tab(icon: Icon(Icons.tune_rounded), text: 'تعديل جماعي'),
           Tab(icon: Icon(Icons.history_rounded), text: 'سجل الدفعات'),
+          Tab(icon: Icon(Icons.trending_down_rounded), text: 'نزل ربحها'),
         ],
       ),
-      body: TabBarView(controller: _tabs, children: [_editor(), _history()]),
+      body: TabBarView(controller: _tabs, children: [
+        _editor(),
+        _history(),
+        // 📉 مواد ربح سعر المفرد فيها أقل من حد تختاره — مع سعر مقترح وتطبيق قابل للتراجع
+        _MarginTab(onApplied: () async {
+          await _init();
+          if (mounted) setState(() {});
+        }),
+      ]),
     );
   }
 
@@ -619,5 +631,103 @@ class _PriceToolsScreenState extends State<PriceToolsScreen> with SingleTickerPr
     return db.rawQuery('''
       SELECT l.*, p.name FROM price_change_log l LEFT JOIN products p ON p.id = l.product_id
       WHERE l.batch_no = ? ORDER BY p.name''', [batch]);
+  }
+}
+
+/// تبويب «نزل ربحها»: حد الربح الأدنى (يُحفظ)، ثم المواد التي تحته.
+class _MarginTab extends StatefulWidget {
+  const _MarginTab({required this.onApplied});
+  final Future<void> Function() onApplied;
+
+  @override
+  State<_MarginTab> createState() => _MarginTabState();
+}
+
+class _MarginTabState extends State<_MarginTab> {
+  final _min = TextEditingController();
+  List<MarginRow>? _rows;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _min.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load({double? minOverride}) async {
+    setState(() => _loading = true);
+    try {
+      final min = minOverride ?? await MarginAlert.minPct();
+      if (_min.text.isEmpty || minOverride != null) _min.text = min.toStringAsFixed(min == min.roundToDouble() ? 0 : 1);
+      final products = await DatabaseService().getAllProducts();
+      final rows = MarginAlert.belowMinimum(products, min);
+      if (mounted) setState(() => _rows = rows);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _saveMin() async {
+    final v = double.tryParse(_min.text.trim().replaceAll('%', ''));
+    if (v == null) return;
+    await MarginAlert.setMinPct(v);
+    await _load(minOverride: v.clamp(0, 95).toDouble());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _rows;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+        child: Row(children: [
+          const Icon(Icons.trending_down_rounded, color: ErpColors.orange),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text('مواد ربح سعر المفرد فيها أقل من:',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          SizedBox(
+            width: 90,
+            child: TextField(
+              controller: _min,
+              textAlign: TextAlign.center,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(isDense: true, suffixText: '%', border: OutlineInputBorder()),
+              onSubmitted: (_) => _saveMin(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(onPressed: _loading ? null : _saveMin, child: const Text('عرض')),
+        ]),
+      ),
+      const Padding(
+        padding: EdgeInsets.fromLTRB(16, 2, 16, 6),
+        child: Text('المقترح = الكلفة ÷ (1 − الحد)، مقرّباً للأعلى. التطبيق دفعة في «سجل الدفعات» يمكن التراجع عنها.',
+            style: TextStyle(fontSize: 12, color: ErpColors.muted)),
+      ),
+      if (_loading) const LinearProgressIndicator(minHeight: 2),
+      Expanded(
+        child: rows == null
+            ? const SizedBox.shrink()
+            : rows.isEmpty
+                ? const EmptyState('لا مواد ربحها أقل من الحد ✓', icon: Icons.verified_rounded)
+                : MarginReview(
+                    rows: rows,
+                    onApplied: (_) async {
+                      await widget.onApplied();
+                      await _load();
+                    },
+                  ),
+      ),
+    ]);
   }
 }

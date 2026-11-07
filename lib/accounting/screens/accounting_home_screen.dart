@@ -623,7 +623,9 @@ class _ProblemsCard extends StatelessWidget {
                   Align(
                     alignment: AlignmentDirectional.centerStart,
                     child: TextButton.icon(
-                      onPressed: () => showOrphanDebtsDialog(context),
+                      onPressed: () async {
+                        if (await showOrphanDebtsDialog(context)) _check();
+                      },
                       icon: const Icon(Icons.person_search_rounded, size: 18),
                       label: const Text('عرض هؤلاء العملاء ومبالغهم'),
                     ),
