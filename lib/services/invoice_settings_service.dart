@@ -38,7 +38,7 @@ class InvoiceSettingsService {
   /// الحصول على ترويسة الفاتورة
   static Future<String> getInvoiceHeader() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_invoiceHeaderKey) ?? 'مؤسسة رائد الحمود التجارية';
+    return prefs.getString(_invoiceHeaderKey) ?? ''; // لا اسم محل افتراضي (كان اسم محل آخر)
   }
 
   /// تعيين ترويسة الفاتورة

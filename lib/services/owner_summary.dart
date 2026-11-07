@@ -192,7 +192,10 @@ class OwnerSummary {
     final d = OwnerSummaryData(DateTime(day.year, day.month, day.day));
     final db = await DatabaseService().database;
     try {
-      d.shopName = (await InvoiceSettingsService.getInvoiceHeader()).trim();
+      // اسم المحل كما يُطبع في رأس الفاتورة (إعدادات تصميم الفاتورة)، ثم الترويسة المحفوظة.
+      // (كانت تُقرأ الترويسة وحدها، وقيمتها الافتراضية اسم محل آخر مكتوب في الكود)
+      final printed = (await SettingsManager.getAppSettings()).invoiceDesign.companyName.trim();
+      d.shopName = printed.isNotEmpty ? printed : (await InvoiceSettingsService.getInvoiceHeader()).trim();
     } catch (_) {}
 
     SalesFacts? facts;
