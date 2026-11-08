@@ -191,12 +191,12 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
           ),
         ),
         // Define AppBar theme
-        appBarTheme: AppBarTheme(
+        appBarTheme: const AppBarTheme(
           backgroundColor: primaryColor, // AppBar background color
           foregroundColor: Colors.white, // AppBar text/icon color
           centerTitle: true, // Center title
           elevation: 4, // Shadow elevation
-          titleTextStyle: const TextStyle( // Title text style (inherits from TextTheme.titleLarge)
+          titleTextStyle: TextStyle( // Title text style (inherits from TextTheme.titleLarge)
             fontSize: 24.0,
             fontWeight: FontWeight.w600,
             color: Colors.white,

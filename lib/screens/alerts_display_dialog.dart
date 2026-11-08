@@ -211,7 +211,7 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> {
           child: LinearProgressIndicator(value: r, minHeight: 6, color: c, backgroundColor: const Color(0xFFEEF2F7)),
         );
       case _Kind.expiry:
-        final days = p.expiryDate == null ? null : p.expiryDate!.difference(DateTime.now()).inDays;
+        final days = p.expiryDate?.difference(DateTime.now()).inDays;
         c = days == null ? _muted : (days <= 7 ? _red : (days <= 30 ? _orange : _amber));
         badge = _badge(days == null ? 'بلا تاريخ' : (days <= 0 ? 'تنتهي اليوم' : 'بعد $days يوماً'), c);
         line = 'تنتهي ${p.expiryDate == null ? '—' : _date.format(p.expiryDate!)} • المتوفر ${fmtMoney(p.stockQuantity)} $unit';

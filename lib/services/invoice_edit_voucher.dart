@@ -200,7 +200,7 @@ class InvoiceEditVoucher {
           decoration: const pw.BoxDecoration(color: PdfColors.grey200),
           child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
             pw.Text(title, style: st(13, b: true)),
-            pw.Text('رقم ${number ?? voucherId}', style: st(11, b: true)),
+            pw.Text('رقم $number', style: st(11, b: true)),
           ]),
         ),
         pw.SizedBox(height: 6),

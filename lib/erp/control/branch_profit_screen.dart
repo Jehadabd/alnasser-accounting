@@ -15,7 +15,6 @@ import 'package:flutter/material.dart';
 import '../../accounting/screens/acc_ui.dart' show fmtMoney, showError, PeriodBar;
 import '../../models/app_user.dart' show AppPermissions;
 import '../../services/auth_service.dart';
-import '../../services/reports/sales_facts.dart';
 import '../../services/reports_service.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';

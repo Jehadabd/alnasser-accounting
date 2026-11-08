@@ -464,7 +464,7 @@ class PrintedInvoicePdf {
                         pw.Divider(height: 4, thickness: 0.4),
                         if (isLast && !deferSummary) ...[
                           if (invoiceToManage != null &&
-                              invoiceToManage!.id != null &&
+                              invoiceToManage.id != null &&
                               (itemAdditionsForSection.isNotEmpty ||
                                   itemCreditsForSection.isNotEmpty ||
                                   amountOnlyAdjs.isNotEmpty)) ...[

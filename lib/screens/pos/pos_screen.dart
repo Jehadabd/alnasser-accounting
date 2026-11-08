@@ -405,7 +405,7 @@ class _PriceLevelPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<POSProvider>(
       builder: (context, pos, _) {
-        final levels = POSProvider.priceLevels;
+        const levels = POSProvider.priceLevels;
         final cur = levels.indexOf(pos.priceLevel).clamp(0, levels.length - 1);
         final c = _tint(cur);
         return Padding(

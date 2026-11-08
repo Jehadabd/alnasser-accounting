@@ -173,7 +173,6 @@ class UploadPlan {
 
   // الوجهة الجارية
   int _index = -1;
-  DateTime _targetStart = DateTime.now();
   bool _uploaded = false; // انتهى خروج الملف إلى الوجهة الجارية
   DateTime? _uploadedAt;
 
@@ -194,7 +193,6 @@ class UploadPlan {
 
   void startTarget(int index) {
     _index = index;
-    _targetStart = DateTime.now();
     _uploaded = false;
     _uploadedAt = null;
     _netStart = null;

@@ -231,7 +231,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
                 ]),
               ),
               const SizedBox(height: 10),
-              Text('قارن هذه البيانات بالورقة التي بين يديك:', style: const TextStyle(color: ErpColors.muted, fontSize: 12.5)),
+              const Text('قارن هذه البيانات بالورقة التي بين يديك:', style: TextStyle(color: ErpColors.muted, fontSize: 12.5)),
               const SizedBox(height: 6),
               _kv('المبلغ', '${fmtMoney(v.amount)} دينار'),
               _kv('العميل', v.customerName),

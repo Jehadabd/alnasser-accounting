@@ -707,12 +707,12 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
           bodySmall: TextStyle(
               fontSize: 12.0, color: Colors.grey[700]),
         ),
-        appBarTheme: AppBarTheme(
+        appBarTheme: const AppBarTheme(
           backgroundColor: primaryColor,
           foregroundColor: Colors.white,
           centerTitle: false,
           elevation: 4,
-          titleTextStyle: const TextStyle(
+          titleTextStyle: TextStyle(
             fontSize: 20.0,
             fontWeight: FontWeight.bold,
             color: Colors.white,

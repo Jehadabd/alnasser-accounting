@@ -14,7 +14,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../models/app_settings.dart';
 import '../models/customer.dart';
 import '../models/invoice.dart';
 import '../models/invoice_adjustment.dart';
@@ -256,8 +255,8 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       final old = inputData.invoiceToManage;
       final sameName = old != null &&
           old.customerName.trim().replaceAll(' ', '') == inputData.customerName.trim().replaceAll(' ', '');
-      final int? cid = (sameName && old!.customerId != null)
-          ? old!.customerId
+      final int? cid = (sameName && old.customerId != null)
+          ? old.customerId
           : await CreditLimitGuard.customerIdByName(dbx, inputData.customerName);
       if (cid != null) {
         final complete = inputData.invoiceItems.where((it) =>
@@ -274,7 +273,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
           credit: inputData.paymentType != 'نقد',
           total: total,
           paid: inputData.paidAmount,
-          editInvoiceId: sameName ? old!.id : null,
+          editInvoiceId: sameName ? old.id : null,
         );
         if (!mounted) return null;
         final go = await CreditLimitGuard.enforce(
@@ -334,7 +333,6 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     final beforeEdit = editId == null ? null : await InvoiceEditVoucher.snapshot(editId);
 
     try {
-      final saveStartedAt = DateTime.now(); // ↩️ لمستند مرتجع هذا الحفظ
       final result = await controller.saveInvoice(inputData);
 
       if (!result.success) {

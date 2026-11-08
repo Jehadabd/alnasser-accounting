@@ -234,11 +234,11 @@ class _InvoiceDesignScreenState extends State<InvoiceDesignScreen> {
         _dirty = false;
         _saving = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         behavior: SnackBarBehavior.floating,
         width: 420,
         backgroundColor: ErpColors.green,
-        content: const Row(children: [
+        content: Row(children: [
           Icon(Icons.check_circle_rounded, color: Colors.white),
           SizedBox(width: 8),
           Text('حُفظت معلومات الشركة — تظهر في كل التصاميم'),

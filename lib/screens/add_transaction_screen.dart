@@ -243,6 +243,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         transactionUuid: uuid,
       );
       
+      if (!mounted) return;
       await context.read<AppProvider>().addTransaction(transaction);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -13,7 +13,6 @@ import '../models/product.dart';
 import 'database_service.dart';
 import 'settings_manager.dart';
 import 'telegram_backup_service.dart';
-import 'invoice_pdf_service.dart'; // 🔄 استخدام InvoicePdfService الموحد
 import 'printed_invoice_pdf.dart'; // 🖨️ نفس شكل الطباعة
 import '../models/invoice_adjustment.dart';
 import 'invoice_upload_tracker.dart'; // 📤 ما رُفع، وأي فاتورة من الكاشير

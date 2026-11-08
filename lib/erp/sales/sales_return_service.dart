@@ -309,11 +309,8 @@ class SalesReturnService {
       // تعويض: إلغاء أثر الدين إن كان قد سُجّل. يُنفَّذ كلما أمكن (المزوّد
       // مُمرَّر أو الشاشة ما زالت مفتوحة) — كان يُتخطّى إن أُغلقت الشاشة رغم
       // وجود المزوّد، فيبقى للعميل رصيد مرتجع لم يُحفظ.
-      final liveContext = (context != null && context.mounted) ? context : null;
-      if (txUuid != null && (provider != null || liveContext != null)) {
-        try {
-          await CustomerMoney.post(
-            liveContext,
+      Future<void> undo(BuildContext? c) => CustomerMoney.post(
+            c,
             provider: provider,
             customerId: customerId!,
             amount: creditPart,
@@ -322,6 +319,14 @@ class SalesReturnService {
             date: date,
             refType: 'sales_return',
           );
+      if (txUuid != null) {
+        try {
+          final ctx = context;
+          if (ctx != null && ctx.mounted) {
+            await undo(ctx);
+          } else if (provider != null) {
+            await undo(null);
+          }
         } catch (_) {}
       }
       rethrow;

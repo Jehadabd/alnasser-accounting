@@ -78,7 +78,7 @@ class AuditDao {
         }
         // zlib (78 01 / 78 5E / 78 9C / 78 DA): لقطات حفظتها نسخة سابقة من البرنامج
         if (raw.length > 2 && raw[0] == 0x78 && (raw[0] * 256 + raw[1]) % 31 == 0) {
-          return utf8.decode(ZLibDecoder().decodeBytes(raw));
+          return utf8.decode(const ZLibDecoder().decodeBytes(raw));
         }
         return utf8.decode(raw);
       } catch (e) {

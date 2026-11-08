@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 
 import '../../accounting/screens/acc_ui.dart' show fmtMoney, fmtDate, showError, showOk;
 import '../erp_common.dart';
-import '../erp_kit.dart' show erpDialogActions;
 import '../erp_ui.dart';
 import 'bank_rec_service.dart';
 import 'control_common.dart';

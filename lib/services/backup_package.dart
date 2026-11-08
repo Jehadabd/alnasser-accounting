@@ -104,10 +104,11 @@ class BackupPackage {
   /// يصنع حزمة جديدة. يرمي Exception برسالة عربية عند أي فشل (لا يُرفع شيء ناقص).
   static Future<BackupPackage> build({void Function(double p)? onProgress}) async {
     final caller = onProgress;
-    onProgress = (v) {
+    void report(double v) {
       caller?.call(v);
       buildListener?.call(v);
-    };
+    }
+
     final now = DateTime.now();
     final sw = Stopwatch()..start();
     final settings = await SettingsManager.getAppSettings();
@@ -115,22 +116,22 @@ class BackupPackage {
     final dir = await Directory.systemTemp.createTemp('alnaser_backup_');
     try {
       // 1) لقطة متّسقة
-      onProgress?.call(0.02);
+      report(0.02);
       final dbCopy = File(p.join(dir.path, 'debt_book.db'));
       await BackupFiles.snapshotForBackup(dbCopy.path);
 
       // 2) فحص سلامة اللقطة قبل أي رفع
-      onProgress?.call(0.25);
+      report(0.25);
       await _verifySnapshot(dbCopy.path);
 
       // 3) TAR ← XZ متحقق منه
-      onProgress?.call(0.30);
+      report(0.30);
       final folderName = '${branch}_${now.year}-${_two(now.month)}-${_two(now.day)}';
       final dbBytes = await dbCopy.readAsBytes();
       final archive = Archive()..addFile(ArchiveFile('$folderName/debt_book.db', dbBytes.length, dbBytes));
       final tarData = TarEncoder().encode(archive);
       final tarBytes = tarData is Uint8List ? tarData : Uint8List.fromList(tarData);
-      final xz = await XzBackup.compressVerified(tarBytes, onProgress: (v) => onProgress?.call(0.32 + v * 0.66));
+      final xz = await XzBackup.compressVerified(tarBytes, onProgress: (v) => report(0.32 + v * 0.66));
 
       final stamp = '${folderName}_${_two(now.hour)}-${_two(now.minute)}';
       final File out;
@@ -151,7 +152,7 @@ class BackupPackage {
       try {
         await dbCopy.delete();
       } catch (_) {}
-      onProgress?.call(1.0);
+      report(1.0);
       final outLen = await out.length();
       buildCount++;
       lastBuildMs = sw.elapsedMilliseconds;

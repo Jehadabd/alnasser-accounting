@@ -161,7 +161,7 @@ class CashFlow {
     // 2) تعديلات فواتير نقدية بسندات (الجدول يُنشأ مع أول سند)
     final laterEdit = <int, double>{}; // فاتورة في الفترة عُدّلت بعدها: + ما يُعاد
     if (await _has(db, 'invoice_edit_vouchers')) {
-      final day = 'substr(COALESCE(v.edited_at, v.created_at), 1, 10)';
+      const day = 'substr(COALESCE(v.edited_at, v.created_at), 1, 10)';
       final vr = await db.rawQuery('''
         SELECT v.kind AS k, v.amount AS amt, $day AS d, substr(i.invoice_date, 1, 10) AS idate, i.id AS iid
         FROM invoice_edit_vouchers v JOIN invoices i ON i.id = v.invoice_id
