@@ -19,6 +19,7 @@ import '../erp/report_export.dart';
 import '../erp/sales/doc_pdf.dart';
 import '../services/reports_service.dart';
 import '../widgets/report_kit.dart';
+import 'day_close_quick_screen.dart'; // ⏱️ ما خرج من الدرج قبل العدّ
 import 'report_parts.dart';
 import 'transactions_list_dialog.dart';
 
@@ -138,6 +139,17 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
       subtitle: 'ما يجب أن يكون في الدرج، ومطابقته مع المعدود',
       icon: Icons.point_of_sale_rounded,
       actions: [
+        // ⏱️ مصروف/دفعة مورد/سحب مالك لم يُسجَّل؟ سجّله قبل العدّ
+        if (DayCloseQuickScreen.allowed)
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            onPressed: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => DayCloseQuickScreen(initialDate: _day)));
+              if (mounted) _load();
+            },
+            icon: const Icon(Icons.outbox_rounded),
+            label: const Text('ما خرج من الدرج'),
+          ),
         SourceMenu(
             value: _source,
             onChanged: (v) {

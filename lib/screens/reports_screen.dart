@@ -24,6 +24,7 @@ import '../owner/founders_screen.dart';
 import '../radar/radar_screen.dart';
 import 'custom_range_report_screen.dart';
 import 'day_close_screen.dart';
+import 'day_close_quick_screen.dart';
 import '../erp/control/control_screens.dart' show ControlHubScreen;
 import 'people_reports_screen.dart';
 import 'product_reports_screen.dart';
@@ -57,6 +58,11 @@ class ReportsScreen extends StatefulWidget {
           HubTile('إقفال اليوم', Icons.point_of_sale_rounded, const Color(0xFF0F766E), () => go(const DayCloseScreen()),
               subtitle: 'ما يجب أن يكون في الدرج: المقبوض والمدفوع نقداً، ومطابقته مع المعدود',
               permission: AppPermissions.repDaily),
+          // ⏱️ عند الإغلاق: ما خرج من الدرج (مصاريف، موردون، سحب المالك) ثم العدّ
+          if (DayCloseQuickScreen.allowed)
+            HubTile('إقفال اليوم في دقيقة', Icons.timer_rounded, const Color(0xFF0F766E),
+                () => go(const DayCloseQuickScreen()),
+                subtitle: 'سجّل ما دفعته نقداً اليوم: مصروف، دفعة لمورد، سحب المالك — ثم عدّ الدرج'),
         ]),
         HubSection('حسب الجهة', subtitle: 'ماذا بِعت ولمن', [
           HubTile('تقارير البضاعة', Icons.inventory_2_rounded, kSetGreen, () => go(const ProductReportsScreen()),
