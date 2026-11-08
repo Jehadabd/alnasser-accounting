@@ -606,8 +606,8 @@ class _ItemCardsListScreenState extends State<ItemCardsListScreen> {
                 final r = _rows[i];
                 final inactive = (r['is_active'] as int? ?? 1) == 0;
                 final sub = [
-                  if (r['item_code'] != null && '${r['item_code']}'.isNotEmpty) '${r['item_code']}',
-                  '#${r['id']}',
+                  // الرمز وحده إن وُجد — رقم المادة الداخلي (ID) لا يُعرض
+                  if (r['item_code'] != null && '${r['item_code']}'.isNotEmpty) 'الرمز: ${r['item_code']}',
                   if (r['brand'] != null && '${r['brand']}'.isNotEmpty) '${r['brand']}',
                   if (inactive) 'موقوفة',
                 ].join('  ·  ');

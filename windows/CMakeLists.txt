@@ -59,14 +59,18 @@ add_subdirectory("runner")
 # which makes CMake print a deprecation warning on every build. That file is
 # re-extracted into build/ by the plugin, so it cannot be edited; silence
 # deprecation warnings only while the plugins are configured, then restore.
-set(_ALNASER_PREV_WARN_DEPRECATED "${CMAKE_WARN_DEPRECATED}")
-set(CMAKE_WARN_DEPRECATED OFF)
+# CMake decides whether to show its own deprecation warnings from the CACHE entry
+# CMAKE_WARN_DEPRECATED (what -Wno-deprecated sets) — a normal variable is not
+# enough, so the cache entry is switched off here and restored right after.
+set(_ALNASER_PREV_WARN_DEPRECATED "$CACHE{CMAKE_WARN_DEPRECATED}")
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "Silenced while plugins are configured" FORCE)
 include(flutter/generated_plugins.cmake)
 if(_ALNASER_PREV_WARN_DEPRECATED STREQUAL "")
-  unset(CMAKE_WARN_DEPRECATED)
+  unset(CMAKE_WARN_DEPRECATED CACHE)
 else()
-  set(CMAKE_WARN_DEPRECATED "${_ALNASER_PREV_WARN_DEPRECATED}")
+  set(CMAKE_WARN_DEPRECATED "${_ALNASER_PREV_WARN_DEPRECATED}" CACHE BOOL "" FORCE)
 endif()
+unset(CMAKE_WARN_DEPRECATED)
 
 
 # === Installation ===
