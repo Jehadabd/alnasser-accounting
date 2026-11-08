@@ -8,6 +8,7 @@
 // هذا الملف يوفّر المعرّفات والتوقيع التي يعتمد عليها نظام firebase_sync.
 
 import 'dart:convert';
+import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -37,13 +38,17 @@ class SyncSecurity {
   }
 
   /// توليد UUID عام غير حتمي (عشوائي) للعملاء والعمليات.
+  static final Random _secure = Random.secure();
+
   static String generateUuid() {
-    // مبني على عشوائية قوية + طابع زمني.
-    final rndBytes = DateTime.now().microsecondsSinceEpoch.toString() +
-        DateTime.now().toIso8601String();
-    final hash = sha256.convert(utf8.encode(rndBytes)).toString();
-    // صيغة 32 hex بدون شرطات (متوافقة كمفتاح وثيقة Firestore)
-    return hash;
+    // 🛡️ عشوائية آمنة (32 بايت) + الوقت. كان الوقت وحده: على ويندوز تتكرر قيمة الساعة
+    //    لاستدعاءين متتاليين، فيخرج المعرّف نفسه مرتين (عميلان في حلقة واحدة ⇒
+    //    UNIQUE constraint failed: customers.sync_uuid). الصيغة كما هي: 64 hex.
+    final bytes = <int>[
+      for (var i = 0; i < 32; i++) _secure.nextInt(256),
+      ...utf8.encode(DateTime.now().microsecondsSinceEpoch.toString()),
+    ];
+    return sha256.convert(bytes).toString();
   }
 
   /// التحقق أن المعرّف صالح كمفتاح وثيقة Firestore (لا يحوي '/' ولا فارغ).
@@ -96,10 +101,10 @@ class SyncSecurity {
 
   /// توليد مفتاح عشوائي قوي (hex 64 محرف ≈ 256 بت).
   static String _generateRandomKey() {
-    final seed = DateTime.now().microsecondsSinceEpoch.toString() +
-        DateTime.now().toIso8601String() +
-        IdentityCache.nonce();
-    return sha256.convert(utf8.encode(seed)).toString();
+    // 🛡️ 32 بايت من مولّد آمن — كان مبنياً على الوقت وحده (يمكن تخمينه). المفاتيح
+    //    المحفوظة سابقاً لا تتغير؛ هذا للمفتاح الجديد فقط.
+    final bytes = [for (var i = 0; i < 32; i++) _secure.nextInt(256)];
+    return sha256.convert(bytes).toString();
   }
 
   // ──────────────── التوقيع والتحقق ────────────────
