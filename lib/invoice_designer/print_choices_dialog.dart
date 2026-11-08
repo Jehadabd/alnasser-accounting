@@ -50,6 +50,7 @@ class _PrintChoicesDialogState extends State<PrintChoicesDialog> {
 
   IconData _icon(PrintTarget t) {
     if (t.key == PrintTarget.posReceipt.key) return Icons.point_of_sale_rounded;
+    if (t.key == PrintTarget.pickingA4.key) return Icons.inventory_2_outlined;
     if (t.roll) return Icons.receipt_long_rounded;
     if (t.kind != 'invoice' || t.key == PrintTarget.adjustmentVoucher.key) return Icons.request_quote_rounded;
     return Icons.description_rounded;

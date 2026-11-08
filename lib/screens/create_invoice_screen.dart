@@ -2816,6 +2816,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
   Future<void> _printPickingList() async {
     try {
+      // 🎨 تصميم مربوط بـ«وثيقة التجهيز» في مصمم الفاتورة؟ (وإلا الشكل الأصلي أدناه)
+      final designed = await generateDesignedPickingPdf();
+      if (designed != null) {
+        await _deliverPickingPdf(designed);
+        return;
+      }
       // تحميل الخطوط والشعار كما في خدمة PDF
       final fontData = await rootBundle.load('assets/fonts/Amiri-Regular.ttf');
       final alnaserFontData = await rootBundle.load('assets/fonts/PTBLDHAD.TTF');
@@ -2839,7 +2845,19 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         logoImage: logoImage,
         appSettings: appSettings,
       );
+      await _deliverPickingPdf(doc);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('فشل طباعة التجهيز: $e')),
+        );
+      }
+    }
+  }
 
+  /// يطبع وثيقة التجهيز (ويندوز) أو يشاركها (أندرويد) أو يفتح نافذة الطباعة (الويب)
+  Future<void> _deliverPickingPdf(pw.Document doc) async {
+    try {
       // 🌐 الويب: PDF من الذاكرة مباشرة — فتح نافذة طباعة المتصفح مباشرة
       if (kIsWeb) {
         final bytes = await doc.save();

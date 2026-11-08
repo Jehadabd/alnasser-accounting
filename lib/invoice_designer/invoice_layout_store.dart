@@ -33,7 +33,13 @@ class PrintTarget {
   static const adjustmentVoucher = PrintTarget('adjustment_voucher', 'إشعار مدين / دائن — A4',
       'السند الذي يُطبع بعد إضافة أو إرجاع على فاتورة محفوظة', false);
 
-  static const all = [invoiceA4, invoiceRoll, posReceipt, adjustmentVoucher];
+  /// 📦 وثيقة التجهيز (خيارات أخرى ← طباعة تجهيز). تُطبع بلا أي سعر أو مبلغ مهما
+  /// احتوى التصميم: أعمدة السعر والمبلغ والمجاميع تصلها فارغة.
+  static const pickingA4 = PrintTarget('picking_a4', 'وثيقة التجهيز — بدون أسعار (A4)',
+      'خيارات أخرى ← طباعة تجهيز في شاشة إنشاء الفاتورة. لا يُطبع فيها أي سعر أو مبلغ ولو كان عموده في التصميم',
+      false);
+
+  static const all = [invoiceA4, invoiceRoll, posReceipt, adjustmentVoucher, pickingA4];
 
   // 🧾 مصمم السندات — لكل نوع سند نوع طباعة (ورق A4)
   static const vReceipt = PrintTarget('voucher_receipt', 'سند قبض — تسديد دين',

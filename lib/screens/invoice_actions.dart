@@ -494,6 +494,59 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
 
 // ============================================
 // 2. دالة إنشاء PDF (generateInvoicePdf)// ============================================
+  /// 📦 وثيقة التجهيز بتصميم من «مصمم الفاتورة» إن رُبط تصميم بـ«وثيقة التجهيز»؛
+  /// null ⇒ الشكل الأصلي. لا سعر ولا مبلغ يصل التصميم أبداً: أعمدة السعر والمبلغ
+  /// والخصم فارغة، والمجاميع والدين ونوع الدفع غير مرسلة.
+  Future<pw.Document?> generateDesignedPickingPdf() async {
+    final designed = await InvoiceLayoutStore.activeFor(PrintTarget.pickingA4.key);
+    if (designed == null) return null;
+    final appSettings = await SettingsManager.getAppSettings();
+    final allProducts = await db.getAllProducts();
+    Product? byName(String n) {
+      for (final p in allProducts) {
+        if (p.name == n) return p;
+      }
+      return null;
+    }
+
+    const money = ['price', 'amount', 'priceBeforeDiscount', 'discount'];
+    final items = invoiceItems.where((it) => it.productName.trim().isNotEmpty).toList();
+    final rows = <Map<String, String>>[
+      for (var i = 0; i < items.length; i++)
+        {
+          ...DesignedRows.item(i, items[i], byName(items[i].productName)),
+          for (final k in money) k: '',
+        },
+    ];
+    final created = invoiceToManage?.createdAt ?? DateTime.now();
+    final dateStr = InvoicePrintData.dateText(selectedDate);
+    final invoiceNo = (invoiceToManage != null && invoiceToManage!.id != null)
+        ? invoiceToManage!.formattedInvoiceNumber
+        : await db.getNextInvoiceNumber(selectedDate);
+    return LayoutPdfRenderer.render(
+      designed,
+      InvoicePrintData(
+        company: await PrintCompany.load(appSettings),
+        fields: {
+          'invoiceNo': invoiceNo,
+          'date': dateStr,
+          'time': InvoicePrintData.timeText(created),
+          'dateTime': '$dateStr ${InvoicePrintData.timeText(created)}',
+          'customer': customerNameController.text.trim(),
+          'phone': customerPhoneController.text.trim(),
+          'address': customerAddressController.text.trim(),
+          'user': AuthService().currentUser?.username ?? '',
+          'preparer': preparerController.text.trim(),
+          'accountant': accountantController.text.trim(),
+          'copy': '',
+        },
+        rows: rows,
+        totals: const {}, // لا مبالغ في وثيقة التجهيز
+        paymentType: '',
+      ),
+    );
+  }
+
   Future<pw.Document> generateInvoicePdf({String target = 'invoice_a4'}) async {
     try {
       final pdf = pw.Document();

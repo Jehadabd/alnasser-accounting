@@ -613,6 +613,9 @@ class InvoiceLayoutTemplates {
             const LayoutTemplate('a4_wholesale', 'جملة ومستودع', 'أعمدة كثيرة (الوحدة، عدد الوحدات، الوزن) ومجاميع في صف، وثلاثة تواقيع', _a4Wholesale),
             const LayoutTemplate('a4_compact', 'مضغوط', 'رأس صغير وصفوف أكثر في الصفحة', _a4Compact),
             const LayoutTemplate('a4_bw', 'أبيض وأسود', 'للطابعات بلا ألوان: خطوط سوداء، مربعات بلا تعبئة، وتواقيع', _a4BW),
+            const LayoutTemplate('a4_picking', 'وثيقة تجهيز (بدون أسعار)',
+                'للمخزن: المواد والعدد والتعبئة والوزن مع عمود «تم» للتأشير، وتواقيع المجهز والمدقق والمستلم — بلا أي سعر. اربطه بـ«وثيقة التجهيز» من «ما يُطبع الآن»',
+                _a4Picking),
             // 🧾 قوالب السندات صارت في «مصمم السندات» (لكل نوع قوالبه)
             LayoutTemplate('blank', 'ورقة بيضاء', 'صمّم كل شيء بنفسك من قائمة العناصر', () => _blank(LayoutPaper.a4)),
           ],
@@ -904,6 +907,38 @@ class InvoiceLayoutTemplates {
         ..._signature(8, 272, 52, 'المحاسب: {accountant}'),
         _pageNo(288),
       ]);
+
+  /// 📦 وثيقة تجهيز للمخزن: لا أعمدة أسعار ولا مجاميع مالية (والطباعة تفرغها على أي حال).
+  static InvoiceLayout _a4Picking() {
+    List<Map<String, dynamic>> cols(List<List<Object>> c) => [
+          for (final x in c)
+            <String, dynamic>{'id': x[0], 'label': x[1], 'flex': x[2], 'align': x[0] == 'details' ? 'right' : 'center'}
+        ];
+    return _a4('وثيقة تجهيز (بدون أسعار)', [
+      ..._header(nameColor: _navy),
+      _text(8, 31, 194, 9, 'وثيقة تجهيز', fs: 16, bold: true, align: 'center', color: _navy),
+      _line(8, 41, 194, color: _navy),
+      _field(110, 43, 92, 7, 'customer', label: 'السيد', fs: 11, bold: true),
+      _field(8, 43, 100, 7, 'address'),
+      _field(140, 50.5, 62, 7, 'invoiceNo'),
+      _field(74, 50.5, 64, 7, 'dateTime', label: 'التاريخ', align: 'center'),
+      _field(8, 50.5, 64, 7, 'phone', align: 'left'),
+      _table(8, 60, 194, 196, cols([
+        ['serial', 'ت', 0.45],
+        ['productId', 'ID', 0.8],
+        ['details', 'المادة', 3.4],
+        ['quantity', 'العدد', 1.4],
+        ['unitsCount', 'التعبئة', 1.1],
+        ['weight', 'الوزن', 0.9],
+        ['blank', 'تم', 0.6],
+      ]), rowH: 8, fs: 10),
+      _field(8, 258, 70, 7, 'itemsCount', label: 'عدد المواد', bold: true),
+      ..._signature(150, 268, 52, 'المجهز: {preparer}'),
+      ..._signature(79, 268, 52, 'المدقق'),
+      ..._signature(8, 268, 52, 'المستلم'),
+      _pageNo(288),
+    ]);
+  }
 
   static InvoiceLayout _a4Compact() => _a4('مضغوط', [
         _e(ElType.logo, 8, 5, 18, 14),
