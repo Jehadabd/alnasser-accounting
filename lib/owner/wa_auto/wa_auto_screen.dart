@@ -26,6 +26,10 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
   final _perDay = TextEditingController();
   final _loadWait = TextEditingController();
   ({List<WaTarget> targets, int noPhone, int badPhone})? _debtors;
+  List<WaTarget> _targets = const [];
+  final _testPhone = TextEditingController();
+  bool _testing = false;
+  String? _testResult;
   Map<String, Map<String, dynamic>> _log = {};
   String _shop = '';
   bool _dirty = false;
@@ -47,7 +51,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
   void dispose() {
     WaAutoReminder.state.removeListener(_onRun);
     _tick?.cancel();
-    for (final c in [_min, _tpl, _minDelay, _maxDelay, _perDay, _loadWait]) {
+    for (final c in [_min, _tpl, _minDelay, _maxDelay, _perDay, _loadWait, _testPhone]) {
       c.dispose();
     }
     super.dispose();
@@ -77,10 +81,12 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
     final s = _s;
     if (s == null) return;
     final d = await WaAutoReminder.debtors(s.minDebt);
+    final t = await WaAutoReminder.targets(s);
     final log = await WaAutoReminder.monthLog();
     if (mounted) {
       setState(() {
         _debtors = d;
+        _targets = t;
         _log = log;
       });
     }
@@ -147,13 +153,13 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
   Future<void> _start({int? limit}) async {
     if (_dirty) await _save();
     if (!mounted) return;
-    final pending = (_debtors?.targets.length ?? 0) - _sentCount;
+    final pending = _targets.where((t) => _log['${t.id}']?['s'] != 'sent').length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(limit == null ? 'بدء الإرسال' : 'تجربة على $limit زبائن'),
         content: Text(
-          '${limit == null ? 'سيُرسل لـ ${pending < 0 ? 0 : pending} زبوناً (ضمن الحد اليومي).' : 'سيُرسل لأول $limit ممن لم يُذكَّروا هذا الشهر.'}\n\n'
+          '${limit == null ? 'سيُرسل لـ $pending زبوناً (ضمن الحد اليومي).' : 'سيُرسل لأول $limit ممن لم يُذكَّروا هذا الشهر.'}\n\n'
           'تأكد أن WhatsApp Desktop مفتوح ومسجّل الدخول.\n'
           'لا تستعمل الحاسبة حتى ينتهي. للإيقاف: ارجع إلى هذه الشاشة واضغط «إيقاف».',
           style: const TextStyle(height: 1.6),
@@ -169,6 +175,30 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
   }
 
   int get _sentCount => _log.values.where((v) => v['s'] == 'sent').length;
+
+  Future<void> _test() async {
+    if (_dirty) await _save();
+    setState(() {
+      _testing = true;
+      _testResult = null;
+    });
+    final err = await WaAutoReminder.sendTest(_testPhone.text);
+    if (!mounted) return;
+    setState(() {
+      _testing = false;
+      _testResult = err == null ? 'ضُغط «إرسال» في واتساب ✓ — تأكد من وصولها على الرقم الآخر' : 'لم تُرسل: $err';
+    });
+  }
+
+  Future<void> _pick() async {
+    final all = await WaAutoReminder.withPhones();
+    if (!mounted) return;
+    final chosen = await showDialog<Set<int>>(
+      context: context,
+      builder: (_) => _PickDialog(all: all, initial: _s!.selected),
+    );
+    if (chosen != null) await _save(_s!.copyWith(selected: chosen));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -217,7 +247,30 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
                 ],
                 onChanged: run.running ? null : (v) => _save(s.copyWith(day: v ?? 0)),
               ),
+              const SizedBox(width: 20),
+              const Text('الساعة:', style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(width: 12),
+              DropdownButton<int>(
+                value: s.hour,
+                items: [
+                  const DropdownMenuItem(value: -1, child: Text('عند فتح البرنامج')),
+                  for (var h = 0; h < 24; h++)
+                    DropdownMenuItem(value: h, child: Text('${h.toString().padLeft(2, '0')}:00 فما بعد')),
+                ],
+                onChanged: run.running ? null : (v) => _save(s.copyWith(hour: v ?? -1)),
+              ),
             ]),
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text('اختر ساعة لا تعمل فيها على الحاسبة (بعد الإغلاق مثلاً) — البرنامج يجب أن يبقى مفتوحاً',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+            ),
+            SetSwitch(
+              title: 'إرجاع البرنامج إلى المقدمة بعد كل رسالة',
+              subtitle: 'واتساب يظهر بضع ثوانٍ لكل رسالة ثم تعود شاشة البرنامج (وفيها زر «إيقاف»)',
+              value: s.refocus,
+              onChanged: run.running ? null : (v) => _save(s.copyWith(refocus: v)),
+            ),
           ]),
         ),
         const SizedBox(height: 12),
@@ -225,16 +278,39 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
           title: 'من يُذكَّر',
           icon: Icons.groups_rounded,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            _field(_min, 'الحد الأدنى للدين (دينار)', number: true),
-            const SizedBox(height: 10),
-            if (_debtors == null)
-              const LinearProgressIndicator()
-            else ...[
-              _stat('مدينون برقم صالح', _debtors!.targets.length, const Color(0xFF047857)),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: true, label: Text('عملاء أختارهم'), icon: Icon(Icons.checklist_rounded)),
+                ButtonSegment(value: false, label: Text('كل مدين فوق حد'), icon: Icon(Icons.groups_rounded)),
+              ],
+              selected: {s.onlySelected},
+              onSelectionChanged: run.running ? null : (v) => _save(s.copyWith(onlySelected: v.first)),
+            ),
+            const SizedBox(height: 12),
+            if (s.onlySelected) ...[
+              OutlinedButton.icon(
+                onPressed: run.running ? null : _pick,
+                icon: const Icon(Icons.person_search_rounded),
+                label: Text('اختيار العملاء (${s.selected.length} مختار)'),
+              ),
+              const SizedBox(height: 6),
+              const Text('تصل الرسالة للمختار فقط إن كان عليه دين أكبر من صفر لحظة الإرسال.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+              const SizedBox(height: 8),
+              _stat('سيصلهم التذكير (مختارون عليهم دين)', _targets.length, const Color(0xFF047857)),
               _stat('أُرسل لهم هذا الشهر', _sentCount, const Color(0xFF0F3460)),
-              _stat('مدينون بلا رقم هاتف (لن تصلهم)', _debtors!.noPhone, const Color(0xFFB45309)),
-              if (_debtors!.badPhone > 0)
-                _stat('رقم غير صالح (لن تصلهم)', _debtors!.badPhone, const Color(0xFFB91C1C)),
+            ] else ...[
+              _field(_min, 'الحد الأدنى للدين (دينار)', number: true),
+              const SizedBox(height: 10),
+              if (_debtors == null)
+                const LinearProgressIndicator()
+              else ...[
+                _stat('مدينون برقم صالح', _debtors!.targets.length, const Color(0xFF047857)),
+                _stat('أُرسل لهم هذا الشهر', _sentCount, const Color(0xFF0F3460)),
+                _stat('مدينون بلا رقم هاتف (لن تصلهم)', _debtors!.noPhone, const Color(0xFFB45309)),
+                if (_debtors!.badPhone > 0)
+                  _stat('رقم غير صالح (لن تصلهم)', _debtors!.badPhone, const Color(0xFFB91C1C)),
+              ],
             ],
           ]),
         ),
@@ -247,20 +323,21 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
                 style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
             const SizedBox(height: 8),
             _field(_tpl, 'النص', lines: 5),
-            if (_debtors != null && _debtors!.targets.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              const Text('معاينة (أول زبون):', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: const Color(0xFFDCF8C6), borderRadius: BorderRadius.circular(12)),
-                child: Text(
-                  WaAutoReminder.render(
-                      _tpl.text.trim().isEmpty ? WaAutoSettings.defaultTemplate : _tpl.text, _debtors!.targets.first, _shop),
-                  style: const TextStyle(height: 1.6),
-                ),
+            const SizedBox(height: 10),
+            Text(_targets.isEmpty ? 'معاينة (مثال):' : 'معاينة (أول زبون):',
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: const Color(0xFFDCF8C6), borderRadius: BorderRadius.circular(12)),
+              child: Text(
+                WaAutoReminder.render(
+                    _tpl.text.trim().isEmpty ? WaAutoSettings.defaultTemplate : _tpl.text,
+                    _targets.isEmpty ? WaTarget(id: 0, name: 'أحمد', phone: '', debt: 125000) : _targets.first,
+                    _shop),
+                style: const TextStyle(height: 1.6),
               ),
-            ],
+            ),
           ]),
         ),
         const SizedBox(height: 12),
@@ -279,6 +356,42 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
               const SizedBox(width: 10),
               Expanded(child: _field(_loadWait, 'مهلة تحميل المحادثة (ثانية)', number: true)),
             ]),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        // 🧪 رسالة تجربة لرقمك الثاني أو قريب — بلا عميل ولا سجل
+        SetCard(
+          title: 'رسالة تجربة',
+          icon: Icons.science_outlined,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('تُرسل الرسالة بالنص أعلاه باسم «تجربة» ومبلغ 125,000 إلى الرقم الذي تكتبه — لا تُسجَّل ولا تخص أي عميل.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF64748B), height: 1.5)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _testPhone,
+                  keyboardType: TextInputType.phone,
+                  textDirection: TextDirection.ltr,
+                  decoration: const InputDecoration(
+                      labelText: 'رقم التجربة (مثل 07701234567)', border: OutlineInputBorder(), isDense: true),
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton.icon(
+                onPressed: !s.enabled || run.running || _testing ? null : _test,
+                icon: _testing
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.send_rounded),
+                label: const Text('أرسل تجربة'),
+              ),
+            ]),
+            if (_testResult != null) ...[
+              const SizedBox(height: 8),
+              Text(_testResult!,
+                  style: TextStyle(
+                      color: _testResult!.startsWith('ضُغط') ? const Color(0xFF047857) : const Color(0xFFB91C1C))),
+            ],
           ]),
         ),
         const SizedBox(height: 12),
@@ -380,28 +493,61 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
       );
 }
 
-/// 🕒 عند فتح البرنامج: إن كان اليوم يوم الإرسال وفُعّل «يبدأ وحده» ⇒ عدّ تنازلي 60 ثانية
-/// ثم يبدأ الإرسال (أو «ليس اليوم»). للمالك ومدير البرنامج على الشاشة الأولى فقط.
-Future<void> offerWaAutoOnStartup(BuildContext context, {required bool primarySeat}) async {
-  if (!primarySeat || !WaAutoReminder.allowed || WaAutoReminder.running) return;
-  final s = await WaAutoReminder.load();
-  if (!s.enabled || !s.riskAccepted || !s.autoStart) return;
-  if (!WaAutoReminder.isDueDay(s, DateTime.now()) || await WaAutoReminder.snoozedToday()) return;
-  if (await WaAutoReminder.sentToday() >= s.maxPerDay) return;
-  final pending = await WaAutoReminder.pending(s);
-  if (pending.isEmpty || !context.mounted) return;
-  final go = await showDialog<bool>(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => _CountdownDialog(count: pending.length),
-  );
-  if (!context.mounted) return;
-  if (go != true) {
-    await WaAutoReminder.snoozeToday();
-    return;
+/// 🕒 مُجدول التذكير: يفحص كل دقيقة ما دام البرنامج مفتوحاً — في يوم الإرسال وبعد الساعة
+/// المختارة يظهر عدّ تنازلي 60 ثانية ثم يبدأ (أو «ليس اليوم»). للمالك ومدير البرنامج على
+/// الشاشة الأولى فقط، وإن فُعّل «يبدأ وحده».
+class WaAutoScheduler {
+  WaAutoScheduler._();
+  static Timer? _timer;
+  static bool _busy = false;
+  static BuildContext? _context; // آخر شاشة رئيسية (بعد تبديل المستخدم تُستبدل)
+
+  static void start(BuildContext context, {required bool primarySeat}) {
+    if (!primarySeat) return;
+    _context = context;
+    unawaited(_tick());
+    _timer ??= Timer.periodic(const Duration(minutes: 1), (_) => _tick());
   }
-  unawaited(WaAutoReminder.run());
-  unawaited(Navigator.push(context, MaterialPageRoute(builder: (_) => const WaAutoScreen())));
+
+  static Future<void> _tick() async {
+    final context = _context;
+    if (_busy || context == null || !context.mounted) return;
+    _busy = true;
+    try {
+      await _check(context);
+    } catch (e) {
+      debugPrint('💬 تذكير واتساب: $e');
+    } finally {
+      _busy = false;
+    }
+  }
+
+  static void stop() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  static Future<void> _check(BuildContext context) async {
+    if (!WaAutoReminder.allowed || WaAutoReminder.running) return;
+    final s = await WaAutoReminder.load();
+    if (!s.enabled || !s.riskAccepted || !s.autoStart) return;
+    if (!WaAutoReminder.isDueNow(s, DateTime.now()) || await WaAutoReminder.snoozedToday()) return;
+    if (await WaAutoReminder.sentToday() >= s.maxPerDay) return;
+    final pending = await WaAutoReminder.pending(s);
+    if (pending.isEmpty || !context.mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CountdownDialog(count: pending.length),
+    );
+    if (!context.mounted) return;
+    if (go != true) {
+      await WaAutoReminder.snoozeToday();
+      return;
+    }
+    unawaited(Navigator.push(context, MaterialPageRoute(builder: (_) => const WaAutoScreen())));
+    await WaAutoReminder.run();
+  }
 }
 
 class _CountdownDialog extends StatefulWidget {
@@ -449,4 +595,69 @@ class _CountdownDialogState extends State<_CountdownDialog> {
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('ابدأ الآن')),
         ],
       );
+}
+
+/// اختيار العملاء الذين تصلهم الرسالة (من لهم رقم صالح).
+class _PickDialog extends StatefulWidget {
+  const _PickDialog({required this.all, required this.initial});
+  final List<WaTarget> all;
+  final Set<int> initial;
+  @override
+  State<_PickDialog> createState() => _PickDialogState();
+}
+
+class _PickDialogState extends State<_PickDialog> {
+  late final Set<int> _sel = {...widget.initial};
+  String _q = '';
+  static final _n = NumberFormat('#,##0', 'en');
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _q.trim();
+    final list = q.isEmpty ? widget.all : widget.all.where((t) => t.name.contains(q) || t.phone.contains(q)).toList();
+    return AlertDialog(
+      title: Text('من تصله الرسالة؟ (${_sel.length} مختار)'),
+      content: SizedBox(
+        width: 520,
+        height: 480,
+        child: Column(children: [
+          TextField(
+            autofocus: true,
+            decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search), hintText: 'بحث بالاسم أو الرقم', border: OutlineInputBorder(), isDense: true),
+            onChanged: (v) => setState(() => _q = v),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: widget.all.isEmpty
+                ? const Center(child: Text('لا يوجد عميل له رقم هاتف صالح'))
+                : ListView.builder(
+                    itemCount: list.length,
+                    itemBuilder: (_, i) {
+                      final t = list[i];
+                      return CheckboxListTile(
+                        dense: true,
+                        value: _sel.contains(t.id),
+                        onChanged: (v) => setState(() {
+                          if (v == true) {
+                            _sel.add(t.id);
+                          } else {
+                            _sel.remove(t.id);
+                          }
+                        }),
+                        title: Text(t.name),
+                        subtitle: Text('${t.phone} • ${t.debt > 0 ? '${_n.format(t.debt.round())} دينار' : 'لا دين — لن تصله'}'),
+                      );
+                    },
+                  ),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => setState(_sel.clear), child: const Text('إلغاء الكل')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
+        FilledButton(onPressed: () => Navigator.pop(context, _sel), child: const Text('حفظ الاختيار')),
+      ],
+    );
+  }
 }

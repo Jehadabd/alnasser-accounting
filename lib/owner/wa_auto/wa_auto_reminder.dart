@@ -15,6 +15,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../erp/activity/activity_log.dart';
 import '../../services/auth_service.dart';
@@ -44,6 +45,10 @@ class WaAutoSettings {
     required this.maxPerDay,
     required this.autoStart,
     required this.loadWait,
+    required this.onlySelected,
+    required this.selected,
+    required this.hour,
+    required this.refocus,
   });
 
   final bool enabled;
@@ -63,6 +68,18 @@ class WaAutoSettings {
   /// مهلة تحميل المحادثة قبل ضغط «إرسال» (ثوانٍ).
   final int loadWait;
 
+  /// true = يُرسل فقط للعملاء الذين اخترتهم (الافتراضي). false = كل مدين فوق الحد الأدنى.
+  final bool onlySelected;
+
+  /// أرقام العملاء المختارين.
+  final Set<int> selected;
+
+  /// ساعة البدء في يوم الإرسال (0..23)؛ -1 = عند فتح البرنامج في أي ساعة.
+  final int hour;
+
+  /// إرجاع البرنامج إلى المقدمة بعد كل رسالة.
+  final bool refocus;
+
   static const defaultTemplate = 'السيد {الاسم}،\n'
       'نذكّركم بأن المبلغ المترتب بذمتكم {المبلغ} دينار.\n'
       'يرجى التسديد في أقرب وقت، مع الشكر.\n'
@@ -79,6 +96,10 @@ class WaAutoSettings {
     int? maxPerDay,
     bool? autoStart,
     int? loadWait,
+    bool? onlySelected,
+    Set<int>? selected,
+    int? hour,
+    bool? refocus,
   }) =>
       WaAutoSettings(
         enabled: enabled ?? this.enabled,
@@ -91,6 +112,10 @@ class WaAutoSettings {
         maxPerDay: maxPerDay ?? this.maxPerDay,
         autoStart: autoStart ?? this.autoStart,
         loadWait: loadWait ?? this.loadWait,
+        onlySelected: onlySelected ?? this.onlySelected,
+        selected: selected ?? this.selected,
+        hour: hour ?? this.hour,
+        refocus: refocus ?? this.refocus,
       );
 }
 
@@ -137,6 +162,13 @@ class WaAutoReminder {
       maxPerDay: p.getInt('${_k}max_day') ?? 100,
       autoStart: p.getBool('${_k}auto') ?? false,
       loadWait: p.getInt('${_k}load_wait') ?? 4,
+      onlySelected: p.getBool('${_k}only_selected') ?? true,
+      selected: {
+        for (final x in p.getStringList('${_k}selected') ?? const <String>[])
+          if (int.tryParse(x) != null) int.parse(x),
+      },
+      hour: p.getInt('${_k}hour') ?? 22,
+      refocus: p.getBool('${_k}refocus') ?? true,
     );
   }
 
@@ -152,6 +184,10 @@ class WaAutoReminder {
     await p.setInt('${_k}max_day', s.maxPerDay.clamp(1, 1000));
     await p.setBool('${_k}auto', s.autoStart);
     await p.setInt('${_k}load_wait', s.loadWait.clamp(2, 20));
+    await p.setBool('${_k}only_selected', s.onlySelected);
+    await p.setStringList('${_k}selected', [for (final id in s.selected) '$id']);
+    await p.setInt('${_k}hour', s.hour.clamp(-1, 23));
+    await p.setBool('${_k}refocus', s.refocus);
   }
 
   // ───────────── السجل (لكل شهر: من أُرسل له) ─────────────
@@ -246,12 +282,42 @@ class WaAutoReminder {
     return (targets: out, noPhone: noPhone, badPhone: bad);
   }
 
+  /// العملاء الذين لهم رقم صالح (أياً كان دينهم) — لاختيار من تصله الرسالة.
+  static Future<List<WaTarget>> withPhones() async {
+    final db = await DatabaseService().database;
+    final rows = await db.rawQuery(
+      "SELECT id, name, phone, current_total_debt AS d FROM customers "
+      "WHERE COALESCE(is_deleted, 0) = 0 AND TRIM(COALESCE(phone, '')) != '' "
+      'ORDER BY current_total_debt DESC, name',
+    );
+    return [
+      for (final r in rows)
+        if (normalizePhone('${r['phone']}') != null)
+          WaTarget(
+            id: r['id'] as int,
+            name: '${r['name'] ?? ''}'.trim(),
+            phone: normalizePhone('${r['phone']}')!,
+            debt: (r['d'] as num?)?.toDouble() ?? 0,
+          ),
+    ];
+  }
+
+  /// من سيُرسل لهم (قبل استبعاد من أُرسل لهم هذا الشهر):
+  /// المختارون الذين عليهم دين، أو كل مدين فوق الحد الأدنى.
+  static Future<List<WaTarget>> targets(WaAutoSettings s) async {
+    if (!s.onlySelected) return (await debtors(s.minDebt)).targets;
+    return [for (final t in await withPhones()) if (s.selected.contains(t.id) && t.debt > 0) t];
+  }
+
   /// من لم يُرسل له بنجاح هذا الشهر.
   static Future<List<WaTarget>> pending(WaAutoSettings s) async {
-    final all = (await debtors(s.minDebt)).targets;
+    final all = await targets(s);
     final log = await monthLog();
     return [for (final t in all) if (log['${t.id}']?['s'] != 'sent') t];
   }
+
+  /// الحد الأدنى الذي يُفحص لحظة الإرسال (المختارون: أي دين أكبر من صفر).
+  static double _floor(WaAutoSettings s) => s.onlySelected ? 0.0001 : s.minDebt;
 
   // ───────────── نص الرسالة ─────────────
 
@@ -285,6 +351,30 @@ class WaAutoReminder {
     return now.day >= s.day;
   }
 
+  /// يوم الإرسال وحلّت ساعته.
+  static bool isDueNow(WaAutoSettings s, DateTime now) => isDueDay(s, now) && (s.hour < 0 || now.hour >= s.hour);
+
+  /// 🧪 رسالة تجربة إلى أي رقم (بلا عميل، ولا تُسجَّل). null = ضُغط «إرسال».
+  static Future<String?> sendTest(String rawPhone) async {
+    if (!allowed) return 'غير متاح';
+    final phone = normalizePhone(rawPhone);
+    if (phone == null) return 'رقم غير صالح';
+    final s = await load();
+    final t = WaTarget(id: 0, name: 'تجربة', phone: phone, debt: 125000);
+    final err = await WaDesktop.send(phone, render(s.template, t, await shopName()),
+        loadWait: Duration(seconds: s.loadWait));
+    if (s.refocus) await _refocus();
+    return err;
+  }
+
+  /// يعيد نافذة البرنامج إلى المقدمة (بعد إرسال كل رسالة).
+  static Future<void> _refocus() async {
+    try {
+      await windowManager.show();
+      await windowManager.focus();
+    } catch (_) {}
+  }
+
   static Future<bool> snoozedToday() async {
     final p = await SharedPreferences.getInstance();
     return p.getString('${_k}snooze') == DateFormat('yyyy-MM-dd', 'en').format(DateTime.now());
@@ -316,7 +406,11 @@ class WaAutoReminder {
     list = list.take(room).toList();
     if (list.isEmpty) {
       state.value = WaRunState(
-          note: room == 0 ? 'بلغت الحد اليومي (${s.maxPerDay}) — يكمل غداً' : 'لا أحد ينتظر التذكير هذا الشهر');
+          note: room == 0
+              ? 'بلغت الحد اليومي (${s.maxPerDay}) — يكمل غداً'
+              : (s.onlySelected && s.selected.isEmpty
+                  ? 'لم تختر أي عميل بعد'
+                  : 'لا أحد ينتظر التذكير هذا الشهر'));
       return;
     }
     final shop = await shopName();
@@ -335,7 +429,7 @@ class WaAutoReminder {
       final r = await db.rawQuery(
           'SELECT current_total_debt AS d, COALESCE(is_deleted, 0) AS del FROM customers WHERE id = ?', [t.id]);
       final now = r.isEmpty ? 0.0 : ((r.first['d'] as num?)?.toDouble() ?? 0);
-      if (r.isEmpty || r.first['del'] != 0 || now < s.minDebt) {
+      if (r.isEmpty || r.first['del'] != 0 || now < _floor(s)) {
         skipped++;
         state.value = WaRunState(running: true, total: list.length, sent: sent, failed: failed, skipped: skipped);
         continue;
@@ -344,6 +438,7 @@ class WaAutoReminder {
       state.value = WaRunState(
           running: true, total: list.length, sent: sent, failed: failed, skipped: skipped, current: t.name);
       final err = await WaDesktop.send(t.phone, render(s.template, t, shop), loadWait: Duration(seconds: s.loadWait));
+      if (s.refocus) await _refocus(); // 🔙 البرنامج إلى المقدمة فوراً بعد الضغط
       if (err == null) {
         sent++;
         failsInRow = 0;

@@ -1,9 +1,9 @@
 import 'package:alnaser/owner/wa_auto/wa_auto_reminder.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-WaAutoSettings _s(int day) => WaAutoSettings(
+WaAutoSettings _s(int day, {int hour = -1}) => WaAutoSettings(
     enabled: true, riskAccepted: true, minDebt: 0, day: day, template: '', minDelay: 30, maxDelay: 90,
-    maxPerDay: 100, autoStart: true, loadWait: 4);
+    maxPerDay: 100, autoStart: true, loadWait: 4, onlySelected: true, selected: const {}, hour: hour, refocus: true);
 
 void main() {
   test('phone numbers become international without +', () {
@@ -30,5 +30,11 @@ void main() {
     expect(WaAutoReminder.isDueDay(_s(0), DateTime(2026, 11, 30)), isTrue);
     expect(WaAutoReminder.isDueDay(_s(25), DateTime(2026, 11, 26)), isTrue);
     expect(WaAutoReminder.isDueDay(_s(25), DateTime(2026, 11, 24)), isFalse);
+  });
+
+  test('due now waits for the chosen hour', () {
+    expect(WaAutoReminder.isDueNow(_s(25, hour: 22), DateTime(2026, 11, 26, 21, 59)), isFalse);
+    expect(WaAutoReminder.isDueNow(_s(25, hour: 22), DateTime(2026, 11, 26, 22, 0)), isTrue);
+    expect(WaAutoReminder.isDueNow(_s(25), DateTime(2026, 11, 26, 8)), isTrue);
   });
 }
