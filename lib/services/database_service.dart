@@ -1873,59 +1873,34 @@ class DatabaseService {
     return _invoiceDao.getInvoicesCreatedAfter(afterDate);
   }
   
+  /// يربط فواتير **نقدية** قديمة بلا رقم عميل بعميلها الموجود (بالاسم) — للتقارير فقط.
+  ///
+  /// 🛡️ كانت هذه الدالة (تُستدعى عند فتح صفحة عميل أو تقارير الأشخاص):
+  ///   • تُنشئ عملاء جدداً تلقائياً لكل اسم بلا عميل،
+  ///   • وتنقل فواتير الدين أيضاً إلى عميل بالاسم نفسه — حتى فواتير مربوطة بعميل آخر
+  ///     (`customer_id != ?`) أو بعميل محذوف — فينتقل الدين بين العملاء بلا علم المستخدم.
+  /// الآن: لا إنشاء عملاء، لا لمس لفاتورة لها رقم عميل (صالح أو محذوف)، ولا لفاتورة دين
+  /// (ربطها يغيّر دين عميل). فواتير الدين بلا عميل تبقى كما هي حتى يقرر المستخدم.
   Future<void> updateOldInvoicesWithCustomerIds() async {
     final db = await database;
     try {
-      // 1. Find all distinct customer names in invoices that have no customer_id OR have an invalid customer_id
-      final List<Map<String, dynamic>> orphanedNames = await db.rawQuery('''
-        SELECT DISTINCT i.customer_name
-        FROM invoices i
-        LEFT JOIN customers c ON i.customer_id = c.id
-        WHERE (i.customer_id IS NULL OR i.customer_id = 0 OR c.id IS NULL)
-          AND i.customer_name IS NOT NULL 
-          AND TRIM(i.customer_name) != ''
-      ''');
-
-      for (var row in orphanedNames) {
-        final String name = row['customer_name'] as String;
-        
-        // 2. Check if a customer with this name exists
-        // 🛡️ الاسم يحدد الحساب (بتجاهل المسافات)
-        final active = await CustomerNameRule.findActive(db, name);
-        final List<Map<String, dynamic>> existing = active != null
-            ? [active]
-            : await db.query(
-                'customers',
-                columns: ['id'],
-                where: 'name = ?',
-                whereArgs: [name],
-                limit: 1,
-              );
-
-        int customerId;
-        if (existing.isNotEmpty) {
-          customerId = existing.first['id'] as int;
-        } else {
-          // 3. Create a new customer
-          customerId = await db.insert('customers', {
-            'name': name,
-            'current_total_debt': 0.0,
-            'is_deleted': 0,
-            'last_modified_at': DateTime.now().toIso8601String(),
-          });
+      await db.transaction((txn) async {
+        final names = await txn.rawQuery('''
+          SELECT DISTINCT customer_name FROM invoices
+          WHERE (customer_id IS NULL OR customer_id = 0)
+            AND payment_type = 'نقد'
+            AND customer_name IS NOT NULL AND TRIM(customer_name) != ''
+        ''');
+        for (final row in names) {
+          final name = row['customer_name'] as String;
+          final active = await CustomerNameRule.findActive(txn, name);
+          if (active == null) continue; // لا عميل بهذا الاسم ⇒ لا شيء (لا ننشئ عملاء)
+          await txn.rawUpdate('''
+            UPDATE invoices SET customer_id = ?
+            WHERE customer_name = ? AND (customer_id IS NULL OR customer_id = 0) AND payment_type = 'نقد'
+          ''', [active['id'], name]);
         }
-
-        // 4. Update the invoices with the correct customer_id
-        await db.rawUpdate('''
-          UPDATE invoices
-          SET customer_id = ?
-          WHERE customer_name = ? AND (customer_id IS NULL OR customer_id = 0 OR customer_id != ?)
-        ''', [customerId, name, customerId]);
-        
-        // 5. Update transactions if they exist without customer_id? 
-        // Note: transactions already enforce customer_id NOT NULL in schema, 
-        // but if there are any orphaned, we can't update them directly.
-      }
+      });
     } catch (e) {
       debugPrint('Error in updateOldInvoicesWithCustomerIds: $e');
     }
