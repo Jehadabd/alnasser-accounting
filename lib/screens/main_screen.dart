@@ -21,6 +21,7 @@ import '../services/auth_service.dart'; // 👤
 import '../models/app_user.dart'; // 👤 AppPermissions
 import '../services/debt_reminders.dart'; // 📅
 import '../services/owner_summary.dart'; // 📊 ملخص المالك اليومي
+import '../owner/wa_auto/wa_auto_screen.dart' show offerWaAutoOnStartup; // 👑💬 تذكير الديون الشهري
 import 'debt_reminders_screen.dart' show showDueRemindersDialog;
 import '../services/reports_service.dart'; // ✅ Added
 import '../services/settings_manager.dart'; // ✅ Added
@@ -76,6 +77,13 @@ class _MainScreenState extends State<MainScreen> {
           await AlertService().checkAndShowAlerts(context);
         } catch (e) {
           debugPrint('🔔 تنبيهات المخزون: $e');
+        }
+        // 👑💬 يوم تذكير الديون عبر واتساب (حساب المالك فقط، إن فُعّل «يبدأ وحده»)
+        if (!mounted) return;
+        try {
+          await offerWaAutoOnStartup(context, primarySeat: SeatService.isPrimary);
+        } catch (e) {
+          debugPrint('💬 تذكير واتساب: $e');
         }
       });
       // 📊 ملخص المالك اليومي على تيليجرام (إن فُعّل على هذا الجهاز)

@@ -11,6 +11,8 @@ import '../accounting/screens/acc_ui.dart' show accRoute;
 import '../widgets/settings_kit.dart';
 import 'founder_service.dart';
 import 'founders_screen.dart';
+import 'wa_auto/wa_auto_reminder.dart';
+import 'wa_auto/wa_auto_screen.dart';
 
 String _fmtRate(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
 
@@ -18,9 +20,28 @@ class OwnerSettingsCards extends StatelessWidget {
   const OwnerSettingsCards({super.key});
 
   @override
-  Widget build(BuildContext context) => const Column(
+  Widget build(BuildContext context) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [_OwnerBadge(), _FoundersCard()],
+        children: [
+          const _OwnerBadge(),
+          const _FoundersCard(),
+          // 💬 تذكير الديون الشهري عبر واتساب — لمدير البرنامج على ويندوز فقط
+          if (WaAutoReminder.allowed) ...[
+            const SizedBox(height: 14),
+            SetCard(
+              title: 'تذكير الديون الشهري عبر واتساب',
+              icon: Icons.chat_rounded,
+              color: const Color(0xFF047857),
+              child: SetActionRow(
+                icon: Icons.send_rounded,
+                title: 'رسالة لكل مدين باسمه ومبلغه، من WhatsApp Desktop',
+                subtitle: 'تفعيل، نص الرسالة، يوم الإرسال، الحد اليومي، وسجل الإرسال',
+                color: const Color(0xFF047857),
+                onTap: () => Navigator.push(context, accRoute(const WaAutoScreen())),
+              ),
+            ),
+          ],
+        ],
       );
 }
 
