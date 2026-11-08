@@ -31,6 +31,7 @@ import '../widgets/loading_dialog.dart';
 import '../erp/control/printed_vouchers_screen.dart'; // 🧾 أرشيف السندات المطبوعة
 import '../models/app_user.dart' show AppPermissions; // 🔐 صلاحيات التقارير والبطاقة
 import '../services/auth_service.dart';
+import '../widgets/edit_customer_dialog.dart'; // ✏️ تعديل معلومات العميل
 import 'person_details_screen.dart'; // 📊 تقرير العميل
 import 'product_reports_screen.dart'; // 📦 بضاعة العميل
 
@@ -386,56 +387,25 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   /// دالة تعديل بيانات العميل
   Future<void> _editCustomerDetails() async {
     if (!_can(AppPermissions.drEditCustomer)) return;
-    final nameController = TextEditingController(text: widget.customer.name);
-    final phoneController = TextEditingController(text: widget.customer.phone ?? '');
-    final addressController = TextEditingController(text: widget.customer.address ?? '');
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('تعديل معلومات العميل'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(labelText: 'الاسم'),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: phoneController,
-                  decoration: const InputDecoration(labelText: 'الهاتف'),
-                  keyboardType: TextInputType.phone,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: addressController,
-                  decoration: const InputDecoration(labelText: 'العنوان'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('حفظ')),
-          ],
-        );
-      },
+    // ✏️ نافذة بنفس تصميم البرنامج، مع تحقق من الاسم والرقم
+    final current0 = context.read<AppProvider>().selectedCustomer ?? widget.customer;
+    final edited = await showEditCustomerDialog(
+      context,
+      name: current0.name,
+      phone: current0.phone,
+      address: current0.address,
+      normalizePhone: _normalizePhoneNumber,
     );
-    if (result == true && mounted) {
-      String? normalizedPhone;
-      if (phoneController.text.trim().isNotEmpty) {
-        normalizedPhone = _normalizePhoneNumber(phoneController.text.trim());
-      }
-      
+    if (edited != null && mounted) {
+      final normalizedPhone = edited.phone.isEmpty ? null : edited.phone;
+
       final provider = context.read<AppProvider>();
       final currentCustomer = provider.selectedCustomer ?? widget.customer;
       
       final updated = currentCustomer.copyWith(
-        name: nameController.text.trim(),
-        phone: normalizedPhone,
-        address: addressController.text.trim(),
+        name: edited.name,
+        phone: edited.phone, // '' = حُذف الرقم (null كان يُبقي القديم)
+        address: edited.address,
         currentTotalDebt: currentCustomer.currentTotalDebt,
         lastModifiedAt: DateTime.now(),
       );
@@ -878,7 +848,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       children: [
                         Icon(Icons.insights_rounded, color: Color(0xFF4F46E5), size: 20),
                         SizedBox(width: 12),
-                        Text('تقرير العميل (سنوات ← أشهر ← فواتير)'),
+                        Flexible(child: Text('تقرير العميل')),
                       ],
                     ),
                   ),
@@ -889,7 +859,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       children: [
                         Icon(Icons.inventory_2_rounded, color: Color(0xFF047857), size: 20),
                         SizedBox(width: 12),
-                        Text('بضاعة العميل (ما اشتراه)'),
+                        Flexible(child: Text('بضاعة العميل')),
                       ],
                     ),
                   ),
