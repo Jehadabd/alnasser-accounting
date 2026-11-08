@@ -39,6 +39,7 @@ import '../lan/lan_codec.dart' show LanConnectionException;
 import '../accounting/accounting_schema.dart'; // 🏛️ مخطط النسخة المحاسبية
 import '../erp/erp_schema.dart'; // 🧱 ميزات الإداري وسهل
 import '../owner/cost_stamp.dart';
+import 'database/business/financial_black_box.dart';
 import '../erp/erp_common.dart' show PeriodLock;
 import '../erp/device_defaults.dart';
 import 'database/core/database_helpers.dart';
@@ -430,6 +431,14 @@ class DatabaseService {
       await CostStamp.ensure(db);
     } catch (e) {
       debugPrint('⚠️ Error running CostStamp.ensure: $e');
+    }
+
+    // 📼 الصندوق الأسود المالي: يسجّل كل تغيّر في الديون والمعاملات من أي مسار
+    // (تسجيل فقط — لا يمنع ولا يغيّر أي رقم). يقرؤه «الفحص العميق».
+    try {
+      await FinancialBlackBox.ensure(db);
+    } catch (e) {
+      debugPrint('⚠️ Error running FinancialBlackBox.ensure: $e');
     }
 
     // 🛡️ سجل الديون: لا حسابان بالاسم نفسه. عمود الدمج + قيد فريد في القاعدة

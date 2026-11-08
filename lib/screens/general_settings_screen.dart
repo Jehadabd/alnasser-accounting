@@ -55,6 +55,7 @@ import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 
 import '../models/account_statement_item.dart';
 import 'data_import_screen.dart'; // 📥 استيراد من Excel
+import 'financial_deep_check_screen.dart'; // 🔬
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
 import '../widgets/loading_dialog.dart';
 import '../services/receipt_paper.dart';
@@ -2422,6 +2423,17 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   title: 'فحص شامل لجميع العملاء',
                   subtitle: 'التحقق من سلامة جميع البيانات المالية',
                   onTap: () => _runFullIntegrityCheck(),
+                ),
+                const Divider(height: 1),
+                _buildActionTile(
+                  icon: Icons.manage_search,
+                  iconColor: Colors.indigo,
+                  title: 'الفحص العميق (قراءة فقط)',
+                  subtitle: 'يعيد حساب كل دين من فاتورته ومعاملاته — لا يغيّر أي رقم',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const FinancialDeepCheckScreen()),
+                  ),
                 ),
                 const Divider(height: 1),
                 _buildActionTile(
