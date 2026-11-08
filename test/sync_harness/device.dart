@@ -30,6 +30,7 @@ import 'package:alnaser/services/purchase_service.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/services/database/business/stock_ledger.dart';
 import 'package:alnaser/services/database/business/financial_deep_check.dart';
+import 'package:alnaser/services/held_invoices.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
 import 'package:alnaser/services/database_service.dart';
@@ -464,10 +465,14 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
     case 'saveInvoice':
       // مسار شاشة الفاتورة: InvoiceController.saveInvoice ثم الرفع الفوري
       final db = await DatabaseService().database;
-      final cr = await db.query('customers',
-          where: 'sync_uuid = ?', whereArgs: [a['cust']], limit: 1);
-      if (cr.isEmpty) throw StateError('customer not on device');
-      final cust = cr.first;
+      // 'name' = ما يُكتب في حقل العميل (اسم جديد ⇒ التطبيق يُنشئ العميل)،
+      // 'phone' = حقل الهاتف، 'date' = تاريخ الفاتورة، 'incomplete' = سطر ناقص.
+      final nameField = a['name'] as String?;
+      final cr = a['cust'] == null
+          ? const <Map<String, Object?>>[]
+          : await db.query('customers', where: 'sync_uuid = ?', whereArgs: [a['cust']], limit: 1);
+      if (cr.isEmpty && nameField == null) throw StateError('customer not on device');
+      final Map<String, Object?> cust = cr.isEmpty ? const {} : cr.first;
       Invoice? existing;
       final invUuid = a['inv'] as String?;
       if (invUuid != null) {
@@ -495,17 +500,27 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final controller = InvoiceController(db: DatabaseService());
       final data = InvoiceInputData(
         invoiceToManage: existing,
-        customerName: cust['name'] as String,
-        customerPhone: (cust['phone'] as String?) ?? '',
+        customerName: nameField ?? cust['name'] as String,
+        customerPhone: (a['phone'] as String?) ?? (cust['phone'] as String?) ?? '',
         customerAddress: (cust['address'] as String?) ?? '',
         paidAmount: paid,
         loadingFee: (a['loadingFee'] as num?)?.toDouble() ?? 0,
         discount: (a['discount'] as num?)?.toDouble() ?? 0,
         paymentType: ptype,
-        selectedDate: DateTime.now(),
+        selectedDate: a['date'] == null ? DateTime.now() : DateTime.parse(a['date'] as String),
         invoiceItems: [
           if ((total - productTotal).abs() > 1e-9 || productItems.isEmpty) item,
           ...productItems,
+          if (a['incomplete'] == true)
+            InvoiceItem(
+              invoiceId: existing?.id ?? 0,
+              productName: 'سطر بلا كمية',
+              unit: 'قطعة',
+              unitPrice: 1000,
+              appliedPrice: 1000,
+              itemTotal: 0,
+              saleType: 'قطعة',
+            ),
         ],
       );
       final v = controller.validateInvoiceData(data);
@@ -955,6 +970,73 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       await PeriodLock.setLockDate(v == null ? null : DateTime.parse(v));
       return true;
 
+    case 'custBalance':
+      // دين العميل المخزّن + مجموع معاملاته الحيّة + هاتف بطاقته (سريع)
+      final db = await DatabaseService().database;
+      final r = await db.rawQuery('''
+        SELECT c.current_total_debt AS debt, c.phone AS phone, c.is_deleted AS del,
+               (SELECT COALESCE(SUM(t.amount_changed), 0) FROM transactions t
+                WHERE t.customer_id = c.id AND COALESCE(t.is_deleted, 0) = 0) AS sum
+        FROM customers c WHERE c.sync_uuid = ? LIMIT 1''', [a['cust']]);
+      if (r.isEmpty) return null;
+      return {
+        'debt': (r.first['debt'] as num?)?.toDouble() ?? 0.0,
+        'sum': (r.first['sum'] as num?)?.toDouble() ?? 0.0,
+        'phone': r.first['phone'],
+        'del': r.first['del'],
+      };
+
+    case 'holdInvoice':
+      // زر «تعليق» في شاشة الفاتورة: HeldInvoices.hold (جديدة أو معلّقة موجودة)
+      final db = await DatabaseService().database;
+      Invoice? existing;
+      if (a['inv'] != null) {
+        final ir = await db.query('invoices', where: 'invoice_uuid = ?', whereArgs: [a['inv']], limit: 1);
+        if (ir.isEmpty) throw StateError('invoice not on device');
+        existing = Invoice.fromMap(ir.first);
+      }
+      final cr = await db.query('customers', where: 'sync_uuid = ?', whereArgs: [a['cust']], limit: 1);
+      if (cr.isEmpty) throw StateError('customer not on device');
+      final total = (a['total'] as num).toDouble();
+      final productItems = await _productItems(db, a['items'], existing?.id ?? 0);
+      final productTotal = productItems.fold(0.0, (s, i) => s + i.itemTotal);
+      try {
+        final held = await HeldInvoices.hold(
+          existing: existing,
+          items: [
+            if ((total - productTotal).abs() > 1e-9 || productItems.isEmpty)
+              InvoiceItem(
+                invoiceId: existing?.id ?? 0,
+                productName: 'صنف اختبار',
+                unit: 'قطعة',
+                unitPrice: total - productTotal,
+                quantityIndividual: 1,
+                appliedPrice: total - productTotal,
+                itemTotal: total - productTotal,
+                saleType: 'قطعة',
+              ),
+            ...productItems,
+          ],
+          customerName: cr.first['name'] as String,
+          customerPhone: cr.first['phone'] as String?,
+          invoiceDate: DateTime.now(),
+          paymentType: a['ptype'] as String? ?? 'دين',
+          discount: (a['discount'] as num?)?.toDouble() ?? 0,
+          loadingFee: (a['loadingFee'] as num?)?.toDouble() ?? 0,
+          paid: (a['paid'] as num?)?.toDouble() ?? 0,
+        );
+        return {'ok': true, 'uuid': held.invoiceUuid};
+      } catch (e) {
+        return {'ok': false, 'err': '$e'};
+      }
+
+    case 'discardHeld':
+      final db = await DatabaseService().database;
+      final ir = await db.query('invoices', where: 'invoice_uuid = ?', whereArgs: [a['inv']], limit: 1);
+      if (ir.isEmpty) throw StateError('invoice not on device');
+      await HeldInvoices.discard(Invoice.fromMap(ir.first));
+      return true;
+
     case 'deepCheck':
       // 🔬 الفحص العميق (قراءة فقط) على قاعدة هذا الجهاز
       final r = await FinancialDeepCheck(await DatabaseService().database).run();
@@ -1132,6 +1214,31 @@ Future<List<InvoiceItem>> _productItems(dynamic db, Object? spec, int invoiceId)
     final useLarge = large && carton != null;
     final baseQty = useLarge ? qty * carton : qty;
     final price = (m['price'] as num?)?.toDouble() ?? (useLarge ? carton.toDouble() : 1.0);
+    // 🎁 هدية (سعر صفر) أو خصم سطر بنسبة/مبلغ — كما يكتبها حقل الخصم في السطر
+    final gift = m['gift'] == true;
+    final pct = (m['discPct'] as num?)?.toDouble();
+    final amt = (m['discAmt'] as num?)?.toDouble();
+    if (gift || pct != null || amt != null) {
+      final applied = gift ? 0.0 : (pct != null ? price * (1 - pct / 100) : price - amt!);
+      out.add(InvoiceItem(
+        invoiceId: invoiceId,
+        productId: p['id'] as int,
+        productName: p['name'] as String,
+        unit: 'piece',
+        unitPrice: 1,
+        costPrice: 0.5 * baseQty,
+        quantityIndividual: useLarge ? null : qty,
+        quantityLargeUnit: useLarge ? qty : null,
+        appliedPrice: applied,
+        itemTotal: qty * applied,
+        saleType: useLarge ? 'كرتون' : 'قطعة',
+        unitsInLargeUnit: useLarge ? carton.toDouble() : null,
+        priceBeforeDiscount: price,
+        discountType: gift ? 'gift' : (pct != null ? 'percent' : 'amount'),
+        discountValue: gift ? 100.0 : (pct ?? amt),
+      ));
+      continue;
+    }
     out.add(InvoiceItem(
       invoiceId: invoiceId,
       productId: p['id'] as int,
