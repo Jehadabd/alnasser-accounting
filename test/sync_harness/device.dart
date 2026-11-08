@@ -29,6 +29,7 @@ import 'package:alnaser/models/supplier.dart';
 import 'package:alnaser/services/purchase_service.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/services/database/business/stock_ledger.dart';
+import 'package:alnaser/services/database/business/financial_deep_check.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
 import 'package:alnaser/services/database_service.dart';
@@ -953,6 +954,11 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final v = a['date'] as String?;
       await PeriodLock.setLockDate(v == null ? null : DateTime.parse(v));
       return true;
+
+    case 'deepCheck':
+      // 🔬 الفحص العميق (قراءة فقط) على قاعدة هذا الجهاز
+      final r = await FinancialDeepCheck(await DatabaseService().database).run();
+      return {'errors': r.errors, 'warnings': r.warnings, 'text': r.asText()};
 
     case 'ledgerCheck':
       // ترحيل كامل ثم فحوص الدفتر: كل قيد متوازن، الميزان متوازن، ذمم العملاء =
