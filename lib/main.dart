@@ -76,6 +76,7 @@ import 'erp/accounting_plus/period_screens.dart' show AccountingPlusHubScreen;
 import 'services/seat_service.dart';
 import 'erp/activity/screen_usage.dart' show ScreenUsageObserver; // 📈
 import 'widgets/home_destinations.dart' show HomeDests;
+import 'wa_messages/wa_send_notice.dart'; // 🔔 إشعار نتيجة إرسال واتساب
 
 /// 🔥 مفتاح الملاح العام — يُستخدم من ReconciliationPrompt وغيرها لإظهار
 /// حوارات من خارج شجرة الويدجت.
@@ -633,8 +634,9 @@ class MyApp extends StatelessWidget {
         navigatorKey: globalNavigatorKey, // ✅ مفتاح الملاح العام
         navigatorObservers: [sideNavObserver, SaveLock.newObserver(), screenUsageObserver],
         // ⌨️ اختصارات لوحة المفاتيح لكل الشاشات (F1 الكاشير، F2 قائمة، F4 المحاسبة...)
-        builder: (context, child) =>
-            GlobalShortcuts(
+        // 🔔 إشعارات إرسال واتساب (أعلى يسار الشاشة، فوق كل الشاشات)
+        builder: (context, child) => WaSendNoticeHost(
+          child: GlobalShortcuts(
               navigatorKey: globalNavigatorKey,
               // 🧭 اللوحة الجانبية مرة واحدة حول كل الشاشات
               // 🔒 غطاء قفل الحفظ فوق كل شيء (يمنع الضغط المزدوج على أي «حفظ»)
@@ -646,6 +648,7 @@ class MyApp extends StatelessWidget {
                 ),
               ),
             ),
+        ),
       ),
     );
   }

@@ -19,6 +19,7 @@ import '../owner/wa_auto/wa_usage_mark.dart';
 import '../services/database_service.dart';
 import 'wa_message_log.dart';
 import 'wa_phone_book.dart';
+import 'wa_send_notice.dart';
 
 /// مستند جاهز للإرسال.
 class WaDoc {
@@ -27,6 +28,14 @@ class WaDoc {
   final String fileName, caption, customerName;
   final int? customerId;
   final String? phone;
+
+  /// اسم المستند للإشعار: «فاتورة رقم 12»، «كشف حساب»، «وصل قبض رقم 7»...
+  String get label {
+    var t = caption.split(' — ').first.trim();
+    final n = customerName.trim();
+    if (n.isNotEmpty && t.endsWith(n)) t = t.substring(0, t.length - n.length).trim();
+    return t.isEmpty ? 'المستند' : t;
+  }
 }
 
 class WaDocSender {
@@ -68,10 +77,7 @@ class WaDocSender {
   static Future<bool> precheck(BuildContext context) async {
     final block = await blockReason();
     if (block == null) return true;
-    if (context.mounted) {
-      ScaffoldMessenger.maybeOf(context)
-          ?.showSnackBar(SnackBar(content: Text(block), backgroundColor: Colors.red.shade700));
-    }
+    if (context.mounted) _notify(context, null, WaNoticeState.failed, 'لم يُرسل', block);
     return false;
   }
 
@@ -81,21 +87,31 @@ class WaDocSender {
     return ids.length == 1 ? ids.first : null;
   }
 
-  /// يبني المستند ([build]) ثم يسأل ويرسل. يعرض النتيجة في شريط أسفل الشاشة.
-  static Future<void> send(BuildContext context, Future<WaDoc?> Function() build, {String source = 'doc'}) async {
-    void toast(String m, {bool error = false}) => ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(SnackBar(content: Text(m), backgroundColor: error ? Colors.red.shade700 : null));
+  /// إشعار النتيجة: لوحة أعلى يسار الشاشة (تبقى ولو أُغلقت الشاشة)، وإلا شريط أسفلها.
+  static void _notify(BuildContext context, int? id, WaNoticeState st, String title, [String? detail]) {
+    if (WaSendNotice.available) {
+      WaSendNotice.finish(id, st, title, detail);
+      return;
+    }
+    if (!context.mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+      content: Text(detail == null ? title : '$title\n$detail'),
+      backgroundColor: st == WaNoticeState.ok ? null : Colors.red.shade700,
+    ));
+  }
 
+  /// يبني المستند ([build]) ثم يسأل (أول مرة فقط) ويرسل، والنتيجة في إشعار.
+  static Future<void> send(BuildContext context, Future<WaDoc?> Function() build, {String source = 'doc'}) async {
     final block = await blockReason();
     if (block != null) {
-      if (context.mounted) toast(block, error: true);
+      if (context.mounted) _notify(context, null, WaNoticeState.failed, 'لم يُرسل', block);
       return;
     }
     final WaDoc? doc;
     try {
       doc = await build();
     } catch (e) {
-      if (context.mounted) toast('تعذّر تجهيز المستند: $e', error: true);
+      if (context.mounted) _notify(context, null, WaNoticeState.failed, 'تعذّر تجهيز المستند', '$e');
       return;
     }
     if (doc == null || !context.mounted) return;
@@ -122,7 +138,8 @@ class WaDocSender {
       phone = ok;
     }
 
-    toast('يرسل إلى ${doc.customerName.isEmpty ? phone : doc.customerName}…');
+    final who = doc.customerName.isEmpty ? phone : doc.customerName;
+    final nid = WaSendNotice.available ? WaSendNotice.start('جارٍ إرسال ${doc.label} إلى $who…') : null;
     String? err;
     String? note;
     try {
@@ -159,9 +176,13 @@ class WaDocSender {
         } catch (_) {}
       }
     }
-    if (!context.mounted) return;
-    toast(err == null ? (note ?? 'أُرسل ✓ إلى ${doc.customerName.isEmpty ? phone : doc.customerName}') : 'لم يُرسل: $err',
-        error: err != null || note != null);
+    if (err != null) {
+      _notify(context, nid, WaNoticeState.failed, 'فشل إرسال ${doc.label} إلى $who', err);
+    } else if (note != null) {
+      _notify(context, nid, WaNoticeState.warn, 'وصلت رسالة ${doc.label} إلى $who دون الملف', note);
+    } else {
+      _notify(context, nid, WaNoticeState.ok, 'أُرسل ${doc.label} إلى $who ✓');
+    }
   }
 }
 
