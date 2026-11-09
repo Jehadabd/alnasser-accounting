@@ -1,6 +1,5 @@
-// اختبارات الأجزاء الصافية من التشغيل الآلي لخادم واتساب (بلا شبكة ولا Windows).
+// اختبارات الأجزاء الصافية من تشغيل خادم واتساب على هذه الحاسبة (بلا شبكة ولا Windows).
 import 'package:alnaser/owner/wa_auto/wa_local_server.dart';
-import 'package:alnaser/owner/wa_auto/wa_render_deployer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -28,30 +27,7 @@ void main() {
   test('رابط الخادم المحلي', () {
     expect(WaLocalServer.isLocalUrl('http://127.0.0.1:8765'), isTrue);
     expect(WaLocalServer.isLocalUrl('http://localhost:8765'), isTrue);
-    expect(WaLocalServer.isLocalUrl('http://127.0.0.1:8080'), isFalse); // الطريقة اليدوية
+    expect(WaLocalServer.isLocalUrl('http://127.0.0.1:8080'), isFalse); // خادم يدوي قديم
     expect(WaLocalServer.isLocalUrl('https://alnaser-wa.onrender.com'), isFalse);
-  });
-
-  group('رسائل Render', () {
-    test('مفتاح خاطئ', () {
-      expect(WaRenderDeployer.errorText(401, 'unauthorized'), contains('مفتاح Render غير صحيح'));
-    });
-    test('طلب بطاقة', () {
-      expect(WaRenderDeployer.errorText(402, ''), contains('بطاقة'));
-      expect(WaRenderDeployer.errorText(400, 'A credit card is required'), contains('بطاقة'));
-    });
-    test('صورة لا تُجلب', () {
-      expect(WaRenderDeployer.errorText(400, 'image not found'), contains('Public'));
-    });
-    test('غير ذلك: الرمز والرسالة كما هما', () {
-      final t = WaRenderDeployer.errorText(500, 'boom');
-      expect(t, contains('500'));
-      expect(t, contains('boom'));
-    });
-    test('حالات النشر', () {
-      expect(WaRenderDeployer.statusText('live'), 'يعمل');
-      expect(WaRenderDeployer.statusText('build_in_progress'), 'يجلب صورة الخادم');
-      expect(WaRenderDeployer.statusText('weird'), 'weird');
-    });
   });
 }

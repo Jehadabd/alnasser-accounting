@@ -10,6 +10,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../../widgets/settings_kit.dart';
 import 'wa_auto_reminder.dart';
 import 'wa_desktop.dart';
+import 'wa_local_server.dart';
 import 'wa_server_client.dart';
 import 'wa_server_screen.dart';
 import 'wa_usage_banner.dart';
@@ -284,7 +285,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
     return SettingsScaffold(
       title: 'تذكير الديون عبر واتساب',
       icon: Icons.chat_rounded,
-      subtitle: 'رسالة شهرية لكل مدين باسمه ومبلغه — من WhatsApp Desktop أو من خادمك',
+      subtitle: 'رسالة شهرية لكل مدين باسمه ومبلغه — من WhatsApp Desktop أو من الخادم على هذه الحاسبة',
       children: [
         const WaUsageBanner(),
         const SetBanner(
@@ -364,10 +365,10 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
             const SizedBox(height: 8),
             Text(
               s.viaServer
-                  ? 'يرسل الخادم في الخلفية من رقم المحل المرتبط به — تستطيع استعمال الحاسبة أثناء الإرسال، ويعمل من أي جهاز.'
+                  ? 'يرسل الخادم في الخلفية من رقم المحل المرتبط به — يعمل على هذه الحاسبة، وتستطيع استعمالها أثناء الإرسال.'
                   : (WaDesktop.supported
                       ? 'البرنامج يفتح WhatsApp Desktop ويضغط «إرسال» بنفسه — لا تستعمل الحاسبة أثناء الإرسال.'
-                      : 'WhatsApp Desktop يعمل على ويندوز فقط — اختر «الخادم» على هذا الجهاز.'),
+                      : 'الإرسال الآلي (WhatsApp Desktop أو الخادم) يعمل على ويندوز فقط.'),
               style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
             ),
             if (s.viaServer) ...[
@@ -643,10 +644,12 @@ class WaAutoScheduler {
   static void start(BuildContext context, {required bool primarySeat}) {
     if (!primarySeat) return;
     _context = context;
-    // 🛰️ الخادم: إيقاظه عند فتح البرنامج يبقي الربط نشطاً ويعيد الجلسة إن مُسحت
+    // 🛰️ الخادم على هذه الحاسبة: يبدأ مع فتح البرنامج (إن فُعّل «يبدأ مع البرنامج»)،
+    //    ثم الفحص يبقي الربط نشطاً ويعيد الجلسة إن ضاعت. «عند الحاجة فقط» ⇒ لا شيء هنا.
     if (_timer == null && WaAutoReminder.allowed) {
       unawaited(() async {
         try {
+          if (!await WaLocalServer.startAtLaunch()) return;
           if ((await WaAutoReminder.load()).viaServer) await WaServerClient.ensureReady();
         } catch (_) {}
       }());

@@ -3,19 +3,17 @@
 // 👑💬 الاتصال بخادم واتساب الخاص بالمالك (assets/wa_server/server.js).
 //
 //   • الرابط في الإعدادات، و«مفتاح الخادم» في التخزين الآمن (لا في الإعدادات العادية).
+//   • الخادم يعمل على هذه الحاسبة فقط (wa_local_server.dart).
 //   • البرنامج يحتفظ بنسخة من جلسة الربط (مشفّرة بمفتاح الخادم، لا يقرؤها البرنامج):
-//     إن أُعيد تشغيل الخادم على منصة تمسح الملفات أعادها البرنامج — فلا ربط جديد.
+//     إن ضاعت ملفات الخادم أعادها البرنامج — فلا ربط جديد.
 //   • لا يغيّر أي دين أو معاملة.
 
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:archive/archive.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'wa_local_server.dart';
@@ -64,18 +62,6 @@ class WaServerClient {
   static const _kBlob = 'wa_srv_blob';
   static const _kRev = 'wa_srv_rev';
   static const _secure = FlutterSecureStorage();
-
-  /// ملفات الحزمة (assets/wa_server/…).
-  static const files = [
-    'server.js',
-    'package.json',
-    'README.md',
-    'Dockerfile',
-    'render.yaml',
-    'install-oracle.sh',
-    'deploy-oracle.bat',
-    'start-windows.bat',
-  ];
 
   // ───────────── الإعدادات ─────────────
 
@@ -157,7 +143,7 @@ class WaServerClient {
     return j;
   }
 
-  /// يوقظ الخادم ويقرأ حالته (Render المجاني يحتاج حتى دقيقة ليستيقظ).
+  /// يقرأ حالة الخادم (ويشغّله على هذه الحاسبة إن كان متوقفاً).
   static Future<WaServerStatus> status() async => WaServerStatus.fromJson(await _call('GET', '/status'));
 
   /// جاهز للإرسال: إن كان الخادم بلا جلسة (أُعيد تشغيله على منصة تمسح الملفات)
@@ -229,32 +215,4 @@ class WaServerClient {
         null => 'خطأ غير معروف',
         final String c => c,
       };
-
-  // ───────────── حزمة ملفات الخادم ─────────────
-
-  /// يكتب alnaser-wa-server.zip في مجلد التنزيلات ويعيد مساره. بلا مفتاح بداخله.
-  static Future<String> savePackage() async {
-    final archive = Archive();
-    for (final f in files) {
-      final data = await rootBundle.load('assets/wa_server/$f');
-      final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-      archive.addFile(ArchiveFile('alnaser-wa-server/$f', bytes.length, bytes));
-    }
-    const ignore = 'node_modules/\ndata/\n.env\n';
-    archive.addFile(ArchiveFile('alnaser-wa-server/.gitignore', ignore.length, utf8.encode(ignore)));
-    final zip = ZipEncoder().encode(archive)!;
-
-    Directory? dir;
-    final home = Platform.environment['USERPROFILE'];
-    if (Platform.isWindows && home != null && Directory('$home\\Downloads').existsSync()) {
-      dir = Directory('$home\\Downloads');
-    }
-    try {
-      dir ??= await getDownloadsDirectory();
-    } catch (_) {}
-    dir ??= await getApplicationDocumentsDirectory();
-    final out = File('${dir.path}${Platform.pathSeparator}alnaser-wa-server.zip');
-    await out.writeAsBytes(zip, flush: true);
-    return out.path;
-  }
 }

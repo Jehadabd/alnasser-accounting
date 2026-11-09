@@ -49,6 +49,7 @@ class WaLocalServer {
   static const _gitReleaseApi = 'https://api.github.com/repos/git-for-windows/git/releases/tags/$_gitTag';
 
   static const _kEnabled = 'wa_local_enabled';
+  static const _kAutoStart = 'wa_local_autostart';
   static const _serverFiles = ['server.js', 'package.json'];
 
   static bool get supported => !kIsWeb && Platform.isWindows;
@@ -78,6 +79,24 @@ class WaLocalServer {
 
   static Future<bool> enabled() async => (await SharedPreferences.getInstance()).getBool(_kEnabled) ?? false;
   static Future<void> _setEnabled(bool v) async => (await SharedPreferences.getInstance()).setBool(_kEnabled, v);
+
+  /// true (الافتراضي) = يبدأ الخادم مع فتح البرنامج. false = عند الحاجة فقط (أول إرسال أو «تشغيل الآن»).
+  static Future<bool> autoStart() async => (await SharedPreferences.getInstance()).getBool(_kAutoStart) ?? true;
+  static Future<void> setAutoStart(bool v) async => (await SharedPreferences.getInstance()).setBool(_kAutoStart, v);
+
+  /// عند فتح البرنامج: يشغّل الخادم إن كان مثبّتاً و«يبدأ مع البرنامج» مفعّلاً.
+  static Future<bool> startAtLaunch() async {
+    if (!supported || !await enabled() || !await autoStart()) return false;
+    return ensureRunning();
+  }
+
+  /// Node.js المحمول هنا نسخة 64-bit فقط.
+  static bool get is64Bit {
+    final env = Platform.environment;
+    String? v(String k) => env.entries.where((e) => e.key.toUpperCase() == k).map((e) => e.value).firstOrNull;
+    final arch = (v('PROCESSOR_ARCHITEW6432') ?? v('PROCESSOR_ARCHITECTURE') ?? '').toUpperCase();
+    return arch.isEmpty || arch.contains('64'); // AMD64 أو ARM64 (يشغّل x64)
+  }
 
   // ───────────── الحالة ─────────────
 
@@ -146,6 +165,7 @@ class WaLocalServer {
   static Future<void> install({WaLocalStep? onStep}) async {
     if (!supported) throw WaServerException('التشغيل الآلي على هذه الحاسبة متاح في Windows فقط');
     if (_installing) throw WaServerException('التثبيت جارٍ بالفعل');
+    if (!is64Bit) throw WaServerException('هذه الحاسبة بنظام Windows 32-bit — الخادم يحتاج Windows 10 أو 11 بنسخة 64-bit');
     _installing = true;
     void step(String m, [double? f]) {
       onStep?.call(m, f);

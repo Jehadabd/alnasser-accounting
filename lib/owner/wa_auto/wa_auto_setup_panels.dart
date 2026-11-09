@@ -1,16 +1,13 @@
 // lib/owner/wa_auto/wa_auto_setup_panels.dart
 //
-// 🪄 الطريقة الآلية في شاشة «خادم واتساب»:
-//   • WaLocalAutoPanel — تشغيل الخادم على هذه الحاسبة بضغطة (wa_local_server.dart).
-//   • WaRenderAutoPanel — إنشاء الخادم على Render بمفتاح API (wa_render_deployer.dart).
-// كل لوحة تنادي [onReady] بالرابط عند النجاح، والشاشة تفحص الاتصال.
+// 🖥️ لوحة «الخادم على هذه الحاسبة» في شاشة «خادم واتساب»: زر واحد يثبّت ويشغّل
+// (wa_local_server.dart)، ثم: متى يبدأ، إعادة التشغيل، السجل، الإزالة.
+// تنادي [onReady] بالرابط عند النجاح، والشاشة تفحص الاتصال.
 
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../widgets/settings_kit.dart';
 import 'wa_local_server.dart';
-import 'wa_render_deployer.dart';
 import 'wa_server_client.dart';
 
 const _green = Color(0xFF047857);
@@ -67,7 +64,7 @@ class WaLocalAutoPanel extends StatefulWidget {
 }
 
 class _WaLocalAutoPanelState extends State<WaLocalAutoPanel> {
-  bool _installed = false, _running = false, _enabled = false, _busy = false, _bad = false;
+  bool _installed = false, _running = false, _enabled = false, _busy = false, _bad = false, _auto = true;
   String? _text;
   double? _frac;
 
@@ -81,11 +78,13 @@ class _WaLocalAutoPanelState extends State<WaLocalAutoPanel> {
     final i = await WaLocalServer.isInstalled();
     final r = await WaLocalServer.isRunning();
     final e = await WaLocalServer.enabled();
+    final a = await WaLocalServer.autoStart();
     if (mounted) {
       setState(() {
         _installed = i;
         _running = r;
         _enabled = e;
+        _auto = a;
       });
     }
   }
@@ -193,16 +192,18 @@ class _WaLocalAutoPanelState extends State<WaLocalAutoPanel> {
     final ready = _installed && _enabled;
     return _box(
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _title('الطريقة الآلية (موصى بها)'),
+        _title('الخادم على هذه الحاسبة'),
         const SizedBox(height: 6),
         const Text(
-          'ضغطة واحدة: ينزّل البرنامج ما يلزم من المواقع الرسمية ويتحقق من بصمته، يثبّته داخل مجلد البرنامج، '
-          'ويشغّل الخادم بلا نافذة. يحتاج إنترنت أول مرة (≈70 ميغابايت). لا حسابات ولا بطاقات.',
+          'ضغطة واحدة: يتأكد البرنامج من وجود Node.js وGit، وينزّل الناقص من مواقعه الرسمية ويطابق بصمته، '
+          'ويثبّت الخادم داخل مجلد البرنامج، ثم يشغّله بلا نافذة. يحتاج إنترنت أول مرة (≈70 ميغابايت). '
+          'لا حسابات ولا بطاقات ولا صلاحيات مدير.',
           style: TextStyle(fontSize: 12.5, height: 1.6, color: _muted),
         ),
         const SizedBox(height: 6),
         const Text(
-          'يعمل ما دام البرنامج مفتوحاً، ويتوقف وحده عند إغلاقه ويعود عند أول تذكير.',
+          'خفيف: نحو 100 إلى 200 ميغابايت من الذاكرة، ولا يستهلك المعالج إلا لحظة الإرسال. يكفيه أي حاسوب '
+          'بنظام Windows 10 أو 11 (64-bit). يعمل ما دام البرنامج مفتوحاً، ويتوقف وحده عند إغلاقه.',
           style: TextStyle(fontSize: 12.5, height: 1.6, color: _muted),
         ),
         const SizedBox(height: 10),
@@ -244,177 +245,44 @@ class _WaLocalAutoPanelState extends State<WaLocalAutoPanel> {
             ),
           ],
         ]),
+        if (ready) ...[
+          const Divider(height: 26),
+          const Text('متى يبدأ الخادم؟', style: TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          _choice(true, 'مع فتح البرنامج (موصى به)',
+              'يبدأ وحده كل مرة تفتح فيها البرنامج — بعد تشغيل الحاسبة أيضاً — فيبقى الربط بواتساب نشطاً.'),
+          _choice(false, 'عند الحاجة فقط',
+              'لا يعمل حتى أول إرسال أو حتى تضغط «تشغيل الآن». يوفّر الذاكرة، لكن أول إرسال يتأخر ثوانيَ.'),
+        ],
         _Progress(_text, _frac, bad: _bad, busy: _busy),
       ]),
     );
   }
-}
 
-// ═════════════════════ Render ═════════════════════
-
-class WaRenderAutoPanel extends StatefulWidget {
-  const WaRenderAutoPanel({super.key, required this.onReady});
-  final Future<void> Function(String url) onReady;
-
-  @override
-  State<WaRenderAutoPanel> createState() => _WaRenderAutoPanelState();
-}
-
-class _WaRenderAutoPanelState extends State<WaRenderAutoPanel> {
-  final _key = TextEditingController();
-  bool _hasKey = false, _busy = false, _bad = false, _show = false;
-  String? _service, _dash, _text;
-
-  @override
-  void initState() {
-    super.initState();
-    _refresh();
-  }
-
-  @override
-  void dispose() {
-    _key.dispose();
-    super.dispose();
-  }
-
-  Future<void> _refresh() async {
-    final h = await WaRenderDeployer.hasApiKey();
-    final s = await WaRenderDeployer.serviceId();
-    final d = await WaRenderDeployer.dashboardUrl();
-    if (mounted) {
-      setState(() {
-        _hasKey = h;
-        _service = s;
-        _dash = d;
-      });
-    }
-  }
-
-  void _open(String u) => launchUrl(Uri.parse(u), mode: LaunchMode.externalApplication);
-
-  Future<void> _deploy() async {
-    setState(() {
-      _busy = true;
-      _bad = false;
-      _text = 'يبدأ…';
-    });
-    try {
-      if (_key.text.trim().isNotEmpty) {
-        await WaRenderDeployer.setApiKey(_key.text);
-        _key.clear();
-      }
-      final url = await WaRenderDeployer.deploy(onStep: (m) {
-        if (mounted) setState(() => _text = m);
-      });
-      await widget.onReady(url);
-      if (mounted) setState(() => _text = 'تم ✓ الخادم يعمل على $url — بقي ربط رقم واتساب في البطاقة 3');
-    } on WaServerException catch (e) {
-      if (mounted) {
-        setState(() {
-          _bad = true;
-          _text = e.message;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _bad = true;
-          _text = '$e';
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-      await _refresh();
-    }
-  }
-
-  Future<void> _forget() async {
-    await WaRenderDeployer.forgetApiKey();
-    await _refresh();
-    if (mounted) setState(() => _text = 'حُذف مفتاح Render من البرنامج. الخادم في Render يبقى يعمل.');
-  }
-
-  Widget _stepLine(String n, String t, [String? label, String? link]) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+  Widget _choice(bool v, String title, String sub) {
+    final on = _auto == v;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: _busy
+          ? null
+          : () async {
+              await WaLocalServer.setAutoStart(v);
+              if (mounted) setState(() => _auto = v);
+            },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          CircleAvatar(
-              radius: 10,
-              backgroundColor: kSetNavy,
-              child: Text(n, style: const TextStyle(fontSize: 10.5, color: Colors.white))),
-          const SizedBox(width: 8),
+          Icon(on ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+              color: on ? kSetNavy : _muted, size: 20),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(t, style: const TextStyle(fontSize: 13, height: 1.55)),
-              if (link != null)
-                TextButton.icon(
-                  style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
-                  onPressed: () => _open(link),
-                  icon: const Icon(Icons.open_in_new_rounded, size: 16),
-                  label: Text(label ?? 'فتح'),
-                ),
+              Text(title, style: TextStyle(fontWeight: FontWeight.w700, color: on ? kSetNavy : null)),
+              Text(sub, style: const TextStyle(fontSize: 12, height: 1.5, color: _muted)),
             ]),
           ),
         ]),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    final again = _service != null;
-    return _box(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _title('الطريقة الآلية — بلا GitHub وبلا رفع ملفات'),
-        const SizedBox(height: 6),
-        _stepLine('1', 'أنشئ حساباً في Render (بالبريد أو Google). لا يلزم GitHub.', 'فتح Render', WaRenderDeployer.registerPage),
-        _stepLine('2', 'في Render: Account Settings ← API Keys ← «Create API Key»، سمّه alnaser، وانسخه (يبدأ بـ rnd_).',
-            'فتح صفحة المفاتيح', WaRenderDeployer.keysPage),
-        _stepLine('3', 'الصقه هنا واضغط الزر. البرنامج ينشئ الخادم المجاني وينتظره ويضع رابطه وحده (2 إلى 6 دقائق).'),
-        const SizedBox(height: 8),
-        if (_hasKey)
-          Row(children: [
-            const Icon(Icons.vpn_key_rounded, size: 18, color: _green),
-            const SizedBox(width: 8),
-            const Expanded(child: Text('مفتاح Render محفوظ في التخزين الآمن', style: TextStyle(color: _green))),
-            TextButton(onPressed: _busy ? null : _forget, child: const Text('حذف المفتاح')),
-          ])
-        else
-          TextField(
-            controller: _key,
-            obscureText: !_show,
-            textDirection: TextDirection.ltr,
-            decoration: InputDecoration(
-              labelText: 'مفتاح Render API',
-              hintText: 'rnd_…',
-              border: const OutlineInputBorder(),
-              isDense: true,
-              suffixIcon: IconButton(
-                icon: Icon(_show ? Icons.visibility_off_rounded : Icons.visibility_rounded),
-                onPressed: () => setState(() => _show = !_show),
-              ),
-            ),
-          ),
-        const SizedBox(height: 10),
-        Wrap(spacing: 10, runSpacing: 10, children: [
-          FilledButton.icon(
-            style: FilledButton.styleFrom(backgroundColor: _green, minimumSize: const Size(0, 46)),
-            onPressed: _busy ? null : _deploy,
-            icon: Icon(again ? Icons.sync_rounded : Icons.rocket_launch_rounded),
-            label: Text(again ? 'تحديث الخادم في Render' : 'إنشاء الخادم على Render تلقائياً'),
-          ),
-          if (_dash != null)
-            OutlinedButton.icon(
-              onPressed: () => _open(_dash!),
-              icon: const Icon(Icons.open_in_new_rounded),
-              label: const Text('فتح الخدمة في Render'),
-            ),
-        ]),
-        const SizedBox(height: 8),
-        const Text(
-          'المفتاح يتحكم في حساب Render كله: يُحفظ مشفّراً في هذا الجهاز ولا يُرسل إلا إلى api.render.com، '
-          'واحذفه متى شئت. إن طلب Render بطاقة دفع فاستعمل «هذه الحاسبة».',
-          style: TextStyle(fontSize: 12, height: 1.6, color: _muted),
-        ),
-        _Progress(_text, null, bad: _bad, busy: _busy),
-      ]),
+      ),
     );
   }
 }
