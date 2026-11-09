@@ -26,11 +26,14 @@ import 'wa_desktop.dart';
 
 /// زبون مستحق للتذكير.
 class WaTarget {
-  WaTarget({required this.id, required this.name, required this.phone, required this.debt});
+  WaTarget({required this.id, required this.name, required this.phone, required this.debt, this.lateMonths});
   final int id;
   final String name;
   final String phone; // دولي بلا + (9647…)
   final double debt;
+
+  /// أشهر كاملة مضت بلا تسديد على الدين القائم (null = لا دين قائم).
+  final int? lateMonths;
 }
 
 class WaAutoSettings {
@@ -49,6 +52,7 @@ class WaAutoSettings {
     required this.selected,
     required this.hour,
     required this.refocus,
+    this.overdueMonths = 0,
   });
 
   final bool enabled;
@@ -80,6 +84,9 @@ class WaAutoSettings {
   /// إرجاع البرنامج إلى المقدمة بعد كل رسالة.
   final bool refocus;
 
+  /// شرط التأخر: 0 = كل من عليه دين؛ N = فقط من مضى عليه N شهراً فأكثر بلا تسديد.
+  final int overdueMonths;
+
   static const defaultTemplate = 'السيد {الاسم}،\n'
       'نذكّركم بأن المبلغ المترتب بذمتكم {المبلغ} دينار.\n'
       'يرجى التسديد في أقرب وقت، مع الشكر.\n'
@@ -100,6 +107,7 @@ class WaAutoSettings {
     Set<int>? selected,
     int? hour,
     bool? refocus,
+    int? overdueMonths,
   }) =>
       WaAutoSettings(
         enabled: enabled ?? this.enabled,
@@ -116,6 +124,7 @@ class WaAutoSettings {
         selected: selected ?? this.selected,
         hour: hour ?? this.hour,
         refocus: refocus ?? this.refocus,
+        overdueMonths: overdueMonths ?? this.overdueMonths,
       );
 }
 
@@ -169,6 +178,7 @@ class WaAutoReminder {
       },
       hour: p.getInt('${_k}hour') ?? 22,
       refocus: p.getBool('${_k}refocus') ?? true,
+      overdueMonths: p.getInt('${_k}overdue') ?? 0,
     );
   }
 
@@ -188,6 +198,66 @@ class WaAutoReminder {
     await p.setStringList('${_k}selected', [for (final id in s.selected) '$id']);
     await p.setInt('${_k}hour', s.hour.clamp(-1, 23));
     await p.setBool('${_k}refocus', s.refocus);
+    await p.setInt('${_k}overdue', s.overdueMonths.clamp(0, 24));
+  }
+
+  // ───────────── التأخر عن التسديد ─────────────
+
+  /// أشهر كاملة بين [from] و[now] (لا تقل عن صفر).
+  static int monthsBetween(DateTime from, DateTime now) {
+    var m = (now.year - from.year) * 12 + now.month - from.month;
+    if (now.day < from.day) m--;
+    return max(0, m);
+  }
+
+  /// من حركات مرتبة (عميل، تاريخ، مبلغ، نوع) بالعميل ثم التاريخ: لكل عميل رصيده
+  /// موجب في النهاية ⇒ أشهر منذ «آخر تسديد على الدين القائم»:
+  ///   • آخر تسديد (manual_payment بمبلغ سالب — وصل، خصم، مرتجع على الحساب)، أو
+  ///   • بداية الدين القائم (أول دين بعد آخر مرة صار فيها الرصيد صفراً) إن كانت أحدث.
+  /// فمن سدّد كل دينه قبل سنة ثم استدان أمس متأخر صفر شهر، لا سنة.
+  static Map<int, int> lateFrom(Iterable<(int, DateTime?, double, String?)> rows, DateTime now) {
+    final out = <int, int>{};
+    int? cur;
+    var bal = 0.0;
+    DateTime? since;
+    void flush() {
+      if (cur != null && bal > 0.009 && since != null) out[cur!] = monthsBetween(since!, now);
+    }
+
+    for (final (c, d, a, type) in rows) {
+      if (c != cur) {
+        flush();
+        cur = c;
+        bal = 0;
+        since = null;
+      }
+      final clearBefore = bal <= 0.009;
+      bal += a;
+      if (d == null) continue;
+      if (clearBefore && bal > 0.009) since = d; // دين جديد بعد رصيد صفر
+      if (a < 0 && type == 'manual_payment') since = d; // تسديد
+    }
+    flush();
+    return out;
+  }
+
+  /// أشهر التأخر لكل عميل عليه دين (قراءة فقط).
+  static Future<Map<int, int>> lateMonthsAll() async {
+    final db = await DatabaseService().database;
+    final rows = await db.rawQuery('''
+      SELECT t.customer_id AS c, t.transaction_date AS d, t.amount_changed AS a, t.transaction_type AS ty
+      FROM transactions t JOIN customers cu ON cu.id = t.customer_id
+      WHERE COALESCE(t.is_deleted, 0) = 0 AND COALESCE(cu.is_deleted, 0) = 0 AND cu.current_total_debt > 0
+      ORDER BY t.customer_id, t.transaction_date, t.id''');
+    return lateFrom([
+      for (final r in rows)
+        (
+          r['c'] as int,
+          DateTime.tryParse('${r['d'] ?? ''}'),
+          (r['a'] as num?)?.toDouble() ?? 0,
+          r['ty'] as String?,
+        )
+    ], DateTime.now());
   }
 
   // ───────────── السجل (لكل شهر: من أُرسل له) ─────────────
@@ -259,6 +329,7 @@ class WaAutoReminder {
       'ORDER BY current_total_debt DESC',
       [minDebt],
     );
+    final late = await lateMonthsAll();
     final out = <WaTarget>[];
     var noPhone = 0, bad = 0;
     for (final r in rows) {
@@ -277,6 +348,7 @@ class WaAutoReminder {
         name: '${r['name'] ?? ''}'.trim(),
         phone: phone,
         debt: (r['d'] as num?)?.toDouble() ?? 0,
+        lateMonths: late[r['id'] as int],
       ));
     }
     return (targets: out, noPhone: noPhone, badPhone: bad);
@@ -290,6 +362,7 @@ class WaAutoReminder {
       "WHERE COALESCE(is_deleted, 0) = 0 AND TRIM(COALESCE(phone, '')) != '' "
       'ORDER BY current_total_debt DESC, name',
     );
+    final late = await lateMonthsAll();
     return [
       for (final r in rows)
         if (normalizePhone('${r['phone']}') != null)
@@ -298,15 +371,20 @@ class WaAutoReminder {
             name: '${r['name'] ?? ''}'.trim(),
             phone: normalizePhone('${r['phone']}')!,
             debt: (r['d'] as num?)?.toDouble() ?? 0,
+            lateMonths: late[r['id'] as int],
           ),
     ];
   }
 
   /// من سيُرسل لهم (قبل استبعاد من أُرسل لهم هذا الشهر):
   /// المختارون الذين عليهم دين، أو كل مدين فوق الحد الأدنى.
+  /// ثم شرط التأخر (overdueMonths) إن كان مضبوطاً.
   static Future<List<WaTarget>> targets(WaAutoSettings s) async {
-    if (!s.onlySelected) return (await debtors(s.minDebt)).targets;
-    return [for (final t in await withPhones()) if (s.selected.contains(t.id) && t.debt > 0) t];
+    final base = !s.onlySelected
+        ? (await debtors(s.minDebt)).targets
+        : [for (final t in await withPhones()) if (s.selected.contains(t.id) && t.debt > 0) t];
+    if (s.overdueMonths <= 0) return base;
+    return [for (final t in base) if ((t.lateMonths ?? -1) >= s.overdueMonths) t];
   }
 
   /// من لم يُرسل له بنجاح هذا الشهر.
@@ -401,10 +479,13 @@ class WaAutoReminder {
   static void stop() => _stop = true;
 
   /// يرسل لمن لم يُذكَّر هذا الشهر. [limit] للتجربة (مثلاً 5).
-  static Future<void> run({int? limit}) async {
+  /// [overdue] و[allDebtors]: إرسال يدوي لمجموعة غير ما في الإعدادات (المتأخرون N شهراً،
+  /// أو كل المدينين فوق الحد بدل المختارين) — دون تغيير الإعدادات المحفوظة.
+  static Future<void> run({int? limit, int? overdue, bool? allDebtors}) async {
     if (running || !allowed) return;
-    final s = await load();
-    if (!s.enabled || !s.riskAccepted) return;
+    final saved = await load();
+    if (!saved.enabled || !saved.riskAccepted) return;
+    final s = saved.copyWith(overdueMonths: overdue, onlySelected: allDebtors == null ? null : !allDebtors);
     _stop = false;
     final already = await sentToday();
     final room = max(0, s.maxPerDay - already);
@@ -417,7 +498,9 @@ class WaAutoReminder {
               ? 'بلغت الحد اليومي (${s.maxPerDay}) — يكمل غداً'
               : (s.onlySelected && s.selected.isEmpty
                   ? 'لم تختر أي عميل بعد'
-                  : 'لا أحد ينتظر التذكير هذا الشهر'));
+                  : (s.overdueMonths > 0
+                      ? 'لا أحد متأخر ${s.overdueMonths} شهراً فأكثر ولم يُذكَّر هذا الشهر'
+                      : 'لا أحد ينتظر التذكير هذا الشهر')));
       return;
     }
     final shop = await shopName();

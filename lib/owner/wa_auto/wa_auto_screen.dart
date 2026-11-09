@@ -176,6 +176,73 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
 
   int get _sentCount => _log.values.where((v) => v['s'] == 'sent').length;
 
+  static const _overdueChoices = [0, 1, 2, 3, 4, 6, 12];
+  static String _overdueLabel(int m) => m == 0 ? 'كل من عليه دين' : 'لم يسدّد منذ $m ${m <= 2 ? (m == 1 ? 'شهر' : 'شهرين') : (m <= 10 ? 'أشهر' : 'شهراً')} فأكثر';
+
+  /// إرسال يدوي للمتأخرين N شهراً — لا يغيّر الإعدادات المحفوظة.
+  Future<void> _sendLate() async {
+    if (_dirty) await _save();
+    if (!mounted) return;
+    final s = _s!;
+    var months = s.overdueMonths > 0 ? s.overdueMonths : 3;
+    var all = !s.onlySelected;
+    Future<int> count() async =>
+        (await WaAutoReminder.pending(s.copyWith(overdueMonths: months, onlySelected: !all))).length;
+    var n = await count();
+    if (!mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) {
+          Future<void> update() async {
+            final v = await count();
+            if (ctx.mounted) set(() => n = v);
+          }
+
+          return AlertDialog(
+            title: const Text('إرسال للمتأخرين عن التسديد'),
+            content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final m in _overdueChoices.where((m) => m > 0))
+                  ChoiceChip(
+                    label: Text('$m ${m == 1 ? 'شهر' : (m == 2 ? 'شهرين' : 'أشهر')}+'),
+                    selected: months == m,
+                    onSelected: (_) {
+                      months = m;
+                      update();
+                    },
+                  ),
+              ]),
+              const SizedBox(height: 10),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('كل المدينين برقم صالح'),
+                subtitle: Text(all ? 'فوق الحد الأدنى للدين' : 'من اخترتهم فقط'),
+                value: all,
+                onChanged: (v) {
+                  all = v;
+                  update();
+                },
+              ),
+              const SizedBox(height: 6),
+              Text('سيُرسل لـ $n زبوناً (لم يُذكَّروا هذا الشهر، ضمن الحد اليومي).',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              const Text('تأكد أن WhatsApp Desktop مفتوح. لا تستعمل الحاسبة حتى ينتهي.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+            ]),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+              FilledButton(onPressed: n == 0 ? null : () => Navigator.pop(ctx, true), child: const Text('ابدأ')),
+            ],
+          );
+        },
+      ),
+    );
+    if (go != true) return;
+    unawaited(WaAutoReminder.run(overdue: months, allDebtors: all));
+  }
+
   Future<void> _test() async {
     if (_dirty) await _save();
     setState(() {
@@ -285,6 +352,26 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
               ],
               selected: {s.onlySelected},
               onSelectionChanged: run.running ? null : (v) => _save(s.copyWith(onlySelected: v.first)),
+            ),
+            const SizedBox(height: 12),
+            Row(children: [
+              const Text('شرط التأخر:', style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: DropdownButton<int>(
+                  isExpanded: true,
+                  value: _overdueChoices.contains(s.overdueMonths) ? s.overdueMonths : 0,
+                  items: [
+                    for (final m in _overdueChoices) DropdownMenuItem(value: m, child: Text(_overdueLabel(m))),
+                  ],
+                  onChanged: run.running ? null : (v) => _save(s.copyWith(overdueMonths: v ?? 0)),
+                ),
+              ),
+            ]),
+            const Text(
+              'التأخر = أشهر كاملة منذ آخر تسديد على الدين القائم (أو منذ بدايته إن لم يسدّد بعدها). '
+              'الوصل والخصم والمرتجع على الحساب تُحسب تسديداً.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
             ),
             const SizedBox(height: 12),
             if (s.onlySelected) ...[
@@ -411,6 +498,11 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
             onPressed: !s.enabled || run.running ? null : () => _start(),
             icon: const Icon(Icons.send_rounded),
             label: const Text('أرسل الآن لمن لم يُذكَّر'),
+          ),
+          OutlinedButton.icon(
+            onPressed: !s.enabled || run.running ? null : _sendLate,
+            icon: const Icon(Icons.schedule_send_rounded),
+            label: const Text('أرسل للمتأخرين…'),
           ),
         ]),
         const SizedBox(height: 16),
@@ -646,7 +738,8 @@ class _PickDialogState extends State<_PickDialog> {
                           }
                         }),
                         title: Text(t.name),
-                        subtitle: Text('${t.phone} • ${t.debt > 0 ? '${_n.format(t.debt.round())} دينار' : 'لا دين — لن تصله'}'),
+                        subtitle: Text('${t.phone} • ${t.debt > 0 ? '${_n.format(t.debt.round())} دينار' : 'لا دين — لن تصله'}'
+                            '${t.lateMonths != null && t.lateMonths! > 0 ? ' • بلا تسديد منذ ${t.lateMonths} شهر' : ''}'),
                       );
                     },
                   ),
