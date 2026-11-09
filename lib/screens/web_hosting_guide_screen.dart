@@ -18,6 +18,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
 import '../services/firebase_sync/firebase_custom_config.dart';
+import '../owner/wa_auto/wa_auto_reminder.dart';
+import '../owner/wa_auto/wa_server_screen.dart';
 
 /// نموذج بيانات خطوة فرعية داخل بطاقة الخطوة التفصيلية
 class _SubStep {
@@ -735,6 +737,25 @@ pause
           badgeText: '🔥 نقرة واحدة (الفكرة A)',
           badgeColor: Colors.amber.shade900,
         ),
+        // 👑 خادم تذكير واتساب — لحساب المالك فقط (شاشة مستقلة)
+        if (WaAutoReminder.allowed) ...[
+          const SizedBox(height: 10),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: Colors.green.shade300),
+            ),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              leading: const Icon(Icons.dns_rounded, color: Color(0xFF047857), size: 32),
+              title: const Text('4. خادم تذكير واتساب (للمالك)', style: TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: const Text('ارفعه على هذه الحاسبة أو Oracle Cloud أو Render أو أي منصة Docker، واربط رقم المحل برمز.'),
+              trailing: const Icon(Icons.chevron_left_rounded),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const WaServerScreen())),
+            ),
+          ),
+        ],
       ],
     );
   }

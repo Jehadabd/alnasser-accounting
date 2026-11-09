@@ -1,0 +1,15 @@
+# Render: New → Blueprint → اختر مستودع GitHub الذي رفعت إليه هذه الملفات.
+# بعد الإنشاء: الصق قيمة API_KEY من البرنامج في Environment.
+services:
+  - type: web
+    name: alnaser-wa
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev --no-audit --no-fund
+    startCommand: node server.js
+    healthCheckPath: /ping
+    envVars:
+      - key: API_KEY
+        sync: false
+      - key: NODE_VERSION
+        value: "20"

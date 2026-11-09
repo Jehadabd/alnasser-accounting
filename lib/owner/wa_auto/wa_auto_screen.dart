@@ -9,6 +9,9 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../widgets/settings_kit.dart';
 import 'wa_auto_reminder.dart';
+import 'wa_desktop.dart';
+import 'wa_server_client.dart';
+import 'wa_server_screen.dart';
 
 class WaAutoScreen extends StatefulWidget {
   const WaAutoScreen({super.key});
@@ -160,8 +163,8 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
         title: Text(limit == null ? 'بدء الإرسال' : 'تجربة على $limit زبائن'),
         content: Text(
           '${limit == null ? 'سيُرسل لـ $pending زبوناً (ضمن الحد اليومي).' : 'سيُرسل لأول $limit ممن لم يُذكَّروا هذا الشهر.'}\n\n'
-          'تأكد أن WhatsApp Desktop مفتوح ومسجّل الدخول.\n'
-          'لا تستعمل الحاسبة حتى ينتهي. للإيقاف: ارجع إلى هذه الشاشة واضغط «إيقاف».',
+          '${_s!.viaServer ? 'يرسل الخادم في الخلفية.' : 'تأكد أن WhatsApp Desktop مفتوح ومسجّل الدخول. لا تستعمل الحاسبة حتى ينتهي.'}\n'
+          'للإيقاف: ارجع إلى هذه الشاشة واضغط «إيقاف».',
           style: const TextStyle(height: 1.6),
         ),
         actions: [
@@ -228,8 +231,8 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
               Text('سيُرسل لـ $n زبوناً (لم يُذكَّروا هذا الشهر، ضمن الحد اليومي).',
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
-              const Text('تأكد أن WhatsApp Desktop مفتوح. لا تستعمل الحاسبة حتى ينتهي.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+              Text(s.viaServer ? 'يرسل الخادم في الخلفية.' : 'تأكد أن WhatsApp Desktop مفتوح. لا تستعمل الحاسبة حتى ينتهي.',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
             ]),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
@@ -277,7 +280,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
     return SettingsScaffold(
       title: 'تذكير الديون عبر واتساب',
       icon: Icons.chat_rounded,
-      subtitle: 'رسالة شهرية لكل مدين باسمه ومبلغه — من WhatsApp Desktop على هذه الحاسبة',
+      subtitle: 'رسالة شهرية لكل مدين باسمه ومبلغه — من WhatsApp Desktop أو من خادمك',
       children: [
         const SetBanner(
           'ميزة حساب المالك. الإرسال من رقم واتساب عادي ليس طريقة رسمية: قد يُقيَّد الرقم. '
@@ -338,6 +341,44 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
               value: s.refocus,
               onChanged: run.running ? null : (v) => _save(s.copyWith(refocus: v)),
             ),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        SetCard(
+          title: 'طريقة الإرسال',
+          icon: Icons.alt_route_rounded,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'desktop', label: Text('WhatsApp Desktop'), icon: Icon(Icons.desktop_windows_rounded)),
+                ButtonSegment(value: 'server', label: Text('الخادم'), icon: Icon(Icons.dns_rounded)),
+              ],
+              selected: {s.via},
+              onSelectionChanged: run.running ? null : (v) => _save(s.copyWith(via: v.first)),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              s.viaServer
+                  ? 'يرسل الخادم في الخلفية من رقم المحل المرتبط به — تستطيع استعمال الحاسبة أثناء الإرسال، ويعمل من أي جهاز.'
+                  : (WaDesktop.supported
+                      ? 'البرنامج يفتح WhatsApp Desktop ويضغط «إرسال» بنفسه — لا تستعمل الحاسبة أثناء الإرسال.'
+                      : 'WhatsApp Desktop يعمل على ويندوز فقط — اختر «الخادم» على هذا الجهاز.'),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            ),
+            if (s.viaServer) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (_) => const WaServerScreen()));
+                    if (mounted) setState(() {});
+                  },
+                  icon: const Icon(Icons.settings_rounded),
+                  label: const Text('إعدادات الخادم والربط'),
+                ),
+              ),
+            ],
           ]),
         ),
         const SizedBox(height: 12),
@@ -597,6 +638,14 @@ class WaAutoScheduler {
   static void start(BuildContext context, {required bool primarySeat}) {
     if (!primarySeat) return;
     _context = context;
+    // 🛰️ الخادم: إيقاظه عند فتح البرنامج يبقي الربط نشطاً ويعيد الجلسة إن مُسحت
+    if (_timer == null && WaAutoReminder.allowed) {
+      unawaited(() async {
+        try {
+          if ((await WaAutoReminder.load()).viaServer) await WaServerClient.ensureReady();
+        } catch (_) {}
+      }());
+    }
     unawaited(_tick());
     _timer ??= Timer.periodic(const Duration(minutes: 1), (_) => _tick());
   }

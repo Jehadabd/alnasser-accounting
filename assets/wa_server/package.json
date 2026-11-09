@@ -1,0 +1,18 @@
+{
+  "name": "alnaser-wa-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "خادم تذكير الديون عبر واتساب لبرنامج الناصر — يرسل فقط",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "baileys": "6.7.21",
+    "pino": "^9.6.0"
+  }
+}

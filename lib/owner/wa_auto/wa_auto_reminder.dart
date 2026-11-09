@@ -9,6 +9,7 @@
 //   • المبلغ يُقرأ من سجل الديون لحظة الإرسال (من سدّد أثناء التشغيل لا يُذكَّر).
 //   • لا يغيّر أي دين أو معاملة: قراءة فقط.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -23,6 +24,7 @@ import '../../services/database_service.dart';
 import '../../services/settings_manager.dart';
 import '../owner_access.dart';
 import 'wa_desktop.dart';
+import 'wa_server_client.dart';
 
 /// زبون مستحق للتذكير.
 class WaTarget {
@@ -53,6 +55,7 @@ class WaAutoSettings {
     required this.hour,
     required this.refocus,
     this.overdueMonths = 0,
+    this.via = 'desktop',
   });
 
   final bool enabled;
@@ -87,6 +90,10 @@ class WaAutoSettings {
   /// شرط التأخر: 0 = كل من عليه دين؛ N = فقط من مضى عليه N شهراً فأكثر بلا تسديد.
   final int overdueMonths;
 
+  /// طريقة الإرسال: 'desktop' = WhatsApp Desktop على هذه الحاسبة، 'server' = خادم المالك.
+  final String via;
+  bool get viaServer => via == 'server';
+
   static const defaultTemplate = 'السيد {الاسم}،\n'
       'نذكّركم بأن المبلغ المترتب بذمتكم {المبلغ} دينار.\n'
       'يرجى التسديد في أقرب وقت، مع الشكر.\n'
@@ -108,6 +115,7 @@ class WaAutoSettings {
     int? hour,
     bool? refocus,
     int? overdueMonths,
+    String? via,
   }) =>
       WaAutoSettings(
         enabled: enabled ?? this.enabled,
@@ -125,6 +133,7 @@ class WaAutoSettings {
         hour: hour ?? this.hour,
         refocus: refocus ?? this.refocus,
         overdueMonths: overdueMonths ?? this.overdueMonths,
+        via: via ?? this.via,
       );
 }
 
@@ -153,8 +162,18 @@ class WaAutoReminder {
   static const _k = 'wa_auto_';
   static const _logKey = 'wa_auto_log_v1';
 
-  /// 👑 حساب المالك (ترخيص المالك) + مدير البرنامج + ويندوز.
-  static bool get allowed => OwnerAccess.enabled && AuthService().isAdmin && WaDesktop.supported;
+  /// 👑 حساب المالك (ترخيص المالك) + مدير البرنامج. (WhatsApp Desktop يحتاج ويندوز؛
+  /// الخادم يعمل من أي جهاز.)
+  static bool get allowed => OwnerAccess.enabled && AuthService().isAdmin;
+
+  /// الإرسال بالطريقة المضبوطة. null = أُرسلت.
+  static Future<({String? error, bool notOnWhatsApp})> _deliver(WaAutoSettings s, String phone, String text) async {
+    if (s.viaServer) return WaServerClient.send(phone, text);
+    if (!WaDesktop.supported) return (error: 'WhatsApp Desktop يعمل على ويندوز فقط — اختر «الخادم»', notOnWhatsApp: false);
+    final err = await WaDesktop.send(phone, text, loadWait: Duration(seconds: s.loadWait));
+    if (s.refocus) await _refocus(); // 🔙 البرنامج إلى المقدمة فوراً بعد الضغط
+    return (error: err, notOnWhatsApp: false);
+  }
 
   // ───────────── الإعدادات ─────────────
 
@@ -179,6 +198,7 @@ class WaAutoReminder {
       hour: p.getInt('${_k}hour') ?? 22,
       refocus: p.getBool('${_k}refocus') ?? true,
       overdueMonths: p.getInt('${_k}overdue') ?? 0,
+      via: p.getString('${_k}via') == 'server' ? 'server' : 'desktop',
     );
   }
 
@@ -199,6 +219,7 @@ class WaAutoReminder {
     await p.setInt('${_k}hour', s.hour.clamp(-1, 23));
     await p.setBool('${_k}refocus', s.refocus);
     await p.setInt('${_k}overdue', s.overdueMonths.clamp(0, 24));
+    await p.setString('${_k}via', s.via);
   }
 
   // ───────────── التأخر عن التسديد ─────────────
@@ -446,10 +467,17 @@ class WaAutoReminder {
     if (phone == null) return 'رقم غير صالح';
     final s = await load();
     final t = WaTarget(id: 0, name: 'تجربة', phone: phone, debt: 125000);
-    final err = await WaDesktop.send(phone, render(s.template, t, await shopName()),
-        loadWait: Duration(seconds: s.loadWait));
-    if (s.refocus) await _refocus();
-    return err;
+    if (s.viaServer) {
+      try {
+        final st = await WaServerClient.ensureReady();
+        if (!st.linked) return 'الخادم غير مربوط برقم واتساب';
+      } on WaServerException catch (e) {
+        return e.message;
+      }
+    }
+    final r = await _deliver(s, phone, render(s.template, t, await shopName()));
+    if (s.viaServer) unawaited(WaServerClient.pullState().catchError((_) {}));
+    return r.error;
   }
 
   /// يعيد نافذة البرنامج إلى المقدمة (بعد إرسال كل رسالة).
@@ -503,6 +531,19 @@ class WaAutoReminder {
                       : 'لا أحد ينتظر التذكير هذا الشهر')));
       return;
     }
+    if (s.viaServer) {
+      state.value = const WaRunState(running: true, note: 'يوقظ الخادم…');
+      try {
+        final st = await WaServerClient.ensureReady();
+        if (!st.linked) {
+          state.value = const WaRunState(note: 'الخادم غير مربوط برقم واتساب — اربطه من «إعدادات الخادم»');
+          return;
+        }
+      } on WaServerException catch (e) {
+        state.value = WaRunState(note: 'الخادم: ${e.message}');
+        return;
+      }
+    }
     final shop = await shopName();
     final rnd = Random();
     var sent = 0, failed = 0, skipped = 0, failsInRow = 0;
@@ -527,15 +568,16 @@ class WaAutoReminder {
       t = WaTarget(id: t.id, name: t.name, phone: t.phone, debt: now);
       state.value = WaRunState(
           running: true, total: list.length, sent: sent, failed: failed, skipped: skipped, current: t.name);
-      final err = await WaDesktop.send(t.phone, render(s.template, t, shop), loadWait: Duration(seconds: s.loadWait));
-      if (s.refocus) await _refocus(); // 🔙 البرنامج إلى المقدمة فوراً بعد الضغط
+      final res = await _deliver(s, t.phone, render(s.template, t, shop));
+      final err = res.error;
       if (err == null) {
         sent++;
         failsInRow = 0;
         await _record(t.id, 'sent', t.debt);
       } else {
         failed++;
-        failsInRow++;
+        // رقم ليس على واتساب مشكلة الزبون لا الإرسال: لا يوقف التشغيل
+        if (!res.notOnWhatsApp) failsInRow++;
         await _record(t.id, 'failed', t.debt, error: err);
         if (failsInRow >= 2) {
           note = 'توقف بعد فشلين متتاليين: $err';
@@ -551,6 +593,11 @@ class WaAutoReminder {
       while (DateTime.now().isBefore(next) && !_stop) {
         await Future<void>.delayed(const Duration(seconds: 1));
       }
+    }
+    if (s.viaServer) {
+      try {
+        await WaServerClient.pullState(); // نسخة الجلسة الأحدث عند البرنامج
+      } catch (_) {}
     }
     state.value = WaRunState(total: list.length, sent: sent, failed: failed, skipped: skipped, note: note ?? 'انتهى');
     await ActivityLog.log('إرسال', 'تذكير الديون عبر واتساب',

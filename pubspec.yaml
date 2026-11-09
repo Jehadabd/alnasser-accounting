@@ -92,6 +92,7 @@ flutter:
     - assets/icon/photo_2025-07-07_12-12-56.jpg
     - assets/icon/alnasser.jpg
     - assets/web_app.zip
+    - assets/wa_server/
     # 🔥 assets/models/ أُزيل — نموذج ONNX (481 ميجا) محذوف لتقليل حجم التطبيق.
     # أعد إضافته فقط إن أردت تفعيل طبقة فهم بنية الفاتورة (VisionService).
 
