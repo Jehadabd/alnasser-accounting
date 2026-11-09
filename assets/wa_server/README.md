@@ -15,7 +15,7 @@
 |---|---|---|---|
 | هذه الحاسبة | مجاني | لا | الأسهل |
 | Oracle Cloud Always Free | مجاني | نعم | متوسطة |
-| Render | مجاني، لكنه ينام بعد 15 دقيقة | نعم، ويستيقظ عند الطلب | سهلة |
+| Render | مجاني، ينام بعد 15 دقيقة، وقد يطلب بطاقة للتحقق | نعم، ويستيقظ عند الطلب | سهلة |
 | Docker (Koyeb، Fly.io، Railway، أي VPS) | حسب المنصة | نعم | متوسطة |
 
 ### 1) هذه الحاسبة
@@ -34,8 +34,8 @@
 
 ### 3) Render
 1. أنشئ مستودعاً **خاصاً** (Private) في GitHub، وارفع إليه كل الملفات **عدا `.env`**.
-2. في Render اختر: New ← Blueprint ← اختر المستودع.
-3. ضع قيمة `API_KEY` = «مفتاح الخادم».
+2. افتح https://dashboard.render.com/web/new (لا تستعمل Blueprint: يطلب بطاقة). في «Source Code» اضغط GitHub واختر المستودع.
+3. Build Command: `npm install --omit=dev` • Start Command: `node server.js` • Instance Type: Free • Environment: `API_KEY` = «مفتاح الخادم».
 4. الرابط يكون بالشكل `https://alnaser-wa-xxxx.onrender.com`. الصقه في البرنامج.
 
 ملاحظة: Render المجاني يمسح الملفات عند النوم، والبرنامج يعيد جلسة الربط وحده عند أول طلب.

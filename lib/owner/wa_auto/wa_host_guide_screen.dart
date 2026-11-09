@@ -181,9 +181,11 @@ const _oracle = HostGuide(
 // ─────────────── 3) Render ───────────────
 
 const _render = HostGuide(
-  'Render (مجاني)',
+  'Render (مجاني — قد يطلب بطاقة)',
   Icons.rocket_launch_rounded,
-  'موقع يشغّل الخادم لك من ملفات ترفعها إلى GitHub. مجاني وبلا بطاقة، لكنه «ينام» بعد 15 دقيقة بلا طلبات ويستيقظ خلال دقيقة عند الإرسال — البرنامج يتعامل مع هذا وحده.',
+  'موقع يشغّل الخادم لك من ملفات ترفعها إلى GitHub. الخطة المجانية «تنام» بعد 15 دقيقة بلا طلبات وتستيقظ خلال دقيقة عند الإرسال — البرنامج يتعامل مع هذا وحده.\n'
+      'تنبيه: Render يطلب بطاقة مع «Blueprint» دائماً، وقد يطلبها لبعض الحسابات حتى مع «Web Service» المجاني للتحقق. '
+      'هذا الدليل يستعمل «Web Service» (بلا Blueprint). إن طلب بطاقة ولا تملكها فاستعمل «هذه الحاسبة» — الخيار الوحيد المضمون بلا بطاقة.',
   ['بريد إلكتروني', 'حساب GitHub (مجاني)', 'متصفح على هذه الحاسبة'],
   '20 إلى 30 دقيقة أول مرة',
   [
@@ -205,14 +207,31 @@ const _render = HostGuide(
       'تأكد: في الصفحة الرئيسية للمستودع يجب أن ترى package.json وserver.js وrender.yaml مباشرة (لا داخل مجلد).',
     ], tip: 'إن ظهر ملف .env في المجلد فلا ترفعه — فيه المفتاح.'),
     _copyKey,
-    GuideStep('أنشئ الخادم في Render', [
-      'اضغط الزر أدناه، واختر «GitHub» للدخول بحساب GitHub نفسه، ووافق.',
-      'في صفحة «Blueprints» اضغط «New Blueprint Instance».',
-      'اضغط «Connect GitHub» (أو «Configure account») ← اختر «Only select repositories» ← اختر alnaser-wa ← «Install».',
-      'ارجع إلى Render واختر المستودع alnaser-wa ← «Connect».',
-      'يقرأ Render الإعدادات وحده ويظهر خدمة اسمها alnaser-wa (Free). يطلب قيمة API_KEY: انقر الحقل والصق «مفتاح الخادم».',
-      'اضغط «Apply» (أو «Deploy Blueprint»).',
-    ], link: 'https://dashboard.render.com/blueprints', linkLabel: 'فتح Render'),
+    GuideStep('ادخل Render بحساب GitHub', [
+      'اضغط الزر أدناه، ثم اختر زر «GitHub» (لا تكتب بريداً) ووافق على «Authorize Render».',
+      'إن سألك أسئلة تعريفية (ماذا تبني…) اختر أي جواب أو تخطَّها.',
+    ], link: 'https://dashboard.render.com/register', linkLabel: 'فتح Render (الدخول بـ GitHub)'),
+    GuideStep('أنشئ «Web Service» — لا Blueprint', [
+      'اضغط الزر أدناه: يفتح مباشرة صفحة «New Web Service». (أو من الأعلى: + New ← «Web Service»؛ لا تختر «Blueprint» لأنه يطلب بطاقة.)',
+      'في أعلى الصفحة قسم «Source Code» وفيه تبويب «Git Provider» وتحته زر «GitHub». اضغطه.',
+      'تفتح صفحة GitHub: اختر «Only select repositories» ← اختر alnaser-wa ← «Install» (أو «Save»). ترجع إلى Render.',
+      'يظهر المستودع alnaser-wa في القائمة: اضغط عليه (أو «Connect» بجانبه).',
+    ], link: 'https://dashboard.render.com/web/new', linkLabel: 'فتح «New Web Service»',
+        tip: 'إن لم يظهر زر GitHub: اضغط «Git Provider» في أعلى الصفحة، أو «Configure account» بجانب GitHub.'),
+    GuideStep('املأ الإعدادات (انسخ كل قيمة بزرها)', [
+      'Name: alnaser-wa',
+      'Language (أو Runtime): Node',
+      'Branch: main   •   Region: أي منطقة   •   Root Directory: اتركه فارغاً',
+      'Build Command: امسح ما فيه واكتب:  npm install --omit=dev',
+      'Start Command: امسح ما فيه واكتب:  node server.js',
+      'Instance Type: اختر «Free» (0 دولار) — مهم.',
+      'انزل إلى «Environment Variables» ← «Add Environment Variable»: في NAME اكتب API_KEY، وفي VALUE الصق «مفتاح الخادم».',
+      'اضغط «Deploy Web Service» أسفل الصفحة.',
+    ], copy: 'npm install --omit=dev',
+        tip: 'إن طلب Render بطاقة عند الضغط على Deploy مع أنك اخترت Free، فحسابك يحتاج تحققاً ببطاقة — توقف هنا واستعمل «هذه الحاسبة».'),
+    GuideStep('أمر التشغيل', [
+      'هذا ما يوضع في «Start Command» (انسخه بالزر):',
+    ], copy: 'node server.js'),
     GuideStep('انتظر البناء وانسخ الرابط', [
       'افتح «Dashboard» ← الخدمة alnaser-wa. البناء يأخذ 3 إلى 6 دقائق.',
       'حين تظهر كلمة «Live» باللون الأخضر، انسخ الرابط في أعلى الصفحة (مثل https://alnaser-wa-ab12.onrender.com).',
@@ -222,6 +241,8 @@ const _render = HostGuide(
     _tryIt,
   ],
   [
+    ('Render يطلب بطاقة (credit card)', 'لا تستعمل «Blueprint». استعمل «New Web Service» بنوع «Free». إن طلبها حتى هناك فحسابك يحتاج تحققاً ببطاقة — استعمل «هذه الحاسبة» فهي بلا بطاقة.'),
+    ('لا أرى مكاناً لاختيار GitHub', 'افتح الرابط https://dashboard.render.com/web/new مباشرة (زر «فتح New Web Service» في الخطوة). زر GitHub داخل قسم «Source Code» في تلك الصفحة، لا في قائمة + New.'),
     ('البناء فشل (Build failed)', 'غالباً رُفعت الملفات داخل مجلد. افتح المستودع: يجب أن يكون package.json في الصفحة الرئيسية. إن كان داخل مجلد فاحذف المستودع وأعد الرفع بالملفات نفسها.'),
     ('في Logs: «API_KEY مطلوب»', 'افتح الخدمة ← Environment ← أضف API_KEY والصق المفتاح ← Save. يعيد Render التشغيل وحده.'),
     ('«مفتاح الخادم غير مطابق»', 'المفتاح في Render غير المفتاح في البرنامج: انسخه من البرنامج وضعه في Environment ← API_KEY.'),

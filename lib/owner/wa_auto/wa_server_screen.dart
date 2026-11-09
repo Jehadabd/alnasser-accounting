@@ -56,15 +56,16 @@ const _hosts = [
         'ubuntu، و«مفتاح الخادم». ينتظر 3 إلى 8 دقائق.'),
     _Step('في آخر النافذة رابط مثل https://1-2-3-4.sslip.io — الصقه في الأسفل واضغط «حفظ وفحص الاتصال».'),
   ]),
-  _Host('Render', 'مجاني • ينام بعد 15 دقيقة ويستيقظ عند الطلب • يحتاج GitHub', Icons.rocket_launch_rounded,
+  _Host('Render', 'مجاني • ينام ويستيقظ • يحتاج GitHub • قد يطلب بطاقة للتحقق', Icons.rocket_launch_rounded,
       'https://alnaser-wa-xxxx.onrender.com', [
     _Step('أنشئ حساب GitHub (إن لم يكن لديك).', 'إنشاء حساب GitHub', 'https://github.com/signup'),
     _Step('أنشئ مستودعاً جديداً: الاسم alnaser-wa، واختر Private (خاص) — مهم — ثم Create repository.', 'مستودع جديد', 'https://github.com/new'),
     _Step('في صفحة المستودع اضغط «uploading an existing file». افتح مجلد alnaser-wa-server، حدّد كل ما بداخله (Ctrl+A) '
         'واسحبه إلى الصفحة — الملفات لا المجلد نفسه — ثم «Commit changes». يجب أن يظهر package.json في الصفحة الرئيسية للمستودع.'),
-    _Step('ادخل Render بحساب GitHub ← New ← Blueprint ← اختر المستودع alnaser-wa ← اسمح لـRender بالوصول إليه.', 'فتح Render',
-        'https://dashboard.render.com/blueprints'),
-    _Step('يطلب Render قيمة API_KEY: الصق «مفتاح الخادم» ← Apply. البناء يأخذ 3 إلى 6 دقائق.'),
+    _Step('ادخل Render بزر «GitHub».', 'فتح Render', 'https://dashboard.render.com/register'),
+    _Step('افتح «New Web Service» (لا Blueprint — يطلب بطاقة) ← في «Source Code» اضغط GitHub ← اختر alnaser-wa.',
+        'فتح New Web Service', 'https://dashboard.render.com/web/new'),
+    _Step('Build: npm install --omit=dev • Start: node server.js • Instance Type: Free • Environment: API_KEY = «مفتاح الخادم» ← Deploy Web Service.'),
     _Step('افتح الخدمة alnaser-wa وانسخ رابطها (…onrender.com) — الصقه في الأسفل واضغط «حفظ وفحص الاتصال».'),
   ]),
   _Host('Docker', 'Koyeb • Fly.io • Railway • أي خادم', Icons.inventory_2_rounded, 'https://…', [
