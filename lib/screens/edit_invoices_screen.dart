@@ -3,7 +3,7 @@
 import '../erp/sales/sales_return_screen.dart';
 import '../erp/sales/sales_return_service.dart' show SalesReturnService;
 import '../services/auth_service.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
+import 'package:flutter/foundation.dart' show kIsWeb, Uint8List; // 🌐
 import 'package:flutter/material.dart';
 import '../models/invoice.dart';
 import 'create_invoice_screen.dart';
