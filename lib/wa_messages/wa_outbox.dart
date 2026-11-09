@@ -16,6 +16,7 @@ import '../erp/activity/activity_log.dart';
 import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../owner/wa_auto/wa_server_client.dart';
 import '../owner/wa_auto/wa_usage_mark.dart';
+import '../services/customer_balance_guard.dart'; // 🛡️ الرصيد = مجموع المعاملات
 import '../services/database_service.dart';
 import 'wa_compose.dart';
 import 'wa_message_log.dart';
@@ -176,6 +177,24 @@ class WaOutbox {
               error: r.isEmpty || r.first['del'] != 0 ? 'العميل محذوف' : 'لا دين عليه الآن',
               amount: debt);
           first = true; // لا انتظار بلا إرسال
+          emit();
+          continue;
+        }
+        // 🛡️ المبلغ المطالَب به والكشف المرفق يجب أن يتطابقا بالفلس — وإلا لا تُرسل المطالبة
+        final chk = await CustomerBalanceGuard.check(job.customerId, db: db);
+        if (chk != null && !chk.ok) {
+          skipped++;
+          await WaMessageLog.add(
+              customerId: job.customerId,
+              name: job.name,
+              phone: job.phone,
+              source: job.source,
+              ruleId: job.ruleId,
+              ruleName: job.ruleName,
+              status: 'skipped',
+              error: chk.message,
+              amount: debt);
+          first = true;
           emit();
           continue;
         }

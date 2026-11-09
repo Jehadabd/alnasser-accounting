@@ -1000,6 +1000,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         final name = customerNameController.text.trim();
         final safe = (name.isEmpty ? 'نقدية' : name).replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
         return WaDoc(
+ showsDebt: true,
           bytes: bytes,
           fileName: 'فاتورة_$safe.pdf',
           caption: 'فاتورة${invoiceToManage?.invoiceNumber == null ? '' : ' رقم ${invoiceToManage!.invoiceNumber}'}'

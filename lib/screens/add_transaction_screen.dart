@@ -702,6 +702,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           await WaDocSender.send(
               context,
               () async => WaDoc(
+ showsDebt: true,
                     bytes: bytes,
                     fileName: 'وصل_قبض_${res.receiptNo}.pdf',
                     caption: 'وصل قبض رقم ${res.receiptNo} — ${widget.customer.name}',

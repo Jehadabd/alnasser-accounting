@@ -537,6 +537,7 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
                     make: () async {
                       final pdf = await _invoicePdf(invoice);
                       return WaDoc(
+ showsDebt: true,
                         bytes: pdf.bytes,
                         fileName: pdf.fileName,
                         caption: 'فاتورة رقم ${invoice.invoiceNumber ?? invoice.id} — ${invoice.customerName}',

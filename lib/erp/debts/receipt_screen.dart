@@ -386,6 +386,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
       await WaDocSender.send(
           context,
           () async => WaDoc(
+ showsDebt: true,
                 bytes: bytes,
                 fileName: 'وصل_قبض_${r['receipt_no']}.pdf',
                 caption: 'وصل قبض رقم ${r['receipt_no']} — ${r['customers'] ?? ''}',

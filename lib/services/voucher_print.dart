@@ -515,6 +515,7 @@ class VoucherPrint {
       await WaDocSender.send(
           context,
           () async => WaDoc(
+ showsDebt: true,
                 bytes: pdf,
                 fileName: '${name.replaceAll(' ', '_')}.pdf',
                 caption: '${VoucherKinds.title(kind)} رقم ${data.field('voucherNo')} — الفاتورة ${data.field('invoiceNo')}',

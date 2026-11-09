@@ -10,7 +10,9 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
+import '../../services/customer_balance_guard.dart';
 import '../../wa_messages/wa_doc_sender.dart';
+import '../../widgets/balance_mismatch_banner.dart';
 import 'statement_service.dart';
 
 class CustomerStatementScreen extends StatefulWidget {
@@ -36,6 +38,8 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
   final _max = TextEditingController();
   bool _advanced = false;
   final Map<int, List<Map<String, Object?>>> _items = {};
+  BalanceCheck? _chk; // 🛡️ الرصيد المسجّل = مجموع المعاملات؟
+  bool _filtered = false; // الكشف المعروض مفلتر (نص/مادة/مبلغ): مجموعه ورصيده الأخير ليسا الحساب كاملاً
 
   @override
   void initState() {
@@ -47,6 +51,13 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
 
   Future<void> _load() async {
     if (_customerId == null) return;
+    CustomerBalanceGuard.check(_customerId!).then((c) {
+      if (mounted) setState(() => _chk = c);
+    }).catchError((_) {});
+    final filtered = _text.text.trim().isNotEmpty ||
+        _product.text.trim().isNotEmpty ||
+        parseMoney(_min.text) != null ||
+        parseMoney(_max.text) != null;
     final st = await _svc.statement(
       _customerId!,
       from: _from,
@@ -63,7 +74,12 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
         }
       }
     }
-    if (mounted) setState(() => _st = st);
+    if (mounted) {
+      setState(() {
+        _st = st;
+        _filtered = filtered;
+      });
+    }
   }
 
   Future<void> _sinceRecon() async {
@@ -177,7 +193,15 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
 
   String get _subtitle => 'من ${_from == null ? 'البداية' : fmtDate(_from!)} إلى ${fmtDate(_to)}';
 
+  static const _filteredMsg = 'الكشف المعروض مفلتر (بحث بنص أو مادة أو مبلغ): «المجموع» و«الرصيد الختامي» فيه '
+      'للأسطر الظاهرة فقط، لا للحساب كاملاً. امسح الفلاتر ثم أرسل.';
+
   Future<void> _share() async {
+    if (_filtered) {
+      showError(context, _filteredMsg);
+      return;
+    }
+    if (!await BalanceMismatchBanner.confirmShare(context, _chk)) return;
     try {
       final bytes = await ReportExport.tablePdf(
           title: 'كشف حساب $_customerName', subtitle: _subtitle, headers: _headers, rows: _data, footer: _footer);
@@ -190,10 +214,12 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
 
   /// 📨 نفس ملف «مشاركة» يُرسل إلى واتساب العميل عبر الخادم.
   Future<WaDoc?> _waDoc() async {
+    if (_filtered) throw DocNotSendable(_filteredMsg);
     final bytes = await ReportExport.tablePdf(
         title: 'كشف حساب $_customerName', subtitle: _subtitle, headers: _headers, rows: _data, footer: _footer);
     final safe = _customerName.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_');
     return WaDoc(
+ showsDebt: true,
       bytes: bytes,
       fileName: 'كشف_حساب_$safe.pdf',
       caption: 'كشف حساب $_customerName — $_subtitle',
@@ -237,6 +263,7 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
               StatCard(label: 'الرصيد الختامي', value: fmtMoney(st.closing), icon: Icons.account_balance_wallet, color: ErpColors.navy),
             ]),
       body: Column(children: [
+        BalanceMismatchBanner(_chk),
         Container(
           color: Colors.white,
           padding: const EdgeInsets.all(8),

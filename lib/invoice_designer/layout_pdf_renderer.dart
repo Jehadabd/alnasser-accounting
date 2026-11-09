@@ -138,7 +138,11 @@ class LayoutPdfRenderer {
   /// تصغير النص ليتسع — إلا النص الفارغ: FittedBox في مكتبة PDF يرفض محتوى بعرض صفر
   /// (خطأ «width > 0.0» يوقف الطباعة كلها)، فالفارغ لا يُرسم أصلاً.
   static pw.Widget _fit(String text, pw.Widget child, {pw.Alignment alignment = pw.Alignment.center}) =>
-      text.trim().isEmpty ? pw.SizedBox() : pw.FittedBox(fit: pw.BoxFit.scaleDown, alignment: alignment, child: child);
+      _blank(text) ? pw.SizedBox() : pw.FittedBox(fit: pw.BoxFit.scaleDown, alignment: alignment, child: child);
+
+  /// نص بلا أي حرف مرئي: مسافات، أو علامات اتجاه وفواصل بعرض صفر (RLM/LRM/ZWJ…).
+  static final RegExp _invisible = RegExp(r'[\s\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]');
+  static bool _blank(String s) => s.replaceAll(_invisible, '').isEmpty;
 
   static pw.Alignment _alignment(String a) => a == 'center'
       ? pw.Alignment.center
@@ -210,9 +214,11 @@ class LayoutPdfRenderer {
       case ElType.barcode:
         final qr = e.s('kind', 'qr') == 'qr';
         final data = d.barcodeText(e.s('data', 'invoiceNo'), qr: qr);
-        if (data.trim().isEmpty) return pw.SizedBox();
+        final bc = qr ? pw.Barcode.qrCode() : pw.Barcode.code128();
+        // بيانات لا يقبلها نوع الباركود (أو طويلة جداً) ⇒ لا باركود بدل إيقاف الطباعة كلها
+        if (data.trim().isEmpty || !bc.isValid(data)) return pw.SizedBox();
         return pw.BarcodeWidget(
-          barcode: qr ? pw.Barcode.qrCode() : pw.Barcode.code128(),
+          barcode: bc,
           data: data,
           drawText: !qr,
           textStyle: _style(7),

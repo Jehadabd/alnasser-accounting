@@ -12,7 +12,9 @@ import 'package:intl/intl.dart' hide TextDirection; // TextDirection من Flutte
 import '../../accounting/screens/acc_ui.dart';
 import '../../erp/report_export.dart' show ReportExport;
 import '../../services/invoice_edit_log.dart';
+import '../../services/customer_balance_guard.dart';
 import '../../wa_messages/wa_doc_sender.dart';
+import '../../widgets/balance_mismatch_banner.dart';
 import 'statement_engine.dart';
 import 'statement_pdf.dart';
 
@@ -58,6 +60,7 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
   bool _loading = true;
   bool _printing = false;
   int _loadSeq = 0;
+  BalanceCheck? _chk; // 🛡️ الرصيد المسجّل = مجموع المعاملات؟
   final Set<int> _open = {}; // أسطر فواتير مفتوحة (تفصيلي)
 
   StmtPeriod get _period {
@@ -79,6 +82,9 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
 
   Future<void> _load() async {
     final my = ++_loadSeq;
+    CustomerBalanceGuard.check(widget.customerId).then((c) {
+      if (mounted) setState(() => _chk = c);
+    }).catchError((_) {});
     setState(() {
       _loading = true;
       _error = null;
@@ -128,6 +134,7 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
     if (f == null) return null;
     final kind = _tab == StatementTab.account ? 'كشف حساب' : 'الكشف التجاري';
     return WaDoc(
+ showsDebt: true,
       bytes: f.$1,
       fileName: '${f.$2.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_')}.pdf',
       caption: '$kind ${widget.customerName}',
@@ -137,6 +144,8 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
   }
 
   Future<void> _print({bool share = false}) async {
+    if (share && !await BalanceMismatchBanner.confirmShare(context, _chk)) return;
+    if (!mounted) return;
     setState(() => _printing = true);
     try {
       final f = await _pdf();
@@ -220,6 +229,7 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
         ),
         body: Column(children: [
           _controls(),
+          BalanceMismatchBanner(_chk),
           Expanded(child: _body()),
         ]),
       ),

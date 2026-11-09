@@ -126,6 +126,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       await WaDocSender.send(
           context,
           () async => WaDoc(
+ showsDebt: true,
               bytes: bytes,
               fileName: '$name.pdf',
               caption: text ?? name,

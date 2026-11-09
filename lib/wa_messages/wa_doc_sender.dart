@@ -17,17 +17,29 @@ import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../owner/wa_auto/wa_server_client.dart';
 import '../owner/wa_auto/wa_usage_mark.dart';
 import '../services/database_service.dart';
+import '../services/customer_balance_guard.dart';
 import 'wa_message_log.dart';
 import 'wa_phone_book.dart';
 import 'wa_send_notice.dart';
 
 /// مستند جاهز للإرسال.
 class WaDoc {
-  WaDoc({required this.bytes, required this.fileName, required this.caption, this.customerId, this.customerName = '', this.phone});
+  WaDoc({
+    required this.bytes,
+    required this.fileName,
+    required this.caption,
+    this.customerId,
+    this.customerName = '',
+    this.phone,
+    this.showsDebt = false,
+  });
   final Uint8List bytes;
   final String fileName, caption, customerName;
   final int? customerId;
   final String? phone;
+
+  /// المستند يعرض دين العميل (كشف، فاتورة، وصل) ⇒ لا يُرسل إن لم يطابق رصيده المسجّل معاملاته.
+  final bool showsDebt;
 
   /// اسم المستند للإشعار: «فاتورة رقم 12»، «كشف حساب»، «وصل قبض رقم 7»...
   String get label {
@@ -110,11 +122,23 @@ class WaDocSender {
     final WaDoc? doc;
     try {
       doc = await build();
+    } on DocNotSendable catch (e) {
+      if (context.mounted) _notify(context, null, WaNoticeState.failed, 'لم يُرسل', e.message);
+      return;
     } catch (e) {
       if (context.mounted) _notify(context, null, WaNoticeState.failed, 'تعذّر تجهيز المستند', '$e');
       return;
     }
     if (doc == null || !context.mounted) return;
+    // 🛡️ دين العميل في المستند يجب أن يكون مؤكداً: الرصيد المسجّل = مجموع المعاملات بالفلس
+    if (doc.showsDebt && doc.customerId != null) {
+      final chk = await CustomerBalanceGuard.check(doc.customerId!);
+      if (chk != null && !chk.ok) {
+        if (context.mounted) _notify(context, null, WaNoticeState.failed, 'لم يُرسل ${doc.label}', chk.message);
+        return;
+      }
+      if (!context.mounted) return;
+    }
     // 📒 الرقم المؤكَّد سابقاً لصاحب المستند
     final key = WaPhoneBook.keyOf(doc.customerId, doc.customerName);
     final saved = await WaPhoneBook.phoneOf(key);
