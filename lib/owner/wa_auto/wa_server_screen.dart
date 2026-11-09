@@ -19,36 +19,57 @@ const _amber = Color(0xFFB45309);
 const _red = Color(0xFFB91C1C);
 const _muted = Color(0xFF64748B);
 
+class _Step {
+  const _Step(this.text, [this.linkLabel, this.link]);
+  final String text;
+  final String? linkLabel, link;
+}
+
 class _Host {
   const _Host(this.title, this.badge, this.icon, this.urlHint, this.steps);
   final String title, badge, urlHint;
   final IconData icon;
-  final List<String> steps;
+  final List<_Step> steps;
 }
 
+// الحزمة المنزّلة فيها مجلد واحد alnaser-wa-server — كل الخطوات تشير إلى ما «داخله».
 const _hosts = [
-  _Host('هذه الحاسبة', 'مجاني • الأسهل', Icons.computer_rounded, 'http://127.0.0.1:8080', [
-    'ثبّت Node.js 20 أو أحدث (nodejs.org) وGit (git-scm.com).',
-    'نزّل ملفات الخادم من الزر أدناه وفك ضغطها في مجلد ثابت.',
-    'شغّل start-windows.bat والصق «مفتاح الخادم» عند السؤال (أول مرة فقط).',
-    'الرابط: http://127.0.0.1:8080 — يعمل ما دامت النافذة مفتوحة والحاسبة شغّالة.',
+  _Host('هذه الحاسبة', 'مجاني • الأسهل • يعمل ما دامت الحاسبة شغّالة', Icons.computer_rounded, 'http://127.0.0.1:8080', [
+    _Step('ثبّت Node.js (نسخة LTS) — التالي ثم التالي حتى ينتهي.', 'تنزيل Node.js', 'https://nodejs.org/en/download'),
+    _Step('ثبّت Git — اترك كل الخيارات كما هي.', 'تنزيل Git', 'https://git-scm.com/download/win'),
+    _Step('نزّل الحزمة من الزر أدناه، وفك ضغطها في مكان ثابت (مثل C:\\alnaser-wa). لا شيء يُرفع.'),
+    _Step('افتح مجلد alnaser-wa-server وانقر start-windows.bat مرتين، والصق «مفتاح الخادم» عند السؤال (أول مرة فقط). أبقِ النافذة مفتوحة.'),
+    _Step('ضع الرابط http://127.0.0.1:8080 في الأسفل واضغط «حفظ وفحص الاتصال».'),
   ]),
-  _Host('Oracle Cloud (Always Free)', 'مجاني • يعمل دائماً', Icons.cloud_rounded, 'https://1-2-3-4.sslip.io', [
-    'أنشئ حساباً في Oracle Cloud ثم Compute ← Instance بنظام Ubuntu، ونزّل ملف المفتاح الخاص (.key).',
-    'في VCN ← Security List أضف قاعدة Ingress للمنفذين 80 و443 من 0.0.0.0/0.',
-    'نزّل ملفات الخادم وفك ضغطها، ثم شغّل deploy-oracle.bat: عنوان IP، مسار ملف المفتاح، و«مفتاح الخادم».',
-    'في النهاية يطبع رابطاً مثل https://1-2-3-4.sslip.io — الصقه هنا.',
+  _Host('Oracle Cloud', 'مجاني دائماً (Always Free) • يعمل والحاسبة مطفأة • يطلب بطاقة للتحقق', Icons.cloud_rounded,
+      'https://1-2-3-4.sslip.io', [
+    _Step('أنشئ حساباً مجانياً. اختر «Home Region» الأقرب (لا يتغيّر بعدها).', 'إنشاء حساب Oracle', 'https://signup.cloud.oracle.com'),
+    _Step('ادخل لوحة التحكم ← القائمة ☰ ← Compute ← Instances ← Create instance:\n'
+        '• Image: Ubuntu  • Shape: VM.Standard.A1.Flex أو VM.Standard.E2.1.Micro (عليها «Always Free»)\n'
+        '• SSH keys: «Generate a key pair for me» ← Save private key (احفظ ملف .key)\n'
+        '• Create، ثم انسخ «Public IP address».', 'فتح لوحة Oracle', 'https://cloud.oracle.com'),
+    _Step('افتح المنفذين: صفحة الخادم ← Subnet ← Security Lists ← Default ← Add Ingress Rules:\n'
+        'Source CIDR = 0.0.0.0/0، IP Protocol = TCP، Destination Port = 80,443.'),
+    _Step('لا ترفع شيئاً بيدك: افتح مجلد alnaser-wa-server وانقر deploy-oracle.bat مرتين، وأدخل: الـ IP، مسار ملف .key، '
+        'ubuntu، و«مفتاح الخادم». ينتظر 3 إلى 8 دقائق.'),
+    _Step('في آخر النافذة رابط مثل https://1-2-3-4.sslip.io — الصقه في الأسفل واضغط «حفظ وفحص الاتصال».'),
   ]),
-  _Host('Render', 'مجاني • ينام ويستيقظ', Icons.rocket_launch_rounded, 'https://alnaser-wa-xxxx.onrender.com', [
-    'أنشئ مستودعاً خاصاً (Private) في GitHub وارفع إليه ملفات الخادم بالسحب والإفلات — بلا ملف .env.',
-    'في Render: New ← Blueprint ← اختر المستودع. ضع API_KEY = «مفتاح الخادم».',
-    'انسخ رابط الخدمة (…onrender.com) والصقه هنا.',
-    'ينام بعد 15 دقيقة بلا طلبات ويستيقظ خلال دقيقة؛ البرنامج يعيد جلسة الربط وحده.',
+  _Host('Render', 'مجاني • ينام بعد 15 دقيقة ويستيقظ عند الطلب • يحتاج GitHub', Icons.rocket_launch_rounded,
+      'https://alnaser-wa-xxxx.onrender.com', [
+    _Step('أنشئ حساب GitHub (إن لم يكن لديك).', 'إنشاء حساب GitHub', 'https://github.com/signup'),
+    _Step('أنشئ مستودعاً جديداً: الاسم alnaser-wa، واختر Private (خاص) — مهم — ثم Create repository.', 'مستودع جديد', 'https://github.com/new'),
+    _Step('في صفحة المستودع اضغط «uploading an existing file». افتح مجلد alnaser-wa-server، حدّد كل ما بداخله (Ctrl+A) '
+        'واسحبه إلى الصفحة — الملفات لا المجلد نفسه — ثم «Commit changes». يجب أن يظهر package.json في الصفحة الرئيسية للمستودع.'),
+    _Step('ادخل Render بحساب GitHub ← New ← Blueprint ← اختر المستودع alnaser-wa ← اسمح لـRender بالوصول إليه.', 'فتح Render',
+        'https://dashboard.render.com/blueprints'),
+    _Step('يطلب Render قيمة API_KEY: الصق «مفتاح الخادم» ← Apply. البناء يأخذ 3 إلى 6 دقائق.'),
+    _Step('افتح الخدمة alnaser-wa وانسخ رابطها (…onrender.com) — الصقه في الأسفل واضغط «حفظ وفحص الاتصال».'),
   ]),
-  _Host('Docker (أي منصة)', 'Koyeb • Fly.io • Railway • VPS', Icons.inventory_2_rounded, 'https://…', [
-    'في الحزمة Dockerfile جاهز: ابنِ الصورة وشغّلها مع المتغير API_KEY = «مفتاح الخادم».',
-    'اربط مجلد /data بتخزين دائم إن أتاحته المنصة (وإلا يعيد البرنامج الجلسة).',
-    'الصق رابط الخدمة هنا.',
+  _Host('Docker', 'Koyeb • Fly.io • Railway • أي خادم', Icons.inventory_2_rounded, 'https://…', [
+    _Step('ارفع ملفات المجلد alnaser-wa-server (لا المجلد نفسه) إلى مستودع GitHub خاص كما في Render.'),
+    _Step('في المنصة اختر النشر من GitHub بـ Dockerfile، وأضف المتغير API_KEY = «مفتاح الخادم»، والمنفذ 8080.', 'فتح Koyeb',
+        'https://app.koyeb.com'),
+    _Step('إن أتاحت المنصة تخزيناً دائماً فاربطه بـ /data (وإلا يعيد البرنامج الجلسة وحده). الصق رابط الخدمة في الأسفل.'),
   ]),
 ];
 
@@ -282,14 +303,25 @@ class _WaServerScreenState extends State<WaServerScreen> {
             const Divider(),
             for (var i = 0; i < h.steps.length; i++)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.symmetric(vertical: 5),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   CircleAvatar(
                       radius: 11,
                       backgroundColor: kSetNavy,
                       child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: Colors.white))),
                   const SizedBox(width: 10),
-                  Expanded(child: Text(h.steps[i], style: const TextStyle(height: 1.5))),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(h.steps[i].text, style: const TextStyle(height: 1.55)),
+                      if (h.steps[i].link != null)
+                        TextButton.icon(
+                          style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                          onPressed: () => launchUrl(Uri.parse(h.steps[i].link!), mode: LaunchMode.externalApplication),
+                          icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                          label: Text(h.steps[i].linkLabel ?? 'فتح'),
+                        ),
+                    ]),
+                  ),
                 ]),
               ),
             const SizedBox(height: 10),
