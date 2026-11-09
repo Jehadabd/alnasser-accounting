@@ -3,8 +3,9 @@
 // 🔔 لوحة صغيرة أعلى يسار الشاشة لنتيجة إرسال المستندات عبر واتساب — فوق كل الشاشات، فتبقى
 // ظاهرة ولو أُغلقت الشاشة التي ضُغط منها الزر:
 //   • «جارٍ إرسال…» ثم تتحول إلى النتيجة.
-//   • نجح ⇒ أخضر، يختفي بعد ثانيتين.
-//   • فشل (أو وصل النص دون الملف) ⇒ أحمر/برتقالي، يبقى حتى يُغلق — السبب يجب أن يُقرأ.
+//   • النتيجة (نجح أخضر / فشل أحمر / وصل النص دون الملف برتقالي) تبقى 5 ثوانٍ ثم تختفي،
+//     ويمكن إغلاقها قبل ذلك بـ ✕. السبب محفوظ أيضاً في «سجل الرسائل».
+//   • إشعار مطابق لآخر ظاهر لا يتكرر (يُجدَّد وقته فقط).
 // المضيف [WaSendNoticeHost] يُلفّ حول التطبيق مرة واحدة (main.dart).
 
 import 'dart:async';
@@ -27,7 +28,7 @@ class WaSendNotice {
   static final notices = ValueNotifier<List<WaNotice>>(const []);
   static int _seq = 0;
   static int _hosts = 0;
-  static const _okFor = Duration(seconds: 2);
+  static const _showFor = Duration(seconds: 5);
   static const _max = 5;
 
   /// هل المضيف مركّب؟ (وإلا يعود المستدعي إلى شريط أسفل الشاشة)
@@ -42,19 +43,38 @@ class WaSendNotice {
 
   /// نتيجة: يستبدل «جارٍ…» (أو يضيف جديداً إن لم يُمرَّر [id]).
   static void finish(int? id, WaNoticeState state, String title, [String? detail]) {
+    // نفس الإشعار ظاهر الآن (ضغط الزر مرتين) ⇒ لا يتكرر
+    final same = notices.value.where((x) => x.id != id && x.state == state && x.title == title && x.detail == detail);
+    if (same.isNotEmpty && id == null) {
+      _arm(same.first.id);
+      return;
+    }
+    if (same.isNotEmpty && id != null) dismiss(same.first.id);
     final n = WaNotice(id ?? ++_seq, state, title, detail);
     _put(n);
-    if (state == WaNoticeState.ok) Timer(_okFor, () => dismiss(n.id));
+    _arm(n.id);
   }
 
-  static void dismiss(int id) => notices.value = [for (final n in notices.value) if (n.id != id) n];
+  static final _timers = <int, Timer>{};
+
+  /// يبدأ (أو يجدّد) عدّاد الثواني الخمس بعد ظهور النتيجة.
+  static void _arm(int id) {
+    _timers.remove(id)?.cancel();
+    _timers[id] = Timer(_showFor, () => dismiss(id));
+  }
+
+  static void dismiss(int id) {
+    _timers.remove(id)?.cancel();
+    notices.value = [for (final n in notices.value) if (n.id != id) n];
+  }
 
   static void _put(WaNotice n) {
     final l = [for (final x in notices.value) if (x.id != n.id) x, n];
-    // الحد الأقصى: يُسقط الأقدم من غير الفاشل أولاً
+    // الحد الأقصى: يُسقط الأقدم من النتائج (لا «جارٍ…»)
     while (l.length > _max) {
-      final i = l.indexWhere((x) => x.state != WaNoticeState.failed && x.state != WaNoticeState.warn);
-      l.removeAt(i < 0 ? 0 : i);
+      final i = l.indexWhere((x) => x.state != WaNoticeState.sending);
+      final gone = l.removeAt(i < 0 ? 0 : i);
+      _timers.remove(gone.id)?.cancel();
     }
     notices.value = l;
   }
@@ -110,7 +130,7 @@ class _NoticeCard extends StatelessWidget {
       WaNoticeState.warn => (const Color(0xFFB45309), Icons.warning_amber_rounded),
       WaNoticeState.failed => (const Color(0xFFB91C1C), Icons.error_rounded),
     };
-    final stays = n.state == WaNoticeState.failed || n.state == WaNoticeState.warn;
+    final stays = n.state != WaNoticeState.sending; // ✕ لإغلاقه قبل الثواني الخمس
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: TweenAnimationBuilder<double>(
