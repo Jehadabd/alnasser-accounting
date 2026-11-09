@@ -1,0 +1,46 @@
+# يبني صورة خادم واتساب (assets/wa_server) وينشرها في GitHub Container Registry:
+#   ghcr.io/<المالك>/alnaser-wa:latest
+# البرنامج ينشئ خدمة Render من هذه الصورة تلقائياً (wa_render_deployer.dart)،
+# فيجب أن تكون الحزمة «Public» مرة واحدة: GitHub ← Packages ← alnaser-wa ←
+# Package settings ← Change visibility ← Public. الصورة لا تحوي أي مفتاح.
+name: wa-server-image
+
+on:
+  push:
+    paths:
+      - 'assets/wa_server/**'
+      - '.github/workflows/wa-server-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: اسم المالك بحروف صغيرة (يشترطه ghcr.io)
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: assets/wa_server
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/${{ env.OWNER }}/alnaser-wa:latest
+            ghcr.io/${{ env.OWNER }}/alnaser-wa:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=alnaser-wa
+            org.opencontainers.image.description=خادم تذكير الديون عبر واتساب — برنامج الناصر

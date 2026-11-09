@@ -18,7 +18,13 @@
 | Render | مجاني، ينام بعد 15 دقيقة، وقد يطلب بطاقة للتحقق | نعم، ويستيقظ عند الطلب | سهلة |
 | Docker (Koyeb، Fly.io، Railway، أي VPS) | حسب المنصة | نعم | متوسطة |
 
-### 1) هذه الحاسبة
+### الطريقة الآلية (من داخل البرنامج)
+- **هذه الحاسبة:** زر «تشغيل على هذه الحاسبة بضغطة». ينزّل البرنامج Node.js وMinGit من المواقع الرسمية، ويطابق بصمتيهما (SHA-256)، ويثبّت الخادم داخل مجلد البرنامج، ويشغّله بلا نافذة على `127.0.0.1:8765`. يتوقف الخادم وحده عند إغلاق البرنامج.
+- **Render:** الصق «مفتاح Render API» واضغط «إنشاء الخادم على Render تلقائياً». ينشئ البرنامج خدمة مجانية من الصورة الجاهزة `ghcr.io/jehadabd/alnaser-wa:latest`. لا يلزم GitHub ولا رفع ملفات.
+
+الطرق اليدوية أدناه لمن يريد التحكم بنفسه.
+
+### 1) هذه الحاسبة (يدوياً)
 1. ثبّت [Node.js 20+](https://nodejs.org) و[Git](https://git-scm.com).
 2. شغّل `start-windows.bat`، والصق «مفتاح الخادم» عند السؤال. تُطلب أول مرة فقط.
 3. ضع في البرنامج الرابط: `http://127.0.0.1:8080`
@@ -32,7 +38,7 @@
    - «مفتاح الخادم».
 4. في النهاية يطبع رابطاً مثل `https://1-2-3-4.sslip.io`. الصقه في البرنامج.
 
-### 3) Render
+### 3) Render (يدوياً)
 1. أنشئ مستودعاً **خاصاً** (Private) في GitHub، وارفع إليه كل الملفات **عدا `.env`**.
 2. افتح https://dashboard.render.com/web/new (لا تستعمل Blueprint: يطلب بطاقة). في «Source Code» اضغط GitHub واختر المستودع.
 3. Build Command: `npm install --omit=dev` • Start Command: `node server.js` • Instance Type: Free • Environment: `API_KEY` = «مفتاح الخادم».
@@ -45,3 +51,7 @@
 docker build -t alnaser-wa .
 docker run -d --restart=always -p 8080:8080 -e API_KEY=... -v alnaser-wa:/data alnaser-wa
 ```
+أو الصورة الجاهزة: `ghcr.io/jehadabd/alnaser-wa:latest`.
+
+### متغيرات اختيارية
+`HOST` (الافتراضي `0.0.0.0`) • `MAX_PER_HOUR` (60) • `LOG_FILE` (سجل في ملف) • `PARENT_PID` (يتوقف الخادم إذا انتهت هذه العملية)

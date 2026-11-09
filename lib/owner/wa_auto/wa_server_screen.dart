@@ -12,7 +12,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../widgets/settings_kit.dart';
 import 'wa_auto_reminder.dart';
+import 'wa_auto_setup_panels.dart';
 import 'wa_host_guide_screen.dart';
+import 'wa_local_server.dart';
 import 'wa_server_client.dart';
 import 'wa_usage_banner.dart';
 
@@ -36,7 +38,7 @@ class _Host {
 
 // الحزمة المنزّلة فيها مجلد واحد alnaser-wa-server — كل الخطوات تشير إلى ما «داخله».
 const _hosts = [
-  _Host('هذه الحاسبة', 'مجاني • الأسهل • يعمل ما دامت الحاسبة شغّالة', Icons.computer_rounded, 'http://127.0.0.1:8080', [
+  _Host('هذه الحاسبة', 'مجاني • الأسهل • بضغطة واحدة • يعمل ما دام البرنامج مفتوحاً', Icons.computer_rounded, 'http://127.0.0.1:8080', [
     _Step('ثبّت Node.js (نسخة LTS) — التالي ثم التالي حتى ينتهي.', 'تنزيل Node.js', 'https://nodejs.org/en/download'),
     _Step('ثبّت Git — اترك كل الخيارات كما هي.', 'تنزيل Git', 'https://git-scm.com/download/win'),
     _Step('نزّل الحزمة من الزر أدناه، وفك ضغطها في مكان ثابت (مثل C:\\alnaser-wa). لا شيء يُرفع.'),
@@ -56,7 +58,7 @@ const _hosts = [
         'ubuntu، و«مفتاح الخادم». ينتظر 3 إلى 8 دقائق.'),
     _Step('في آخر النافذة رابط مثل https://1-2-3-4.sslip.io — الصقه في الأسفل واضغط «حفظ وفحص الاتصال».'),
   ]),
-  _Host('Render', 'مجاني • ينام ويستيقظ • يحتاج GitHub • قد يطلب بطاقة للتحقق', Icons.rocket_launch_rounded,
+  _Host('Render', 'مجاني • ينام ويستيقظ • آلياً بلا GitHub • قد يطلب بطاقة للتحقق', Icons.rocket_launch_rounded,
       'https://alnaser-wa-xxxx.onrender.com', [
     _Step('أنشئ حساب GitHub (إن لم يكن لديك).', 'إنشاء حساب GitHub', 'https://github.com/signup'),
     _Step('أنشئ مستودعاً جديداً: الاسم alnaser-wa، واختر Private (خاص) — مهم — ثم Create repository.', 'مستودع جديد', 'https://github.com/new'),
@@ -237,8 +239,49 @@ class _WaServerScreenState extends State<WaServerScreen> {
       _showKey = true;
       _st = null;
     });
+    if (WaLocalServer.isLocalUrl(_url.text) && await WaLocalServer.enabled()) {
+      _say('مفتاح جديد — يعيد تشغيل الخادم على هذه الحاسبة به…');
+      if (await WaLocalServer.ensureRunning()) await _check();
+      return;
+    }
     _say('مفتاح جديد — ضعه في الخادم ثم اضغط «فحص الاتصال»');
   }
+
+  /// الطريقة الآلية أنهت عملها: يضع الرابط ويفحص الاتصال.
+  Future<void> _onAutoReady(String url) async {
+    _url.text = url;
+    await _check();
+  }
+
+  List<Widget> _stepsOf(_Host h) => [
+        for (var i = 0; i < h.steps.length; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 5),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              CircleAvatar(
+                  radius: 11,
+                  backgroundColor: kSetNavy,
+                  child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: Colors.white))),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(h.steps[i].text, style: const TextStyle(height: 1.55)),
+                  if (h.steps[i].link != null && resolveGuideLink(h.steps[i].link, _gh) == null)
+                    const Text('↑ اكتب اسم مستخدم GitHub في «الشرح الكامل» ليظهر الرابط.',
+                        style: TextStyle(fontSize: 12, color: _amber)),
+                  if (resolveGuideLink(h.steps[i].link, _gh) != null)
+                    TextButton.icon(
+                      style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                      onPressed: () =>
+                          launchUrl(Uri.parse(resolveGuideLink(h.steps[i].link, _gh)!), mode: LaunchMode.externalApplication),
+                      icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                      label: Text(h.steps[i].linkLabel ?? 'فتح'),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+      ];
 
   Future<void> _download() async {
     try {
@@ -307,34 +350,19 @@ class _WaServerScreenState extends State<WaServerScreen> {
             ]),
             const SizedBox(height: 6),
             Text(h.badge, style: const TextStyle(fontSize: 12, color: _muted)),
+            if (_host == 0) ...[const SizedBox(height: 10), WaLocalAutoPanel(onReady: _onAutoReady)],
+            if (_host == 2) ...[const SizedBox(height: 10), WaRenderAutoPanel(onReady: _onAutoReady)],
             const Divider(),
-            for (var i = 0; i < h.steps.length; i++)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  CircleAvatar(
-                      radius: 11,
-                      backgroundColor: kSetNavy,
-                      child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: Colors.white))),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(h.steps[i].text, style: const TextStyle(height: 1.55)),
-                      if (h.steps[i].link != null && resolveGuideLink(h.steps[i].link, _gh) == null)
-                        const Text('↑ اكتب اسم مستخدم GitHub في «الشرح الكامل» ليظهر الرابط.',
-                            style: TextStyle(fontSize: 12, color: _amber)),
-                      if (resolveGuideLink(h.steps[i].link, _gh) != null)
-                        TextButton.icon(
-                          style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
-                          onPressed: () => launchUrl(Uri.parse(resolveGuideLink(h.steps[i].link, _gh)!),
-                              mode: LaunchMode.externalApplication),
-                          icon: const Icon(Icons.open_in_new_rounded, size: 16),
-                          label: Text(h.steps[i].linkLabel ?? 'فتح'),
-                        ),
-                    ]),
-                  ),
-                ]),
-              ),
+            if (_host == 0 || _host == 2)
+              ExpansionTile(
+                key: ValueKey('manual$_host'),
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: EdgeInsets.zero,
+                title: const Text('أو يدوياً: الخطوات', style: TextStyle(fontWeight: FontWeight.w700)),
+                children: _stepsOf(h),
+              )
+            else
+              ..._stepsOf(h),
             const SizedBox(height: 10),
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: kSetNavy, minimumSize: const Size.fromHeight(46)),

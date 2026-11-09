@@ -18,6 +18,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'wa_local_server.dart';
 import 'wa_usage_mark.dart';
 
 class WaServerStatus {
@@ -120,12 +121,19 @@ class WaServerClient {
     if (base.isEmpty) throw WaServerException('لم يُضبط رابط الخادم');
     final uri = Uri.parse('$base$path');
     final headers = {'x-key': await key(), 'content-type': 'application/json'};
+    Future<http.Response> send() => (method == 'GET'
+            ? http.get(uri, headers: headers)
+            : http.post(uri, headers: headers, body: jsonEncode(body ?? const {})))
+        .timeout(timeout);
     http.Response r;
     try {
-      r = await (method == 'GET'
-              ? http.get(uri, headers: headers)
-              : http.post(uri, headers: headers, body: jsonEncode(body ?? const {})))
-          .timeout(timeout);
+      try {
+        r = await send();
+      } on SocketException {
+        // الخادم على هذه الحاسبة متوقف (أُغلق البرنامج أو أُعيد تشغيل الحاسبة) ⇒ يشغّله ويعيد مرة واحدة
+        if (!WaLocalServer.isLocalUrl(base) || !await WaLocalServer.ensureRunning()) rethrow;
+        r = await send();
+      }
     } on SocketException catch (e) {
       throw WaServerException('تعذّر الوصول إلى الخادم: ${e.message}');
     } on HttpException catch (e) {

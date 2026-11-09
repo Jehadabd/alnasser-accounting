@@ -9,7 +9,8 @@
 //     الملفات (Render المجاني) يعيدها البرنامج فلا يلزم ربط جديد.
 //   • حد أقصى للرسائل في الساعة (MAX_PER_HOUR) حماية للرقم.
 //
-// المتغيرات: API_KEY (إلزامي، 24+ حرفاً)، PORT (8080)، STATE_DIR (./data)، MAX_PER_HOUR (60)
+// المتغيرات: API_KEY (إلزامي، 24+ حرفاً)، PORT (8080)، HOST (0.0.0.0)، STATE_DIR (./data)، MAX_PER_HOUR (60)،
+//   LOG_FILE (اختياري)، PARENT_PID (اختياري: يتوقف إذا أُغلق البرنامج)
 
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -34,7 +35,42 @@ try {
   // لا ملف .env — المتغيرات من المنصة
 }
 
-const VERSION = '1.0.0';
+// LOG_FILE: سجل في ملف بدل الشاشة (التشغيل الآلي على الحاسبة يعمل بلا نافذة)
+if (process.env.LOG_FILE) {
+  // كتابة متزامنة: تُحفظ الرسالة حتى لو خرج الخادم بعدها مباشرة
+  const w = (...a) => {
+    try {
+      fs.appendFileSync(process.env.LOG_FILE, `${new Date().toISOString()} ${a.map((x) => (x instanceof Error ? x.stack : String(x))).join(' ')}\n`);
+    } catch {
+      // لا شيء — السجل إضافي
+    }
+  };
+  console.log = w;
+  console.error = w;
+  console.warn = w;
+  process.on('uncaughtException', (e) => {
+    w('خطأ غير متوقع:', e);
+    process.exit(1);
+  });
+}
+
+// PARENT_PID: يتوقف الخادم وحده إذا أُغلق البرنامج الذي شغّله
+const PARENT_PID = Number(process.env.PARENT_PID || 0);
+if (PARENT_PID > 0) {
+  setInterval(() => {
+    try {
+      process.kill(PARENT_PID, 0);
+    } catch (e) {
+      if (e.code === 'ESRCH') {
+        console.log('أُغلق البرنامج — يتوقف الخادم');
+        process.exit(0);
+      }
+    }
+  }, 5000).unref();
+}
+
+const VERSION = '1.1.0';
+const HOST = process.env.HOST || '0.0.0.0';
 const API_KEY = (process.env.API_KEY || '').trim();
 const PORT = Number(process.env.PORT || 8080);
 const STATE_DIR = process.env.STATE_DIR || path.join(process.cwd(), 'data');
@@ -290,7 +326,7 @@ export const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/ping')) {
-      return reply(res, 200, { ok: true, app: 'alnaser-wa', v: VERSION });
+      return reply(res, 200, { ok: true, app: 'alnaser-wa', v: VERSION, pid: process.pid });
     }
     if (!authorized(req)) return reply(res, 401, { ok: false, error: 'bad_key' });
 
@@ -358,5 +394,9 @@ try {
 }
 
 if (process.env.NO_LISTEN !== '1') {
-  server.listen(PORT, '0.0.0.0', () => console.log(`خادم واتساب الناصر ${VERSION} على المنفذ ${PORT}`));
+  server.on('error', (e) => {
+    console.error(e.code === 'EADDRINUSE' ? `المنفذ ${PORT} مشغول ببرنامج آخر` : e.message);
+    process.exit(1);
+  });
+  server.listen(PORT, HOST, () => console.log(`خادم واتساب الناصر ${VERSION} على ${HOST}:${PORT}`));
 }
