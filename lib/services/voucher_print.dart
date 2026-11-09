@@ -33,6 +33,7 @@ import 'invoice_edit_log.dart';
 import 'invoice_edit_voucher.dart';
 import 'printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة ورمز التحقق
 import 'settings_manager.dart';
+import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال السند لصاحبه
 
 /// أنواع السندات.
 class VoucherKinds {
@@ -445,11 +446,14 @@ class VoucherPrint {
   }
 
   /// يطبع سند حدث تعديل (التصميم المختار، أو الشكل الحالي).
+  /// [wa]: بدل الفتح للطباعة يُرسل إلى واتساب صاحب الفاتورة عبر الخادم (نسخة مسجّلة مثل الطباعة).
   static Future<void> printEditEvent(BuildContext context, int eventId,
-      {int? legacyCashVoucherId, (String, InvoicePrintData)? prepared}) async {
+      {int? legacyCashVoucherId, (String, InvoicePrintData)? prepared, bool wa = false}) async {
+    if (wa && !await WaDocSender.precheck(context)) return;
     final r = prepared ?? await editEventData(eventId);
     if (r == null) return;
     final (kind, raw) = r;
+    int? customerId;
     // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة؛ فشله يوقفها (ورقة بلا سجل لا يُتحقق منها)
     final PrintStamp stamp;
     try {
@@ -459,13 +463,14 @@ class VoucherPrint {
       final inv = invId == 0
           ? const <Map<String, Object?>>[]
           : await db.query('invoices', columns: ['customer_id'], where: 'id = ?', whereArgs: [invId], limit: 1);
+      customerId = inv.isEmpty ? null : (inv.first['customer_id'] as num?)?.toInt();
       stamp = await PrintedVouchers.forEditEvent(
         eventId: eventId,
         kind: kind,
         voucherNo: raw.field('voucherNo'),
         amount: raw.totals['voucherAmount'] ?? 0,
         customerName: raw.field('customer'),
-        customerId: inv.isEmpty ? null : (inv.first['customer_id'] as num?)?.toInt(),
+        customerId: customerId,
         invoiceId: invId,
         invoiceNo: raw.field('invoiceNo'),
         details: {
@@ -503,8 +508,22 @@ class VoucherPrint {
     }
     // بلا تصميم ولا سند قديم: قالب البرنامج الافتراضي لهذا النوع
     bytes ??= await _render(InvoiceLayoutTemplates.defaultFor(kind), data);
-    if (context.mounted) {
-      await ReportExport.openPdf(context, bytes, '${VoucherKinds.title(kind)}_${data.field('voucherNo')}');
+    if (!context.mounted) return;
+    final name = '${VoucherKinds.title(kind)}_${data.field('voucherNo')}';
+    if (wa) {
+      final pdf = bytes;
+      await WaDocSender.send(
+          context,
+          () async => WaDoc(
+                bytes: pdf,
+                fileName: '${name.replaceAll(' ', '_')}.pdf',
+                caption: '${VoucherKinds.title(kind)} رقم ${data.field('voucherNo')} — الفاتورة ${data.field('invoiceNo')}',
+                customerId: customerId,
+                customerName: data.field('customer'),
+              ),
+          source: 'voucher');
+      return;
     }
+    await ReportExport.openPdf(context, bytes, name);
   }
 }

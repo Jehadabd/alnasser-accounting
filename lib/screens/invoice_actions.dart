@@ -22,6 +22,7 @@ import '../models/printer_device.dart';
 import '../models/product.dart';
 import '../models/invoice_input_data.dart'; // ✅ Added import
 import '../services/database_service.dart';
+import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال عبر واتساب
 import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../services/database/business/customer_name_rule.dart'; // 🔤 الاسم بلا مسافات
 // import '../services/drive_service.dart'; // Removed
@@ -985,6 +986,29 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
     }
   }
+
+// ============================================
+// 4ب. 📨 إرسال الفاتورة لصاحبها عبر واتساب (الخادم)
+// ============================================
+  /// نفس ملف «مشاركة»، يُرسل مباشرة إلى رقم الفاتورة أو رقم العميل في سجل الديون.
+  Future<void> sendInvoiceWhatsApp() => WaDocSender.send(context, () async {
+        final pdf = await generateInvoicePdf();
+        final bytes = await pdf.save();
+        if (widget.settlementForInvoice == null) {
+          await PrintAudit.record(invoiceToManage?.id, kind: 'share');
+        }
+        final name = customerNameController.text.trim();
+        final safe = (name.isEmpty ? 'نقدية' : name).replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+        return WaDoc(
+          bytes: bytes,
+          fileName: 'فاتورة_$safe.pdf',
+          caption: 'فاتورة${invoiceToManage?.invoiceNumber == null ? '' : ' رقم ${invoiceToManage!.invoiceNumber}'}'
+              '${name.isEmpty ? '' : ' — $name'}',
+          customerId: invoiceToManage?.customerId,
+          customerName: name,
+          phone: customerPhoneController.text.trim(),
+        );
+      }, source: 'invoice');
 
 // ============================================
 // 4. دالة مشاركة الفاتورة (shareInvoice)

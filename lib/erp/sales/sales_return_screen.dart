@@ -16,6 +16,7 @@ import '../report_export.dart';
 import '../stock_helpers.dart';
 import 'doc_pdf.dart';
 import 'sales_return_service.dart';
+import '../../wa_messages/wa_doc_sender.dart';
 import '../../services/settings_manager.dart';
 import '../../services/invoice_edit_log.dart';
 
@@ -468,6 +469,10 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
         actions: [
           TextButton.icon(
               onPressed: () => printSalesReturn(ctx, r['id'] as int), icon: const Icon(Icons.print), label: const Text('طباعة')),
+          TextButton.icon(
+              onPressed: () => printSalesReturn(ctx, r['id'] as int, wa: true),
+              icon: const Icon(Icons.send_to_mobile_rounded),
+              label: const Text('واتساب')),
           if (r['status'] == 'posted')
             TextButton(
               onPressed: () async {
@@ -599,7 +604,8 @@ String _modeLabel(Map<String, Object?> r) {
 }
 
 /// طباعة مستند مرتجع مبيعات (بالمبلغ كتابةً).
-Future<void> printSalesReturn(BuildContext context, int id) async {
+Future<void> printSalesReturn(BuildContext context, int id, {bool wa = false}) async {
+  if (wa && !await WaDocSender.precheck(context)) return;
   try {
     final db = await erpDb();
     final h = (await db.rawQuery(
@@ -633,7 +639,22 @@ Future<void> printSalesReturn(BuildContext context, int id) async {
       total: d0(h['total']),
       notes: h['notes'] as String?,
     );
-    if (context.mounted) await ReportExport.openPdf(context, bytes, 'مرتجع مبيعات ${h['return_no']}');
+    if (!context.mounted) return;
+    if (wa) {
+      // 📨 إلى واتساب الزبون عبر الخادم
+      await WaDocSender.send(
+          context,
+          () async => WaDoc(
+                bytes: bytes,
+                fileName: 'مرتجع_مبيعات_${h['return_no']}.pdf',
+                caption: 'مرتجع مبيعات رقم ${h['return_no']} — ${h['customer_name'] ?? ''}',
+                customerId: (h['customer_id'] as num?)?.toInt(),
+                customerName: '${h['customer_name'] ?? ''}',
+              ),
+          source: 'doc');
+      return;
+    }
+    await ReportExport.openPdf(context, bytes, 'مرتجع مبيعات ${h['return_no']}');
   } catch (e) {
     if (context.mounted) showError(context, 'تعذّرت الطباعة: $e');
   }

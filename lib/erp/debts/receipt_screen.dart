@@ -15,6 +15,7 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
+import '../../wa_messages/wa_doc_sender.dart';
 import 'receipt_pdf.dart';
 import 'receipts_service.dart';
 
@@ -354,7 +355,9 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
           ],
       ];
 
-  Future<void> _print(Map<String, Object?> r, {bool share = false}) async {
+  Future<void> _print(Map<String, Object?> r, {bool share = false, bool wa = false}) async {
+    // 📨 واتساب: يُفحص قبل تسجيل النسخة كي لا تُسجَّل نسخة لن تُرسل
+    if (wa && !await WaDocSender.precheck(context)) return;
     final lines = await ReceiptsService().receiptLines(r['id'] as int);
     // 🧾 إعادة الطباعة = نسخة جديدة في سجل السندات المطبوعة
     final PrintStamp stamp;
@@ -379,7 +382,18 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
       recordedBy: r['created_by'] as String?, // 👤 المحاسب = من سجّل الوصل
     );
     if (!mounted) return;
-    if (share) {
+    if (wa) {
+      await WaDocSender.send(
+          context,
+          () async => WaDoc(
+                bytes: bytes,
+                fileName: 'وصل_قبض_${r['receipt_no']}.pdf',
+                caption: 'وصل قبض رقم ${r['receipt_no']} — ${r['customers'] ?? ''}',
+                customerId: WaDocSender.singleCustomer(lines),
+                customerName: '${r['customers'] ?? ''}',
+              ),
+          source: 'voucher');
+    } else if (share) {
       // 📤 المشاركة نسخة مسجّلة في سجل السندات المطبوعة مثل الطباعة
       await ReportExport.sharePdf(context, bytes, 'وصل_قبض_${r['receipt_no']}',
           text: 'وصل قبض رقم ${r['receipt_no']} — ${r['customers'] ?? ''}');
@@ -451,6 +465,10 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
                               tooltip: 'مشاركة',
                               icon: const Icon(Icons.share_outlined),
                               onPressed: () => _print(r, share: true)),
+                          IconButton(
+                              tooltip: 'إرسال لصاحبه عبر واتساب (الخادم)',
+                              icon: const Icon(Icons.send_to_mobile_rounded, color: Color(0xFF047857)),
+                              onPressed: () => _print(r, wa: true)),
                           IconButton(tooltip: 'طباعة', icon: const Icon(Icons.print_outlined), onPressed: () => _print(r)),
                         ]),
                       ),

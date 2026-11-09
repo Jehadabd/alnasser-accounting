@@ -954,6 +954,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         const PopupMenuDivider(),
         item('picking', Icons.print_disabled, 'طباعة تجهيز (بدون أسعار)', enabled: hasItems),
         item('share', Icons.share, 'مشاركة الفاتورة PDF', enabled: hasItems),
+        item('wa_send', Icons.send_to_mobile_rounded, 'إرسال لصاحبها عبر واتساب (الخادم)', enabled: hasItems),
         if (invoiceToManage?.id != null) item('history', Icons.history, 'سجل التعديلات'),
       ],
       onSelected: (v) {
@@ -969,6 +970,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             break;
           case 'share':
             shareInvoice();
+            break;
+          case 'wa_send':
+            sendInvoiceWhatsApp();
             break;
           case 'history':
             _openInvoiceHistory();

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../models/invoice.dart';
 import 'create_invoice_screen.dart';
 import 'package:intl/intl.dart' hide TextDirection; // NumberFormat (TextDirection من Flutter)
+import '../wa_messages/wa_doc_sender.dart'; // 📨
 import '../services/database_service.dart'; // Added for DatabaseService
 import '../models/invoice_adjustment.dart'; // Added for InvoiceAdjustment model
 import 'package:share_plus/share_plus.dart';
@@ -530,6 +531,23 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
                   icon: const Icon(Icons.share_rounded, color: _muted),
                   onPressed: () => _shareInvoicePdf(invoice),
                 ),
+                // 📨 إرسال الفاتورة لصاحبها عبر واتساب (الخادم) — رقم الفاتورة أو رقم العميل
+                if (invoice.id != null)
+                  WaSendDocButton(
+                    color: _green,
+                    source: 'invoice',
+                    make: () async {
+                      final pdf = await _invoicePdf(invoice);
+                      return WaDoc(
+                        bytes: pdf.bytes,
+                        fileName: pdf.fileName,
+                        caption: 'فاتورة رقم ${invoice.invoiceNumber ?? invoice.id} — ${invoice.customerName}',
+                        customerId: invoice.customerId,
+                        customerName: invoice.customerName,
+                        phone: invoice.customerPhone,
+                      );
+                    },
+                  ),
                 // ↩️ مرتجع من هذه الفاتورة (مستند مستقل، موادها فقط).
                 // 🔒 فاتورة المزامنة: من جهازها أو بحساب محاسبها فقط.
                 if (!pending && invoice.id != null && _returnBlock(invoice) != null)
@@ -558,63 +576,71 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
     );
   }
 
+  /// 📄 PDF الفاتورة (بايتات واسم الملف) — للمشاركة وللإرسال عبر واتساب.
+  Future<({Uint8List bytes, String fileName})> _invoicePdf(Invoice invoice) async {
+    final db = DatabaseService();
+    final items = await db.getInvoiceItems(invoice.id!);
+    final products = await db.getAllProducts();
+
+    // تحميل الخطوط والشعار
+    final fontData = await rootBundle.load('assets/fonts/Amiri-Regular.ttf');
+    final alnaserFontData = await rootBundle.load('assets/fonts/PTBLDHAD.TTF');
+    final logoBytes = await rootBundle.load('assets/icon/alnasser.jpg');
+    final font = pw.Font.ttf(fontData);
+    final alnaserFont = pw.Font.ttf(alnaserFontData);
+    final logoImage = pw.MemoryImage(logoBytes.buffer.asUint8List());
+
+    // تحميل الإعدادات العامة
+    final appSettings = await SettingsManager.getAppSettings();
+
+    // نفس حساب الطباعة الجماعية: كان التحميل = المجموع − البنود (يدخل فيه الخصم
+    // والتسويات)، ثم يُطرح الخصم مرة ثانية من «بعد الخصم» و«المتبقي».
+    final double itemsTotal =
+        items.fold(0.0, (sum, item) => sum + item.itemTotal);
+    final double loadingFee = invoice.loadingFee;
+    final double afterDiscount = (itemsTotal + loadingFee) - invoice.discount;
+    final double remaining = invoice.paymentType == 'نقد' ? 0.0 : afterDiscount - invoice.amountPaidOnInvoice;
+
+    final doc = await InvoicePdfService.generateInvoicePdf(
+      invoiceItems: items,
+      allProducts: products,
+      customerName: invoice.customerName,
+      customerAddress: invoice.customerAddress ?? '',
+      customerPhone: invoice.customerPhone,
+      invoiceId: invoice.id ?? 0,
+      selectedDate: invoice.invoiceDate,
+      discount: invoice.discount,
+      loadingFee: loadingFee,
+      paid: invoice.amountPaidOnInvoice,
+      paymentType: invoice.paymentType,
+      invoiceToManage: invoice,
+      previousDebt: 0,
+      currentDebt: 0,
+      afterDiscount: afterDiscount,
+      remaining: remaining,
+      font: font,
+      alnaserFont: alnaserFont,
+      logoImage: logoImage,
+      createdAt: invoice.createdAt,
+      appSettings: appSettings,
+    );
+
+    // حفظ الملف
+    final safeCustomerName = invoice.customerName.replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');
+    final formattedDate = DateFormat('yyyy-MM-dd').format(invoice.invoiceDate);
+    final fileName = '${safeCustomerName}_$formattedDate.pdf';
+
+    return (bytes: await doc.save(), fileName: fileName);
+  }
+
   Future<void> _shareInvoicePdf(Invoice invoice) async {
     try {
-      final db = DatabaseService();
-      final items = await db.getInvoiceItems(invoice.id!);
-      final products = await db.getAllProducts();
-
-      // تحميل الخطوط والشعار
-      final fontData = await rootBundle.load('assets/fonts/Amiri-Regular.ttf');
-      final alnaserFontData = await rootBundle.load('assets/fonts/PTBLDHAD.TTF');
-      final logoBytes = await rootBundle.load('assets/icon/alnasser.jpg');
-      final font = pw.Font.ttf(fontData);
-      final alnaserFont = pw.Font.ttf(alnaserFontData);
-      final logoImage = pw.MemoryImage(logoBytes.buffer.asUint8List());
-
-      // تحميل الإعدادات العامة
-      final appSettings = await SettingsManager.getAppSettings();
-
-      // نفس حساب الطباعة الجماعية: كان التحميل = المجموع − البنود (يدخل فيه الخصم
-      // والتسويات)، ثم يُطرح الخصم مرة ثانية من «بعد الخصم» و«المتبقي».
-      final double itemsTotal =
-          items.fold(0.0, (sum, item) => sum + item.itemTotal);
-      final double loadingFee = invoice.loadingFee;
-      final double afterDiscount = (itemsTotal + loadingFee) - invoice.discount;
-      final double remaining = invoice.paymentType == 'نقد' ? 0.0 : afterDiscount - invoice.amountPaidOnInvoice;
-
-      final doc = await InvoicePdfService.generateInvoicePdf(
-        invoiceItems: items,
-        allProducts: products,
-        customerName: invoice.customerName,
-        customerAddress: invoice.customerAddress ?? '',
-        customerPhone: invoice.customerPhone,
-        invoiceId: invoice.id ?? 0,
-        selectedDate: invoice.invoiceDate,
-        discount: invoice.discount,
-        loadingFee: loadingFee,
-        paid: invoice.amountPaidOnInvoice,
-        paymentType: invoice.paymentType,
-        invoiceToManage: invoice,
-        previousDebt: 0,
-        currentDebt: 0,
-        afterDiscount: afterDiscount,
-        remaining: remaining,
-        font: font,
-        alnaserFont: alnaserFont,
-        logoImage: logoImage,
-        createdAt: invoice.createdAt,
-        appSettings: appSettings,
-      );
-
-      // حفظ الملف
-      final safeCustomerName = invoice.customerName.replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');
-      final formattedDate = DateFormat('yyyy-MM-dd').format(invoice.invoiceDate);
-      final fileName = '${safeCustomerName}_$formattedDate.pdf';
+      final pdf = await _invoicePdf(invoice);
+      final fileName = pdf.fileName;
 
       // 🌐 الويب: مشاركة وتنزيل PDF مباشرة عبر المتصفح دون مجلدات مؤقتة
       if (kIsWeb) {
-        final bytes = await doc.save();
+        final bytes = pdf.bytes;
         await Printing.sharePdf(
           bytes: bytes,
           filename: fileName,
@@ -628,7 +654,7 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
       }
       final filePath = '${directory.path}/$fileName';
       final file = File(filePath);
-      await file.writeAsBytes(await doc.save());
+      await file.writeAsBytes(pdf.bytes);
 
       await Share.shareXFiles([XFile(file.path)], text: 'فاتورة ${invoice.customerName}');
     } catch (e) {

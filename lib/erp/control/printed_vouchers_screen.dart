@@ -24,6 +24,7 @@ import '../debts/receipts_service.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../report_export.dart';
+import '../../wa_messages/wa_doc_sender.dart';
 import 'control_common.dart';
 
 String _dt(DateTime d) =>
@@ -96,18 +97,20 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
 
   // ───────────────────────── إعادة الطباعة ─────────────────────────
 
-  Future<void> _reprint(PrintedVoucher v, {bool share = false}) async {
+  Future<void> _reprint(PrintedVoucher v, {bool share = false, bool wa = false}) async {
+    // 📨 واتساب: يُفحص قبل البناء كي لا تُسجَّل نسخة لن تُرسل
+    if (wa && v.refType != PrintedRef.editEvent && !await WaDocSender.precheck(context)) return;
     try {
       switch (v.refType) {
         case PrintedRef.customerReceipt:
-          await _reprintReceipt(v.refId!, share: share);
+          await _reprintReceipt(v.refId!, share: share, wa: wa);
         case PrintedRef.editEvent:
-          await VoucherPrint.printEditEvent(context, v.refId!);
+          await VoucherPrint.printEditEvent(context, v.refId!, wa: wa);
         case PrintedRef.legacyReceipt:
           final db = await controlDb();
           final r = await db.query('customer_receipt_vouchers', where: 'id = ?', whereArgs: [v.refId], limit: 1);
           if (r.isEmpty) throw ErpException('السند غير موجود في الأرشيف القديم');
-          await _reprintLegacy(r.first, share: share);
+          await _reprintLegacy(r.first, share: share, wa: wa);
       }
     } catch (e) {
       if (mounted) showError(context, e);
@@ -116,16 +119,27 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
   }
 
   /// 📤 فتح للطباعة أو مشاركة — كلاهما نسخة مسجّلة (رقمها على الورقة)
-  Future<void> _deliver(Uint8List bytes, String name, {required bool share, String? text}) async {
+  Future<void> _deliver(Uint8List bytes, String name,
+      {required bool share, String? text, bool wa = false, int? customerId, String customerName = ''}) async {
     if (!mounted) return;
-    if (share) {
+    if (wa) {
+      await WaDocSender.send(
+          context,
+          () async => WaDoc(
+              bytes: bytes,
+              fileName: '$name.pdf',
+              caption: text ?? name,
+              customerId: customerId,
+              customerName: customerName),
+          source: 'voucher');
+    } else if (share) {
       await ReportExport.sharePdf(context, bytes, name, text: text);
     } else {
       await ReportExport.openPdf(context, bytes, name);
     }
   }
 
-  Future<void> _reprintReceipt(int receiptId, {bool share = false}) async {
+  Future<void> _reprintReceipt(int receiptId, {bool share = false, bool wa = false}) async {
     final db = await controlDb();
     final h = await db.rawQuery('''
       SELECT r.*, b.name AS box_name FROM customer_receipts r LEFT JOIN cash_boxes b ON b.id = r.cash_box_id
@@ -149,10 +163,14 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       stamp: stamp,
     );
     await _deliver(bytes, 'وصل_قبض_${r['receipt_no']}_نسخة_${stamp.copyNo}',
-        share: share, text: 'وصل قبض رقم ${r['receipt_no']}');
+        share: share,
+        text: 'وصل قبض رقم ${r['receipt_no']}',
+        wa: wa,
+        customerId: WaDocSender.singleCustomer(lines),
+        customerName: {for (final l in lines) '${l['customer_name'] ?? ''}'}.where((n) => n.isNotEmpty).join('، '));
   }
 
-  Future<void> _reprintLegacy(Map<String, Object?> r, {bool share = false}) async {
+  Future<void> _reprintLegacy(Map<String, Object?> r, {bool share = false, bool wa = false}) async {
     final stamp = await PrintedVouchers.forLegacyReceipt(
       archiveId: r['id'] as int,
       receiptNumber: (r['receipt_number'] as num).toInt(),
@@ -189,7 +207,11 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
     );
     final bytes = await pdf.save();
     await _deliver(bytes, 'سند_قبض_${r['receipt_number']}_نسخة_${stamp.copyNo}',
-        share: share, text: 'سند قبض رقم ${r['receipt_number']} — ${r['customer_name'] ?? ''}');
+        share: share,
+        text: 'سند قبض رقم ${r['receipt_number']} — ${r['customer_name'] ?? ''}',
+        wa: wa,
+        customerId: (r['customer_id'] as num?)?.toInt(),
+        customerName: '${r['customer_name'] ?? ''}');
   }
 
   // ───────────────────────── التفاصيل والتحقق ─────────────────────────
@@ -269,6 +291,12 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
               label: Text('مشاركة (نسخة ${prints.length + 1})'),
             ),
           if (state != VoucherState.deleted)
+            OutlinedButton.icon(
+              onPressed: () => Navigator.pop(ctx, 'wa'),
+              icon: const Icon(Icons.send_to_mobile_rounded, color: Color(0xFF047857)),
+              label: const Text('إرسال لصاحبه (واتساب)'),
+            ),
+          if (state != VoucherState.deleted)
             FilledButton.icon(
               onPressed: () => Navigator.pop(ctx, 'print'),
               icon: const Icon(Icons.print_rounded),
@@ -277,7 +305,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
         ],
       ),
     );
-    if (again != null) await _reprint(v, share: again == 'share');
+    if (again != null) await _reprint(v, share: again == 'share', wa: again == 'wa');
   }
 
   Widget _kv(String k, String v) => Padding(
@@ -303,6 +331,10 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
               onPressed: () => Navigator.pop(ctx, 'share'),
               icon: const Icon(Icons.share_rounded),
               label: const Text('مشاركة')),
+          OutlinedButton.icon(
+              onPressed: () => Navigator.pop(ctx, 'wa'),
+              icon: const Icon(Icons.send_to_mobile_rounded, color: Color(0xFF047857)),
+              label: const Text('واتساب')),
           FilledButton.icon(
               onPressed: () => Navigator.pop(ctx, 'print'),
               icon: const Icon(Icons.print_rounded),
@@ -311,8 +343,9 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       ),
     );
     if (choice == null) return;
+    if (choice == 'wa' && !await WaDocSender.precheck(context)) return;
     try {
-      await _reprintLegacy(r, share: choice == 'share');
+      await _reprintLegacy(r, share: choice == 'share', wa: choice == 'wa');
     } catch (e) {
       if (mounted) showError(context, e);
     }

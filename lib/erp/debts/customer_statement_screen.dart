@@ -10,6 +10,7 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
+import '../../wa_messages/wa_doc_sender.dart';
 import 'statement_service.dart';
 
 class CustomerStatementScreen extends StatefulWidget {
@@ -187,6 +188,20 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
     }
   }
 
+  /// 📨 نفس ملف «مشاركة» يُرسل إلى واتساب العميل عبر الخادم.
+  Future<WaDoc?> _waDoc() async {
+    final bytes = await ReportExport.tablePdf(
+        title: 'كشف حساب $_customerName', subtitle: _subtitle, headers: _headers, rows: _data, footer: _footer);
+    final safe = _customerName.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_');
+    return WaDoc(
+      bytes: bytes,
+      fileName: 'كشف_حساب_$safe.pdf',
+      caption: 'كشف حساب $_customerName — $_subtitle',
+      customerId: _customerId,
+      customerName: _customerName,
+    );
+  }
+
   /// 🔒 فُتح الكشف من صفحة عميل: يبقى لهذا العميل وحده (لا تنقّل إلى عميل آخر)
   bool get _locked => widget.customerId != null;
 
@@ -205,6 +220,7 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
           icon: const Icon(Icons.share_rounded),
           onPressed: _st == null ? null : _share,
         ),
+        WaSendDocButton(enabled: _st != null && _customerId != null, source: 'statement', make: _waDoc),
         ...exportActions(context,
             title: 'كشف حساب $_customerName',
             headers: () => _headers,

@@ -16,6 +16,7 @@ import '../stock_helpers.dart';
 import 'doc_pdf.dart';
 import 'invoice_bridge.dart';
 import 'quote_order_service.dart';
+import '../../wa_messages/wa_doc_sender.dart';
 
 const Map<String, String> quoteStatusLabels = {
   'open': 'مفتوح',
@@ -61,6 +62,9 @@ Future<void> printLines(
   double discount = 0,
   String? notes,
   String? terms,
+  bool wa = false, // 📨 بدل الفتح: إرسال لصاحبه عبر واتساب (للعملاء فقط — لا تمرّر معرّف مورد)
+  int? customerId,
+  String? phone,
 }) async {
   final bytes = await DocPdf.build(
     title: title,
@@ -88,7 +92,22 @@ Future<void> printLines(
     notes: notes,
     terms: terms,
   );
-  if (context.mounted) await ReportExport.openPdf(context, bytes, '${title}_$number');
+  if (!context.mounted) return;
+  if (wa) {
+    await WaDocSender.send(
+        context,
+        () async => WaDoc(
+              bytes: bytes,
+              fileName: '${title}_$number.pdf'.replaceAll(' ', '_'),
+              caption: '$title رقم $number — $partyName',
+              customerId: customerId,
+              customerName: partyName,
+              phone: phone,
+            ),
+        source: 'doc');
+    return;
+  }
+  await ReportExport.openPdf(context, bytes, '${title}_$number');
 }
 
 // ═══════════════════════════ عروض الأسعار ═══════════════════════════
@@ -279,9 +298,13 @@ class _QuotationEditorScreenState extends State<QuotationEditorScreen> {
     }
   }
 
-  Future<void> _print() async {
-    if (!await _save() || !mounted) return;
+  Future<void> _print({bool wa = false}) async {
+    if (wa && !await WaDocSender.precheck(context)) return;
+    if (!mounted || !await _save() || !mounted) return;
     await printLines(context,
+        wa: wa,
+        customerId: _customer?.id,
+        phone: _phone.text,
         title: 'عرض سعر',
         number: '$_number',
         date: _date,
@@ -332,6 +355,10 @@ class _QuotationEditorScreenState extends State<QuotationEditorScreen> {
       icon: Icons.request_quote_outlined,
       actions: [
         IconButton(tooltip: 'طباعة', icon: const Icon(Icons.print), onPressed: _print),
+        IconButton(
+            tooltip: 'إرسال لصاحبه عبر واتساب (الخادم)',
+            icon: const Icon(Icons.send_to_mobile_rounded),
+            onPressed: () => _print(wa: true)),
         if (_id != null && _status == 'open')
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Colors.white),
@@ -781,6 +808,27 @@ class _OrderEditorScreenState extends State<OrderEditorScreen> {
               lines: _lines,
               notes: _notes.text),
         ),
+        // 📨 طلب المبيعات فقط: طلب الشراء لمورد وليس لعميل
+        if (_sales)
+          IconButton(
+            tooltip: 'إرسال لصاحبه عبر واتساب (الخادم)',
+            icon: const Icon(Icons.send_to_mobile_rounded),
+            onPressed: () => printLines(context,
+                wa: true,
+                customerId: _party?.id,
+                phone: _party?.phone,
+                title: 'طلب مبيعات',
+                number: '${_number ?? '-'}',
+                date: _date,
+                partyLabel: 'العميل',
+                partyName: _party?.name ?? '',
+                infos: [
+                  if (_delivery != null) MapEntry('التسليم', fmtDate(_delivery!)),
+                  MapEntry('الأولوية', priorityLabels[_priority] ?? ''),
+                ],
+                lines: _lines,
+                notes: _notes.text),
+          ),
         if (_id != null && (_status == 'open' || _status == 'partial'))
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Colors.white),

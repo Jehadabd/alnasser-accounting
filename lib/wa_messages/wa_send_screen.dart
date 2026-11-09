@@ -163,6 +163,10 @@ class _WaLogScreenState extends State<WaLogScreen> {
         'reminder' => 'مواعيد المطالبة',
         'card' => 'من حساب العميل',
         'loyalty' => 'برنامج الولاء',
+        'invoice' => 'فاتورة (PDF)',
+        'statement' => 'كشف حساب (PDF)',
+        'voucher' => 'وصل / سند (PDF)',
+        'doc' => 'مستند (PDF)',
         'legacy' => 'التذكير الشهري (قديم)',
         _ => e.source,
       };

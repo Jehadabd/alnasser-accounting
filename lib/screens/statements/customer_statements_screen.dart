@@ -12,6 +12,7 @@ import 'package:intl/intl.dart' hide TextDirection; // TextDirection من Flutte
 import '../../accounting/screens/acc_ui.dart';
 import '../../erp/report_export.dart' show ReportExport;
 import '../../services/invoice_edit_log.dart';
+import '../../wa_messages/wa_doc_sender.dart';
 import 'statement_engine.dart';
 import 'statement_pdf.dart';
 
@@ -121,6 +122,20 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
     return null;
   }
 
+  /// 📨 نفس الملف المعروض يُرسل إلى واتساب العميل عبر الخادم.
+  Future<WaDoc?> _waDoc() async {
+    final f = await _pdf();
+    if (f == null) return null;
+    final kind = _tab == StatementTab.account ? 'كشف حساب' : 'الكشف التجاري';
+    return WaDoc(
+      bytes: f.$1,
+      fileName: '${f.$2.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_')}.pdf',
+      caption: '$kind ${widget.customerName}',
+      customerId: widget.customerId,
+      customerName: widget.customerName,
+    );
+  }
+
   Future<void> _print({bool share = false}) async {
     setState(() => _printing = true);
     try {
@@ -176,6 +191,9 @@ class _CustomerStatementsScreenState extends State<CustomerStatementsScreen> {
           icon: Icons.receipt_long_rounded,
           subtitle: _tab == StatementTab.account ? 'كشف الحساب' : 'الكشف التجاري',
           actions: [
+            // 📨 إرسال الكشف لصاحبه عبر واتساب (الخادم)
+            WaSendDocButton(
+                color: Colors.white, enabled: !_loading && !_printing, source: 'statement', make: _waDoc),
             // 📤 مشاركة الكشف PDF — مثل مشاركة الفاتورة
             Padding(
               padding: const EdgeInsetsDirectional.only(end: 6),

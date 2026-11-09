@@ -37,6 +37,7 @@ import '../models/app_user.dart' show AppPermissions; // 🔐 دين يدوي / 
 import '../services/auth_service.dart';
 import '../erp/debts/receipt_screen.dart' show ReceiptScreen; // 🧾 وصل قبض متقدم
 import '../erp/pickers.dart' show PartyLite;
+import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال الوصل لصاحبه عبر واتساب
 
 class AddTransactionScreen extends StatefulWidget {
   final Customer customer;
@@ -648,7 +649,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     final pmode = await VoucherPrint.modeFor(VoucherKinds.receipt);
     if (!mounted) return;
     // طباعة / مشاركة / لا شيء — وصل القبض محفوظ في كل الأحوال (سجل الوصولات)
-    final choice = pmode == 'always'
+    String? choice = pmode == 'always'
         ? 'print'
         : pmode == 'never'
             ? null
@@ -664,6 +665,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                       icon: const Icon(Icons.share_rounded, size: 18),
                       label: const Text('مشاركة'),
                     ),
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.of(ctx).pop('wa'),
+                      icon: const Icon(Icons.send_to_mobile_rounded, size: 18, color: Color(0xFF047857)),
+                      label: const Text('واتساب'),
+                    ),
                     FilledButton.icon(
                       onPressed: () => Navigator.of(ctx).pop('print'),
                       icon: const Icon(Icons.print_rounded, size: 18),
@@ -672,6 +678,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ],
                 ),
               );
+    // 📨 واتساب: يُفحص قبل تسجيل النسخة (التسديد محفوظ في كل الأحوال)
+    if (choice == 'wa' && mounted && !await WaDocSender.precheck(context)) choice = null;
     if (choice != null && mounted) {
       // الطباعة/المشاركة بعد الحفظ: فشلها لا يعني أن التسديد لم يُحفظ
       try {
@@ -690,7 +698,19 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           stamp: stamp,
         );
         if (!mounted) return;
-        if (choice == 'share') {
+        if (choice == 'wa') {
+          await WaDocSender.send(
+              context,
+              () async => WaDoc(
+                    bytes: bytes,
+                    fileName: 'وصل_قبض_${res.receiptNo}.pdf',
+                    caption: 'وصل قبض رقم ${res.receiptNo} — ${widget.customer.name}',
+                    customerId: widget.customer.id,
+                    customerName: widget.customer.name,
+                    phone: widget.customer.phone,
+                  ),
+              source: 'voucher');
+        } else if (choice == 'share') {
           await ReportExport.sharePdf(context, bytes, 'وصل_قبض_${res.receiptNo}',
               text: 'وصل قبض رقم ${res.receiptNo} — ${widget.customer.name}');
         } else {
