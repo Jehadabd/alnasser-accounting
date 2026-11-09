@@ -29,6 +29,7 @@ import '../erp/control/control_screens.dart' show ControlHubScreen;
 import 'people_reports_screen.dart';
 import 'product_reports_screen.dart';
 import 'returns_report_screen.dart';
+import 'employee_sales_screen.dart'; // 👷
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -71,6 +72,9 @@ class ReportsScreen extends StatefulWidget {
           HubTile('تقارير الأشخاص', Icons.people_alt_rounded, kSetBlue, () => go(const PeopleReportsScreen()),
               subtitle: 'كل عميل: السنوات ← الأشهر ← الفواتير بربح كل فاتورة',
               permission: AppPermissions.repPeople),
+          HubTile('مبيعات الموظفين', Icons.badge_rounded, const Color(0xFF0F766E), () => go(const EmployeeSalesScreen()),
+              subtitle: 'من باع كم: الفواتير، صافي المبيعات، النقد والدين، المرتجعات، والربح لمن يراه',
+              permission: AppPermissions.repEmployees),
         ]),
         // 👷 لحساب المالك فقط
         if (OwnerAccess.enabled)

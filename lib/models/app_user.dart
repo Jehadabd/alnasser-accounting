@@ -145,9 +145,11 @@ class AppPermissions {
   static const String repPeople = 'rep_people';
   static const String repReturns = 'rep_returns';
   static const String repFounders = 'rep_founders';
+  static const String repEmployees = 'rep_employees'; // 👷 مبيعات الموظفين
 
   static const List<String> reportKeys = [
     repDaily, repWeekly, repMonthly, repYearly, repCustom, repProducts, repPeople, repReturns, repFounders,
+    repEmployees,
   ];
 
   static bool isReportKey(String k) => k.startsWith('rep_');
@@ -246,6 +248,7 @@ class AppPermissions {
     repPeople: 'تقارير الأشخاص',
     repReturns: 'تقرير المرتجعات',
     repFounders: 'تقارير المؤسسين',
+    repEmployees: 'مبيعات الموظفين',
     // سجل الديون زراً زراً
     drView: 'عرض سجل الديون والعملاء وأرصدتهم',
     drAddCustomer: 'إضافة عميل جديد',
