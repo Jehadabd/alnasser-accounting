@@ -31,6 +31,7 @@ class WaJob {
     required this.options,
     this.ruleId,
     this.ruleName,
+    this.requireDebt = true,
   });
   final int customerId;
   final String name, phone;
@@ -39,6 +40,9 @@ class WaJob {
   final String source;
   final String? ruleId, ruleName;
   final WaMessageOptions options;
+
+  /// true (المطالبات) = لا تُرسل لمن لا دين عليه لحظة الإرسال. false = رسائل عامة (الولاء).
+  final bool requireDebt;
 
   String get key => '$customerId|${ruleId ?? source}';
 }
@@ -159,7 +163,7 @@ class WaOutbox {
             'SELECT current_total_debt AS d, COALESCE(is_deleted, 0) AS del FROM customers WHERE id = ?',
             [job.customerId]);
         final debt = r.isEmpty ? 0.0 : ((r.first['d'] as num?)?.toDouble() ?? 0);
-        if (r.isEmpty || r.first['del'] != 0 || debt < 0.5) {
+        if (r.isEmpty || r.first['del'] != 0 || (job.requireDebt && debt < 0.5)) {
           skipped++;
           await WaMessageLog.add(
               customerId: job.customerId,
@@ -169,7 +173,7 @@ class WaOutbox {
               ruleId: job.ruleId,
               ruleName: job.ruleName,
               status: 'skipped',
-              error: 'لا دين عليه الآن',
+              error: r.isEmpty || r.first['del'] != 0 ? 'العميل محذوف' : 'لا دين عليه الآن',
               amount: debt);
           first = true; // لا انتظار بلا إرسال
           emit();

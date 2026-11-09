@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 
 import '../../erp/accounting_plus/voucher_pdf.dart';
 import '../../erp/arabic_words.dart';
+import '../../erp/control/approval_gate.dart' show ApprovalGate;
 import '../../erp/erp_common.dart' show confirmDialog, parseMoney;
 import '../../erp/erp_ui.dart';
 import '../../models/app_user.dart';
@@ -880,6 +881,12 @@ class _VoucherFormScreenState extends State<VoucherFormScreen> {
       showError(context, 'اختر الصندوق المحوَّل إليه');
       return;
     }
+    // 💸 موافقة المدير على التحويل بين الصناديق (إن فُعّلت في «موافقات المدير»)
+    if (_type == VoucherType.transfer &&
+        !await ApprovalGate.checkCashTransfer(context, amount: amount, fromBox: _box!.name, toBox: _toBox!.name)) {
+      return;
+    }
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       await _svc.create(

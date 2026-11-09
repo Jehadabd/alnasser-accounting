@@ -34,6 +34,7 @@ import '../invoice_designer/layout_pdf_renderer.dart';
 import '../services/printing_service.dart';
 import '../services/settings_manager.dart';
 import '../services/auth_service.dart'; // 👤 User authentication
+import '../org/warehouse_scope.dart'; // 🔐 نطاق الموظف
 import '../services/debt_reminders.dart'; // 📅
 import '../services/product_codes.dart'; // 🏷️ رمز المادة
 import '../services/logo_service.dart'; // 🖼️ Custom logo loading
@@ -302,6 +303,18 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         customerName: inputData.customerName,
       );
       if (!go) return null;
+    }
+
+    // 🔐 الموظف المقيَّد بمخازن: مخزن هذا الجهاز يجب أن يكون من مخازنه
+    {
+      final block = await WarehouseScope.saleBlockReason();
+      if (block != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(block), backgroundColor: Colors.red.shade700));
+        }
+        return null;
+      }
     }
 
     setState(() {

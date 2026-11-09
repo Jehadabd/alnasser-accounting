@@ -19,6 +19,8 @@ import 'manufacturing_screen.dart';
 import 'price_tools_screen.dart';
 import 'stock_count_screen.dart';
 import 'stock_docs_screen.dart';
+import '../batches/batch_screen.dart'; // 🧪
+import '../variants/variant_screen.dart'; // 👕
 
 class InventoryHubScreen extends StatefulWidget {
   const InventoryHubScreen({super.key});
@@ -34,6 +36,10 @@ class InventoryHubScreen extends StatefulWidget {
             subtitle: 'رفع أو خفض أسعار مجموعة مواد بمعاينة وتراجع', permission: AppPermissions.priceTools),
         HubTile('ملصقات تحتاج إعادة طباعة', Icons.new_label_rounded, ErpColors.orange, () => go(const LabelReprintScreen()),
             subtitle: 'مواد تغيّر سعرها بعد طباعة ملصقها', permission: AppPermissions.itemCard),
+        HubTile('متغيّرات المواد', Icons.style_rounded, ErpColors.purple, () => go(const VariantScreen()),
+            subtitle: 'مقاس × لون: مادة لكل تركيبة بكميتها', permission: AppPermissions.editProducts),
+        HubTile('الدفعات والصلاحية', Icons.event_busy_rounded, ErpColors.red, () => go(const BatchScreen()),
+            subtitle: 'دفعات بتاريخ انتهاء، وتنبيه بما يقترب', permission: AppPermissions.itemCard),
       ]),
       HubSection('حركة المخزون', [
         HubTile('سند إدخال', Icons.move_to_inbox_rounded, ErpColors.green, () => go(const StockDocEditorScreen(docType: 'in')),

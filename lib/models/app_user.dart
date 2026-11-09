@@ -126,6 +126,9 @@ class AppPermissions {
   // 🧱 ميزات الإداري وسهل
   static const String dashboard = 'erp_dashboard'; // لوحة المؤشرات
   static const String salesDocs = 'erp_sales_docs'; // المرتجعات، عروض الأسعار، الطلبات
+  static const String changePrice = 'change_price'; // 🏷️ تغيير سعر البيع في الفاتورة بلا موافقة
+  static const String delivery = 'erp_delivery'; // 🚚 شركات التوصيل وطلباتها
+  static const String loyalty = 'erp_loyalty'; // 🎁 برنامج الولاء
   static const String collection = 'erp_collection'; // وصولات القبض، الاستحقاقات، المطابقة
   static const String debtReports = 'erp_debt_reports'; // أعمار الديون ونسب التحصيل
   static const String customerCard = 'erp_customer_card'; // بطاقة العميل الموسّعة
@@ -230,6 +233,9 @@ class AppPermissions {
     // ميزات الإداري وسهل
     dashboard: 'لوحة المؤشرات',
     salesDocs: 'مستندات المبيعات: المرتجعات، عروض الأسعار، الطلبات',
+    changePrice: 'تغيير سعر البيع في الفاتورة (بلا موافقة المدير)',
+    delivery: 'شركات التوصيل وطلباتها',
+    loyalty: 'برنامج الولاء: الأعضاء والمكافآت',
     collection: 'التحصيل: وصولات القبض، الاستحقاقات، مطابقة الأرصدة',
     debtReports: 'تقارير الديون: أعمار الديون ونسب التحصيل',
     customerCard: 'بطاقة العميل الموسّعة (سقف الدين، المجموعة...)',

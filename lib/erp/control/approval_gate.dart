@@ -4,6 +4,8 @@
 //   • فاتورة بتاريخ يوم سابق: تعديل فاتورة يوم مضى، أو فاتورة جديدة بتاريخ رجعي.
 //   • بيع تحت الكلفة (ومنه الهدية المجانية).
 //   • خصم أعلى من نسبة يحددها المدير (خصم الفاتورة + خصومات الأسطر).
+//   • 🏷️ تغيير السعر عن أسعار قائمة المادة (لمن ليست له صلاحية «تغيير السعر»).
+//   • 💸 تحويل نقدي بين الصناديق (فوق مبلغ يحدده المدير).
 //
 // المدير المسجّل دخوله لا يُسأل. غيره: تظهر أسباب المنع، ويُدخل المدير كلمة سرّه
 // على الجهاز نفسه فيستمر الحفظ — أو يُلغى. كل طلب يُسجَّل في «سجل الموافقات»
@@ -18,17 +20,22 @@ import '../../services/auth_service.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
 import 'control_common.dart';
+import 'price_list.dart';
 
 class ApprovalRule {
   ApprovalRule._();
   static const pastDate = 'past_date';
   static const belowCost = 'below_cost';
   static const discount = 'discount';
+  static const priceChange = 'price_change';
+  static const cashTransfer = 'cash_transfer';
 
   static String label(String r) => switch (r) {
         pastDate => 'فاتورة بتاريخ سابق',
         belowCost => 'بيع تحت الكلفة',
         discount => 'خصم أعلى من المسموح',
+        priceChange => 'تغيير سعر البيع',
+        cashTransfer => 'تحويل بين الصناديق',
         _ => r,
       };
 
@@ -36,20 +43,58 @@ class ApprovalRule {
   static const kPastDate = 'approve_past_date';
   static const kBelowCost = 'approve_below_cost';
   static const kDiscountPct = 'approve_discount_pct';
+  static const kPriceChange = 'approve_price_change';
+  static const kCashTransfer = 'approve_cash_transfer';
+  static const kCashTransferMin = 'approve_cash_transfer_min';
 }
 
 class ApprovalSettings {
-  ApprovalSettings({required this.pastDate, required this.belowCost, required this.discountPct});
+  ApprovalSettings({
+    required this.pastDate,
+    required this.belowCost,
+    required this.discountPct,
+    this.priceChange = false,
+    this.cashTransfer = false,
+    this.cashTransferMin = 0,
+  });
   final bool pastDate;
   final bool belowCost;
 
   /// 0 = بلا قيد على الخصم.
   final double discountPct;
 
+  /// تغيير السعر عن قائمة المادة يحتاج صلاحية «تغيير السعر» أو موافقة. مطفأ افتراضياً
+  /// (تشغيله يغيّر عمل الموظفين الحالي، فلا يُفرض دون قرار المدير).
+  final bool priceChange;
+
+  /// تحويل بين الصناديق يحتاج موافقة إن بلغ [cashTransferMin] (0 = أي مبلغ).
+  final bool cashTransfer;
+  final double cashTransferMin;
+
+  ApprovalSettings copyWith({
+    bool? pastDate,
+    bool? belowCost,
+    double? discountPct,
+    bool? priceChange,
+    bool? cashTransfer,
+    double? cashTransferMin,
+  }) =>
+      ApprovalSettings(
+        pastDate: pastDate ?? this.pastDate,
+        belowCost: belowCost ?? this.belowCost,
+        discountPct: discountPct ?? this.discountPct,
+        priceChange: priceChange ?? this.priceChange,
+        cashTransfer: cashTransfer ?? this.cashTransfer,
+        cashTransferMin: cashTransferMin ?? this.cashTransferMin,
+      );
+
   static Future<ApprovalSettings> load() async => ApprovalSettings(
         pastDate: await ControlSettings.getBool(ApprovalRule.kPastDate, true),
         belowCost: await ControlSettings.getBool(ApprovalRule.kBelowCost, true),
         discountPct: await ControlSettings.getNum(ApprovalRule.kDiscountPct, 10),
+        priceChange: await ControlSettings.getBool(ApprovalRule.kPriceChange, false),
+        cashTransfer: await ControlSettings.getBool(ApprovalRule.kCashTransfer, false),
+        cashTransferMin: await ControlSettings.getNum(ApprovalRule.kCashTransferMin, 0),
       );
 
   static Future<void> save(ApprovalSettings s) async {
@@ -57,8 +102,12 @@ class ApprovalSettings {
     await ControlSettings.setBool(ApprovalRule.kPastDate, s.pastDate);
     await ControlSettings.setBool(ApprovalRule.kBelowCost, s.belowCost);
     await ControlSettings.setNum(ApprovalRule.kDiscountPct, s.discountPct < 0 ? 0 : s.discountPct);
+    await ControlSettings.setBool(ApprovalRule.kPriceChange, s.priceChange);
+    await ControlSettings.setBool(ApprovalRule.kCashTransfer, s.cashTransfer);
+    await ControlSettings.setNum(ApprovalRule.kCashTransferMin, s.cashTransferMin < 0 ? 0 : s.cashTransferMin);
     ActivityLog.log('تعديل', 'إعدادات الموافقات',
-            'تاريخ سابق: ${s.pastDate ? 'نعم' : 'لا'}، تحت الكلفة: ${s.belowCost ? 'نعم' : 'لا'}، الخصم: ${s.discountPct}%')
+            'تاريخ سابق: ${s.pastDate ? 'نعم' : 'لا'}، تحت الكلفة: ${s.belowCost ? 'نعم' : 'لا'}، الخصم: ${s.discountPct}%، '
+            'تغيير السعر: ${s.priceChange ? 'نعم' : 'لا'}، التحويل بين الصناديق: ${s.cashTransfer ? 'من ${s.cashTransferMin}' : 'لا'}')
         .catchError((_) {});
   }
 }
@@ -82,6 +131,8 @@ List<ApprovalViolation> invoiceViolations({
   required DateTime selectedDate,
   DateTime? originalDate,
   DateTime? today,
+  Map<String, List<double>> listPrices = const {},
+  bool canChangePrice = false,
 }) {
   final now = _day(today ?? DateTime.now());
   final out = <ApprovalViolation>[];
@@ -130,6 +181,22 @@ List<ApprovalViolation> invoiceViolations({
       }
     }
   }
+
+  if (settings.priceChange && !canChangePrice && listPrices.isNotEmpty) {
+    final lines = <String>[];
+    for (final it in real) {
+      if (it.isGift) continue;
+      final base = PriceList.lookup(listPrices, it);
+      if (base == null || PriceList.matches(it, base) != false) continue;
+      if (lines.length < 5) {
+        lines.add('«${it.productName}» بسعر ${_m(it.priceBeforeDiscount ?? it.appliedPrice)} '
+            '(أسعار القائمة: ${base.map(_m).join('، ')})');
+      }
+    }
+    if (lines.isNotEmpty) {
+      out.add(ApprovalViolation(ApprovalRule.priceChange, 'سعر غير أسعار المادة: ${lines.join('، ')}'));
+    }
+  }
   return out;
 }
 
@@ -142,6 +209,7 @@ class ApprovalGate {
     int? refId,
     required String decision,
     String? decidedBy,
+    String refType = 'invoice',
   }) async {
     try {
       final db = await controlDb();
@@ -150,7 +218,7 @@ class ApprovalGate {
         for (final x in v) {
           await txn.insert('approval_log', {
             'rule': x.rule,
-            'ref_type': 'invoice',
+            'ref_type': refType,
             'ref_id': refId,
             'ref_label': refLabel,
             'details': x.text,
@@ -183,12 +251,21 @@ class ApprovalGate {
     } catch (_) {
       return true; // لا إعدادات بعد (قاعدة قديمة): السلوك القديم
     }
+    var prices = const <String, List<double>>{};
+    final canChangePrice = AuthService().hasPermission(AppPermissions.changePrice);
+    if (settings.priceChange && !canChangePrice) {
+      try {
+        prices = await PriceList.forItems(await controlDb(), items);
+      } catch (_) {}
+    }
     final v = invoiceViolations(
       settings: settings,
       items: items,
       invoiceDiscount: discount,
       selectedDate: selectedDate,
       originalDate: originalDate,
+      listPrices: prices,
+      canChangePrice: canChangePrice,
     );
     if (v.isEmpty) return true;
     if (!context.mounted) return false;
@@ -205,6 +282,29 @@ class ApprovalGate {
       ActivityLog.log('موافقة المدير', label, '${admin.username}: ${v.map((x) => ApprovalRule.label(x.rule)).join('، ')}')
           .catchError((_) {});
     }
+    return admin != null;
+  }
+
+  /// 💸 تحويل بين الصناديق: true = استمر. المدير لا يُسأل.
+  static Future<bool> checkCashTransfer(
+    BuildContext context, {
+    required double amount,
+    required String fromBox,
+    required String toBox,
+  }) async {
+    if (await currentIsAdmin()) return true;
+    final ApprovalSettings settings;
+    try {
+      settings = await ApprovalSettings.load();
+    } catch (_) {
+      return true;
+    }
+    if (!settings.cashTransfer || amount + 0.0001 < settings.cashTransferMin) return true;
+    if (!context.mounted) return false;
+    final v = [ApprovalViolation(ApprovalRule.cashTransfer, 'تحويل ${_m(amount)} من «$fromBox» إلى «$toBox»')];
+    const label = 'تحويل بين الصناديق';
+    final admin = await _askAdmin(context, v, label);
+    await _log(v: v, refLabel: label, decision: admin == null ? 'denied' : 'approved', decidedBy: admin?.username, refType: 'voucher');
     return admin != null;
   }
 

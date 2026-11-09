@@ -20,6 +20,8 @@ import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../../widgets/formatters.dart';
 import '../org_service.dart';
+import '../warehouse_scope.dart';
+import 'user_scope_screen.dart';
 
 // ═══════════════════════════ عناصر مشتركة ═══════════════════════════
 
@@ -547,7 +549,16 @@ class _BranchesWarehousesScreenState extends State<BranchesWarehousesScreen> {
         title: 'الفروع والمخازن',
         subtitle: 'أماكن العمل، المخازن وأرصدتها، والتحويل بينها',
         icon: Icons.domain_rounded,
-        actions: [IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
+        actions: [
+          // 🔐 مخازن كل موظف (للمدير)
+          if (AuthService().currentUser?.isAdmin ?? false)
+            IconButton(
+              tooltip: 'نطاق الموظفين',
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const UserScopeScreen())),
+              icon: const Icon(Icons.lock_person_rounded),
+            ),
+          IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
+        ],
         headerExtra: Container(
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
@@ -1378,6 +1389,13 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
       ok: 'تنفيذ',
     );
     if (!ok || !mounted) return;
+    // 🔐 الموظف المقيَّد يحوّل من مخازنه فقط
+    final block = await WarehouseScope.blockReason(_from.id, action: 'التحويل من');
+    if (block != null) {
+      if (mounted) showError(context, block);
+      return;
+    }
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       await _svc.createTransfer(

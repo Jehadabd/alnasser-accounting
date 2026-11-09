@@ -19,6 +19,10 @@ import 'device_cash_screen.dart';
 import 'invoice_extras.dart';
 import 'quotes_orders_screen.dart';
 import 'sales_return_screen.dart';
+import '../delivery/delivery_screens.dart'; // 🚚
+import '../hr/hr_screen.dart'; // 👥
+import '../loyalty/loyalty_screen.dart'; // 🎁
+import '../../marketing/marketing_screen.dart'; // 📣
 
 class SalesHubScreen extends StatefulWidget {
   const SalesHubScreen({super.key});
@@ -50,6 +54,18 @@ class SalesHubScreen extends StatefulWidget {
             subtitle: 'لكل شاشة صندوقها • كل الصناديق', permission: AppPermissions.accountingPost),
         HubTile('إقفال اليوم', Icons.point_of_sale_rounded, ErpColors.green, () => go(const DayCloseScreen()),
             subtitle: 'المتوقع في الدرج ومطابقته مع المعدود', permission: AppPermissions.repDaily),
+      ]),
+      HubSection('التوصيل والولاء', [
+        HubTile('شركات التوصيل', Icons.local_shipping_rounded, ErpColors.blue, () => go(const DeliveryHubScreen()),
+            subtitle: 'الطلبات وحالتها، وحساب كل شركة وتسويته', permission: AppPermissions.delivery),
+        HubTile('برنامج الولاء', Icons.loyalty_rounded, ErpColors.green, () => go(const LoyaltyScreen()),
+            subtitle: 'نقاط أو أختام، مكافآت، وبطاقة برمز QR', permission: AppPermissions.loyalty),
+      ]),
+      HubSection('التسويق والفريق', [
+        HubTile('مركز التسويق', Icons.campaign_rounded, ErpColors.purple, () => go(const MarketingScreen()),
+            subtitle: 'جدولة ونشر آلي على صفحة فيسبوك وإنستغرام', permission: AppPermissions.manageUsers),
+        HubTile('الموارد البشرية', Icons.groups_2_rounded, ErpColors.navy, () => go(const HrScreen()),
+            subtitle: 'الحضور، السلف، الرواتب، المسابقات (تفعيل يدوي)', permission: AppPermissions.manageUsers),
       ]),
       ];
 

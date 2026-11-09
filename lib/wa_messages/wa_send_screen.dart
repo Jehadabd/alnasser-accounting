@@ -162,6 +162,7 @@ class _WaLogScreenState extends State<WaLogScreen> {
         'manual' => 'إرسال يدوي',
         'reminder' => 'مواعيد المطالبة',
         'card' => 'من حساب العميل',
+        'loyalty' => 'برنامج الولاء',
         'legacy' => 'التذكير الشهري (قديم)',
         _ => e.source,
       };

@@ -26,6 +26,7 @@ import '../owner/owner_access.dart';
 import '../erp/purchases/purchase_price_history.dart'; // 🏷️ سجل أسعار الشراء
 import '../erp/inventory/margin_alert.dart'; // 📉 مواد نزل ربحها
 import '../erp/inventory/margin_review.dart';
+import '../org/warehouse_scope.dart'; // 🔐 نطاق الموظف
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
@@ -1154,6 +1155,16 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       );
       return;
     }
+    // 🔐 الموظف المقيَّد بمخازن يشتري إلى مخازنه فقط
+    final scopeBlock = await WarehouseScope.blockReason(_warehouseId, action: 'الشراء إلى');
+    if (scopeBlock != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(scopeBlock), backgroundColor: Colors.red.shade700));
+      }
+      return;
+    }
+    if (!mounted) return;
 
     // 🔍 Validation: Check for undefined items (New Products)
     if (_items.any((item) => item.productId == -1)) {

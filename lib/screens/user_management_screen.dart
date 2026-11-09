@@ -56,6 +56,9 @@ const List<(String, IconData, List<String>)> _permissionGroups = [
   ]),
   ('المبيعات والتحصيل', Icons.point_of_sale_rounded, [
     AppPermissions.salesDocs,
+    AppPermissions.changePrice,
+    AppPermissions.delivery,
+    AppPermissions.loyalty,
     AppPermissions.collection,
     AppPermissions.debtReports,
     AppPermissions.customerCard,

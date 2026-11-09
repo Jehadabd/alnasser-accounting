@@ -267,7 +267,8 @@ class WaRecipient {
 }
 
 /// نافذة خيارات ثم إرسال تلقائي. [source]: 'card' أو 'reminder' أو 'manual'. يعيد عدد المضاف.
-Future<int> showWaSendDialog(BuildContext context, List<WaRecipient> people, {String source = 'manual'}) async {
+Future<int> showWaSendDialog(BuildContext context, List<WaRecipient> people,
+    {String source = 'manual', bool requireDebt = true, WaMessageOptions initial = const WaMessageOptions()}) async {
   if (!WaAutoReminder.allowed) {
     _toast(context, 'الإرسال الآلي لمدير البرنامج فقط');
     return 0;
@@ -286,13 +287,15 @@ Future<int> showWaSendDialog(BuildContext context, List<WaRecipient> people, {St
     _toast(context, 'لا يوجد رقم واتساب صالح');
     return 0;
   }
-  var o = const WaMessageOptions();
+  var o = initial;
   final go = await showDialog<bool>(
     context: context,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, set) => AlertDialog(
         icon: const Icon(Icons.chat_rounded, color: kWaGreen, size: 32),
-        title: Text(ok.length == 1 ? 'مطالبة واتساب: ${ok.first.name}' : 'مطالبة واتساب لـ ${ok.length} عميل'),
+        title: Text(requireDebt
+            ? (ok.length == 1 ? 'مطالبة واتساب: ${ok.first.name}' : 'مطالبة واتساب لـ ${ok.length} عميل')
+            : 'رسالة واتساب لـ ${ok.length} عميل'),
         content: SizedBox(
           width: 520,
           child: SingleChildScrollView(
@@ -329,6 +332,7 @@ Future<int> showWaSendDialog(BuildContext context, List<WaRecipient> people, {St
         source: source,
         ruleId: '$source-${DateTime.now().millisecondsSinceEpoch}',
         options: o,
+        requireDebt: requireDebt,
       ),
   ]);
   if (context.mounted) _toast(context, n == 0 ? 'في قائمة الإرسال بالفعل' : 'أُضيف $n إلى الإرسال — يتابع في الخلفية');

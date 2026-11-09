@@ -465,6 +465,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   DateTime _to = DateTime.now();
   ApprovalSettings? _s;
   final _pct = TextEditingController();
+  final _transferMin = TextEditingController();
   List<Map<String, Object?>> _rows = const [];
   bool _admin = false;
 
@@ -477,6 +478,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   @override
   void dispose() {
     _pct.dispose();
+    _transferMin.dispose();
     super.dispose();
   }
 
@@ -489,6 +491,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
         _admin = a;
         _s = s;
         _pct.text = s.discountPct == s.discountPct.roundToDouble() ? '${s.discountPct.round()}' : '${s.discountPct}';
+        _transferMin.text = '${s.cashTransferMin.round()}';
       });
     } catch (e) {
       if (mounted) showError(context, e);
@@ -510,7 +513,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
     if (s == null) return;
     final pct = parseMoney(_pct.text) ?? 0;
     try {
-      await ApprovalSettings.save(ApprovalSettings(pastDate: s.pastDate, belowCost: s.belowCost, discountPct: pct));
+      await ApprovalSettings.save(s.copyWith(discountPct: pct, cashTransferMin: parseMoney(_transferMin.text) ?? 0));
       if (mounted) showOk(context, 'حُفظت إعدادات الموافقات');
     } catch (e) {
       if (mounted) showError(context, e);
@@ -539,7 +542,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                 value: s.pastDate,
                 onChanged: !_admin
                     ? null
-                    : (v) => setState(() => _s = ApprovalSettings(pastDate: v, belowCost: s.belowCost, discountPct: s.discountPct)),
+                    : (v) => setState(() => _s = s.copyWith(pastDate: v)),
               ),
               SwitchListTile(
                 title: const Text('بيع تحت الكلفة'),
@@ -547,8 +550,28 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                 value: s.belowCost,
                 onChanged: !_admin
                     ? null
-                    : (v) => setState(() => _s = ApprovalSettings(pastDate: s.pastDate, belowCost: v, discountPct: s.discountPct)),
+                    : (v) => setState(() => _s = s.copyWith(belowCost: v)),
               ),
+              SwitchListTile(
+                title: const Text('تغيير سعر البيع'),
+                subtitle: const Text('سطر بسعر غير أسعار قائمة المادة — إلا لمن له صلاحية «تغيير السعر»'),
+                value: s.priceChange,
+                onChanged: !_admin ? null : (v) => setState(() => _s = s.copyWith(priceChange: v)),
+              ),
+              SwitchListTile(
+                title: const Text('تحويل بين الصناديق'),
+                subtitle: const Text('سند «تحويل بين صناديق» من المبلغ أدناه فأكثر (0 = أي مبلغ)'),
+                value: s.cashTransfer,
+                onChanged: !_admin ? null : (v) => setState(() => _s = s.copyWith(cashTransfer: v)),
+              ),
+              if (s.cashTransfer)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Row(children: [
+                    const Expanded(child: Text('التحويل يحتاج موافقة من مبلغ')),
+                    SizedBox(width: 160, child: MoneyField(controller: _transferMin, label: 'دينار', enabled: _admin)),
+                  ]),
+                ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Row(children: [

@@ -22,6 +22,7 @@ import '../models/app_user.dart'; // 👤 AppPermissions
 import '../services/debt_reminders.dart'; // 📅
 import '../services/owner_summary.dart'; // 📊 ملخص المالك اليومي
 import '../wa_messages/wa_scheduler.dart' show WaAutoScheduler; // 💬 قواعد رسائل واتساب التلقائية
+import '../marketing/marketing_publisher.dart'; // 📣
 import 'debt_reminders_screen.dart' show showDueRemindersDialog;
 import '../services/reports_service.dart'; // ✅ Added
 import '../services/settings_manager.dart'; // ✅ Added
@@ -81,6 +82,8 @@ class _MainScreenState extends State<MainScreen> {
         // 💬 رسائل واتساب: القواعد التلقائية كل دقيقة (لمدير البرنامج، على الجهاز الرئيسي)
         if (!mounted) return;
         WaAutoScheduler.start(context, primarySeat: SeatService.isPrimary);
+        // 📣 النشر الآلي للمنشورات المجدولة (الجهاز الرئيسي فقط؛ لا شيء ما لم يُفعَّل)
+        if (SeatService.isPrimary) MarketingPublisher.start();
       });
       // 📊 ملخص المالك اليومي على تيليجرام (إن فُعّل على هذا الجهاز)
       OwnerSummary.start();
