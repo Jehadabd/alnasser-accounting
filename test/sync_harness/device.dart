@@ -512,7 +512,7 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         paymentType: ptype,
         selectedDate: a['date'] == null ? DateTime.now() : DateTime.parse(a['date'] as String),
         invoiceItems: [
-          if ((total - productTotal).abs() > 1e-9 || productItems.isEmpty) item,
+          if ((total - productTotal).abs() > 0.001 || productItems.isEmpty) item,
           ...productItems,
           if (a['incomplete'] == true)
             InvoiceItem(
@@ -1007,7 +1007,7 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         final held = await HeldInvoices.hold(
           existing: existing,
           items: [
-            if ((total - productTotal).abs() > 1e-9 || productItems.isEmpty)
+            if ((total - productTotal).abs() > 0.001 || productItems.isEmpty)
               InvoiceItem(
                 invoiceId: existing?.id ?? 0,
                 productName: 'صنف اختبار',

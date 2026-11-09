@@ -29,6 +29,22 @@ class BackupFiles {
   static bool _isSqlite(List<int> b) =>
       b.length >= 16 && utf8.decode(b.sublist(0, 15), allowMalformed: true) == _sqliteHeader;
 
+  /// رأس TAR صالح: «ustar» عند 257، أو مجموع الرأس الصحيح عند 148 (tar القديم).
+  /// TarEncoder في حزمة archive — وبه تُصنع نسخ البرنامج .tar.xz — لا يكتب
+  /// «ustar»، فكان الفحص بها وحدها يرفض نسخ البرنامج نفسه عند الاستعادة.
+  static bool _looksLikeTar(List<int> b) {
+    if (b.length < 512) return false;
+    if (utf8.decode(b.sublist(257, 262), allowMalformed: true) == 'ustar') return true;
+    final field = String.fromCharCodes(b.sublist(148, 156)).replaceAll(RegExp(r'[\x00 ]'), '');
+    final stored = int.tryParse(field, radix: 8);
+    if (stored == null || stored == 0) return false;
+    var sum = 0;
+    for (var i = 0; i < 512; i++) {
+      sum += (i >= 148 && i < 156) ? 32 : b[i];
+    }
+    return sum == stored;
+  }
+
   // ─────────────────────────── للرفع ───────────────────────────
 
   /// يكتب في [path] نسخة متّسقة من القاعدة الحية مهيّأة لأفضل ضغط.
@@ -123,7 +139,7 @@ class BackupFiles {
       Archive? archive;
       if (_starts(bytes, const [0x50, 0x4B, 0x03, 0x04])) {
         archive = ZipDecoder().decodeBytes(bytes);
-      } else if (bytes.length > 262 && utf8.decode(bytes.sublist(257, 262), allowMalformed: true) == 'ustar') {
+      } else if (_looksLikeTar(bytes)) {
         archive = TarDecoder().decodeBytes(bytes);
       }
       if (archive != null) {

@@ -221,10 +221,11 @@ class LicenseService {
 
   // ═══════════════════════════════ الحالة ═══════════════════════════════
 
-  int get _maxSeen => _toInt(_storage.read(_kSeen));
+  int get _maxSeen => _testLicense ? 0 : _toInt(_storage.read(_kSeen));
 
   /// أحدث وقت رآه البرنامج (لكشف إرجاع ساعة الجهاز). يُكتب كل دقيقة على الأكثر.
   void _bumpSeen([int? now]) {
+    if (_testLicense) return;
     final n = now ?? DateTime.now().millisecondsSinceEpoch;
     if (n > _maxSeen + 60000) _storage.write(_kSeen, n);
   }
@@ -314,8 +315,11 @@ class LicenseService {
   /// 🧪 للاختبارات الآلية فقط (test/sync_harness): ترخيص في الذاكرة بلا توقيع
   /// حتى يعمل محرك المزامنة في الاختبار. الجسم داخل assert ⇒ يُحذف كلياً من
   /// نسخة الإصدار (release/profile)، فلا يفتح هذا الاستدعاء شيئاً عند المستخدم.
+  static bool _testLicense = false;
+
   static void debugInstallTestLicense({String mode = 'full_sync'}) {
     assert(() {
+      _testLicense = true; // لا GetStorage في الاختبار (ملف مقفل بين الأجهزة الوهمية)
       _payload = LicensePayload({
         'v': 4,
         'lic': 'harness',

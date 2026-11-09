@@ -227,13 +227,16 @@ class FinancialDeepCheck {
       SELECT t.invoice_id AS inv, t.customer_id AS cid, c.name AS name, COUNT(*) AS n, SUM(t.amount_changed) AS s
       FROM transactions t LEFT JOIN customers c ON c.id = t.customer_id
       WHERE t.transaction_type = ? AND COALESCE(t.is_deleted, 0) = 0 AND t.invoice_id IS NOT NULL
-      GROUP BY t.invoice_id, t.customer_id HAVING COUNT(*) > 1''', [InvoiceDebtReconciler.adjustmentType]);
+      GROUP BY t.invoice_id, t.customer_id
+      HAVING SUM(CASE WHEN ABS(COALESCE(t.amount_changed, 0)) > 0.0001 THEN 1 ELSE 0 END) > 1''',
+        [InvoiceDebtReconciler.adjustmentType]);
     if (rows.isEmpty) {
       _passed.add('لا صفوف تسوية مكررة لفاتورة واحدة');
       return;
     }
     _add(DeepSeverity.error, 'تكرار', '${rows.length} فاتورة لها أكثر من صف دين واحد للعميل نفسه',
-        'الصيغة الصحيحة صف واحد لكل (فاتورة، عميل). التكرار قد يعني ديناً محسوباً مرتين.', [
+        'أكثر من صف بمبلغ غير صفري لفاتورة واحدة وعميل واحد = دين قد يكون محسوباً مرتين '
+            '(الصفوف الصفرية لا تُحسب: يتركها نقل الفاتورة بين العملاء على الأجهزة المستقبِلة).', [
       for (final r in rows) 'فاتورة #${r['inv']} — ${r['name'] ?? r['cid']}: ${r['n']} صفوف مجموعها ${m(r['s'] as num?)}'
     ]);
   }

@@ -60,7 +60,11 @@ class DatabaseMigrations {
     
     // فهرس لجدول المعاملات لتحسين الأداء
     await db.execute('CREATE INDEX IF NOT EXISTS idx_transactions_customer_id ON transactions(customer_id);');
-    await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_uuid ON transactions(transaction_uuid) WHERE transaction_uuid IS NOT NULL;');
+    // قاعدة قديمة جداً بلا العمود (الإصدار الأول): الفهرس كان يُفشل الترقية كلها
+    // فتُرفض الاستعادة. يُنشأ هنا إن وُجد العمود، وإلا في ensureSchema بعد إضافته.
+    if (await DatabaseHelpers.columnExists(db, 'transactions', 'transaction_uuid')) {
+      await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_uuid ON transactions(transaction_uuid) WHERE transaction_uuid IS NOT NULL;');
+    }
 
     // 📦 جدول المنتجات
     await db.execute('''
@@ -1128,6 +1132,12 @@ class DatabaseMigrations {
 
     // 28.5 🏭 إصلاح مخطط الموردين — انظر _ensureSupplierSchema
     await _ensureSupplierSchema(db);
+
+    // 28.6 فهرس معرّف المعاملة الفريد — للقواعد التي لم يكن فيها العمود عند createTables
+    if (await DatabaseHelpers.columnExists(db, 'transactions', 'transaction_uuid')) {
+      await _tryExecQuiet(db,
+          'CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_uuid ON transactions(transaction_uuid) WHERE transaction_uuid IS NOT NULL;');
+    }
 
     // 29. هجرة القيم المالية الحالية إلى أعمدة الأعداد الصحيحة الدقيقة (cents)
     await _migrateFinancialCents(db);
