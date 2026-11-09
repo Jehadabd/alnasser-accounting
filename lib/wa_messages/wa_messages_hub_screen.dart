@@ -14,6 +14,7 @@ import '../owner/wa_auto/wa_usage_banner.dart';
 import '../screens/debt_reminders_screen.dart';
 import '../widgets/settings_kit.dart';
 import 'wa_message_log.dart';
+import 'wa_phone_book_screen.dart';
 import 'wa_rules.dart';
 import 'wa_rules_screen.dart';
 import 'wa_send_screen.dart';
@@ -130,6 +131,12 @@ class _WaMessagesHubScreenState extends State<WaMessagesHubScreen> {
               title: 'سجل الرسائل',
               subtitle: 'ما أُرسل، وما فشل ولماذا، ومن تُخطّي لأنه سدّد',
               onTap: () => _go(const WaLogScreen()),
+            ),
+            SetActionRow(
+              icon: Icons.verified_user_rounded,
+              title: 'أرقام واتساب المؤكَّدة',
+              subtitle: 'من تُرسل لهم الفواتير والكشوفات مباشرة بلا سؤال — احذف رقماً ليُسأل عنه مجدداً',
+              onTap: () => _go(const WaPhoneBookScreen()),
             ),
           ]),
         ),

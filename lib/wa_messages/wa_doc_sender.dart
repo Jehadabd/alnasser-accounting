@@ -4,7 +4,8 @@
 // بجانب زر «مشاركة» الذي يبقى كما هو.
 //   • الرقم: رقم الفاتورة نفسها إن وُجد، وإلا رقم العميل في سجل الديون (بالمعرّف، ثم
 //     بالاسم إن طابق عميلاً واحداً فقط). لا رقم ⇒ يُطلب كتابته.
-//   • يُسأل المستخدم قبل الإرسال (الاسم، الرقم، المستند) — لا إرسال صامت.
+//   • أول مرة لكل عميل يُسأل المستخدم (الاسم، الرقم، المستند)، وبعد أول إرسال ناجح يُحفظ الرقم في
+//     «الأرقام المؤكَّدة» فيُرسل له بعدها مباشرة. رقم مختلف عن المحفوظ ⇒ يُسأل من جديد.
 //   • الخادم فقط: WhatsApp Desktop لا يرسل ملفات.
 //   • الحد اليومي مشترك مع باقي رسائل واتساب، وكل إرسال في «سجل الرسائل».
 
@@ -17,6 +18,7 @@ import '../owner/wa_auto/wa_server_client.dart';
 import '../owner/wa_auto/wa_usage_mark.dart';
 import '../services/database_service.dart';
 import 'wa_message_log.dart';
+import 'wa_phone_book.dart';
 
 /// مستند جاهز للإرسال.
 class WaDoc {
@@ -97,11 +99,28 @@ class WaDocSender {
       return;
     }
     if (doc == null || !context.mounted) return;
-    var phone = await resolvePhone(phone: doc.phone, customerId: doc.customerId, customerName: doc.customerName);
+    // 📒 الرقم المؤكَّد سابقاً لصاحب المستند
+    final key = WaPhoneBook.keyOf(doc.customerId, doc.customerName);
+    final saved = await WaPhoneBook.phoneOf(key);
+    final docPhone = WaAutoReminder.normalizePhone(doc.phone);
+    String? found;
+    if (docPhone != null) {
+      found = docPhone; // رقم المستند أولاً
+    } else if (saved != null && doc.customerId != null) {
+      found = saved; // عميل مسجّل أكّدت رقمه من قبل
+    } else {
+      found = await resolvePhone(customerId: doc.customerId, customerName: doc.customerName);
+    }
     if (!context.mounted) return;
-    final ok = await showDialog<String>(context: context, builder: (_) => _ConfirmDialog(doc: doc!, phone: phone));
-    if (ok == null || !context.mounted) return;
-    phone = ok;
+    final String phone;
+    if (saved != null && found == saved) {
+      phone = saved; // ✓ مؤكَّد من قبل: بلا سؤال
+    } else {
+      final ok = await showDialog<String>(
+          context: context, builder: (_) => _ConfirmDialog(doc: doc!, phone: found ?? saved, changed: saved != null && found != null));
+      if (ok == null || !context.mounted) return;
+      phone = ok;
+    }
 
     toast('يرسل إلى ${doc.customerName.isEmpty ? phone : doc.customerName}…');
     String? err;
@@ -131,7 +150,15 @@ class WaDocSender {
       amount: 0,
       attach: 'PDF',
     );
-    if (err == null) await WaUsageMark.record('server', sends: 1);
+    if (err == null) {
+      await WaUsageMark.record('server', sends: 1);
+      // 📒 بعد أول إرسال ناجح: هذا هو رقمه، والمرات القادمة بلا سؤال
+      if (key != null && phone != saved) {
+        try {
+          await WaPhoneBook.confirm(key, doc.customerName, phone);
+        } catch (_) {}
+      }
+    }
     if (!context.mounted) return;
     toast(err == null ? (note ?? 'أُرسل ✓ إلى ${doc.customerName.isEmpty ? phone : doc.customerName}') : 'لم يُرسل: $err',
         error: err != null || note != null);
@@ -140,9 +167,10 @@ class WaDocSender {
 
 /// تأكيد قبل الإرسال، مع إمكانية كتابة الرقم أو تصحيحه. يعيد الرقم الدولي أو null.
 class _ConfirmDialog extends StatefulWidget {
-  const _ConfirmDialog({required this.doc, required this.phone});
+  const _ConfirmDialog({required this.doc, required this.phone, this.changed = false});
   final WaDoc doc;
   final String? phone;
+  final bool changed; // له رقم مؤكَّد مختلف
   @override
   State<_ConfirmDialog> createState() => _ConfirmDialogState();
 }
@@ -177,6 +205,13 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
             const SizedBox(height: 6),
             Text(widget.doc.caption, style: const TextStyle(color: Color(0xFF64748B))),
             const SizedBox(height: 12),
+            Text(
+              widget.changed
+                  ? '⚠️ رقم المستند يختلف عن رقمه المؤكَّد سابقاً — تأكد منه. بعد الإرسال يصبح هو المؤكَّد.'
+                  : 'أول مرة لهذا العميل: تأكد من الرقم. بعد الإرسال يُحفظ، والمرات القادمة تُرسل مباشرة.',
+              style: TextStyle(fontSize: 12, color: widget.changed ? const Color(0xFFB45309) : const Color(0xFF047857)),
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _c,
               autofocus: widget.phone == null,
