@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../services/database_service.dart';
 import '../services/debt_reminders.dart';
 import '../services/settings_manager.dart';
@@ -13,6 +14,7 @@ import '../services/whatsapp/claim_message.dart'; // 📨 مطالبة رسمي�
 import '../widgets/app_dialog_shell.dart'; // 🪟 شكل النوافذ الموحّد
 import '../widgets/debt_reminder_editor.dart';
 import '../widgets/settings_kit.dart';
+import '../wa_messages/wa_widgets.dart'; // 💬 إرسال آلي
 import 'customer_details_screen.dart';
 
 const _accent = Color(0xFF4F46E5);
@@ -398,6 +400,22 @@ class _DueDialogState extends State<_DueDialog> {
     } catch (_) {}
   }
 
+  /// 💬 إرسال آلي (الخادم أو WhatsApp Desktop) عبر صندوق الصادر.
+  Future<void> _autoSend(List<DueReminder> list) async {
+    final n = await showWaSendDialog(
+      context,
+      [for (final d in list) WaRecipient(d.member.customerId, d.member.customerName, _phones[d.member.customerId])],
+      source: 'reminder',
+    );
+    if (n > 0 && mounted) {
+      setState(() {
+        for (final d in list) {
+          if (_phones.containsKey(d.member.customerId)) _done[d.member.id!] = 'أُضيف إلى إرسال واتساب الآلي';
+        }
+      });
+    }
+  }
+
   Future<void> _whatsApp(DueReminder d) async {
     final phone = WhatsAppLink.normalizePhone(_phones[d.member.customerId]);
     if (phone == null) return;
@@ -449,6 +467,16 @@ class _DueDialogState extends State<_DueDialog> {
           label: const Text('إدارة مواعيد المطالبة'),
         ),
         const Spacer(),
+        if (WaAutoReminder.allowed && withPhone > 0)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(end: 8),
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF15803D), minimumSize: const Size(0, 46)),
+              onPressed: () => _autoSend([for (final d in list) if (_done[d.member.id] == null) d]),
+              icon: const Icon(Icons.send_rounded, size: 18),
+              label: Text('إرسال آلي للكل ($withPhone)'),
+            ),
+          ),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: _accent, minimumSize: const Size(110, 46)),
           onPressed: () => Navigator.pop(context),
@@ -509,6 +537,13 @@ class _DueDialogState extends State<_DueDialog> {
                   onPressed: () => _whatsApp(d),
                   icon: const Icon(Icons.chat_rounded, size: 18),
                   label: const Text('مطالبة عبر واتساب'),
+                ),
+              if (_phones.containsKey(m.customerId) && WaAutoReminder.allowed)
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: const Color(0xFF15803D)),
+                  onPressed: () => _autoSend([d]),
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('إرسال آلي'),
                 ),
               TextButton.icon(
                 onPressed: () async {

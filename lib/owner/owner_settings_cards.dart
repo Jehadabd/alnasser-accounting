@@ -11,8 +11,6 @@ import '../accounting/screens/acc_ui.dart' show accRoute;
 import '../widgets/settings_kit.dart';
 import 'founder_service.dart';
 import 'founders_screen.dart';
-import 'wa_auto/wa_auto_reminder.dart';
-import 'wa_auto/wa_auto_entry_card.dart';
 
 String _fmtRate(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
 
@@ -25,11 +23,6 @@ class OwnerSettingsCards extends StatelessWidget {
         children: [
           const _OwnerBadge(),
           const _FoundersCard(),
-          // 💬 تذكير الديون عبر واتساب وخادمه (يظهر أيضاً لأصحاب اشتراك المزامنة في قسمه)
-          if (WaAutoReminder.allowed) ...[
-            const SizedBox(height: 14),
-            const WaAutoEntryCard(),
-          ],
         ],
       );
 }

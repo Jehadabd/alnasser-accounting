@@ -69,7 +69,7 @@ if (PARENT_PID > 0) {
   }, 5000).unref();
 }
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const HOST = process.env.HOST || '0.0.0.0';
 const API_KEY = (process.env.API_KEY || '').trim();
 const PORT = Number(process.env.PORT || 8080);
@@ -268,10 +268,22 @@ function hourCount() {
   return sentTimes.length;
 }
 
-async function sendText(to, text) {
+// doc (اختياري): { data: base64, fileName } — PDF فقط، حتى 8 ميغابايت. يُرسل بعد النص مباشرة.
+function parseDoc(doc) {
+  if (!doc) return null;
+  const buf = Buffer.from(String(doc.data || ''), 'base64');
+  if (buf.length < 5 || buf.length > 8 * 1024 * 1024) return { error: 'bad_doc' };
+  if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') return { error: 'bad_doc' };
+  const name = String(doc.fileName || 'كشف حساب.pdf').replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
+  return { buf, fileName: name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf` };
+}
+
+async function sendText(to, text, doc) {
   const digits = to.replace(/\D/g, '');
   if (digits.length < 10 || digits.length > 15) return { ok: false, error: 'bad_number' };
   if (!text.trim() || text.length > 4000) return { ok: false, error: 'bad_text' };
+  const pdf = parseDoc(doc);
+  if (pdf?.error) return { ok: false, error: pdf.error };
   if (!linked()) return { ok: false, error: 'not_linked' };
   if (hourCount() >= MAX_PER_HOUR) return { ok: false, error: 'hour_limit' };
   if (!sock) await connect();
@@ -280,7 +292,16 @@ async function sendText(to, text) {
   if (!hit?.exists) return { ok: false, error: 'not_on_whatsapp' };
   const m = await sock.sendMessage(hit.jid, { text });
   sentTimes.push(Date.now());
-  return { ok: true, id: m?.key?.id || null };
+  if (pdf) {
+    try {
+      await sock.sendMessage(hit.jid, { document: pdf.buf, mimetype: 'application/pdf', fileName: pdf.fileName });
+      sentTimes.push(Date.now());
+    } catch (e) {
+      // النص وصل؛ الملف لم يصل — يُبلَّغ البرنامج ليسجّله
+      return { ok: true, id: m?.key?.id || null, docError: String(e?.message || e) };
+    }
+  }
+  return { ok: true, id: m?.key?.id || null, doc: !!pdf };
 }
 
 function status() {
@@ -365,7 +386,7 @@ export const server = http.createServer(async (req, res) => {
 
       case 'POST /send': {
         const b = await readBody(req);
-        return reply(res, 200, await sendText(String(b.to || ''), String(b.text || '')));
+        return reply(res, 200, await sendText(String(b.to || ''), String(b.text || ''), b.doc));
       }
 
       case 'POST /logout':

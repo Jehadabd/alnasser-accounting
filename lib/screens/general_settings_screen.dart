@@ -84,6 +84,7 @@ class GeneralSettingsScreen extends StatefulWidget {
       HubSection('الأقسام', [
         t('الحساب والموظفون', Icons.verified_user_outlined),
         if (OwnerAccess.enabled) t('ميزات المالك', Icons.workspace_premium_outlined),
+        if (WaAutoReminder.allowed) t('رسائل واتساب للزبائن', Icons.chat_rounded),
         t('الفاتورة والطباعة', Icons.receipt_long_outlined),
         t('الأسعار والأرباح', Icons.trending_up),
         t('النسخ الاحتياطي والمزامنة', Icons.cloud_sync_outlined),
@@ -1536,13 +1537,13 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             keywords: 'مالك مؤسس مؤسسين فني فنيين نقاط جوجل درايف google drive رفع سجل الديون',
             [OwnerSettingsCards()],
           ),
-        // 💬 تذكير الديون عبر واتساب — لأصحاب اشتراك المزامنة (المالك يجدها في قسمه)
-        if (!OwnerAccess.enabled && WaAutoReminder.allowed)
+        // 💬 رسائل واتساب للزبائن — لمدير البرنامج
+        if (WaAutoReminder.allowed)
           const _SettingsSection(
-            'تذكير الديون عبر واتساب',
+            'رسائل واتساب للزبائن',
             Icons.chat_rounded,
-            'رسالة لكل مدين، شرط التأخر، وخادم واتساب',
-            keywords: 'واتساب whatsapp تذكير دين ديون خادم سيرفر ربط رسالة متأخر',
+            'مطالبات تلقائية بقواعد، إرسال فوري، كشف حساب، وخادم واتساب',
+            keywords: 'واتساب whatsapp تذكير مطالبة دين ديون خادم سيرفر ربط رسالة متأخر قاعدة قواعد كشف حساب pdf',
             [WaAutoEntryCard()],
           ),
         _SettingsSection(

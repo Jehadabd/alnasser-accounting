@@ -1,6 +1,6 @@
 // lib/owner/wa_auto/wa_server_screen.dart
 //
-// 👑🛰️ إعدادات خادم واتساب (المالك ومدير البرنامج): الخادم يعمل على هذه الحاسبة فقط —
+// 🛰️ إعدادات خادم واتساب (مدير البرنامج): الخادم يعمل على هذه الحاسبة فقط —
 // تثبيت وتشغيل بضغطة (wa_auto_setup_panels.dart)، ثم ربط رقم واتساب برمز من 8 خانات.
 
 import 'dart:async';
@@ -193,7 +193,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
       return const SettingsScaffold(
         title: 'خادم واتساب',
         icon: Icons.dns_rounded,
-        children: [SetBanner('هذه الإعدادات للمالك ولأصحاب اشتراك المزامنة (مدير البرنامج).', kind: SetBannerKind.warn)],
+        children: [SetBanner('هذه الإعدادات لمدير البرنامج.', kind: SetBannerKind.warn)],
       );
     }
     if (!_loaded) return const SettingsScaffold(title: 'خادم واتساب', icon: Icons.dns_rounded, loading: true);

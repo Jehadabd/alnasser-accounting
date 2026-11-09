@@ -737,7 +737,7 @@ pause
           badgeText: '🔥 نقرة واحدة (الفكرة A)',
           badgeColor: Colors.amber.shade900,
         ),
-        // 👑 خادم تذكير واتساب — لحساب المالك فقط (شاشة مستقلة)
+        // 💬 خادم رسائل واتساب — لمدير البرنامج (شاشة مستقلة)
         if (WaAutoReminder.allowed) ...[
           const SizedBox(height: 10),
           Card(
@@ -749,7 +749,7 @@ pause
             child: ListTile(
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               leading: const Icon(Icons.dns_rounded, color: Color(0xFF047857), size: 32),
-              title: const Text('4. خادم تذكير واتساب (للمالك)', style: TextStyle(fontWeight: FontWeight.bold)),
+              title: const Text('4. خادم رسائل واتساب', style: TextStyle(fontWeight: FontWeight.bold)),
               subtitle: const Text('يعمل على هذه الحاسبة بضغطة واحدة، واربط رقم المحل برمز.'),
               trailing: const Icon(Icons.chevron_left_rounded),
               onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const WaServerScreen())),

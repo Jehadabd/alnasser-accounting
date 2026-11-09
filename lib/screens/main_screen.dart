@@ -21,7 +21,7 @@ import '../services/auth_service.dart'; // 👤
 import '../models/app_user.dart'; // 👤 AppPermissions
 import '../services/debt_reminders.dart'; // 📅
 import '../services/owner_summary.dart'; // 📊 ملخص المالك اليومي
-import '../owner/wa_auto/wa_auto_screen.dart' show WaAutoScheduler; // 👑💬 تذكير الديون الشهري
+import '../wa_messages/wa_scheduler.dart' show WaAutoScheduler; // 💬 قواعد رسائل واتساب التلقائية
 import 'debt_reminders_screen.dart' show showDueRemindersDialog;
 import '../services/reports_service.dart'; // ✅ Added
 import '../services/settings_manager.dart'; // ✅ Added
@@ -78,7 +78,7 @@ class _MainScreenState extends State<MainScreen> {
         } catch (e) {
           debugPrint('🔔 تنبيهات المخزون: $e');
         }
-        // 👑💬 تذكير الديون عبر واتساب: فحص كل دقيقة (يوم الإرسال وساعته) — للمالك فقط
+        // 💬 رسائل واتساب: القواعد التلقائية كل دقيقة (لمدير البرنامج، على الجهاز الرئيسي)
         if (!mounted) return;
         WaAutoScheduler.start(context, primarySeat: SeatService.isPrimary);
       });

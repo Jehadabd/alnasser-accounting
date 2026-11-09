@@ -11,6 +11,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -192,14 +193,23 @@ class WaServerClient {
   }
 
   /// null = أُرسلت. وإلا سبب الفشل بالعربية. [notOnWhatsApp] = الرقم ليس على واتساب.
-  static Future<({String? error, bool notOnWhatsApp})> send(String phone, String text) async {
+  /// [pdf] (اختياري): ملف PDF يُرسل بعد النص مباشرة. [note]: وصل النص ولم يصل الملف.
+  static Future<({String? error, bool notOnWhatsApp, String? note})> send(String phone, String text,
+      {Uint8List? pdf, String? pdfName}) async {
     try {
-      final j = await _call('POST', '/send', body: {'to': phone, 'text': text});
-      if (j['ok'] == true) return (error: null, notOnWhatsApp: false);
+      final j = await _call('POST', '/send', body: {
+        'to': phone,
+        'text': text,
+        if (pdf != null) 'doc': {'data': base64Encode(pdf), 'fileName': pdfName ?? 'كشف حساب.pdf'},
+      });
+      if (j['ok'] == true) {
+        final de = j['docError'];
+        return (error: null, notOnWhatsApp: false, note: de == null ? null : 'وصل النص ولم يصل ملف الكشف: $de');
+      }
       final e = j['error'] as String?;
-      return (error: errorText(e), notOnWhatsApp: e == 'not_on_whatsapp');
+      return (error: errorText(e), notOnWhatsApp: e == 'not_on_whatsapp', note: null);
     } on WaServerException catch (e) {
-      return (error: e.message, notOnWhatsApp: false);
+      return (error: e.message, notOnWhatsApp: false, note: null);
     }
   }
 
@@ -210,6 +220,7 @@ class WaServerClient {
         'hour_limit' => 'بلغ الخادم حد الرسائل في الساعة',
         'bad_number' || 'bad_phone' => 'رقم غير صالح',
         'bad_text' => 'نص الرسالة فارغ أو طويل جداً',
+        'bad_doc' => 'ملف الكشف غير صالح (PDF حتى 8 ميغابايت)',
         'logged_out' => 'فُكّ الربط من الهاتف — اربط من جديد',
         'pair_timeout' => 'انتهت مهلة الربط — اطلب رمزاً جديداً',
         null => 'خطأ غير معروف',

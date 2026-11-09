@@ -25,6 +25,8 @@ import '../erp/debts/customer_card_screen.dart';
 import '../erp/debts/receipt_screen.dart';
 import '../widgets/edit_transaction_dialog.dart'; // ✏️
 import 'debt_reminders_screen.dart'; // 📅
+import '../owner/wa_auto/wa_auto_reminder.dart';
+import '../wa_messages/wa_widgets.dart'; // 💬 مطالبة واتساب آلية
 import '../accounting/screens/acc_ui.dart' show accAppBar;
 import 'statements/customer_statements_screen.dart';
 import '../widgets/loading_dialog.dart';
@@ -777,6 +779,12 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   case 'receipt_archive':
                     _showReceiptVouchersArchive();
                     break;
+                  case 'wa_auto_claim':
+                    if (widget.customer.id != null) {
+                      final c = context.read<AppProvider>().selectedCustomer ?? widget.customer;
+                      showWaSendDialog(context, [WaRecipient(widget.customer.id!, c.name, c.phone)], source: 'card');
+                    }
+                    break;
                   case 'debt_reminders':
                     // 📅 مواعيد المطالبة بالسداد لهذا العميل (والعامة في: التحصيل والتقارير)
                     if (widget.customer.id != null) {
@@ -874,6 +882,18 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       Icon(Icons.analytics, color: Colors.blueGrey, size: 20),
                       SizedBox(width: 12),
                       Text('كشف الحساب التجاري'),
+                    ],
+                  ),
+                ),
+                // 💬 مطالبة واتساب آلية (الخادم أو WhatsApp Desktop) مع العنوان وكشف الحساب
+                if (WaAutoReminder.allowed)
+                const PopupMenuItem(
+                  value: 'wa_auto_claim',
+                  child: Row(
+                    children: [
+                      Icon(Icons.send_rounded, color: Color(0xFF047857), size: 20),
+                      SizedBox(width: 12),
+                      Text('مطالبة واتساب (إرسال آلي)'),
                     ],
                   ),
                 ),
