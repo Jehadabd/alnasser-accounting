@@ -12,7 +12,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../widgets/settings_kit.dart';
 import 'wa_auto_reminder.dart';
+import 'wa_host_guide_screen.dart';
 import 'wa_server_client.dart';
+import 'wa_usage_banner.dart';
 
 const _green = Color(0xFF047857);
 const _amber = Color(0xFFB45309);
@@ -264,7 +266,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
       return const SettingsScaffold(
         title: 'خادم واتساب',
         icon: Icons.dns_rounded,
-        children: [SetBanner('هذه الإعدادات لحساب المالك فقط.', kind: SetBannerKind.warn)],
+        children: [SetBanner('هذه الإعدادات للمالك ولأصحاب اشتراك المزامنة (مدير البرنامج).', kind: SetBannerKind.warn)],
       );
     }
     if (!_loaded) return const SettingsScaffold(title: 'خادم واتساب', icon: Icons.dns_rounded, loading: true);
@@ -275,6 +277,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
       icon: Icons.dns_rounded,
       subtitle: 'يرسل التذكيرات من رقم المحل في الخلفية — بلا WhatsApp Desktop',
       children: [
+        const WaUsageBanner(),
         const SetBanner(
           'الخادم يرسل فقط: لا يقرأ رسائلك ولا يحفظها. ليس طريقة رسمية من واتساب — الإرسال الكثير قد يقيّد الرقم.',
           kind: SetBannerKind.warn,
@@ -325,6 +328,14 @@ class _WaServerScreenState extends State<WaServerScreen> {
                 ]),
               ),
             const SizedBox(height: 10),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: kSetNavy, minimumSize: const Size.fromHeight(46)),
+              onPressed: () => Navigator.push(
+                  context, MaterialPageRoute(builder: (_) => WaHostGuideScreen(index: _host))),
+              icon: const Icon(Icons.menu_book_rounded),
+              label: Text('الشرح الكامل خطوة بخطوة: ${h.title}'),
+            ),
+            const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: _download,
               icon: const Icon(Icons.download_rounded),

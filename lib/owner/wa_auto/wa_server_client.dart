@@ -18,6 +18,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'wa_usage_mark.dart';
+
 class WaServerStatus {
   const WaServerStatus({
     this.reachable = false,
@@ -177,6 +179,7 @@ class WaServerClient {
 
   /// يطلب رمز ربط من 8 خانات للرقم [phone] (دولي بلا +).
   static Future<String> pair(String phone) async {
+    await WaUsageMark.record('server'); // 🔖 علامة دائمة: الخدمة شُغّلت
     final j = await _call('POST', '/pair', body: {'phone': phone});
     if (j['ok'] != true) throw WaServerException(errorText(j['error'] as String?));
     final code = '${j['code']}';

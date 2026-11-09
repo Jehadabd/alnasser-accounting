@@ -59,6 +59,8 @@ import 'financial_deep_check_screen.dart'; // 🔬
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
 import '../widgets/loading_dialog.dart';
 import '../services/receipt_paper.dart';
+import '../owner/wa_auto/wa_auto_entry_card.dart';
+import '../owner/wa_auto/wa_auto_reminder.dart';
 
 
 class GeneralSettingsScreen extends StatefulWidget {
@@ -1533,6 +1535,15 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             'المؤسسون ونقاطهم، الرفع إلى Google Drive',
             keywords: 'مالك مؤسس مؤسسين فني فنيين نقاط جوجل درايف google drive رفع سجل الديون',
             [OwnerSettingsCards()],
+          ),
+        // 💬 تذكير الديون عبر واتساب — لأصحاب اشتراك المزامنة (المالك يجدها في قسمه)
+        if (!OwnerAccess.enabled && WaAutoReminder.allowed)
+          const _SettingsSection(
+            'تذكير الديون عبر واتساب',
+            Icons.chat_rounded,
+            'رسالة لكل مدين، شرط التأخر، وخادم واتساب',
+            keywords: 'واتساب whatsapp تذكير دين ديون خادم سيرفر ربط رسالة متأخر',
+            [WaAutoEntryCard()],
           ),
         _SettingsSection(
           'الفاتورة والطباعة',

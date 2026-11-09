@@ -17,6 +17,7 @@ import '../lan/lan_bootstrap.dart';
 import '../lan/lan_settings.dart';
 import '../services/license_service.dart';
 import '../services/seat_service.dart';
+import '../owner/wa_auto/wa_usage_banner.dart';
 
 Future<void> openSupportWhatsApp() async {
   try {
@@ -360,6 +361,8 @@ class _LicenseScreenState extends State<LicenseScreen> {
                               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _navy)),
                           const SizedBox(height: 18),
                           if (block != null) _blockBanner(block),
+                          // 🔖 خدمة الإرسال الآلي عبر واتساب شُغّلت على هذا الجهاز (علامة دائمة)
+                          const WaUsageBanner(),
                           if (_licenseService.isLicenseActivated())
                             Container(
                               margin: const EdgeInsets.only(bottom: 14),

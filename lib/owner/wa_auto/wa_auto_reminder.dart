@@ -21,10 +21,12 @@ import 'package:window_manager/window_manager.dart';
 import '../../erp/activity/activity_log.dart';
 import '../../services/auth_service.dart';
 import '../../services/database_service.dart';
+import '../../services/license_service.dart';
 import '../../services/settings_manager.dart';
 import '../owner_access.dart';
 import 'wa_desktop.dart';
 import 'wa_server_client.dart';
+import 'wa_usage_mark.dart';
 
 /// زبون مستحق للتذكير.
 class WaTarget {
@@ -162,9 +164,17 @@ class WaAutoReminder {
   static const _k = 'wa_auto_';
   static const _logKey = 'wa_auto_log_v1';
 
-  /// 👑 حساب المالك (ترخيص المالك) + مدير البرنامج. (WhatsApp Desktop يحتاج ويندوز؛
-  /// الخادم يعمل من أي جهاز.)
-  static bool get allowed => OwnerAccess.enabled && AuthService().isAdmin;
+  /// 👑 مدير البرنامج على ترخيص المالك أو ترخيص فيه مزامنة (الاشتراك). WhatsApp Desktop
+  /// يحتاج ويندوز؛ الخادم يعمل من أي جهاز.
+  static bool get allowed {
+    if (!AuthService().isAdmin) return false;
+    if (OwnerAccess.enabled) return true;
+    try {
+      return LicenseService().getStoredLicense()?.isSyncAllowed ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// الإرسال بالطريقة المضبوطة. null = أُرسلت.
   static Future<({String? error, bool notOnWhatsApp})> _deliver(WaAutoSettings s, String phone, String text) async {
@@ -475,7 +485,9 @@ class WaAutoReminder {
         return e.message;
       }
     }
+    await WaUsageMark.record(s.via);
     final r = await _deliver(s, phone, render(s.template, t, await shopName()));
+    if (r.error == null) await WaUsageMark.record(s.via, sends: 1);
     if (s.viaServer) unawaited(WaServerClient.pullState().catchError((_) {}));
     return r.error;
   }
@@ -544,6 +556,7 @@ class WaAutoReminder {
         return;
       }
     }
+    await WaUsageMark.record(s.via); // 🔖 علامة دائمة: الخدمة شُغّلت
     final shop = await shopName();
     final rnd = Random();
     var sent = 0, failed = 0, skipped = 0, failsInRow = 0;
@@ -599,6 +612,7 @@ class WaAutoReminder {
         await WaServerClient.pullState(); // نسخة الجلسة الأحدث عند البرنامج
       } catch (_) {}
     }
+    if (sent > 0) await WaUsageMark.record(s.via, sends: sent);
     state.value = WaRunState(total: list.length, sent: sent, failed: failed, skipped: skipped, note: note ?? 'انتهى');
     await ActivityLog.log('إرسال', 'تذكير الديون عبر واتساب',
         'أُرسل $sent، فشل $failed، تُخطّي $skipped (سدّدوا أو نزل دينهم تحت الحد)${note == null ? '' : ' — $note'}');

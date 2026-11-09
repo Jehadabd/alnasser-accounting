@@ -12,6 +12,8 @@ import 'wa_auto_reminder.dart';
 import 'wa_desktop.dart';
 import 'wa_server_client.dart';
 import 'wa_server_screen.dart';
+import 'wa_usage_banner.dart';
+import 'wa_usage_mark.dart';
 
 class WaAutoScreen extends StatefulWidget {
   const WaAutoScreen({super.key});
@@ -147,9 +149,11 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
         ),
       );
       if (ok != true) return;
+      await WaUsageMark.record(_s!.via); // 🔖 علامة دائمة لا يمحوها الإطفاء
       await _save(_s!.copyWith(enabled: true, riskAccepted: true));
       return;
     }
+    if (on) await WaUsageMark.record(_s!.via);
     await _save(_s!.copyWith(enabled: on));
   }
 
@@ -282,8 +286,9 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
       icon: Icons.chat_rounded,
       subtitle: 'رسالة شهرية لكل مدين باسمه ومبلغه — من WhatsApp Desktop أو من خادمك',
       children: [
+        const WaUsageBanner(),
         const SetBanner(
-          'ميزة حساب المالك. الإرسال من رقم واتساب عادي ليس طريقة رسمية: قد يُقيَّد الرقم. '
+          'للمالك ولأصحاب اشتراك المزامنة. الإرسال من رقم واتساب عادي ليس طريقة رسمية: قد يُقيَّد الرقم. '
           'لا يتغيّر أي دين أو معاملة — البرنامج يقرأ المبلغ فقط.',
           kind: SetBannerKind.warn,
         ),
