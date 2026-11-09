@@ -195,10 +195,10 @@ const _render = HostGuide(
     GuideStep('أنشئ حساب GitHub', [
       'اضغط الزر أدناه. اكتب بريدك وكلمة سر واسم مستخدم بالإنجليزية، وأكمل التحقق، ثم أدخل الرمز الذي يصل إلى بريدك.',
     ], link: 'https://github.com/signup', linkLabel: 'فتح صفحة إنشاء حساب GitHub'),
-    GuideStep('أنشئ مستودعاً خاصاً (مكان الملفات)', [
+    GuideStep('أنشئ مستودعاً عاماً (مكان الملفات)', [
       'اضغط الزر أدناه (وأنت داخل حساب GitHub).',
       'Repository name: اكتب alnaser-wa.',
-      'اختر «Private» — مهم جداً حتى لا يرى أحد ملفاتك.',
+      'اختر «Public» (عام) — مهم: هكذا يقرأ Render الملفات بلا إعدادات إضافية. الملفات نفسها ليس فيها أي سر.',
       'لا تضع علامة على أي خيار آخر ← اضغط «Create repository».',
     ], link: 'https://github.com/new', linkLabel: 'فتح «مستودع جديد»', copy: 'alnaser-wa'),
     _getPackage,
@@ -208,7 +208,8 @@ const _render = HostGuide(
       'اسحب الملفات المحددة بالفأرة وأفلتها داخل صفحة GitHub — الملفات لا المجلد نفسه.',
       'انتظر حتى تظهر أسماء الملفات، ثم اضغط الزر الأخضر «Commit changes» أسفل الصفحة.',
       'تأكد: في الصفحة الرئيسية للمستودع يجب أن ترى package.json وserver.js وrender.yaml مباشرة (لا داخل مجلد).',
-    ], tip: 'إن ظهر ملف .env في المجلد فلا ترفعه — فيه المفتاح.',
+    ], tip: 'المستودع عام يراه الجميع: لا ترفع ملف .env أبداً — فيه «مفتاح الخادم». ارفع من مجلد الحزمة المنزّلة حديثاً (ليس فيه .env)، '
+        'ورفع المتصفح لا يحترم .gitignore. إن رفعته بالخطأ: احذفه من GitHub، ثم اضغط «مفتاح جديد» في البرنامج.',
         link: githubUploadLink, linkLabel: 'فتح صفحة رفع الملفات'),
     _copyKey,
     GuideStep('ادخل Render بحساب GitHub', [
@@ -219,6 +220,7 @@ const _render = HostGuide(
       'اضغط الزر أدناه: يفتح مباشرة صفحة «New Web Service». (أو من الأعلى: + New ← «Web Service»؛ لا تختر «Blueprint» لأنه يطلب بطاقة.)',
       'في أعلى الصفحة قسم «Source Code» وفيه تبويب «Git Provider» وتحته زر «GitHub». اضغطه.',
       'تفتح صفحة GitHub: اختر «Only select repositories» ← اختر alnaser-wa ← «Install» (أو «Save»). ترجع إلى Render.',
+      'بديل أسهل لأن المستودع عام: تبويب «Public Git Repository» ← الصق رابط المستودع (https://github.com/اسمك/alnaser-wa) ← «Connect».',
       'يظهر المستودع alnaser-wa في القائمة: اضغط عليه (أو «Connect» بجانبه).',
     ], link: 'https://dashboard.render.com/web/new', linkLabel: 'فتح «New Web Service»',
         tip: 'إن لم يظهر زر GitHub: اضغط «Git Provider» في أعلى الصفحة، أو «Configure account» بجانب GitHub.'),
@@ -260,11 +262,11 @@ const _docker = HostGuide(
   'Docker (Koyeb وغيرها)',
   Icons.inventory_2_rounded,
   'لأي منصة تشغّل الخوادم بـ Docker (Koyeb، Fly.io، Railway، أي خادم). الشرح هنا على Koyeb. بعض هذه المنصات تطلب بطاقة أو اشتراكاً — تأكد من صفحة الأسعار فيها.',
-  ['حساب GitHub ومستودع خاص فيه ملفات الخادم (الخطوات 1 إلى 4 في دليل Render)', 'حساب في المنصة'],
+  ['حساب GitHub ومستودع عام (Public) فيه ملفات الخادم بلا .env (الخطوات 1 إلى 4 في دليل Render)', 'حساب في المنصة'],
   '20 إلى 30 دقيقة',
   [
     GuideStep('جهّز المستودع', [
-      'نفّذ من دليل Render الخطوات: إنشاء حساب GitHub، مستودع خاص alnaser-wa، ورفع ملفات الخادم (لا المجلد).',
+      'نفّذ من دليل Render الخطوات: إنشاء حساب GitHub، مستودع عام (Public) alnaser-wa، ورفع ملفات الخادم (لا المجلد) بلا ملف .env.',
     ]),
     _copyKey,
     GuideStep('أنشئ الخدمة في Koyeb', [

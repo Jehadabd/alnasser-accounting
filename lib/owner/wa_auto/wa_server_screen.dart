@@ -61,18 +61,19 @@ const _hosts = [
   _Host('Render', 'مجاني • ينام ويستيقظ • آلياً بلا GitHub • قد يطلب بطاقة للتحقق', Icons.rocket_launch_rounded,
       'https://alnaser-wa-xxxx.onrender.com', [
     _Step('أنشئ حساب GitHub (إن لم يكن لديك).', 'إنشاء حساب GitHub', 'https://github.com/signup'),
-    _Step('أنشئ مستودعاً جديداً: الاسم alnaser-wa، واختر Private (خاص) — مهم — ثم Create repository.', 'مستودع جديد', 'https://github.com/new'),
+    _Step('أنشئ مستودعاً جديداً: الاسم alnaser-wa، واختر Public (عام) — مهم — ثم Create repository. لا ترفع إليه ملف .env أبداً.', 'مستودع جديد', 'https://github.com/new'),
     _Step('افتح صفحة الرفع (الزر — يحتاج اسم مستخدم GitHub في «الشرح الكامل»). افتح مجلد alnaser-wa-server، حدّد كل ما بداخله (Ctrl+A) '
         'واسحبه إلى الصفحة — الملفات لا المجلد نفسه — ثم «Commit changes». يجب أن يظهر package.json في الصفحة الرئيسية للمستودع.',
         'فتح صفحة رفع الملفات', githubUploadLink),
     _Step('ادخل Render بزر «GitHub».', 'فتح Render', 'https://dashboard.render.com/register'),
-    _Step('افتح «New Web Service» (لا Blueprint — يطلب بطاقة) ← في «Source Code» اضغط GitHub ← اختر alnaser-wa.',
+    _Step('افتح «New Web Service» (لا Blueprint — يطلب بطاقة) ← في «Source Code» اضغط GitHub ← اختر alnaser-wa. '
+        '(أو تبويب «Public Git Repository» والصق رابط المستودع.)',
         'فتح New Web Service', 'https://dashboard.render.com/web/new'),
     _Step('Build: npm install --omit=dev • Start: node server.js • Instance Type: Free • Environment: API_KEY = «مفتاح الخادم» ← Deploy Web Service.'),
     _Step('افتح الخدمة alnaser-wa وانسخ رابطها (…onrender.com) — الصقه في الأسفل واضغط «حفظ وفحص الاتصال».'),
   ]),
   _Host('Docker', 'Koyeb • Fly.io • Railway • أي خادم', Icons.inventory_2_rounded, 'https://…', [
-    _Step('ارفع ملفات المجلد alnaser-wa-server (لا المجلد نفسه) إلى مستودع GitHub خاص كما في Render.'),
+    _Step('ارفع ملفات المجلد alnaser-wa-server (لا المجلد نفسه) إلى مستودع GitHub عام (Public) كما في Render — بلا ملف .env.'),
     _Step('في المنصة اختر النشر من GitHub بـ Dockerfile، وأضف المتغير API_KEY = «مفتاح الخادم»، والمنفذ 8080.', 'فتح Koyeb',
         'https://app.koyeb.com'),
     _Step('إن أتاحت المنصة تخزيناً دائماً فاربطه بـ /data (وإلا يعيد البرنامج الجلسة وحده). الصق رابط الخدمة في الأسفل.'),
@@ -425,7 +426,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
               ),
             ]),
             const SizedBox(height: 4),
-            const Text('سرّي: من يملكه يرسل من رقمك. لا تضعه في مستودع GitHub عام.',
+            const Text('سرّي: من يملكه يرسل من رقمك. لا تضعه في أي ملف داخل مستودع GitHub — المستودع عام يراه الجميع.',
                 style: TextStyle(fontSize: 12, color: _muted)),
             const SizedBox(height: 10),
             Wrap(spacing: 10, runSpacing: 10, children: [

@@ -39,7 +39,7 @@
 4. في النهاية يطبع رابطاً مثل `https://1-2-3-4.sslip.io`. الصقه في البرنامج.
 
 ### 3) Render (يدوياً)
-1. أنشئ مستودعاً **خاصاً** (Private) في GitHub، وارفع إليه كل الملفات **عدا `.env`**.
+1. أنشئ مستودعاً **عاماً** (Public) في GitHub، وارفع إليه كل الملفات **عدا `.env`**. المستودع العام يراه الجميع، والملفات نفسها لا تحوي أي سر. المفتاح يوضع في Render فقط.
 2. افتح https://dashboard.render.com/web/new (لا تستعمل Blueprint: يطلب بطاقة). في «Source Code» اضغط GitHub واختر المستودع.
 3. Build Command: `npm install --omit=dev` • Start Command: `node server.js` • Instance Type: Free • Environment: `API_KEY` = «مفتاح الخادم».
 4. الرابط يكون بالشكل `https://alnaser-wa-xxxx.onrender.com`. الصقه في البرنامج.
