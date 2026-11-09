@@ -60,8 +60,9 @@ const _hosts = [
       'https://alnaser-wa-xxxx.onrender.com', [
     _Step('أنشئ حساب GitHub (إن لم يكن لديك).', 'إنشاء حساب GitHub', 'https://github.com/signup'),
     _Step('أنشئ مستودعاً جديداً: الاسم alnaser-wa، واختر Private (خاص) — مهم — ثم Create repository.', 'مستودع جديد', 'https://github.com/new'),
-    _Step('في صفحة المستودع اضغط «uploading an existing file». افتح مجلد alnaser-wa-server، حدّد كل ما بداخله (Ctrl+A) '
-        'واسحبه إلى الصفحة — الملفات لا المجلد نفسه — ثم «Commit changes». يجب أن يظهر package.json في الصفحة الرئيسية للمستودع.'),
+    _Step('افتح صفحة الرفع (الزر — يحتاج اسم مستخدم GitHub في «الشرح الكامل»). افتح مجلد alnaser-wa-server، حدّد كل ما بداخله (Ctrl+A) '
+        'واسحبه إلى الصفحة — الملفات لا المجلد نفسه — ثم «Commit changes». يجب أن يظهر package.json في الصفحة الرئيسية للمستودع.',
+        'فتح صفحة رفع الملفات', githubUploadLink),
     _Step('ادخل Render بزر «GitHub».', 'فتح Render', 'https://dashboard.render.com/register'),
     _Step('افتح «New Web Service» (لا Blueprint — يطلب بطاقة) ← في «Source Code» اضغط GitHub ← اختر alnaser-wa.',
         'فتح New Web Service', 'https://dashboard.render.com/web/new'),
@@ -87,6 +88,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
   final _url = TextEditingController();
   final _phone = TextEditingController();
   String _key = '';
+  String _gh = ''; // اسم مستخدم GitHub (لروابط الرفع المباشرة)
   bool _showKey = false;
   int _host = 0;
   bool _busy = false;
@@ -112,6 +114,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
   }
 
   Future<void> _load() async {
+    _gh = await githubUser();
     _url.text = await WaServerClient.url();
     _key = await WaServerClient.key();
     if (_url.text.contains('127.0.0.1') || _url.text.contains('localhost')) {
@@ -317,10 +320,14 @@ class _WaServerScreenState extends State<WaServerScreen> {
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(h.steps[i].text, style: const TextStyle(height: 1.55)),
-                      if (h.steps[i].link != null)
+                      if (h.steps[i].link != null && resolveGuideLink(h.steps[i].link, _gh) == null)
+                        const Text('↑ اكتب اسم مستخدم GitHub في «الشرح الكامل» ليظهر الرابط.',
+                            style: TextStyle(fontSize: 12, color: _amber)),
+                      if (resolveGuideLink(h.steps[i].link, _gh) != null)
                         TextButton.icon(
                           style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
-                          onPressed: () => launchUrl(Uri.parse(h.steps[i].link!), mode: LaunchMode.externalApplication),
+                          onPressed: () => launchUrl(Uri.parse(resolveGuideLink(h.steps[i].link, _gh)!),
+                              mode: LaunchMode.externalApplication),
                           icon: const Icon(Icons.open_in_new_rounded, size: 16),
                           label: Text(h.steps[i].linkLabel ?? 'فتح'),
                         ),
@@ -331,8 +338,11 @@ class _WaServerScreenState extends State<WaServerScreen> {
             const SizedBox(height: 10),
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: kSetNavy, minimumSize: const Size.fromHeight(46)),
-              onPressed: () => Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => WaHostGuideScreen(index: _host))),
+              onPressed: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => WaHostGuideScreen(index: _host)));
+                final gh = await githubUser();
+                if (mounted) setState(() => _gh = gh);
+              },
               icon: const Icon(Icons.menu_book_rounded),
               label: Text('الشرح الكامل خطوة بخطوة: ${h.title}'),
             ),

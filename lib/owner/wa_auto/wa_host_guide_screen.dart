@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../widgets/settings_kit.dart';
@@ -200,12 +201,13 @@ const _render = HostGuide(
     ], link: 'https://github.com/new', linkLabel: 'فتح «مستودع جديد»', copy: 'alnaser-wa'),
     _getPackage,
     GuideStep('ارفع ملفات الخادم إلى المستودع', [
-      'في صفحة المستودع الفارغة اضغط الرابط الأزرق «uploading an existing file».',
+      'اكتب اسم مستخدم GitHub في الخانة أعلى هذه الصفحة، ثم اضغط الزر أدناه: يفتح صفحة الرفع (uploading an existing file) مباشرة.',
       'افتح مجلد الخادم في ويندوز، واضغط Ctrl+A لتحديد كل ما بداخله.',
       'اسحب الملفات المحددة بالفأرة وأفلتها داخل صفحة GitHub — الملفات لا المجلد نفسه.',
       'انتظر حتى تظهر أسماء الملفات، ثم اضغط الزر الأخضر «Commit changes» أسفل الصفحة.',
       'تأكد: في الصفحة الرئيسية للمستودع يجب أن ترى package.json وserver.js وrender.yaml مباشرة (لا داخل مجلد).',
-    ], tip: 'إن ظهر ملف .env في المجلد فلا ترفعه — فيه المفتاح.'),
+    ], tip: 'إن ظهر ملف .env في المجلد فلا ترفعه — فيه المفتاح.',
+        link: githubUploadLink, linkLabel: 'فتح صفحة رفع الملفات'),
     _copyKey,
     GuideStep('ادخل Render بحساب GitHub', [
       'اضغط الزر أدناه، ثم اختر زر «GitHub» (لا تكتب بريداً) ووافق على «Authorize Render».',
@@ -285,13 +287,54 @@ const _docker = HostGuide(
 
 const hostGuides = [_local, _oracle, _render, _docker];
 
-class WaHostGuideScreen extends StatelessWidget {
+/// رابط صفحة الرفع في مستودع alnaser-wa — {gh} = اسم مستخدم GitHub.
+const githubUploadLink = 'https://github.com/{gh}/alnaser-wa/upload/main';
+const _kGhUser = 'wa_gh_user';
+
+Future<String> githubUser() async => (await SharedPreferences.getInstance()).getString(_kGhUser) ?? '';
+
+/// يملأ {gh} في الرابط؛ null إن لم يُكتب اسم المستخدم بعد.
+String? resolveGuideLink(String? link, String gh) {
+  if (link == null) return null;
+  if (!link.contains('{gh}')) return link;
+  final u = gh.trim().replaceAll(RegExp(r'^@|^https?://github\.com/|/.*$'), '');
+  return u.isEmpty ? null : link.replaceAll('{gh}', u);
+}
+
+class WaHostGuideScreen extends StatefulWidget {
   const WaHostGuideScreen({super.key, required this.index});
   final int index;
 
   @override
+  State<WaHostGuideScreen> createState() => _WaHostGuideScreenState();
+}
+
+class _WaHostGuideScreenState extends State<WaHostGuideScreen> {
+  final _gh = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    githubUser().then((v) {
+      if (mounted) setState(() => _gh.text = v);
+    });
+  }
+
+  @override
+  void dispose() {
+    _gh.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveGh(String v) async {
+    await (await SharedPreferences.getInstance()).setString(_kGhUser, v.trim());
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final g = hostGuides[index];
+    final g = hostGuides[widget.index];
+    final needsGh = g.steps.any((s) => s.link?.contains('{gh}') ?? false);
     return SettingsScaffold(
       title: 'الشرح الكامل: ${g.title}',
       icon: g.icon,
@@ -299,6 +342,24 @@ class WaHostGuideScreen extends StatelessWidget {
       children: [
         SetBanner(g.intro),
         const SizedBox(height: 12),
+        if (needsGh) ...[
+          SetCard(
+            title: 'اسم مستخدم GitHub',
+            icon: Icons.person_rounded,
+            child: TextField(
+              controller: _gh,
+              textDirection: TextDirection.ltr,
+              onChanged: _saveGh,
+              decoration: const InputDecoration(
+                hintText: 'مثل: Jehadabd',
+                helperText: 'يظهر أعلى يمين صفحة GitHub عند الضغط على صورتك — به تُبنى روابط الرفع المباشرة',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         SetCard(
           title: 'ماذا تحتاج',
           icon: Icons.checklist_rounded,
@@ -316,7 +377,7 @@ class WaHostGuideScreen extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         for (var i = 0; i < g.steps.length; i++) ...[
-          _StepCard(n: i + 1, step: g.steps[i]),
+          _StepCard(n: i + 1, step: g.steps[i], gh: _gh.text),
           const SizedBox(height: 10),
         ],
         SetCard(
@@ -340,9 +401,10 @@ class WaHostGuideScreen extends StatelessWidget {
 }
 
 class _StepCard extends StatelessWidget {
-  const _StepCard({required this.n, required this.step});
+  const _StepCard({required this.n, required this.step, required this.gh});
   final int n;
   final GuideStep step;
+  final String gh;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -383,12 +445,19 @@ class _StepCard extends StatelessWidget {
                 ),
                 child: Text('💡 ${step.tip}', style: const TextStyle(height: 1.5, fontSize: 13)),
               ),
-            if (step.link != null || step.copy != null) ...[
+            if (step.link != null && resolveGuideLink(step.link, gh) == null)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('↑ اكتب اسم مستخدم GitHub أعلى الصفحة ليظهر الرابط المباشر.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFFB45309))),
+              ),
+            if (resolveGuideLink(step.link, gh) != null || step.copy != null) ...[
               const SizedBox(height: 8),
               Wrap(spacing: 8, runSpacing: 6, children: [
-                if (step.link != null)
+                if (resolveGuideLink(step.link, gh) != null)
                   FilledButton.icon(
-                    onPressed: () => launchUrl(Uri.parse(step.link!), mode: LaunchMode.externalApplication),
+                    onPressed: () =>
+                        launchUrl(Uri.parse(resolveGuideLink(step.link, gh)!), mode: LaunchMode.externalApplication),
                     icon: const Icon(Icons.open_in_new_rounded, size: 18),
                     label: Text(step.linkLabel ?? 'فتح الموقع'),
                   ),
