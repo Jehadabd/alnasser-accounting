@@ -43,7 +43,9 @@ void main() {
     final r = await PurchasePriceHistory.forProduct(db, 7);
     expect(r.where((x) => x.supplierId == 1).map((x) => x.invoiceNumber), ['P4', 'P3', 'P2']);
     expect(r.where((x) => x.supplierId == 2).map((x) => x.invoiceNumber), ['P7', 'P5']);
-    expect(r.first.baseCost, 1000); // كرتون 24000 ÷ 24
+    // الأحدث أولاً بين كل الموردين: P7 (2026-05-02) ثم P4 — كرتون 24000 ÷ 24
+    expect(r.first.invoiceNumber, 'P7');
+    expect(r.firstWhere((x) => x.invoiceNumber == 'P4').baseCost, 1000);
   });
 
   test('آخر شراء من المورد نفسه وبالعملة نفسها، مع استثناء الفاتورة المفتوحة', () async {

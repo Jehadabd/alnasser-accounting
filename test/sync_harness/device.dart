@@ -31,6 +31,7 @@ import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/services/database/business/stock_ledger.dart';
 import 'package:alnaser/services/database/business/financial_deep_check.dart';
 import 'package:alnaser/services/held_invoices.dart';
+import 'package:alnaser/services/license_service.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
 import 'package:alnaser/services/database_service.dart';
@@ -99,6 +100,8 @@ Future<void> _run(DeviceBoot boot, List<String> logs, List<String> errors) async
   PathProviderPlatform.instance = FakePathProvider(boot.dir);
   SharedPreferences.setMockInitialValues(boot.prefs);
   FlutterSecureStorage.setMockInitialValues(Map<String, String>.from(boot.secure));
+  // 🔐 منذ 2026-10-12 لا تعمل المزامنة بلا ترخيص يسمح بها: ترخيص اختبار في الذاكرة
+  LicenseService.debugInstallTestLicense();
   FirebasePlatform.instance = FakeFirebaseCore();
   FirebaseAuthPlatform.instance = FakeAuth('uid-${boot.name}');
   final link = CloudLink(boot.name, boot.cloud);

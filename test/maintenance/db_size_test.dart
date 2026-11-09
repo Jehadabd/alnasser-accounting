@@ -141,7 +141,9 @@ void main() {
     test('أقوى 20 لكل مادة، والحديث لا يُحذف', () {
       const cutoff = '2026-09-29';
       final rows = <PruneRow>[
-        for (var i = 1; i <= 30; i++) PruneRow(i, 1, 100 + i, 100 - i, '2026-01-01'),
+        // طرف واحد فقط (المادة 1): لو كان لكل صف طرف آخر خاص به لبقي لأنه
+        // «الأقوى لطرفه الآخر» — وهذا ما يثبته الاختبار التالي.
+        for (var i = 1; i <= 30; i++) PruneRow(i, 1, null, 100 - i, '2026-01-01'),
         const PruneRow(999, 1, 500, 1, '2026-10-20'), // حديث وضعيف
       ];
       final del = SmartSearchPrune.idsToDelete(rows, keep: 20, cutoffIso: cutoff);

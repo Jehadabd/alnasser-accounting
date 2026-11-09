@@ -420,7 +420,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
   }
 
   Widget _runCard(WaRunState r) {
-    final left = r.nextAt == null ? null : r.nextAt!.difference(DateTime.now()).inSeconds;
+    final left = r.nextAt?.difference(DateTime.now()).inSeconds;
     return SetCard(
       title: r.running ? 'الإرسال جارٍ' : 'آخر تشغيل',
       icon: r.running ? Icons.sync_rounded : Icons.flag_rounded,

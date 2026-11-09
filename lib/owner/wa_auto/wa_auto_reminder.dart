@@ -332,6 +332,13 @@ class WaAutoReminder {
     }
   }
 
+  /// التاريخ بأرقام إنجليزية بلا بيانات لغة (DateFormat يحتاج تهيئة اللغة أولاً)
+  static String _today() {
+    final d = DateTime.now();
+    String two(int n) => n < 10 ? '0$n' : '$n';
+    return '${d.year}/${two(d.month)}/${two(d.day)}';
+  }
+
   /// يملأ القالب؛ التحية تتنوع بين الزبائن (ثابتة للزبون نفسه).
   static String render(String template, WaTarget t, String shop) {
     final amount = NumberFormat('#,##0', 'en').format(t.debt.round());
@@ -339,7 +346,7 @@ class WaAutoReminder {
         .replaceAll('{الاسم}', t.name)
         .replaceAll('{المبلغ}', amount)
         .replaceAll('{المحل}', shop)
-        .replaceAll('{التاريخ}', DateFormat('yyyy/MM/dd', 'en').format(DateTime.now()));
+        .replaceAll('{التاريخ}', _today());
     text = text.trim(); // بلا سطر فارغ في النهاية إن لم يُكتب اسم المحل
     return '${_greetings[t.id % _greetings.length]}$text';
   }

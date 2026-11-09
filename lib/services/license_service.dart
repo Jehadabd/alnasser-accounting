@@ -311,6 +311,27 @@ class LicenseService {
     return LicenseData.fromPayload(p);
   }
 
+  /// 🧪 للاختبارات الآلية فقط (test/sync_harness): ترخيص في الذاكرة بلا توقيع
+  /// حتى يعمل محرك المزامنة في الاختبار. الجسم داخل assert ⇒ يُحذف كلياً من
+  /// نسخة الإصدار (release/profile)، فلا يفتح هذا الاستدعاء شيئاً عند المستخدم.
+  static void debugInstallTestLicense({String mode = 'full_sync'}) {
+    assert(() {
+      _payload = LicensePayload({
+        'v': 4,
+        'lic': 'harness',
+        'cus': 'harness',
+        'dev': 'harness',
+        'role': 'main',
+        'mode': mode,
+        'type': 'lifetime',
+        'iat': DateTime.now().millisecondsSinceEpoch,
+        'max': 99,
+      });
+      _block = null;
+      return true;
+    }());
+  }
+
   /// محتوى الترخيص حتى لو كان موقوفاً (للعرض فقط: اسم الحساب في شاشة التفعيل)
   LicensePayload? get payload => _payload;
   bool get hasStoredToken => _token != null;

@@ -1150,6 +1150,31 @@ class DatabaseMigrations {
   /// لقواعد البيانات القديمة، تنقل القيم من الأسماء القديمة، وتُنشئ الجداول
   /// الغائبة — بما فيها دفتر حركات المورد الذي يجعل الرصيد قابلاً للتحقق.
   static Future<void> _ensureSupplierSchema(Database db) async {
+    // 0) الجدول نفسه أولاً: قاعدة قديمة بلا نظام مشتريات لا تحويه، فكانت كل
+    //    إضافات الأعمدة أدناه (والخطوة 15 والسنتات) تُتخطّى بصمت في أول فتح بعد
+    //    الاستعادة، ثم يُنشأ الجدول لاحقاً ناقص الأعمدة حتى الفتح التالي.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS suppliers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        phone TEXT,
+        address TEXT,
+        currency TEXT NOT NULL DEFAULT 'IQD',
+        payment_terms TEXT DEFAULT 'cash',
+        credit_days INTEGER DEFAULT 0,
+        total_debt_iqd REAL NOT NULL DEFAULT 0.0,
+        total_debt_usd REAL NOT NULL DEFAULT 0.0,
+        total_invoices INTEGER DEFAULT 0,
+        total_payments INTEGER DEFAULT 0,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'last_modified_at', 'TEXT');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'total_debt_iqd_cents', 'INTEGER DEFAULT 0');
+    await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'total_debt_usd_cents', 'INTEGER DEFAULT 0');
+
     // 1) أعمدة نظام المشتريات على جدول suppliers
     await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'name', 'TEXT');
     await DatabaseHelpers.addColumnIfNotExists(db, 'suppliers', 'phone', 'TEXT');

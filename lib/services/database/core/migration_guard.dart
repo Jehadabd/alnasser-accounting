@@ -385,6 +385,7 @@ class _Snap {
   final extra = <String, String>{};
   int totalDebt = 0;
   int orphanTx = 0;
+  bool hasInvoices = true; // false = قاعدة قديمة بلا جدول فواتير
 
   /// الأعمدة التي اعتُمدت في اللقطة الأولى — الثانية تقرأ نفسها بالضبط
   final cols = <String, List<String>>{};
@@ -470,7 +471,11 @@ class _Snap {
       'invoice_number',
     ]);
     final invSel = ['id', 'customer_id', ...ic].join(', ');
-    for (final r in await db.rawQuery('SELECT $invSel FROM invoices')) {
+    // قاعدة قديمة جداً (الإصدار الأول) بلا جدول فواتير: لا فواتير تُحفظ لقطتها.
+    // كان الاستعلام يفشل فيرفض الحارس الاستعادة كلها.
+    final hasInvoices = like != null ? like.hasInvoices : (await _colsOf(db, 'invoices')).isNotEmpty;
+    s.hasInvoices = hasInvoices;
+    for (final r in hasInvoices ? await db.rawQuery('SELECT $invSel FROM invoices') : const <Map<String, Object?>>[]) {
       final id = r['id'] as int;
       final parts = <String>[];
       for (final c in ic) {

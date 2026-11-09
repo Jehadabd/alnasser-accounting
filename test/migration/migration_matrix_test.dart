@@ -19,11 +19,13 @@
 // ignore_for_file: avoid_print, depend_on_referenced_packages
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:alnaser/services/backup_files.dart';
 import 'package:alnaser/services/database/core/migration_guard.dart';
 import 'package:alnaser/services/database_service.dart';
 import 'package:alnaser/services/reports_service.dart';
+import 'package:alnaser/services/xz/xz_encoder.dart';
 import 'package:archive/archive_io.dart';
 import 'package:firebase_core_platform_interface/firebase_core_platform_interface.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -242,7 +244,9 @@ void main() {
     final src = fixtures.first;
     final bytes = src.readAsBytesSync();
     final archive = Archive()..addFile(ArchiveFile('فرع_2026-10-27/debt_book.db', bytes.length, bytes));
-    final xz = XZEncoder().encode(TarEncoder().encode(archive));
+    // ضاغط البرنامج نفسه (XzBackup/xzCompress) — XZEncoder في حزمة archive
+    // يكتب فهرساً لا يقرؤه XZDecoder، والبرنامج لا يستعمله.
+    final xz = xzCompress(Uint8List.fromList(TarEncoder().encode(archive)));
     final f = File('${home.path}/backup.tar.xz')..writeAsBytesSync(xz);
     final out = await BackupFiles.extractDatabase(f);
     expect(out.readAsBytesSync().length, bytes.length);
