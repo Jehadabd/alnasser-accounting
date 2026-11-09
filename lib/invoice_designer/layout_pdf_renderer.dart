@@ -135,6 +135,11 @@ class LayoutPdfRenderer {
 
   static pw.Widget _ltr(pw.Widget w) => pw.Directionality(textDirection: pw.TextDirection.ltr, child: w);
 
+  /// تصغير النص ليتسع — إلا النص الفارغ: FittedBox في مكتبة PDF يرفض محتوى بعرض صفر
+  /// (خطأ «width > 0.0» يوقف الطباعة كلها)، فالفارغ لا يُرسم أصلاً.
+  static pw.Widget _fit(String text, pw.Widget child, {pw.Alignment alignment = pw.Alignment.center}) =>
+      text.trim().isEmpty ? pw.SizedBox() : pw.FittedBox(fit: pw.BoxFit.scaleDown, alignment: alignment, child: child);
+
   static pw.Alignment _alignment(String a) => a == 'center'
       ? pw.Alignment.center
       : (a == 'left' ? pw.Alignment.centerLeft : pw.Alignment.centerRight);
@@ -220,9 +225,9 @@ class LayoutPdfRenderer {
             angle: e.d('angle', 0.8),
             child: pw.Opacity(
               opacity: e.d('opacity', 0.08).clamp(0.01, 1.0).toDouble(),
-              child: pw.FittedBox(
-                fit: pw.BoxFit.scaleDown,
-                child: pw.Text(text,
+              child: _fit(
+                text,
+                pw.Text(text,
                     textDirection: pw.TextDirection.rtl,
                     style: _style(e.d('fontSize', 100), bold: true, color: e.i('color', 0xFF9E9E9E))),
               ),
@@ -264,11 +269,8 @@ class LayoutPdfRenderer {
             textDirection: _dirOf(text),
             maxLines: math.max(lines, text.split('\n').length),
             overflow: pw.TextOverflow.clip)
-        : pw.FittedBox(
-            fit: pw.BoxFit.scaleDown,
-            alignment: _alignment(align),
-            child: pw.Text(text, style: style, textDirection: _dirOf(text), maxLines: 1),
-          );
+        : _fit(text, pw.Text(text, style: style, textDirection: _dirOf(text), maxLines: 1),
+            alignment: _alignment(align));
     return pw.Container(
       alignment: _alignment(align),
       padding: pw.EdgeInsets.symmetric(horizontal: pad),
@@ -376,7 +378,8 @@ class LayoutPdfRenderer {
 
     pw.Widget cell(String k, {bool lineBottom = false}) {
       final isHl = k == hl;
-      final label = pw.Text(LayoutRules.itemLabel(e, k),
+      final labelText = LayoutRules.itemLabel(e, k);
+      final label = pw.Text(labelText,
           textDirection: pw.TextDirection.rtl,
           maxLines: 1,
           style: _style(stacked ? fs * 0.85 : fs, color: isHl ? 0xFFFFFFFF : labelColor));
@@ -401,17 +404,17 @@ class LayoutPdfRenderer {
             ? pw.Column(
                 mainAxisAlignment: pw.MainAxisAlignment.center,
                 children: [
-                  pw.FittedBox(fit: pw.BoxFit.scaleDown, child: label),
-                  pw.FittedBox(fit: pw.BoxFit.scaleDown, child: value),
+                  _fit(labelText, label),
+                  _fit(valueOf(k), value),
                 ],
               )
             : _ltr(pw.Row(children: [
-                pw.FittedBox(fit: pw.BoxFit.scaleDown, child: value),
+                _fit(valueOf(k), value),
                 pw.SizedBox(width: 2 * mm),
                 pw.Expanded(
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
-                    child: pw.FittedBox(fit: pw.BoxFit.scaleDown, child: label),
+                    child: _fit(labelText, label),
                   ),
                 ),
               ])),
