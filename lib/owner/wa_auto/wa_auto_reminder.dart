@@ -14,6 +14,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
@@ -167,6 +168,9 @@ class WaAutoReminder {
 
   // ───────────── الإعدادات ─────────────
 
+  /// WhatsApp Desktop ممكن على هذا الجهاز؟ (ويندوز فقط — أندرويد يرسل عبر الخادم دائماً)
+  static bool get desktopPossible => defaultTargetPlatform == TargetPlatform.windows;
+
   static Future<WaAutoSettings> load() async {
     final p = await SharedPreferences.getInstance();
     return WaAutoSettings(
@@ -188,7 +192,8 @@ class WaAutoReminder {
       hour: p.getInt('${_k}hour') ?? 22,
       refocus: p.getBool('${_k}refocus') ?? true,
       overdueMonths: p.getInt('${_k}overdue') ?? 0,
-      via: p.getString('${_k}via') == 'server' ? 'server' : 'desktop',
+      // WhatsApp Desktop على ويندوز فقط ⇒ على أندرويد (وغيره) الخادم دائماً
+      via: p.getString('${_k}via') == 'server' || !desktopPossible ? 'server' : 'desktop',
     );
   }
 

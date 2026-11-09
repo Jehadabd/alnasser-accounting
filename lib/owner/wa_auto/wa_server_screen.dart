@@ -1,16 +1,23 @@
 // lib/owner/wa_auto/wa_server_screen.dart
 //
-// 🛰️ إعدادات خادم واتساب (مدير البرنامج): الخادم يعمل على هذه الحاسبة فقط —
-// تثبيت وتشغيل بضغطة (wa_auto_setup_panels.dart)، ثم ربط رقم واتساب برمز من 8 خانات.
+// 🛰️ إعدادات خادم واتساب (مدير البرنامج)، ثم ربط رقم واتساب برمز من 8 خانات:
+//   • Windows: الخادم على هذه الحاسبة — تثبيت وتشغيل بضغطة (wa_auto_setup_panels.dart)،
+//     واختيارياً مشاركته مع هواتف المحل (wa_lan_share_panel.dart).
+//   • أندرويد: الخادم على هذا الهاتف أو على حاسبة المحل (wa_phone_panels.dart).
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../widgets/settings_kit.dart';
 import 'wa_auto_reminder.dart';
 import 'wa_auto_setup_panels.dart';
+import 'wa_lan_share_panel.dart';
 import 'wa_local_server.dart';
+import 'wa_phone_panels.dart';
+import 'wa_phone_server.dart';
 import 'wa_server_client.dart';
 import 'wa_usage_banner.dart';
 
@@ -25,6 +32,8 @@ class WaServerScreen extends StatefulWidget {
   @override
   State<WaServerScreen> createState() => _WaServerScreenState();
 }
+
+bool get _android => !kIsWeb && Platform.isAndroid;
 
 class _WaServerScreenState extends State<WaServerScreen> {
   final _phone = TextEditingController();
@@ -53,6 +62,11 @@ class _WaServerScreenState extends State<WaServerScreen> {
   Future<void> _load() async {
     _url = await WaServerClient.url();
     if (mounted) setState(() => _loaded = true);
+    if (_android) {
+      // 📱 الهاتف: خادمه أو خادم الحاسبة — الفحص يشغّل خادم الهاتف إن كان متوقفاً
+      if (await WaPhoneServer.mode() != WaPhoneMode.none) await _check(quiet: true);
+      return;
+    }
     // مثبّت على هذه الحاسبة ⇒ الرابط المحلي دائماً، والفحص يشغّل الخادم إن كان متوقفاً
     if (await WaLocalServer.enabled()) {
       if (!WaLocalServer.isLocalUrl(_url)) {
@@ -72,7 +86,13 @@ class _WaServerScreenState extends State<WaServerScreen> {
   }
 
   Future<void> _check({bool quiet = false}) async {
-    if (!await WaLocalServer.enabled()) {
+    _url = await WaServerClient.url();
+    if (_android) {
+      if (await WaPhoneServer.mode() == WaPhoneMode.none) {
+        _say('اختر أين يعمل الخادم أولاً (البطاقة 1)', bad: true);
+        return;
+      }
+    } else if (!await WaLocalServer.enabled()) {
       _say('شغّل الخادم على هذه الحاسبة أولاً (الزر الأخضر)', bad: true);
       return;
     }
@@ -175,6 +195,60 @@ class _WaServerScreenState extends State<WaServerScreen> {
     await _check();
   }
 
+  /// بطاقة «الخادم» حسب الجهاز.
+  Widget _serverCard() {
+    if (_android) {
+      return SetCard(
+        title: '1. الخادم — هذا الهاتف',
+        icon: Icons.phone_android_rounded,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          WaPhoneServerPanel(onReady: () => _check()),
+          const SizedBox(height: 8),
+          Wrap(spacing: 10, runSpacing: 6, children: [
+            TextButton.icon(
+              onPressed: _busy ? null : () => _check(),
+              icon: const Icon(Icons.wifi_tethering_rounded),
+              label: const Text('فحص الاتصال'),
+            ),
+            // مفتاح هذا الهاتف لخادمه — لا يخص خادم الحاسبة
+            if (!WaServerClient.isRemoteUrl(_url))
+              TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: _muted),
+                onPressed: _busy ? null : _newKey,
+                icon: const Icon(Icons.key_rounded),
+                label: const Text('مفتاح جديد'),
+              ),
+          ]),
+        ]),
+      );
+    }
+    return SetCard(
+      title: '1. الخادم',
+      icon: Icons.computer_rounded,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        WaLocalAutoPanel(onReady: _onAutoReady),
+        const SizedBox(height: 8),
+        Wrap(spacing: 10, runSpacing: 6, children: [
+          TextButton.icon(
+            onPressed: _busy ? null : () => _check(),
+            icon: const Icon(Icons.wifi_tethering_rounded),
+            label: const Text('فحص الاتصال'),
+          ),
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: _muted),
+            onPressed: _busy ? null : _newKey,
+            icon: const Icon(Icons.key_rounded),
+            label: const Text('مفتاح جديد'),
+          ),
+        ]),
+        if (WaLocalServer.supported) ...[
+          const Divider(height: 26),
+          const WaLanSharePanel(),
+        ],
+      ]),
+    );
+  }
+
   Future<bool?> _confirm(String title, String body) => showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -198,7 +272,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
     }
     if (!_loaded) return const SettingsScaffold(title: 'خادم واتساب', icon: Icons.dns_rounded, loading: true);
     final st = _st;
-    final external = _url.isNotEmpty && !WaLocalServer.isLocalUrl(_url);
+    final external = !_android && _url.isNotEmpty && !WaLocalServer.isLocalUrl(_url);
     return SettingsScaffold(
       title: 'خادم واتساب',
       icon: Icons.dns_rounded,
@@ -220,27 +294,7 @@ class _WaServerScreenState extends State<WaServerScreen> {
           ),
           const SizedBox(height: 12),
         ],
-        SetCard(
-          title: '1. الخادم',
-          icon: Icons.computer_rounded,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            WaLocalAutoPanel(onReady: _onAutoReady),
-            const SizedBox(height: 8),
-            Wrap(spacing: 10, runSpacing: 6, children: [
-              TextButton.icon(
-                onPressed: _busy ? null : () => _check(),
-                icon: const Icon(Icons.wifi_tethering_rounded),
-                label: const Text('فحص الاتصال'),
-              ),
-              TextButton.icon(
-                style: TextButton.styleFrom(foregroundColor: _muted),
-                onPressed: _busy ? null : _newKey,
-                icon: const Icon(Icons.key_rounded),
-                label: const Text('مفتاح جديد'),
-              ),
-            ]),
-          ]),
-        ),
+        _serverCard(),
         const SizedBox(height: 12),
         SetCard(
           title: '2. رقم واتساب المحل',

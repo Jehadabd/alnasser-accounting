@@ -5,8 +5,10 @@
 //   2) إن لم يكن Git مثبّتاً: ينزّل MinGit من إصدارات git-for-windows الرسمية ويطابق بصمته
 //      (مكتبة واتساب تحتاج Git مرة واحدة عند التثبيت).
 //   3) ينسخ ملفات الخادم من البرنامج ويثبّت مكتباته (npm install).
-//   4) يشغّل الخادم بلا نافذة، على 127.0.0.1 فقط: لا يصل إليه أحد من الشبكة، ولا يسأل
-//      جدار الحماية.
+//   4) يشغّل الخادم بلا نافذة، على 127.0.0.1: لا يصل إليه أحد من الشبكة — إلا إن فعّل المدير
+//      «مشاركة الخادم مع هواتف المحل» فيستمع على الشبكة المحلية (كل طلب بمفتاح الخادم)،
+//      ويسأل جدار حماية Windows مرة واحدة.
+// على أندرويد: الخادم على الهاتف نفسه في wa_phone_server.dart (هذا الملف يحوّل إليه).
 //
 // كل شيء داخل مجلد بيانات البرنامج (wa_local): لا يُثبَّت شيء في النظام ولا يحتاج صلاحيات
 // المدير. الخادم يتوقف وحده عند إغلاق البرنامج (PARENT_PID)، ويعود عند أول تذكير أو فحص.
@@ -26,6 +28,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'wa_pair_code.dart';
+import 'wa_phone_server.dart';
 import 'wa_server_client.dart';
 import 'wa_usage_mark.dart';
 
@@ -50,6 +54,7 @@ class WaLocalServer {
 
   static const _kEnabled = 'wa_local_enabled';
   static const _kAutoStart = 'wa_local_autostart';
+  static const _kLan = 'wa_local_lan';
   static const _serverFiles = ['server.js', 'package.json'];
 
   static bool get supported => !kIsWeb && Platform.isWindows;
@@ -86,6 +91,7 @@ class WaLocalServer {
 
   /// عند فتح البرنامج: يشغّل الخادم إن كان مثبّتاً و«يبدأ مع البرنامج» مفعّلاً.
   static Future<bool> startAtLaunch() async {
+    if (!kIsWeb && Platform.isAndroid) return WaPhoneServer.startAtLaunch();
     if (!supported || !await enabled() || !await autoStart()) return false;
     return ensureRunning();
   }
@@ -134,7 +140,7 @@ class WaLocalServer {
   static Future<bool> _keyAccepted() async {
     try {
       final r = await http
-          .get(Uri.parse('$url/status'), headers: {'x-key': await WaServerClient.key()})
+          .get(Uri.parse('$url/status'), headers: {'x-key': await WaServerClient.localKey()})
           .timeout(const Duration(seconds: 5));
       return r.statusCode == 200;
     } catch (_) {
@@ -458,9 +464,10 @@ class WaLocalServer {
       ['server.js'],
       workingDirectory: app,
       environment: {
-        'API_KEY': await WaServerClient.key(),
+        'API_KEY': await WaServerClient.localKey(),
         'PORT': '$port',
-        'HOST': '127.0.0.1',
+        // 📱 مشاركة مع هواتف المحل ⇒ الشبكة المحلية (بالمفتاح). وإلا هذه الحاسبة فقط.
+        'HOST': await lanShared() ? '0.0.0.0' : '127.0.0.1',
         'STATE_DIR': data,
         'LOG_FILE': logPath,
         'PARENT_PID': '$pid',
@@ -481,6 +488,34 @@ class WaLocalServer {
     throw WaServerException('الخادم لم يبدأ خلال 20 ثانية.${tail.isEmpty ? '' : '\n$tail'}');
   }
 
+  // ───────────── المشاركة مع هواتف المحل ─────────────
+
+  /// الخادم يقبل طلبات هواتف المحل على الشبكة المحلية (بمفتاحه)؟
+  static Future<bool> lanShared() async => (await SharedPreferences.getInstance()).getBool(_kLan) ?? false;
+
+  /// يغيّر المشاركة ويعيد تشغيل الخادم إن كان يعمل (ليستمع على العنوان الجديد).
+  static Future<void> setLanShared(bool v) async {
+    await (await SharedPreferences.getInstance()).setBool(_kLan, v);
+    if (await isRunning()) {
+      await stop();
+      await start(force: true);
+    }
+  }
+
+  /// عناوين هذه الحاسبة على الشبكة المحلية (192.168.x / 10.x / 172.16-31.x).
+  static Future<List<String>> lanAddresses() async {
+    final out = <String>[];
+    try {
+      for (final i in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+        for (final a in i.addresses) {
+          final s = a.address;
+          if (WaPairCode.isPrivateHost(s)) out.add(s);
+        }
+      }
+    } catch (_) {}
+    return out;
+  }
+
   /// يوقف الخادم المحلي (pid من ردّه نفسه — لا نقتل عملية لا نعرفها).
   static Future<void> stop() async {
     final ping = await _ping();
@@ -496,6 +531,7 @@ class WaLocalServer {
 
   /// للتذكير والفحص: إن كان التشغيل الآلي مفعّلاً والخادم متوقفاً ⇒ يشغّله.
   static Future<bool> ensureRunning() async {
+    if (!kIsWeb && Platform.isAndroid) return WaPhoneServer.ensureRunning();
     if (!supported || !await enabled()) return false;
     try {
       // تحديث البرنامج غيّر مكتبات الخادم ⇒ يعيد تثبيتها وحده (Node وGit موجودان)

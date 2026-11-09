@@ -3,7 +3,9 @@
 // 👑💬 الاتصال بخادم واتساب الخاص بالمالك (assets/wa_server/server.js).
 //
 //   • الرابط في الإعدادات، و«مفتاح الخادم» في التخزين الآمن (لا في الإعدادات العادية).
-//   • الخادم يعمل على هذه الحاسبة فقط (wa_local_server.dart).
+//   • الخادم على هذا الجهاز (127.0.0.1): حاسبة Windows (wa_local_server.dart) أو هاتف أندرويد
+//     (wa_phone_server.dart). أو — على أندرويد — خادم حاسبة المحل عبر الشبكة المحلية
+//     (wa_remote_server.dart): مفتاحه وجلسته محفوظة منفصلة عن مفتاح هذا الجهاز.
 //   • البرنامج يحتفظ بنسخة من جلسة الربط (مشفّرة بمفتاح الخادم، لا يقرؤها البرنامج):
 //     إن ضاعت ملفات الخادم أعادها البرنامج — فلا ربط جديد.
 //   • لا يغيّر أي دين أو معاملة.
@@ -68,6 +70,11 @@ class WaServerClient {
 
   static Future<String> url() async => (await SharedPreferences.getInstance()).getString(_kUrl) ?? '';
 
+  /// خادم على جهاز آخر (حاسبة المحل عبر الشبكة)؟ مفتاحه وجلسته منفصلان عن مفتاح هذا الجهاز.
+  static bool isRemoteUrl(String u) => u.isNotEmpty && !WaLocalServer.isLocalUrl(u);
+
+  static Future<String> _scope() async => isRemoteUrl(await url()) ? '_remote' : '';
+
   static Future<void> setUrl(String v) async {
     var u = v.trim();
     while (u.endsWith('/')) {
@@ -79,9 +86,31 @@ class WaServerClient {
 
   /// مفتاح الخادم — يُولَّد مرة واحدة (32 حرفاً عشوائياً آمناً).
   static Future<String> key() async {
+    final sc = await _scope();
+    final k = await _secure.read(key: '$_kKey$sc');
+    if (k != null && k.length >= 24) return k;
+    if (sc.isNotEmpty) throw WaServerException('لم يُحفظ مفتاح خادم الحاسبة — امسح رمز الربط من جديد');
+    return newKey();
+  }
+
+  /// مفتاح هذا الجهاز (لخادمه المحلي) — لا يولّد ولا يقرأ مفتاح خادم الحاسبة.
+  static Future<String> localKey() async {
     final k = await _secure.read(key: _kKey);
     if (k != null && k.length >= 24) return k;
     return newKey();
+  }
+
+  /// أندرويد ← خادم حاسبة المحل: يحفظ رابطه ومفتاحه (منفصلاً عن مفتاح هذا الجهاز).
+  static Future<void> setRemote(String baseUrl, String serverKey) async {
+    if (serverKey.length < 24) throw WaServerException('مفتاح الخادم في الرمز غير صالح');
+    final old = await _secure.read(key: '${_kKey}_remote');
+    await _secure.write(key: '${_kKey}_remote', value: serverKey);
+    if (old != serverKey) {
+      final p = await SharedPreferences.getInstance();
+      await p.remove('${_kBlob}_remote');
+      await p.remove('${_kRev}_remote');
+    }
+    await setUrl(baseUrl);
   }
 
   /// مفتاح جديد: الخادم القديم يرفض البرنامج حتى يُحدَّث مفتاحه هناك، والجلسة
@@ -98,7 +127,7 @@ class WaServerClient {
   }
 
   static Future<bool> hasSavedSession() async =>
-      ((await SharedPreferences.getInstance()).getString(_kBlob) ?? '').isNotEmpty;
+      ((await SharedPreferences.getInstance()).getString('$_kBlob${await _scope()}') ?? '').isNotEmpty;
 
   // ───────────── الطلبات ─────────────
 
@@ -117,8 +146,14 @@ class WaServerClient {
       try {
         r = await send();
       } on SocketException {
-        // الخادم على هذه الحاسبة متوقف (أُغلق البرنامج أو أُعيد تشغيل الحاسبة) ⇒ يشغّله ويعيد مرة واحدة
-        if (!WaLocalServer.isLocalUrl(base) || !await WaLocalServer.ensureRunning()) rethrow;
+        // الخادم على هذا الجهاز متوقف (أُغلق البرنامج أو أُعيد تشغيل الجهاز) ⇒ يشغّله ويعيد مرة واحدة
+        if (!WaLocalServer.isLocalUrl(base) || !await WaLocalServer.ensureRunning()) {
+          if (isRemoteUrl(base)) {
+            throw WaServerException('تعذّر الوصول إلى خادم الحاسبة ($base) — تأكد أن البرنامج مفتوح على الحاسبة '
+                'وأن الهاتف على نفس شبكة الواي فاي');
+          }
+          rethrow;
+        }
         r = await send();
       }
     } on SocketException catch (e) {
@@ -153,7 +188,7 @@ class WaServerClient {
     var s = await status();
     if (!s.linked && await hasSavedSession()) {
       final p = await SharedPreferences.getInstance();
-      final j = await _call('POST', '/state', body: {'blob': p.getString(_kBlob)});
+      final j = await _call('POST', '/state', body: {'blob': p.getString('$_kBlob${await _scope()}')});
       if (j['_code'] == 200) s = WaServerStatus.fromJson(j);
     }
     if (s.linked) await pullState(s.rev);
@@ -163,13 +198,14 @@ class WaServerClient {
   /// يحفظ نسخة الجلسة إن تغيّرت على الخادم.
   static Future<void> pullState([int? serverRev]) async {
     final p = await SharedPreferences.getInstance();
-    final mine = p.getInt(_kRev) ?? -1;
+    final sc = await _scope();
+    final mine = p.getInt('$_kRev$sc') ?? -1;
     if (serverRev != null && serverRev == mine) return;
     final j = await _call('GET', '/state');
     final blob = j['blob'] as String?;
     if (blob == null || blob.isEmpty) return;
-    await p.setString(_kBlob, blob);
-    await p.setInt(_kRev, (j['rev'] as num?)?.toInt() ?? 0);
+    await p.setString('$_kBlob$sc', blob);
+    await p.setInt('$_kRev$sc', (j['rev'] as num?)?.toInt() ?? 0);
   }
 
   /// يطلب رمز ربط من 8 خانات للرقم [phone] (دولي بلا +).
@@ -187,8 +223,9 @@ class WaServerClient {
       await _call('POST', '/logout');
     } finally {
       final p = await SharedPreferences.getInstance();
-      await p.remove(_kBlob);
-      await p.remove(_kRev);
+      final sc = await _scope();
+      await p.remove('$_kBlob$sc');
+      await p.remove('$_kRev$sc');
     }
   }
 

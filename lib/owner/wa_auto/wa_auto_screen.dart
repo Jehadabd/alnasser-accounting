@@ -165,6 +165,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
               value: s.enabled,
               onChanged: _enable,
             ),
+            if (WaAutoReminder.desktopPossible)
             SetSwitch(
               title: 'إرجاع البرنامج إلى المقدمة بعد كل رسالة',
               subtitle: 'مع WhatsApp Desktop: يظهر واتساب بضع ثوانٍ لكل رسالة ثم تعود شاشة البرنامج',
@@ -178,6 +179,11 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
           title: 'طريقة الإرسال',
           icon: Icons.alt_route_rounded,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (!WaAutoReminder.desktopPossible)
+              const Text('📱 على هذا الجهاز: الإرسال عبر «الخادم» دائماً (WhatsApp Desktop على ويندوز فقط). '
+                  'الخادم إما على هذا الهاتف نفسه، أو على حاسبة المحل — تختار من «خادم واتساب».',
+                  style: TextStyle(fontWeight: FontWeight.w700, height: 1.6))
+            else
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(value: 'server', label: Text('الخادم (موصى به)'), icon: Icon(Icons.dns_rounded)),

@@ -44,6 +44,9 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // 📱 خادم واتساب على هذا الهاتف (WaNode.kt)
+        WaNodeChannel(this).register(flutterEngine.dartExecutor.binaryMessenger)
+
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
 
         // Register USB permission receiver

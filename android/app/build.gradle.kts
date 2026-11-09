@@ -15,6 +15,13 @@ val keyProps = Properties().apply {
 }
 val hasReleaseKey = keyProps.getProperty("storeFile")?.let { file(it).exists() } == true
 
+// 📱 خادم واتساب على الهاتف: Node.js من nodejs-mobile (يُنزَّل بـ tool\wa_android_setup.bat إلى
+//    android/app/libnode، خارج git). بدونه تُبنى النسخة كما كانت تماماً، والهاتف يستعمل خادم الحاسبة فقط.
+val waNodeAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val hasWaNode = waNodeAbis.all { file("libnode/bin/$it/libnode.so").exists() } &&
+    file("libnode/include/node/node.h").exists()
+if (!hasWaNode) logger.lifecycle("ℹ️ لا يوجد android/app/libnode: النسخة بلا «خادم على الهاتف» (شغّل tool\\wa_android_setup.bat لإضافته).")
+
 android {
     namespace = "com.example.debt_book"
     compileSdk = flutter.compileSdkVersion
@@ -41,6 +48,39 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        resValue("bool", "wa_node", hasWaNode.toString())
+        if (hasWaNode) {
+            externalNativeBuild {
+                cmake {
+                    // نفس معماريات Flutter ونفس ما يوفّره nodejs-mobile (لا x86 32-bit)
+                    abiFilters += waNodeAbis
+                    // libnode.so يحتاج libc++_shared.so
+                    arguments += listOf("-DANDROID_STL=c++_shared")
+                }
+            }
+        }
+    }
+
+    buildFeatures {
+        resValues = true
+    }
+
+    if (hasWaNode) {
+        externalNativeBuild {
+            cmake {
+                path = file("src/main/cpp/CMakeLists.txt")
+            }
+        }
+        sourceSets["main"].jniLibs.srcDir("libnode/bin")
+    }
+
+    packaging {
+        jniLibs {
+            // أكثر من مكتبة تحمل libc++_shared.so — تكفي نسخة واحدة
+            pickFirsts += "**/libc++_shared.so"
+            // libnode.so ≈60 ميغابايت لكل معمارية: مضغوطاً داخل APK بدل تخزينه كما هو
+            if (hasWaNode) useLegacyPackaging = true
+        }
     }
 
     signingConfigs {

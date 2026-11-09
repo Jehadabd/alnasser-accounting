@@ -71,3 +71,8 @@ graphify-out/
 android/key.properties
 *.jks
 *.keystore
+
+# 📱 خادم واتساب على الهاتف: تُنتجها claude_wa_android_setup.bat (كبيرة — لا تُرفع)
+/android/app/libnode/
+/android/app/src/main/assets/wa_node/
+/android/app/.cxx/

@@ -26,6 +26,7 @@ dependencies:
   permission_handler: ^12.0.0+1
   flutter_dotenv: ^5.1.0
   pdf: ^3.10.4
+  barcode: ^2.2.9  # 🔗 رمز QR لربط الهاتف بخادم الحاسبة (موجودة أصلاً عبر pdf)
   printing: ^5.11.1
   intl: ^0.20.2
   provider: ^6.1.1
