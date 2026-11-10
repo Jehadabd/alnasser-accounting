@@ -15,6 +15,7 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
+import '../../widgets/after_save_dialog.dart'; // ✅ نافذة ما بعد الحفظ
 import '../../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائي
 import '../../wa_messages/wa_doc_sender.dart';
 import 'receipt_pdf.dart';
@@ -149,9 +150,18 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         );
       }
       if (!mounted) return;
-      final print = await confirmDialog(context, 'تم حفظ الوصل رقم ${res.receiptNo}', 'هل تريد طباعة الوصل؟',
-          ok: 'طباعة');
-      if (print) {
+      final choice = await showAfterSaveDialog(
+        context,
+        title: 'حُفظ الوصل',
+        subtitle: 'وصل قبض رقم ${res.receiptNo}${_lines.length > 1 ? ' — ${_lines.length} عملاء' : ''}',
+        // الوصل الجماعي فيه أرصدة عملاء آخرين: بلا واتساب
+        actions: _lines.length > 1 ? const [kAfterSavePrint, kAfterSaveShare] : const [kAfterSavePrint, kAfterSaveShare, kAfterSaveWa],
+      );
+      if (choice == 'wa' && mounted && !await WaDocSender.precheck(context)) {
+        if (mounted) Navigator.pop(context, true);
+        return;
+      }
+      if (choice != null && mounted) {
         final lines = await ReceiptsService().receiptLines(res.receiptId);
         // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة (فشله يوقفها)
         final stamp = await PrintedVouchers.forCustomerReceipt(res.receiptId);
@@ -168,7 +178,26 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           notes: _notes.text.trim(),
           commission: parseMoney(_commission.text) ?? 0,
         );
-        if (mounted) await ReportExport.openPdf(context, bytes, 'وصل_قبض_${res.receiptNo}');
+        if (!mounted) return;
+        if (choice == 'wa') {
+          final cid = _lines.first.customer.id;
+          final name = _lines.first.customer.name;
+          await WaDocSender.send(
+              context,
+              () async => WaDoc(
+                    showsDebt: true,
+                    bytes: bytes,
+                    fileName: 'وصل_قبض_${res.receiptNo}.pdf',
+                    caption: 'وصل قبض رقم ${res.receiptNo} — $name',
+                    customerId: cid,
+                    customerName: name,
+                  ),
+              source: 'voucher');
+        } else if (choice == 'share') {
+          await ReportExport.sharePdf(context, bytes, 'وصل_قبض_${res.receiptNo}', text: 'وصل قبض رقم ${res.receiptNo}');
+        } else {
+          await ReportExport.openPdf(context, bytes, 'وصل_قبض_${res.receiptNo}');
+        }
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {

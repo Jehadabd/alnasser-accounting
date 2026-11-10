@@ -37,6 +37,7 @@ import '../models/app_user.dart' show AppPermissions; // 🔐 دين يدوي / 
 import '../services/auth_service.dart';
 import '../erp/debts/receipt_screen.dart' show ReceiptScreen; // 🧾 وصل قبض متقدم
 import '../erp/pickers.dart' show PartyLite;
+import '../widgets/after_save_dialog.dart'; // ✅ نافذة ما بعد الحفظ
 import '../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائي للعملاء المختارين
 import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال الوصل لصاحبه عبر واتساب
 
@@ -656,30 +657,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         ? 'print'
         : pmode == 'never'
             ? null
-            : await showDialog<String>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: Text('وصل قبض رقم ${res.receiptNo}'),
-                  content: const Text('حُفظ التسديد ووصل القبض. هل تريد طباعته أو مشاركته؟'),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('لا')),
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.of(ctx).pop('share'),
-                      icon: const Icon(Icons.share_rounded, size: 18),
-                      label: const Text('مشاركة'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.of(ctx).pop('wa'),
-                      icon: const Icon(Icons.send_to_mobile_rounded, size: 18, color: Color(0xFF047857)),
-                      label: const Text('واتساب'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.of(ctx).pop('print'),
-                      icon: const Icon(Icons.print_rounded, size: 18),
-                      label: const Text('طباعة'),
-                    ),
-                  ],
-                ),
+            : await showAfterSaveDialog(
+                context,
+                title: 'حُفظ التسديد',
+                subtitle: 'وصل قبض رقم ${res.receiptNo} — ${widget.customer.name.trim()}',
+                amount: '${formatCurrency(amount)} دينار',
               );
     // 📨 واتساب: يُفحص قبل تسجيل النسخة (التسديد محفوظ في كل الأحوال)
     if (choice == 'wa' && mounted && !await WaDocSender.precheck(context)) choice = null;

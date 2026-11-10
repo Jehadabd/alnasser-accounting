@@ -16,11 +16,13 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../erp/debts/receipt_pdf.dart';
+import '../main.dart' show globalNavigatorKey;
 import '../erp/debts/receipts_service.dart';
 import '../erp/sales/sales_return_screen.dart' show salesReturnPdf;
 import '../models/invoice.dart';
@@ -336,7 +338,35 @@ class WaAutoDocs {
       await _fail(cid, name, rule, label, block);
       return null;
     }
-    final phone = await WaPhoneBook.phoneOf(WaPhoneBook.keyOf(cid, name));
+    final key = WaPhoneBook.keyOf(cid, name);
+    var phone = await WaPhoneBook.phoneOf(key);
+    // رقم العميل في سجل الديون تغيّر منذ التأكيد ⇒ يُسأل مرة واحدة الآن، ثم تلقائي كما كان
+    final changed = phone == null ? null : await WaPhoneBook.changedRegistryPhone(key);
+    if (changed != null && changed != phone) {
+      final ctx = globalNavigatorKey.currentContext;
+      final ok = ctx == null || !ctx.mounted
+          ? null
+          : await WaDocSender.askPhone(
+              ctx,
+              WaDoc(
+                bytes: Uint8List(0),
+                fileName: label,
+                caption: 'إرسال تلقائي عند الحفظ — رقمه في سجل الديون تغيّر',
+                customerId: cid,
+                customerName: name,
+              ),
+              changed,
+              changed: true,
+            );
+      if (ok == null) {
+        await _fail(cid, name, rule, label, 'رقم العميل في سجل الديون تغيّر ولم يُؤكَّد — لم يُرسل');
+        return null;
+      }
+      await WaPhoneBook.confirm(key!, name, ok); // تأكيد صريح الآن
+      phone = ok;
+    } else if (changed != null) {
+      await WaPhoneBook.confirm(key!, name, phone!); // نفس الرقم: يُحدَّث رقم السجل فقط
+    }
     if (phone == null) {
       await _fail(cid, name, rule, label, 'لا رقم مؤكَّد لهذا العميل — أكّده من «الإرسال التلقائي للعملاء»');
       return null;

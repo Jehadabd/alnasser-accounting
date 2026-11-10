@@ -142,10 +142,14 @@ class WaDocSender {
     // 📒 الرقم المؤكَّد سابقاً لصاحب المستند
     final key = WaPhoneBook.keyOf(doc.customerId, doc.customerName);
     final saved = await WaPhoneBook.phoneOf(key);
+    // رقم العميل في سجل الديون تغيّر منذ التأكيد ⇒ يُسأل مرة واحدة (بالرقم الجديد)
+    final registryChanged = saved == null ? null : await WaPhoneBook.changedRegistryPhone(key);
     final docPhone = WaAutoReminder.normalizePhone(doc.phone);
     String? found;
     if (docPhone != null) {
       found = docPhone; // رقم المستند أولاً
+    } else if (registryChanged != null) {
+      found = registryChanged;
     } else if (saved != null && doc.customerId != null) {
       found = saved; // عميل مسجّل أكّدت رقمه من قبل
     } else {
@@ -153,17 +157,16 @@ class WaDocSender {
     }
     if (!context.mounted) return;
     final String phone;
-    if (saved != null && found == saved) {
+    if (saved != null && found == saved && registryChanged == null) {
       phone = saved; // ✓ مؤكَّد من قبل: بلا سؤال
     } else {
-      final ok = await showDialog<String>(
-          context: context, builder: (_) => _ConfirmDialog(doc: doc!, phone: found ?? saved, changed: saved != null && found != null));
+      final ok = await askPhone(context, doc, found ?? saved, changed: saved != null && found != null);
       if (ok == null || !context.mounted) return;
       phone = ok;
     }
 
     final err = await transmit(doc, phone, source: source);
-    if (err == null && key != null && phone != saved) {
+    if (err == null && key != null && (phone != saved || registryChanged != null)) {
       // 📒 بعد أول إرسال ناجح: هذا هو رقمه، والمرات القادمة بلا سؤال
       try {
         await WaPhoneBook.confirm(key, doc.customerName, phone);
@@ -174,6 +177,11 @@ class WaDocSender {
           err == null ? 'أُرسل ${doc.label} ✓' : 'فشل إرسال ${doc.label}', err);
     }
   }
+
+  /// نافذة تأكيد الرقم (تُكتب أو تُصحَّح). يعيد الرقم الدولي أو null عند الإلغاء.
+  /// [changed]: له رقم مؤكَّد سابق والرقم الآن مختلف.
+  static Future<String?> askPhone(BuildContext context, WaDoc doc, String? phone, {bool changed = false}) =>
+      showDialog<String>(context: context, builder: (_) => _ConfirmDialog(doc: doc, phone: phone, changed: changed));
 
   /// الإرسال نفسه (بلا شاشة) — للزر وللإرسال التلقائي: الخادم، سجل الرسائل، علامة الاستعمال،
   /// والإشعار أعلى الشاشة. يعيد null عند النجاح، وإلا السبب.
@@ -266,7 +274,7 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
             const SizedBox(height: 12),
             Text(
               widget.changed
-                  ? '⚠️ رقم المستند يختلف عن رقمه المؤكَّد سابقاً — تأكد منه. بعد الإرسال يصبح هو المؤكَّد.'
+                  ? '⚠️ الرقم تغيّر عن رقمه المؤكَّد سابقاً — تأكد منه مرة واحدة، وبعدها يُرسل له مباشرة.'
                   : 'أول مرة لهذا العميل: تأكد من الرقم. بعد الإرسال يُحفظ، والمرات القادمة تُرسل مباشرة.',
               style: TextStyle(fontSize: 12, color: widget.changed ? const Color(0xFFB45309) : const Color(0xFF047857)),
             ),

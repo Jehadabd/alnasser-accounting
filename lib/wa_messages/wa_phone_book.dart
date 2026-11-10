@@ -3,11 +3,14 @@
 // 📒 «أرقام واتساب المؤكَّدة»: أول إرسال مستند لعميل يُسأل فيه عن الرقم، وبعد التأكيد يُحفظ
 // الرقم هنا (جدول wa_confirmed_phones) فيُرسل له بعدها مباشرة بلا سؤال.
 //   • لا يمس جدول العملاء ولا أي دين — سجل مستقل يُحذف منه الرقم متى شئت.
+//   • تغيّر رقم العميل في سجل الديون بعد التأكيد ⇒ أول إرسال بعدها يسأل من جديد (مرة واحدة)،
+//     ثم يعود مباشراً. لذلك يُحفظ مع الرقم المؤكَّد رقم العميل في السجل وقت التأكيد.
 //   • المفتاح: معرّف العميل؛ وإن لم يكن للمستند عميل مسجّل فالاسم (لا يُستعمل الاسم بديلاً
 //     عن رقم مفقود — أسماء مثل «نقدي» تتكرر — بل يمنع السؤال فقط إن طابق الرقمُ المحفوظ).
 
-import 'package:sqflite/sqflite.dart' show Database, ConflictAlgorithm;
+import 'package:sqflite/sqflite.dart' show Database, DatabaseExecutor, ConflictAlgorithm;
 
+import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
 
@@ -34,6 +37,10 @@ class WaPhoneBook {
           confirmed_at TEXT,
           confirmed_by TEXT
         )''');
+      try {
+        // رقم العميل في سجل الديون وقت التأكيد
+        await db.execute('ALTER TABLE wa_confirmed_phones ADD COLUMN customer_phone TEXT');
+      } catch (_) {}
       _readyGen = DatabaseService.openGeneration;
     }
     return db;
@@ -58,7 +65,16 @@ class WaPhoneBook {
     }
   }
 
-  /// يحفظ الرقم بعد تأكيد المستخدم (ويستبدل القديم إن تغيّر).
+  /// رقم العميل الحالي في سجل الديون (دولي)، أو null.
+  static Future<String?> _registryPhone(DatabaseExecutor db, String key) async {
+    if (!key.startsWith('c:')) return null;
+    final id = int.tryParse(key.substring(2));
+    if (id == null) return null;
+    final r = await db.query('customers', columns: ['phone'], where: 'id = ?', whereArgs: [id], limit: 1);
+    return r.isEmpty ? null : WaAutoReminder.normalizePhone(r.first['phone'] as String?);
+  }
+
+  /// يحفظ الرقم بعد تأكيد المستخدم (ويستبدل القديم إن تغيّر)، مع رقم العميل في السجل الآن.
   static Future<void> confirm(String key, String name, String phone) async {
     final db = await _db();
     await db.insert(
@@ -69,9 +85,32 @@ class WaPhoneBook {
         'phone': phone,
         'confirmed_at': DateTime.now().toIso8601String(),
         'confirmed_by': AuthService().currentUser?.username ?? '',
+        'customer_phone': await _registryPhone(db, key),
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// رقم العميل في سجل الديون تغيّر منذ التأكيد؟ يعيد الرقم الجديد، أو null إن لم يتغير.
+  /// (تأكيد قديم بلا رقم محفوظ: يُسجَّل الحالي الآن ولا يُعدّ تغييراً.)
+  static Future<String?> changedRegistryPhone(String? key) async {
+    if (key == null || !key.startsWith('c:')) return null;
+    try {
+      final db = await _db();
+      final r = await db.query('wa_confirmed_phones',
+          columns: ['customer_phone'], where: 'key = ?', whereArgs: [key], limit: 1);
+      if (r.isEmpty) return null;
+      final now = await _registryPhone(db, key);
+      final then = r.first['customer_phone'] as String?;
+      if (then == null) {
+        await db.update('wa_confirmed_phones', {'customer_phone': now}, where: 'key = ?', whereArgs: [key]);
+        return null;
+      }
+      if (now == null || now == then) return null;
+      return now;
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<void> remove(String key) async {
