@@ -67,6 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
   bool _showScrollToTop = false;
+  bool _showScrollToBottom = false; // ⏬ زر «إلى آخر القائمة»
   AppSettings? _appSettings;
 
   // ملخص كل العملاء (لا الصفحة المحمّلة فقط)
@@ -114,12 +115,41 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onScroll() {
+    _updateArrows();
     final shouldShow = _scrollController.offset > 300;
     if (shouldShow != _showScrollToTop) setState(() => _showScrollToTop = shouldShow);
     if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
       final app = context.read<AppProvider>();
       if (app.hasMoreData && !app.isLoadingMore) app.loadMoreCustomers();
     }
+  }
+
+  /// زرّا التمرير: «إلى الأعلى» بعد 300 بكسل، و«إلى آخر القائمة» ما لم نكن في آخرها.
+  void _updateArrows() {
+    if (!_scrollController.hasClients || !mounted) return;
+    final pos = _scrollController.position;
+    final hasMore = context.read<AppProvider>().hasMoreData;
+    final down = pos.maxScrollExtent > 300 && (hasMore || pos.pixels < pos.maxScrollExtent - 300);
+    if (down != _showScrollToBottom) setState(() => _showScrollToBottom = down);
+  }
+
+  /// ⏬ إلى آخر القائمة: يحمّل ما بقي ثم ينزل حتى آخر عميل (القائمة تُبنى بالتدريج
+  /// فيُكرَّر النزول حتى يثبت آخرها).
+  Future<void> _scrollToBottom() async {
+    final app = context.read<AppProvider>();
+    if (app.hasMoreData) await app.loadAllCustomers();
+    for (var i = 0; i < 8 && mounted; i++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!_scrollController.hasClients) return;
+      final max = _scrollController.position.maxScrollExtent;
+      if (i == 0) {
+        await _scrollController.animateTo(max, duration: const Duration(milliseconds: 500), curve: Curves.easeOutCubic);
+      } else {
+        if ((_scrollController.position.pixels - max).abs() < 1) break;
+        _scrollController.jumpTo(max);
+      }
+    }
+    _updateArrows();
   }
 
   @override
@@ -238,7 +268,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                   await provider.refreshCustomers();
                                   await _loadSummary();
                                 },
-                                child: ListView.builder(
+                                child: NotificationListener<ScrollMetricsNotification>(
+                                  onNotification: (_) {
+                                    WidgetsBinding.instance.addPostFrameCallback((_) => _updateArrows());
+                                    return false;
+                                  },
+                                  child: ListView.builder(
                                   controller: _scrollController,
                                   padding: const EdgeInsets.fromLTRB(16, 6, 16, 96),
                                   itemCount: provider.customers.length + (provider.isLoadingMore ? 1 : 0),
@@ -254,6 +289,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       onReturn: _loadSummary,
                                     );
                                   },
+                                ),
                                 ),
                               ),
                       ),
@@ -280,6 +316,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 onPressed: () => _scrollController.animateTo(0,
                     duration: const Duration(milliseconds: 500), curve: Curves.easeOutCubic),
                 child: const Icon(Icons.keyboard_arrow_up_rounded, size: 28),
+              ),
+            ),
+          if (_showScrollToBottom)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: FloatingActionButton.small(
+                heroTag: 'scroll_to_bottom',
+                tooltip: 'إلى آخر القائمة',
+                backgroundColor: Colors.white,
+                foregroundColor: _K.navy,
+                onPressed: _scrollToBottom,
+                child: const Icon(Icons.keyboard_arrow_down_rounded, size: 28),
               ),
             ),
           // 🔐 إضافة عميل بصلاحيتها (شاشة الموظفين ← سجل الديون)

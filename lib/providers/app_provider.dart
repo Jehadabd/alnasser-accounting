@@ -197,8 +197,51 @@ class AppProvider with ChangeNotifier {
   /// يُستخدم عند العودة من شاشة تفاصيل العميل لتحديث البيانات
   /// مع الحفاظ على موضع التمرير في القائمة
   Future<void> refreshCustomers() async {
-    await _loadCustomersPage(refresh: true);
+    await refreshCustomersKeepPosition();
+  }
+
+  /// 🔁 تحديث بصمت يُبقي كل ما حُمِّل لا الصفحة الأولى فقط: كانت القائمة تُقصَّر إلى أول
+  /// $_pageSize عميل عند العودة من بطاقة عميل (أو وصول مزامنة)، فيقفز التمرير إلى أولها.
+  /// البحث وتغيير الترتيب يبدآن من الأول كما كانا (_loadCustomersPage(refresh: true)).
+  Future<void> refreshCustomersKeepPosition() async {
+    final requestId = ++_searchRequestId;
+    final pages = _customers.length <= _pageSize ? 1 : (_customers.length / _pageSize).ceil();
+    final limit = pages * _pageSize;
+    try {
+      final rows = await _db.getCustomersForDebtRegisterPaginated(
+        limit: limit,
+        offset: 0,
+        searchQuery: _searchQuery,
+        orderBy: _sortTypeToSqlOrderBy(_currentSortType),
+      );
+      if (requestId != _searchRequestId) return; // بحث أحدث بدأ
+      _customers
+        ..clear()
+        ..addAll(rows);
+      _filteredCustomers = List.from(_customers);
+      _hasMoreData = rows.length >= limit;
+      _currentPage = pages;
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error refreshing customers: $e');
+    }
+  }
+
+  /// ⏬ يحمّل كل ما بقي من العملاء (لزر «إلى آخر القائمة»).
+  Future<void> loadAllCustomers() async {
+    if (!_hasMoreData) return;
+    _isLoadingMore = true;
     notifyListeners();
+    try {
+      while (_hasMoreData) {
+        final before = _customers.length;
+        await _loadCustomersPage();
+        if (_customers.length == before) break; // طلب آخر جارٍ أو بحث جديد
+      }
+    } finally {
+      _isLoadingMore = false;
+      notifyListeners();
+    }
   }
 
   /// يحول نوع الترتيب إلى جملة SQL ORDER BY
