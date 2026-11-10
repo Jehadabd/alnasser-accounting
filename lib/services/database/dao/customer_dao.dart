@@ -10,6 +10,7 @@ import '../../name_search.dart'; // 🔤 الأسماء بلا مسافات
 import '../business/tx_author.dart';
 import '../../../services/firebase_sync/uuid_helper.dart';
 import '../../../services/sync/sync_security.dart';
+import '../business/customer_owner_rule.dart';
 
 /// DAO للعملاء - عمليات CRUD الأساسية
 class CustomerDao {
@@ -352,9 +353,13 @@ class CustomerDao {
     // 🛡️ تغيير الاسم إلى اسم حساب آخر مرفوض (لا حسابان بالاسم نفسه)
     if (customer.id != null) {
       final current = await db.query('customers',
-          columns: ['name'], where: 'id = ?', whereArgs: [customer.id], limit: 1);
+          columns: ['name', 'is_created_by_me'], where: 'id = ?', whereArgs: [customer.id], limit: 1);
       final oldName = current.isEmpty ? null : current.first['name'] as String?;
       if (oldName == null || CustomerNameRule.key(oldName) != CustomerNameRule.key(customer.name)) {
+        // 🔐 الاسم يغيّره الجهاز الذي أنشأ العميل فقط (customer_owner_rule.dart)
+        if (oldName != null && !CustomerOwnerRule.isMine(current.first['is_created_by_me'])) {
+          throw CustomerRenameNotOwnedException(oldName);
+        }
         await CustomerNameRule.ensureAvailable(db, customer.name, excludeId: customer.id);
       }
     }

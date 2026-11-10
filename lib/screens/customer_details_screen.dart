@@ -37,6 +37,7 @@ import 'person_details_screen.dart'; // 📊 تقرير العميل
 import '../wa_messages/wa_auto_docs_screen.dart' show showWaAutoDocsEditor; // 🤖 الإرسال التلقائي
 import 'product_reports_screen.dart'; // 📦 بضاعة العميل
 import '../wa_messages/wa_access.dart';
+import '../services/database/business/customer_owner_rule.dart';
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
@@ -419,6 +420,14 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      } on CustomerRenameNotOwnedException catch (e) {
+        // 🔐 الاسم يغيّره الجهاز الذي أنشأ العميل فقط
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red, duration: const Duration(seconds: 6)),
           );
         }
         return;

@@ -21,7 +21,8 @@ for /f "tokens=1-3 delims=/:. " %%a in ("%time: =0%") do set T=%%a%%b%%c
 set OUT=test_results\multi\multi_%date:~-4%%date:~-7,2%%date:~-10,2%_!T!.txt
 set PROG=test_results\multi\progress.txt
 set DONE=test_results\multi\done.txt
-del /q %PROG% %DONE% 2>nul
+set SUMMARY=test_results\multi\summary.txt
+del /q %PROG% %DONE% %SUMMARY% 2>nul
 echo تعذيب متعدد الأجهزة %MODE% — النتيجة في %OUT%
 echo لا تغلق النافذة. البناء يأخذ دقيقة أو اثنتين قبل أن يظهر العداد.
 echo.
@@ -45,8 +46,7 @@ if not exist %DONE% goto wait
 set RES=
 set /p RES=<%DONE%
 echo.
-findstr /C:"🎲" %OUT%
-findstr /C:"══" /C:"❌" /C:"✅" %OUT%
+if exist %SUMMARY% type %SUMMARY%
 if /i "!RES!"=="ok" (
   title نجح
   echo ===== نجح التشغيل =====

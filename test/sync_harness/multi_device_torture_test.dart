@@ -36,6 +36,9 @@ const _maxProblems = int.fromEnvironment('MAX_PROBLEMS', defaultValue: 15);
 /// 📊 عداد حي: سطر واحد يُكتب هنا ويعرضه claude_test_multi.bat في النافذة وعنوانها.
 const _progressPath = 'test_results/multi/progress.txt';
 
+/// 📋 الخلاصة بنص عادي (يعرضها claude_test_multi.bat في آخر النافذة).
+const _summaryPath = 'test_results/multi/summary.txt';
+
 String _dur(int seconds) {
   final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60;
   return h > 0 ? '${h}س ${m}د' : '${m}د';
@@ -717,15 +720,32 @@ void main() {
         count('محاولة تعديل فاتورة جهاز آخر');
       }
 
+      /// تغيير اسم العميل من بطاقته. قاعدة المالك (customer_owner_rule.dart): الجهاز الذي
+      /// أنشأه فقط — وعلى غيره يجب أن يُرفض ولا يتغير شيء.
       Future<void> renameCustomer(String dev, String label) async {
-        final cs = knownCusts(dev).where((c) => !pendingRename.containsKey(c) && homeOnly[c] == null).toList();
-        if (cs.isEmpty) return;
-        final c = cs[rnd.nextInt(cs.length)];
+        final free = knownCusts(dev).where((c) => !pendingRename.containsKey(c) && homeOnly[c] == null);
+        final owned = free.where((c) => h.truth.customers[c]!.creator == dev).toList();
+        final foreign = free.where((c) => h.truth.customers[c]!.creator != dev).toList();
+        if (foreign.isNotEmpty && (owned.isEmpty || rnd.nextDouble() < 0.3)) {
+          final c = foreign[rnd.nextInt(foreign.length)];
+          final r = (await h.d(dev).call('renameCustomer', {'cust': c, 'name': 'اسم ممنوع ${++renames}'}) as Map)
+              .cast<String, Object?>();
+          if (r['ok'] == true) {
+            problems.add('$label: غيّر $dev اسم ${names[c]} وأنشأه ${h.truth.customers[c]!.creator} (يجب رفضه)');
+          } else {
+            count('رُفض كما يجب: تغيير اسم عميل جهاز آخر');
+          }
+          final b = await custBalance(dev, c);
+          if (b['name'] != nameOn(dev, c)) problems.add('$label: تغيّر الاسم على $dev رغم الرفض: ${b['name']}');
+          return;
+        }
+        if (owned.isEmpty) return;
+        final c = owned[rnd.nextInt(owned.length)];
         final old = names[c]!;
         final nn = 'زبون معدَّل ${++renames}';
         final r = (await h.d(dev).call('renameCustomer', {'cust': c, 'name': nn}) as Map).cast<String, Object?>();
         if (r['ok'] != true) {
-          problems.add('$label: رُفض تغيير اسم ${names[c]} إلى $nn (${r['err']})');
+          problems.add('$label: رُفض تغيير اسم ${names[c]} إلى $nn على جهازه (${r['err']})');
           return;
         }
         pendingRename[c] = (dev, old);
@@ -896,6 +916,16 @@ void main() {
       }
       failed = problems.isNotEmpty;
       live(failed ? 'انتهى — هنا وقع خطأ' : 'انتهى — نجح');
+      try {
+        File(_summaryPath)
+          ..createSync(recursive: true)
+          ..writeAsStringSync([
+            'القرعة: seed=$seed (لإعادته: claude_test_multi.bat full $seed)',
+            '$ops عملية من $_ops — ${state.length} فاتورة — ${custs.length} عميلاً — ${devs.length} أجهزة — ${sw.elapsed.inMinutes} دقيقة',
+            failed ? 'النتيجة: هنا وقع خطأ — ${problems.length} مشكلة:' : 'النتيجة: نجح — لا مشكلة واحدة',
+            for (final p in problems.take(_maxProblems)) '  - ${p.split('\n').first}',
+          ].join('\r\n'));
+      } catch (_) {}
       expect(problems, isEmpty);
     } finally {
       await h.dispose(keepFiles: failed);
