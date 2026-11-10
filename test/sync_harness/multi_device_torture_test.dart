@@ -19,6 +19,7 @@
 //
 // ignore_for_file: avoid_print
 
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,14 @@ const _customers = int.fromEnvironment('CUSTOMERS', defaultValue: _quick ? 12 : 
 const _ops = int.fromEnvironment('OPS', defaultValue: _quick ? 3000 : 70000);
 const _seedArg = int.fromEnvironment('SEED', defaultValue: 0); // 0 = قرعة جديدة كل تشغيل
 const _maxProblems = int.fromEnvironment('MAX_PROBLEMS', defaultValue: 15);
+
+/// 📊 عداد حي: سطر واحد يُكتب هنا ويعرضه claude_test_multi.bat في النافذة وعنوانها.
+const _progressPath = 'test_results/multi/progress.txt';
+
+String _dur(int seconds) {
+  final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60;
+  return h > 0 ? '${h}س ${m}د' : '${m}د';
+}
 
 /// أنواع معاملات لا تُعدّ من دين الفاتورة (كما في InvoiceDebtReconciler)
 const _nonContribution = {'manual_payment', 'return_payment', 'correction', 'opening_balance'};
@@ -119,8 +128,24 @@ void main() {
 
     bool stop() => problems.length >= _maxProblems;
 
+    final loopWatch = Stopwatch(); // يبدأ مع العمليات بالقرعة (التجهيز لا يُحسب في التقدير)
+    void live(String phase) {
+      final pct = (ops * 100 / _ops).clamp(0, 100).toStringAsFixed(1);
+      final done = loopWatch.elapsed.inSeconds;
+      final eta = ops > 0 ? (done * (_ops - ops) / ops).round() : null;
+      final line = '$pct% — $ops/$_ops عملية — مضى ${_dur(sw.elapsed.inSeconds)}'
+          '${eta == null ? '' : ' — المتبقي ≈ ${_dur(eta)}'} — مشاكل=${problems.length} — $phase';
+      try {
+        File(_progressPath)
+          ..createSync(recursive: true)
+          ..writeAsStringSync(line);
+      } catch (_) {}
+    }
+
     try {
+      live('تشغيل $_devices أجهزة…');
       await h.start(_devices);
+      live('إنشاء العملاء والأصناف…');
 
       // ── من يعرف ماذا (حتى المزامنة التالية) ──
       // dirty[عميل] = الأجهزة التي غيّرت رصيده منذ آخر مزامنة؛ جهاز لا يرى إلا ما فعله هو.
@@ -755,6 +780,7 @@ void main() {
         count('جولة مزامنة');
       }
 
+      live('فواتير البداية…');
       // ── البداية: 15 فاتورة على كل جهاز ──
       for (final dev in devs) {
         for (var k = 0; k < 15 && !stop(); k++) {
@@ -766,6 +792,7 @@ void main() {
       // ── العمليات بالقرعة ──
       var sinceSync = 0;
       final offline = <String>{};
+      loopWatch.start();
       while (ops < _ops && !stop()) {
         ops++;
         sinceSync++;
@@ -807,8 +834,10 @@ void main() {
           await editInvoice(mine[rnd.nextInt(mine.length)], label);
         }
         // مزامنة في وقت عشوائي (ونادراً ما تتأخر أكثر من 800 عملية)
+        if (ops % 25 == 0) live('عمليات بالقرعة');
         if (rnd.nextDouble() < 1 / 350 || sinceSync >= 800) {
           offline.clear(); // settle يعيد الكل متصلاً
+          live('مزامنة وفحص كل الأجهزة…');
           await syncAndCheck('مزامنة بعد العملية $ops');
           sinceSync = 0;
         }
@@ -821,6 +850,7 @@ void main() {
       }
 
       // ── النهاية ──
+      live('المزامنة والفحص النهائي…');
       if (!stop()) {
         await syncAndCheck('المزامنة النهائية');
         for (final dev in devs) {
@@ -865,6 +895,7 @@ void main() {
         print('✅ لا مشكلة واحدة — seed=$seed.');
       }
       failed = problems.isNotEmpty;
+      live(failed ? 'انتهى — هنا وقع خطأ' : 'انتهى — نجح');
       expect(problems, isEmpty);
     } finally {
       await h.dispose(keepFiles: failed);
