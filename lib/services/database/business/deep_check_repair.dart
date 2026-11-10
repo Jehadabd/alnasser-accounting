@@ -54,7 +54,7 @@ class InvoiceRepairInfo {
   /// null = «اعتمد الفاتورة» ممكن. وإلا السبب.
   String? get invoiceTruthBlock {
     if (consistent) return 'متطابقة';
-    if (expected > 0.01 && !customerExists) {
+    if (expected > 0.005 && !customerExists) {
       return 'عميل الفاتورة غير موجود أو محذوف — لا يُسجَّل دين على عميل غير موجود؛ افتح الفاتورة واختر العميل';
     }
     return null;
@@ -83,7 +83,7 @@ class InvoiceRepairInfo {
       recorded.entries.where((e) => e.key != customerId).fold(0.0, (s, e) => s + e.value);
 
   bool get consistent =>
-      (expected - recordedCurrent).abs() <= 0.01 && recordedOthers.abs() <= 0.01;
+      (expected - recordedCurrent).abs() < 0.005 && recordedOthers.abs() < 0.005; // 🪙 بالفلس
 
   /// بصمة الحالة: «مُراجَعة» تبقى ما دامت هذه كما هي.
   String get fingerprint => [
@@ -104,7 +104,7 @@ class InvoiceRepairInfo {
     if (deleted) return 'الفاتورة محذوفة — لا تُعدَّل';
     if (suspended) return 'الفاتورة معلّقة — المعلّقة لا تحمل ديناً أصلاً؛ استعمل «اعتمد الفاتورة»';
     if (customerId == null || customerId! <= 0) return 'الفاتورة بلا عميل مرتبط — افتحها واختر العميل';
-    if (recordedOthers.abs() > 0.01) return 'جزء من دينها على عميل آخر — استعمل «اعتمد الفاتورة» لنقله';
+    if (recordedOthers.abs() >= 0.005) return 'جزء من دينها على عميل آخر — استعمل «اعتمد الفاتورة» لنقله';
     final room = total - cashSettlements;
     if (recordedCurrent < -0.01) return 'المسجّل في سجل الديون سالب — لا يقابله مسدد منطقي';
     if (recordedCurrent > room + 0.01) {
@@ -113,7 +113,7 @@ class InvoiceRepairInfo {
     return null;
   }
 
-  String get newPaymentType => recordedCurrent > 0.01 ? 'دين' : paymentType;
+  String get newPaymentType => recordedCurrent >= 0.005 ? 'دين' : paymentType;
   double get newPaid {
     final p = total - cashSettlements - recordedCurrent;
     return p < 0 ? 0 : (p * 100).round() / 100;

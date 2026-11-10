@@ -77,7 +77,10 @@ class FinancialDeepCheck {
   FinancialDeepCheck(this.db);
   final DatabaseExecutor db;
 
-  static const double _tol = 0.01;
+  // 🪙 بالفلس: فرق نصف فلس أو أكثر = فرق. كان 0.01 فيعدّ فلساً واحداً «صفراً»: دين فاتورة
+  // متبقيها فلس يُرى «لم يصل سجل الديون» وهو مسجّل فيه، وفرق فلس حقيقي لا يُرى أبداً
+  // (كشفه اختبار التعذيب متعدد الأجهزة 2026-11-11، بعد أن صار الموفّق يسجّل الفلس).
+  static const double _tol = 0.005;
   static const int _show = 40;
 
   final _findings = <DeepFinding>[];
