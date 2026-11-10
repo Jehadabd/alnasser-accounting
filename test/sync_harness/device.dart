@@ -166,6 +166,23 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
           limit: 1);
       return r.isEmpty ? null : r.first['sync_uuid'];
 
+    case 'renameCustomer':
+      // ✏️ مسار «تعديل بيانات العميل» في بطاقته: AppProvider.updateCustomer بنسخة باسم جديد
+      final cid = await _customerId(a['cust'] as String);
+      if (cid == null) return {'ok': false, 'err': 'العميل غير موجود على الجهاز'};
+      final cur = await DatabaseService().getCustomerById(cid);
+      if (cur == null) return {'ok': false, 'err': 'العميل غير موجود على الجهاز'};
+      try {
+        await AppProvider().updateCustomer(cur.copyWith(
+          name: a['name'] as String,
+          currentTotalDebt: cur.currentTotalDebt,
+          lastModifiedAt: DateTime.now(),
+        ));
+        return {'ok': true};
+      } catch (e) {
+        return {'ok': false, 'err': '$e'};
+      }
+
     case 'addTx':
       final cid = await _customerId(a['cust'] as String);
       if (cid == null) throw StateError('customer not on device');
@@ -503,7 +520,12 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final controller = InvoiceController(db: DatabaseService());
       final data = InvoiceInputData(
         invoiceToManage: existing,
-        customerName: nameField ?? cust['name'] as String,
+        // كالشاشة: فتح فاتورة قائمة يملأ حقل العميل بالاسم المحفوظ فيها (حتى لو تغيّر اسم
+        // العميل في بطاقته بعدها)؛ واختيار عميل آخر يكتب اسمه هو.
+        customerName: nameField ??
+            ((existing != null && existing.customerId != null && existing.customerId == cust['id'])
+                ? existing.customerName
+                : cust['name'] as String),
         customerPhone: (a['phone'] as String?) ?? (cust['phone'] as String?) ?? '',
         customerAddress: (cust['address'] as String?) ?? '',
         paidAmount: paid,
@@ -977,7 +999,7 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       // دين العميل المخزّن + مجموع معاملاته الحيّة + هاتف بطاقته (سريع)
       final db = await DatabaseService().database;
       final r = await db.rawQuery('''
-        SELECT c.current_total_debt AS debt, c.phone AS phone, c.is_deleted AS del,
+        SELECT c.current_total_debt AS debt, c.phone AS phone, c.is_deleted AS del, c.name AS name,
                (SELECT COALESCE(SUM(t.amount_changed), 0) FROM transactions t
                 WHERE t.customer_id = c.id AND COALESCE(t.is_deleted, 0) = 0) AS sum
         FROM customers c WHERE c.sync_uuid = ? LIMIT 1''', [a['cust']]);
@@ -987,6 +1009,7 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         'sum': (r.first['sum'] as num?)?.toDouble() ?? 0.0,
         'phone': r.first['phone'],
         'del': r.first['del'],
+        'name': r.first['name'],
       };
 
     case 'holdInvoice':
