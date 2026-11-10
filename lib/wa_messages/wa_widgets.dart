@@ -12,6 +12,7 @@ import '../widgets/settings_kit.dart';
 import 'wa_customer_picker.dart';
 import 'wa_outbox.dart';
 import 'wa_rules.dart';
+import 'wa_access.dart';
 
 const kWaGreen = Color(0xFF047857);
 const kWaMuted = Color(0xFF64748B);
@@ -191,8 +192,8 @@ class WaRecipient {
 /// نافذة خيارات ثم إرسال تلقائي. [source]: 'card' أو 'reminder' أو 'manual'. يعيد عدد المضاف.
 Future<int> showWaSendDialog(BuildContext context, List<WaRecipient> people,
     {String source = 'manual', bool requireDebt = true, WaMessageOptions initial = const WaMessageOptions()}) async {
-  if (!WaAutoReminder.allowed) {
-    _toast(context, 'الإرسال الآلي لمدير البرنامج فقط');
+  if (!WaAccess.sendNow) {
+    _toast(context, 'ليست لك صلاحية «واتساب: إرسال الآن» — يمنحها المدير من الموظفين');
     return 0;
   }
   final s = await WaAutoReminder.load();

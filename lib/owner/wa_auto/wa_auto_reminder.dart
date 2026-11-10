@@ -19,12 +19,12 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../../services/auth_service.dart';
 import '../../services/database_service.dart';
 import '../../services/settings_manager.dart';
 import 'wa_desktop.dart';
 import 'wa_server_client.dart';
 import 'wa_usage_mark.dart';
+import '../../wa_messages/wa_access.dart';
 
 /// زبون مستحق للتذكير.
 class WaTarget {
@@ -144,14 +144,8 @@ class WaAutoReminder {
   static const _k = 'wa_auto_';
   static const _logKey = 'wa_auto_log_v1';
 
-  /// 🔐 كل مدير برنامج (بلا شرط اشتراك).
-  static bool get allowed {
-    try {
-      return AuthService().isAdmin;
-    } catch (_) {
-      return false;
-    }
-  }
+  /// 🔐 كل الصلاحيات: مدير البرنامج، أو موظف له «واتساب: كل الصلاحيات» (wa_access.dart).
+  static bool get allowed => WaAccess.full;
 
   /// الإرسال بالطريقة المضبوطة. error == null ⇒ أُرسلت. [pdf] عبر الخادم فقط
   /// (WhatsApp Desktop لا يرسل ملفات — من يؤلّف الرسالة يضع الكشف نصاً بدله).

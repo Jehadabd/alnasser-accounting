@@ -6,7 +6,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
-import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../services/database_service.dart';
 import '../services/debt_reminders.dart';
 import '../services/settings_manager.dart';
@@ -16,6 +15,7 @@ import '../widgets/debt_reminder_editor.dart';
 import '../widgets/settings_kit.dart';
 import '../wa_messages/wa_widgets.dart'; // 💬 إرسال آلي
 import 'customer_details_screen.dart';
+import '../wa_messages/wa_access.dart';
 
 const _accent = Color(0xFF4F46E5);
 String _money(num v) => NumberFormat('#,##0', 'en_US').format(v);
@@ -467,7 +467,7 @@ class _DueDialogState extends State<_DueDialog> {
           label: const Text('إدارة مواعيد المطالبة'),
         ),
         const Spacer(),
-        if (WaAutoReminder.allowed && withPhone > 0)
+        if (WaAccess.sendNow && withPhone > 0)
           Padding(
             padding: const EdgeInsetsDirectional.only(end: 8),
             child: FilledButton.icon(
@@ -538,7 +538,7 @@ class _DueDialogState extends State<_DueDialog> {
                   icon: const Icon(Icons.chat_rounded, size: 18),
                   label: const Text('مطالبة عبر واتساب'),
                 ),
-              if (_phones.containsKey(m.customerId) && WaAutoReminder.allowed)
+              if (_phones.containsKey(m.customerId) && WaAccess.sendNow)
                 TextButton.icon(
                   style: TextButton.styleFrom(foregroundColor: const Color(0xFF15803D)),
                   onPressed: () => _autoSend([d]),

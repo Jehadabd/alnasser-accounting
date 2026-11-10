@@ -25,7 +25,6 @@ import '../erp/debts/customer_card_screen.dart';
 import '../erp/debts/receipt_screen.dart';
 import '../widgets/edit_transaction_dialog.dart'; // ✏️
 import 'debt_reminders_screen.dart'; // 📅
-import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../wa_messages/wa_widgets.dart'; // 💬 مطالبة واتساب آلية
 import '../accounting/screens/acc_ui.dart' show accAppBar;
 import 'statements/customer_statements_screen.dart';
@@ -37,6 +36,7 @@ import '../widgets/edit_customer_dialog.dart'; // ✏️ تعديل معلوما
 import 'person_details_screen.dart'; // 📊 تقرير العميل
 import '../wa_messages/wa_auto_docs_screen.dart' show showWaAutoDocsEditor; // 🤖 الإرسال التلقائي
 import 'product_reports_screen.dart'; // 📦 بضاعة العميل
+import '../wa_messages/wa_access.dart';
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
@@ -894,7 +894,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   ),
                 ),
                 // 💬 مطالبة واتساب آلية (الخادم أو WhatsApp Desktop) مع العنوان وكشف الحساب
-                if (WaAutoReminder.allowed)
+                if (WaAccess.sendNow)
                 const PopupMenuItem(
                   value: 'wa_auto_claim',
                   child: Row(
@@ -906,7 +906,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   ),
                 ),
                 // 🤖 الإرسال التلقائي عند الحفظ لهذا العميل
-                if (WaAutoReminder.allowed)
+                if (WaAccess.autoDocs)
                 const PopupMenuItem(
                   value: 'wa_auto_docs',
                   child: Row(

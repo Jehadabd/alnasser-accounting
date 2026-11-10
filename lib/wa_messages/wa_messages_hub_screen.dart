@@ -20,6 +20,8 @@ import 'wa_rules.dart';
 import 'wa_rules_screen.dart';
 import 'wa_send_screen.dart';
 import 'wa_widgets.dart';
+import 'wa_access.dart';
+import '../owner/wa_auto/wa_auto_entry_card.dart';
 
 class WaMessagesHubScreen extends StatefulWidget {
   const WaMessagesHubScreen({super.key});
@@ -71,10 +73,16 @@ class _WaMessagesHubScreenState extends State<WaMessagesHubScreen> {
   @override
   Widget build(BuildContext context) {
     if (!WaAutoReminder.allowed) {
-      return const SettingsScaffold(
+      // موظف بصلاحية جزئية: ما يحق له فقط (إرسال الآن / القواعد / الإرسال التلقائي)
+      return SettingsScaffold(
         title: 'رسائل واتساب للزبائن',
         icon: Icons.chat_rounded,
-        children: [SetBanner('هذه الإعدادات لمدير البرنامج.', kind: SetBannerKind.warn)],
+        children: [
+          if (WaAccess.any)
+            const WaAutoEntryCard()
+          else
+            const SetBanner('ليست لك صلاحية في رسائل واتساب — يمنحها المدير من «الموظفين».', kind: SetBannerKind.warn),
+        ],
       );
     }
     final s = _s;

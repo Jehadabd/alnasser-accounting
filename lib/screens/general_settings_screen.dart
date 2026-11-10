@@ -60,7 +60,7 @@ import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 ا�
 import '../widgets/loading_dialog.dart';
 import '../services/receipt_paper.dart';
 import '../owner/wa_auto/wa_auto_entry_card.dart';
-import '../owner/wa_auto/wa_auto_reminder.dart';
+import '../wa_messages/wa_access.dart';
 
 
 class GeneralSettingsScreen extends StatefulWidget {
@@ -84,7 +84,7 @@ class GeneralSettingsScreen extends StatefulWidget {
       HubSection('الأقسام', [
         t('الحساب والموظفون', Icons.verified_user_outlined),
         if (OwnerAccess.enabled) t('ميزات المالك', Icons.workspace_premium_outlined),
-        if (WaAutoReminder.allowed) t('رسائل واتساب للزبائن', Icons.chat_rounded),
+        if (WaAccess.any) t('رسائل واتساب للزبائن', Icons.chat_rounded),
         t('الفاتورة والطباعة', Icons.receipt_long_outlined),
         t('الأسعار والأرباح', Icons.trending_up),
         t('النسخ الاحتياطي والمزامنة', Icons.cloud_sync_outlined),
@@ -1537,8 +1537,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             keywords: 'مالك مؤسس مؤسسين فني فنيين نقاط جوجل درايف google drive رفع سجل الديون',
             [OwnerSettingsCards()],
           ),
-        // 💬 رسائل واتساب للزبائن — لمدير البرنامج
-        if (WaAutoReminder.allowed)
+        // 💬 رسائل واتساب للزبائن — للمدير ولمن له صلاحية منها (البطاقة تعرض ما يحق له)
+        if (WaAccess.any)
           const _SettingsSection(
             'رسائل واتساب للزبائن',
             Icons.chat_rounded,

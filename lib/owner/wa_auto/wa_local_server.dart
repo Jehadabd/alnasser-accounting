@@ -283,7 +283,7 @@ class WaLocalServer {
     return null;
   }
 
-  static Future<String> _getText(String u, {Map<String, String>? headers}) async {
+  static Future<String> _getTextDart(String u, {Map<String, String>? headers}) async {
     try {
       final r = await http.get(Uri.parse(u), headers: headers).timeout(const Duration(seconds: 40));
       if (r.statusCode != 200) throw WaServerException('تعذّر القراءة (HTTP ${r.statusCode}): $u');
@@ -295,7 +295,7 @@ class WaLocalServer {
     }
   }
 
-  static Future<void> _download(String u, File out, void Function(double) progress) async {
+  static Future<void> _downloadDart(String u, File out, void Function(double) progress) async {
     final part = File('${out.path}.part');
     final c = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
@@ -334,6 +334,85 @@ class WaLocalServer {
         } catch (_) {}
       }
     }
+  }
+
+  // ───────────── تنزيل يتحمّل شهادات Windows ─────────────
+  //
+  // 🔐 على حاسبة جديدة قد يفشل اتصال البرنامج بـ«CERTIFICATE_VERIFY_FAILED: unable to get
+  // local issuer certificate»: Windows لا يضع شهادة الجذر في مخزنه إلا حين يطلبها أول برنامج
+  // من برامجه (المتصفح مثلاً)، والبرنامج يقرأ المخزن كما هو. لذلك عند هذا الخطأ فقط نعيد
+  // الطلب بأداة Windows نفسها (curl.exe ثم PowerShell): تتحقق من الشهادة كاملة بطريقة Windows
+  // وتجلب الجذر الناقص من Microsoft. لا يُطفأ التحقق أبداً، وكل ملف مُنزَّل تُطابق بصمته بعدها.
+
+  static bool _isCertError(Object e) =>
+      e is TlsException || '$e'.contains('CERTIFICATE_VERIFY_FAILED') || '$e'.contains('HandshakeException');
+
+  static Future<String> _getText(String u, {Map<String, String>? headers}) async {
+    try {
+      return await _getTextDart(u, headers: headers);
+    } catch (e) {
+      if (!_isCertError(e) || !Platform.isWindows) rethrow;
+      _add('⚠️ شهادة الموقع لم تُقبل ($e) — إعادة القراءة بأداة Windows');
+      final tmp = File(p.join(await _root(), 'fetch_${DateTime.now().microsecondsSinceEpoch}.txt'));
+      try {
+        await _winFetch(u, tmp, headers: headers);
+        return utf8.decode(await tmp.readAsBytes());
+      } finally {
+        if (await tmp.exists()) await tmp.delete();
+      }
+    }
+  }
+
+  static Future<void> _download(String u, File out, void Function(double) progress) async {
+    try {
+      await _downloadDart(u, out, progress);
+    } catch (e) {
+      if (!_isCertError(e) || !Platform.isWindows) rethrow;
+      _add('⚠️ شهادة الموقع لم تُقبل ($e) — إعادة التنزيل بأداة Windows');
+      await _winFetch(u, out);
+    }
+  }
+
+  /// curl.exe (موجود في Windows 10 1803 وما بعده)، وإلا PowerShell. يتبعان التحويلات.
+  static Future<void> _winFetch(String u, File out, {Map<String, String>? headers}) async {
+    final part = File('${out.path}.part');
+    if (await part.exists()) await part.delete();
+    final sys = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+    final curl = p.join(sys, 'System32', 'curl.exe');
+    final errors = <String>[];
+    if (await File(curl).exists()) {
+      final r = await Process.run(curl, [
+        '-fsSL', '--retry', '2', '--connect-timeout', '30', '--max-time', '1800',
+        for (final h in (headers ?? const <String, String>{}).entries) ...['-H', '${h.key}: ${h.value}'],
+        '-o', part.path, u,
+      ]);
+      if (r.exitCode == 0 && await part.exists()) {
+        if (await out.exists()) await out.delete();
+        await part.rename(out.path);
+        return;
+      }
+      errors.add('curl ${r.exitCode}: ${'${r.stderr}'.trim()}');
+    }
+    String q(String v) => "'${v.replaceAll("'", "''")}'";
+    final hdr = (headers ?? const <String, String>{})
+        .entries
+        .map((h) => '${q(h.key)}=${q(h.value)}')
+        .join(';');
+    final r = await Process.run('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+      "\$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "
+          'Invoke-WebRequest -UseBasicParsing -Uri ${q(u)} -OutFile ${q(part.path)} -Headers @{$hdr}',
+    ]);
+    if (r.exitCode == 0 && await part.exists()) {
+      if (await out.exists()) await out.delete();
+      await part.rename(out.path);
+      return;
+    }
+    if (await part.exists()) await part.delete();
+    errors.add('PowerShell ${r.exitCode}: ${'${r.stderr}'.trim()}');
+    throw WaServerException('تعذّر الاتصال الآمن بـ ${Uri.parse(u).host} حتى بأداة Windows. '
+        'افتح ${Uri.parse(u).host} في المتصفح مرة ثم أعد المحاولة، أو تأكد من تاريخ الحاسبة وساعتها. '
+        '(${errors.join(' | ')})');
   }
 
   /// ملف لا تطابق بصمته يُحذف فوراً ولا يُفك ولا يُشغَّل.

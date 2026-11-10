@@ -18,6 +18,8 @@
 
 import 'package:sqflite/sqflite.dart';
 
+import 'invoice_debt_reconciler.dart' show InvoiceDebtReconciler;
+
 class SupplierDebtReconciler {
   /// أنواع الحركات التي لا تُعدّ جزءاً من مساهمة الفاتورة نفسها
   /// (دفعات وتسويات خارجية قد تكون مربوطة برقم الفاتورة).
@@ -122,11 +124,11 @@ class SupplierDebtReconciler {
 
     bool changed = false;
     if (adjRows.isEmpty) {
-      if (needed.abs() > 0.01) {
+      if (!InvoiceDebtReconciler.isZeroFils(needed)) {
         await _insert(
           db,
           supplierId: supplierId,
-          amount: needed,
+          amount: InvoiceDebtReconciler.toFils(needed),
           currency: currency,
           type: adjustmentType,
           description: desc,
@@ -136,8 +138,9 @@ class SupplierDebtReconciler {
         changed = true;
       }
     } else {
-      if ((adjAmount - needed).abs() > 0.01) {
-        if (needed.abs() <= 0.01) {
+      // 🪙 بالفلس — انظر InvoiceDebtReconciler.sameFils
+      if (!InvoiceDebtReconciler.sameFils(adjAmount, needed)) {
+        if (InvoiceDebtReconciler.isZeroFils(needed)) {
           // لم تعد هناك مساهمة: صفّر الصف بدل حذفه (يحفظ الأثر للتدقيق)
           await db.update(
             'supplier_transactions',
@@ -149,7 +152,7 @@ class SupplierDebtReconciler {
           await db.update(
             'supplier_transactions',
             {
-              'amount_changed': needed,
+              'amount_changed': InvoiceDebtReconciler.toFils(needed),
               'currency': currency,
               'description': desc,
             },

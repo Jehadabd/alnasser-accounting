@@ -51,6 +51,13 @@ class InvoiceDebtReconciler {
   /// نوع صف التسوية الذي تكتبه هذه الدالة. (يُعدّ مساهمة، فلا يُستثنى أعلاه)
   static const String adjustmentType = 'invoice_debt_sync';
 
+  // 🪙 المقارنة بالفلس (أقل من نصف فلس = متساويان). كان الحد «≤ 0.01» فيبتلع فرق فلس
+  // كامل: تغيّر متبقي الفاتورة فلساً لا يصل سجل الديون، ونقل فاتورة متبقيها فلس إلى عميل
+  // آخر يترك الفلس على العميل القديم (كشفه اختبار التعذيب الكامل 2026-11-10).
+  static bool sameFils(double a, double b) => ((a - b) * 100).round() == 0;
+  static bool isZeroFils(double v) => (v * 100).round() == 0;
+  static double toFils(double v) => (v * 100).round() / 100;
+
   /// المعرّف القديم (أرقام محلية). يُستخدم فقط للعثور على صفوف أنشأتها
   /// نسخ سابقة، ولصفوف لا تملك فاتورتها أو عميلها هوية عالمية بعد.
   static String adjustmentUuid(int invoiceId, int customerId) =>
@@ -239,8 +246,8 @@ class InvoiceDebtReconciler {
 
       if (adjRows.isEmpty) {
         // فاتورة بلا أي أثر محاسبي: لا نخترع ديناً إلا بطلب صريح
-        if (!createMissing && others.abs() <= 0.01) continue;
-        if (needed.abs() <= 0.01) continue;
+        if (!createMissing && isZeroFils(others)) continue;
+        if (isZeroFils(needed)) continue;
 
         if (!allowNegativeBalance &&
             await _wouldGoNegative(db, customerId, needed - adjAmount)) {
@@ -253,12 +260,12 @@ class InvoiceDebtReconciler {
           invoiceId: invoiceId,
           invoiceUuid: invoiceUuid,
           uuid: adjUuid,
-          amount: needed,
+          amount: toFils(needed),
           reason: reason,
         );
         changed = true;
       } else {
-        if ((adjAmount - needed).abs() <= 0.01) continue;
+        if (sameFils(adjAmount, needed)) continue;
 
         if (!allowNegativeBalance &&
             await _wouldGoNegative(db, customerId, needed - adjAmount)) {
@@ -268,7 +275,7 @@ class InvoiceDebtReconciler {
         await db.update(
           'transactions',
           {
-            'amount_changed': needed,
+            'amount_changed': toFils(needed),
             'description': _describe(invoiceId, reason),
             'transaction_date': DateTime.now().toIso8601String(),
             'is_uploaded': 0,

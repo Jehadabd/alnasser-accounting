@@ -16,8 +16,8 @@ import 'due_items_screen.dart';
 import 'due_items_service.dart';
 import 'receipt_screen.dart';
 import '../../screens/debt_reminders_screen.dart'; // 📅
-import '../../owner/wa_auto/wa_auto_reminder.dart';
 import '../../wa_messages/wa_messages_hub_screen.dart'; // 💬
+import '../../wa_messages/wa_access.dart';
 
 class DebtsHubScreen extends StatefulWidget {
   const DebtsHubScreen({super.key});
@@ -102,7 +102,7 @@ class _DebtsHubScreenState extends State<DebtsHubScreen> {
               () => _go(const DebtRemindersScreen()),
               subtitle: 'تنبيه عند تشغيل البرنامج بالعملاء المستحقة مطالبتهم في أيام محددة من الشهر'),
           // 💬 مطالبات واتساب: قواعد تلقائية وإرسال فوري (لمدير البرنامج)
-          if (WaAutoReminder.allowed)
+          if (WaAccess.any)
             HubTile('رسائل واتساب للزبائن', Icons.chat_rounded, const Color(0xFF047857),
                 () => _go(const WaMessagesHubScreen()),
                 subtitle: 'مطالبات تلقائية بقواعد، وإرسال فوري مع كشف الحساب'),

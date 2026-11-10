@@ -132,7 +132,8 @@ void main() {
     double r2(double v) => (v * 100).roundToDouble() / 100;
     void near(String what, Object? got, double want) {
       final g = (got as num?)?.toDouble();
-      if (g == null || (g - want).abs() > 0.01) problems.add('$what = $g والمتوقع ${r2(want)}');
+      // بالفلس: فرق فلس واحد خطأ (الحد القديم 0.01 أخفى فلساً يبقى على عميل قديم)
+      if (g == null || (g - want).abs() >= 0.005) problems.add('$what = $g والمتوقع ${r2(want)}');
     }
 
     bool stop() => problems.length >= _maxProblems;

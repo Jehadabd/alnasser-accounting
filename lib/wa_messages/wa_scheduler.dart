@@ -19,6 +19,7 @@ import '../services/debt_reminders.dart';
 import 'wa_message_log.dart';
 import 'wa_outbox.dart';
 import 'wa_rules.dart';
+import 'wa_access.dart';
 
 class WaRulesEngine {
   WaRulesEngine._();
@@ -91,7 +92,7 @@ class WaRulesEngine {
 
   /// [force] = الآن بلا انتظار الدقائق الخمس.
   static Future<void> tick(BuildContext context, {bool force = false}) async {
-    if (_busy || !WaAutoReminder.allowed || WaOutbox.running) return;
+    if (_busy || !WaAccess.rules || WaOutbox.running) return;
     final now = DateTime.now();
     if (!force && _lastEval != null && now.difference(_lastEval!) < const Duration(minutes: 5)) return;
     _busy = true;
@@ -145,7 +146,7 @@ class WaAutoScheduler {
   static void start(BuildContext context, {required bool primarySeat}) {
     if (!primarySeat) return;
     _context = context;
-    if (_timer == null && WaAutoReminder.allowed) {
+    if (_timer == null && WaAccess.rules) {
       unawaited(() async {
         try {
           if (!await WaLocalServer.startAtLaunch()) return;

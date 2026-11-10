@@ -172,6 +172,14 @@ class AppPermissions {
   static const String drRepair = 'dr_repair';
   static const String drDeleteCustomer = 'dr_delete_customer';
 
+  // 💬 رسائل واتساب للزبائن (مدير البرنامج له كلها دائماً). «كل الصلاحيات» تشمل الثلاث.
+  static const String waSendNow = 'wa_send_now'; // يختار عملاء ويضغط «إرسال الآن»
+  static const String waAutoDocs = 'wa_auto_docs'; // الإرسال التلقائي: إضافة عميل وما يصله ورقمه
+  static const String waRules = 'wa_rules'; // القواعد التلقائية: إنشاء وتعديل
+  static const String waAdmin = 'wa_admin'; // كل شيء: طريقة الإرسال والخادم والسجل والأرقام
+
+  static const List<String> waKeys = [waSendNow, waAutoDocs, waRules, waAdmin];
+
   /// المعروضة في شاشة الموظفين (drView لا يظهر: يتبع «سجل الديون»)
   static const List<String> debtKeys = [
     drAddCustomer, drAddDebt, drPayment, drEditTx, drStatement, drReceipts,
@@ -269,6 +277,11 @@ class AppPermissions {
     drAudit: 'سجل التدقيق المالي للعميل',
     drRepair: 'فحص السلامة وأدوات إصلاح الرصيد (قد تضيف معاملة تصحيحية)',
     drDeleteCustomer: 'حذف العميل',
+    // رسائل واتساب
+    waSendNow: 'واتساب: إرسال الآن (يختار عملاء ويرسل مطالبة مع كشف الحساب)',
+    waAutoDocs: 'واتساب: الإرسال التلقائي للعملاء (يضيف عميلاً ويحدد ما يصله ويؤكد رقمه)',
+    waRules: 'واتساب: القواعد التلقائية (إنشاء وتعديل وإيقاف)',
+    waAdmin: 'واتساب: كل الصلاحيات (طريقة الإرسال، الخادم وربطه، السجل، الأرقام المؤكدة)',
   };
 
   /// قوالب الأدوار الجاهزة — تملأ الصلاحيات بضغطة، ويمكن تعديلها بعدها.
@@ -282,7 +295,7 @@ class AppPermissions {
     // 💰 محصّل الديون: يرى السجل ويقبض ويرسل الكشوفات والتذكيرات فقط
     'محصّل ديون': [
       debtRegister, drView, drPayment, drStatement, drReceipts, drMessage, drReminders, lateCustomers,
-      collection,
+      collection, waSendNow,
     ],
     // 👁️ مشاهد: يرى الأرصدة ويطبع الكشف — لا يغيّر شيئاً
     'مشاهد سجل الديون': [debtRegister, drView, drStatement],

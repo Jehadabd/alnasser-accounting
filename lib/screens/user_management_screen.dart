@@ -83,6 +83,7 @@ const List<(String, IconData, List<String>)> _permissionGroups = [
     AppPermissions.periodClose,
   ]),
   ('التقارير المسموحة', Icons.insights_rounded, AppPermissions.reportKeys),
+  ('رسائل واتساب للزبائن', Icons.chat_rounded, AppPermissions.waKeys),
   ('الإدارة', Icons.admin_panel_settings_outlined, [
     AppPermissions.settings,
     AppPermissions.uploadDatabase,
