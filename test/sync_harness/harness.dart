@@ -191,7 +191,9 @@ class Harness {
         controller: h.replies.sendPort,
         sqlite: _sqlite!.sendPort,
         prefs: prefs ?? basePrefs(),
-        secure: secure ?? {'firebase_sync_device_id': 'dev_$name'},
+        // Firebase مضبوط كما على جهاز مزامنة حقيقي: بدونه يعدّ التطبيق المزامنة غير
+        // عاملة (_syncUsable) فلا يقفل السجلات المستعادة، ولا يُختبر القفل أصلاً.
+        secure: secure ?? {'firebase_sync_device_id': 'dev_$name', 'firebase_is_custom_configured': 'true'},
         online: online,
       ),
       debugName: name,

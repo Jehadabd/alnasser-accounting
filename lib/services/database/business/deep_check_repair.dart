@@ -161,7 +161,7 @@ class DeepCheckRepair {
       expected = r > 0 ? r : 0;
     }
 
-    final non = InvoiceDebtReconciler.nonContributionTypes;
+    const non = InvoiceDebtReconciler.nonContributionTypes;
     final rows = await db.rawQuery('''
       SELECT t.id, t.transaction_date AS d, t.amount_changed AS a, t.transaction_type AS ty, t.customer_id AS cid,
              c.name AS cname, COALESCE(t.description, t.transaction_note, '') AS descr

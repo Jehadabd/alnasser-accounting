@@ -87,7 +87,11 @@ class _Inv {
   String? phoneField;
   bool incomplete = false;
 
-  double get itemsTotal => specs.fold(0.0, (s, x) => s + (x['qty'] as double) * _applied(x)) + extra;
+  /// كما يحفظها التطبيق: مبلغ كل سطر بالفلس (InvoiceItem.itemTotalCents = round(كمية × سعر × 100)).
+  /// بلا هذا التقريب يفرق المجموع هنا عن مجموع الأسطر في التطبيق بأجزاء فلس، فيصير
+  /// بند الاختبار المكمِّل سالباً (-0.005) ويرفضه التطبيق «ينقص السعر».
+  double get itemsTotal =>
+      specs.fold(0.0, (s, x) => s + ((x['qty'] as double) * _applied(x) * 100).round() / 100) + extra;
   double get finalTotal => itemsTotal + fee - discount;
 
   _Inv copy() => _Inv(dev, cust, date)

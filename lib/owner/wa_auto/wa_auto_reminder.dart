@@ -241,7 +241,7 @@ class WaAutoReminder {
     var bal = 0.0;
     DateTime? since;
     void flush() {
-      if (cur != null && bal > 0.009 && since != null) out[cur!] = since!;
+      if (cur != null && bal > 0.009 && since != null) out[cur] = since;
     }
 
     for (final (c, d, a, type) in rows) {

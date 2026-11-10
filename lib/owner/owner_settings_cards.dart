@@ -18,11 +18,11 @@ class OwnerSettingsCards extends StatelessWidget {
   const OwnerSettingsCards({super.key});
 
   @override
-  Widget build(BuildContext context) => Column(
+  Widget build(BuildContext context) => const Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const _OwnerBadge(),
-          const _FoundersCard(),
+          _OwnerBadge(),
+          _FoundersCard(),
         ],
       );
 }

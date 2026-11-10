@@ -117,6 +117,7 @@ class WaRulesEngine {
         }
         if (await _askedToday(r.id) || !context.mounted) continue;
         await _markAsked(r.id);
+        if (!context.mounted) continue;
         final chosen = await showDialog<List<WaFacts>>(
           context: context,
           barrierDismissible: false,

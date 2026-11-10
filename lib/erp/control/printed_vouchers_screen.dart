@@ -100,6 +100,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
   Future<void> _reprint(PrintedVoucher v, {bool share = false, bool wa = false}) async {
     // 📨 واتساب: يُفحص قبل البناء كي لا تُسجَّل نسخة لن تُرسل
     if (wa && v.refType != PrintedRef.editEvent && !await WaDocSender.precheck(context)) return;
+    if (!mounted) return;
     try {
       switch (v.refType) {
         case PrintedRef.customerReceipt:
@@ -343,7 +344,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
         ],
       ),
     );
-    if (choice == null) return;
+    if (choice == null || !mounted) return;
     if (choice == 'wa' && !await WaDocSender.precheck(context)) return;
     try {
       await _reprintLegacy(r, share: choice == 'share', wa: choice == 'wa');

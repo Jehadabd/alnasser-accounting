@@ -97,7 +97,8 @@ void main() {
       expect(WaRuleEval.select(r, people, lastSent: {}, dueToday: {2}, now: now).map((p) => p.id), [2]);
     });
     test('من أُرسل له بالقاعدة ولم يسدّد لا تصله ثانية', () {
-      final r = WaRule(id: 'x', name: 'x', lateValue: 3);
+      // الحد الأدنى 1000 كأول اختبار: العميل 3 (900) يصله بالحد الافتراضي (1) — وهذا صحيح
+      final r = WaRule(id: 'x', name: 'x', lateValue: 3, minDebt: 1000);
       expect(WaRuleEval.select(r, people, lastSent: {1: d(2027, 2, 15)}, now: now).map((p) => p.id), [4]);
     });
   });
