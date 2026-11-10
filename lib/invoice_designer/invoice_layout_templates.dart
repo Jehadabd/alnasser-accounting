@@ -7,11 +7,15 @@
 import 'invoice_layout.dart';
 
 class LayoutTemplate {
-  const LayoutTemplate(this.key, this.name, this.description, this.build);
+  const LayoutTemplate(this.key, this.name, this.description, this.build, {this.original = false});
   final String key;
   final String name;
   final String description;
   final InvoiceLayout Function() build;
+
+  /// ✅ «المطابق»: ليس تصميماً بعناصر — اختياره يُرجع نوع الطباعة إلى كود البرنامج الأصلي
+  /// نفسه (نفس شكل shop-maniger حرفياً). [build] للمعاينة المصغّرة فقط.
+  final bool original;
 }
 
 class InvoiceLayoutTemplates {
@@ -557,6 +561,11 @@ class InvoiceLayoutTemplates {
   /// قوالب نوع سند ('receipt', 'cash_receipt', 'cash_refund', 'debit_note', 'credit_note').
   static List<LayoutTemplate> forKind(String kind) => switch (kind) {
         'receipt' => [
+            LayoutTemplate('original_exact', 'سند القبض الأصلي — مطابق 100%',
+                'ليس نسخة بالعناصر: يُطبع بكود سند القبض الأصلي نفسه (shop-maniger) حرفاً بحرف — الرأس، السيد ورقم السند والوقت، '
+                    'والمبالغ قبل التسديد والمدفوع وبعده. لسند تسديد عميل واحد. لا يُعدَّل بالسحب',
+                () => _blank(LayoutPaper.a4),
+                original: true),
             const LayoutTemplate('vr_official', 'رسمي بإطار',
                 'إطار أخضر، بيانات السند في جدول، العملاء والمبالغ، المبلغ وحساب العميل في مربعين، المبلغ كتابةً وثلاثة تواقيع',
                 _receiptOfficial),
@@ -596,8 +605,13 @@ class InvoiceLayoutTemplates {
 
   static List<LayoutTemplate> forPaper(LayoutPaper paper) => switch (paper) {
         LayoutPaper.a4 => [
-            const LayoutTemplate('a4_default', 'النموذج الأصلي للبرنامج',
-                'تخطيط الفاتورة التي يطبعها البرنامج حين لا يُفعَّل تصميم: الاسم والشعار في الرأس، سطر السيد والعنوان والهاتف ورقم الفاتورة والتاريخ، الجدول، المجاميع في سطرين، التنويه، واسم الشركة علامة مائية',
+            const LayoutTemplate('original_exact', 'الفاتورة الأصلية — مطابقة 100%',
+                'ليست نسخة بالعناصر: تُطبع بكود الفاتورة الأصلي نفسه (shop-maniger) حرفاً بحرف — نفس الخط والرأس والأعمدة، '
+                    'والجدول يطول بعدد المواد والملخص تحته مباشرة. لا تُعدَّل بالسحب',
+                _a4Default,
+                original: true),
+            const LayoutTemplate('a4_default', 'الأصلية — نسخة قابلة للتعديل',
+                'تقريب للفاتورة الأصلية بعناصر المصمم لتعدّلها بالسحب (الخط والمسافات ليست مطابقة حرفياً): الاسم والشعار في الرأس، سطر البيانات، الجدول، المجاميع تحت آخر بند، التنويه، والعلامة المائية',
                 _a4Default),
             const LayoutTemplate('a4_alnasser', 'الناصر (فاتورة debt_book)',
                 'شكل فاتورة برنامج سجل الديون: الختم (نقد/دين) مع QR، سطر بيانات واحد، جدول ت/ID/التفاصيل/العدد/التعبئة، المجاميع في سطرين، التنويه، والمجهز والمحاسب',

@@ -2,7 +2,8 @@
 //
 // 🖨️ يحوّل تصميم الفاتورة + بياناتها إلى PDF بالمقاسات المصمَّمة بالضبط.
 //   • A4: صفوف الجدول بقدر ارتفاعه؛ الزائد إلى صفحة جديدة. ما فوق الجدول يتكرر
-//     في كل صفحة، وما تحته (المجاميع…) في الأخيرة فقط (إلا ما عُلّم «كل صفحة»).
+//     في كل صفحة، وما تحته (المجاميع…) في الأخيرة فقط (إلا ما عُلّم «كل صفحة»)،
+//     ويصعد فيها ليلي آخر بند مباشرة (flowsTotals) كالفاتورة الأصلية.
 //   • الإيصال: الورقة تطول مع عدد المواد، وما تحت الجدول ينزل معه.
 // كل الصفوف تُبنى من اليسار لليمين صراحةً (والنصوص RTL) فلا يتغير الترتيب.
 
@@ -74,20 +75,30 @@ class LayoutPdfRenderer {
     final cap = math.max(1, ((table.h - headH) / rowH).floor());
     final pages = math.max(1, (rows.length / cap).ceil());
     final fill = table.b('fillRows', false);
+    final flow = flowsTotals(table);
     for (var p = 0; p < pages; p++) {
       final last = p == pages - 1;
       final start = p * cap;
       final end = math.min(rows.length, start + cap);
+      // 📌 الصفحة الأخيرة: الجدول بقدر صفوفه، وما تحته يصعد ليلي آخر بند مباشرة
+      final shrink = (last && flow) ? math.max(0.0, table.h - (headH + (end - start) * rowH)) : 0.0;
       doc.addPage(_page(w, layout.heightMm, [
         for (final e in layout.elements)
           if (e.type == ElType.table)
-            _at(e, 0, e.w, e.h, _table(e, cols, rows, start, end, rowH, headH, fill ? cap - (end - start) : 0))
+            _at(e, 0, e.w, e.h - shrink,
+                _table(e, cols, rows, start, end, rowH, headH, fill ? cap - (end - start) : 0))
           else if (!below(e) || last || e.b('everyPage', false))
-            _place(e, data, 0, page: p + 1, pages: pages),
+            _place(e, data, below(e) && !e.b('everyPage', false) ? -shrink : 0, page: p + 1, pages: pages),
       ]));
     }
     return doc;
   }
+
+  /// 📌 «الملخص تحت آخر بند»: في الصفحة الأخيرة يقصر الجدول بقدر صفوفه ويصعد ما تحته
+  /// (المجاميع، التنويه، التواقيع…) فلا يبقى فراغ تُضاف فيه بنود بخط اليد. يبقى في مكانه:
+  /// رقم الصفحة، العلامة المائية، وما عُلّم «كل صفحة». مفعَّل ما لم يُطفأ، ولا يعمل مع
+  /// «ملء الجدول بأسطر فارغة» (هي تملأ الفراغ بأسطر).
+  static bool flowsTotals(LayoutElement table) => !table.b('fillRows', false) && table.b('flowTotals', true);
 
   /// أعمدة الجدول الظاهرة: «الخصم» و«السعر قبل الخصم» يختفيان إن لم يكن في
   /// الفاتورة صنف مخصوم (إلا إن أُطفئ «إخفاء إن كان فارغاً» للعمود).

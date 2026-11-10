@@ -332,6 +332,10 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       ),
     );
     if (tpl == null) return;
+    if (tpl.original) {
+      await _useOriginalExact();
+      return;
+    }
     final l = tpl.build().copy(id: InvoiceLayout.newId('L'));
     l.kind = widget.docKind; // 🧾 يبقى في مصممه (فاتورة أو هذا السند)
     var name = tpl.name;
@@ -353,6 +357,46 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
         prevCurId: prevCur, prevDirty: prevDirty, createdId: l.id, fromGallery: true, undoLen: _undo.length));
     _snack('أُنشئ «${l.name}». عدّله كما تريد، ثم احفظ وفعّل استعماله في الطباعة من لوحة التصميم.',
         icon: Icons.auto_awesome);
+  }
+
+  /// ✅ «المطابق 100%»: لا يُنشئ تصميماً — يُرجع نوع الطباعة إلى كود البرنامج الأصلي
+  /// (الفاتورة A4 أو سند قبض العميل الواحد)، وهو شكل shop-maniger نفسه.
+  Future<void> _useOriginalExact() async {
+    final t = widget.docKind == 'invoice' ? PrintTarget.invoiceA4 : PrintTarget.vReceipt;
+    final already = (_targets[t.key] ?? '').isEmpty;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.verified_rounded, color: Colors.green, size: 34),
+        title: Text(already ? '«${t.label}» يُطبع بالأصلي الآن' : 'الطباعة بالأصلي المطابق؟'),
+        content: SizedBox(
+          width: 440,
+          child: Text(
+            '${already ? 'لا تصميم مفعّل لهذا النوع، فهو يُطبع الآن بالكود الأصلي نفسه.' : 'يتوقف التصميم المفعّل الآن لـ«${t.label}» (يبقى محفوظاً) ويُطبع بالكود الأصلي نفسه.'}
+
+'
+            'هذا ليس نسخة بالعناصر بل الشكل الأصلي حرفياً: الجدول يطول بعدد المواد والملخص تحته مباشرة. '
+            'لا يُعدَّل بالسحب — للتعديل اختر «نسخة قابلة للتعديل».',
+            style: const TextStyle(height: 1.5),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(already ? 'حسناً' : 'إلغاء')),
+          if (!already)
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.print),
+              label: const Text('اطبع بالأصلي'),
+            ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await InvoiceLayoutStore.setTarget(t.key, '');
+    if (!mounted) return;
+    setState(() => _targets[t.key] = '');
+    _snack('«${t.label}» يُطبع الآن بالأصلي المطابق', icon: Icons.print, color: Colors.green.shade700);
   }
 
   void _duplicate() {
@@ -2121,6 +2165,14 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
             value: e.b('fillRows', false),
             onChanged: (v) => set('fillRows', v),
           ),
+          if (!e.b('fillRows', false))
+            SwitchRow(
+              title: 'الملخص تحت آخر بند مباشرة',
+              subtitle: 'في الصفحة الأخيرة يقصر الجدول بقدر المواد ويصعد ما تحته (المجاميع والتنويه والتواقيع)، '
+                  'فلا يبقى فراغ تُضاف فيه بنود باليد. رقم الصفحة وما عُلّم «كل صفحة» يبقيان مكانهما. يظهر في المعاينة',
+              value: e.b('flowTotals', true),
+              onChanged: (v) => set('flowTotals', v),
+            ),
         ],
       ]),
     ];
@@ -2442,7 +2494,7 @@ class _GalleryDialog extends StatelessWidget {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('اختر نموذجاً — ${paper.label}',
                       style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
-                  const Text('كل نموذج قابل للتعديل الكامل بعد اختياره',
+                  const Text('كل نموذج قابل للتعديل بعد اختياره — إلا «المطابق 100%» فهو الكود الأصلي نفسه',
                       style: TextStyle(color: Colors.white70, fontSize: 12)),
                 ]),
               ),
@@ -2488,6 +2540,7 @@ class _TemplateCardState extends State<_TemplateCard> {
   Widget build(BuildContext context) {
     final t = widget.template;
     final blank = t.key == 'blank';
+    final exact = t.original;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -2500,7 +2553,8 @@ class _TemplateCardState extends State<_TemplateCard> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _hover ? _C.blue : _C.border, width: _hover ? 2 : 1),
+            border: Border.all(
+                color: _hover ? _C.blue : (exact ? Colors.green.shade600 : _C.border), width: _hover || exact ? 2 : 1),
             boxShadow: [
               BoxShadow(
                 color: _hover ? _C.blue.withValues(alpha: 0.25) : Colors.black.withValues(alpha: 0.06),
@@ -2520,7 +2574,23 @@ class _TemplateCardState extends State<_TemplateCard> {
                       border: Border.all(color: _C.border),
                       boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 6)],
                     ),
-                    child: blank
+                    child: exact
+                        ? Container(
+                            width: _l.widthMm * s,
+                            height: _l.heightMm * s,
+                            color: Colors.green.shade50,
+                            alignment: Alignment.center,
+                            child: Column(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.verified_rounded, size: 46, color: Colors.green.shade700),
+                              const SizedBox(height: 6),
+                              Text('مطابق 100%',
+                                  style: TextStyle(
+                                      color: Colors.green.shade800, fontSize: 15, fontWeight: FontWeight.w900)),
+                              const SizedBox(height: 2),
+                              const Text('الكود الأصلي نفسه', style: TextStyle(color: _C.muted, fontSize: 11.5)),
+                            ]),
+                          )
+                        : blank
                         ? Container(
                             width: _l.widthMm * s,
                             height: _l.heightMm * s,
