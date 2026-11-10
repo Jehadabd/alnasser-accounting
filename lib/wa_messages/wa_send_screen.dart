@@ -167,6 +167,7 @@ class _WaLogScreenState extends State<WaLogScreen> {
         'statement' => 'كشف حساب (PDF)',
         'voucher' => 'وصل / سند (PDF)',
         'doc' => 'مستند (PDF)',
+        'auto_doc' => 'إرسال تلقائي عند الحفظ',
         'legacy' => 'التذكير الشهري (قديم)',
         _ => e.source,
       };

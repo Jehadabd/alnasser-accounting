@@ -22,6 +22,7 @@ import '../models/printer_device.dart';
 import '../models/product.dart';
 import '../models/invoice_input_data.dart'; // ✅ Added import
 import '../services/database_service.dart';
+import '../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائي للعملاء المختارين
 import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال عبر واتساب
 import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../services/database/business/customer_name_rule.dart'; // 🔤 الاسم بلا مسافات
@@ -345,6 +346,8 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     // 🧾 مجموع الفاتورة المحفوظة ونوع دفعها قبل التعديل (لسند المرتجع/الإضافة)
     final editId = inputData.isNewInvoice ? null : inputData.invoiceToManage?.id;
     final beforeEdit = editId == null ? null : await InvoiceEditVoucher.snapshot(editId);
+    // 🤖 كانت محفوظة قبل هذا الحفظ؟ (لا ⇒ «أول حفظ» للإرسال التلقائي)
+    final wasSaved = !inputData.isNewInvoice && inputData.invoiceToManage?.status == 'محفوظة';
 
     try {
       final result = await controller.saveInvoice(inputData);
@@ -354,6 +357,8 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
 
       final savedInvoice = result.invoice;
+      // 🤖 عميل في «الإرسال التلقائي»؟ تُرسل له في الخلفية (لا تنتظرها الشاشة)
+      if (savedInvoice != null) WaAutoDocs.invoiceSaved(savedInvoice, firstSave: !wasSaved);
 
       // 👷 مؤسس جديد كُتب اسمه في الفاتورة ⇒ يُسجَّل في قائمة المؤسسين
       final founderName = savedInvoice?.installerName?.trim() ?? '';
@@ -454,6 +459,9 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         // 🧾 التعديل بالقلم عملية بتاريخ اليوم: سنده حسب نوعه — نقدية: سند قبض (إضافة) أو
         //    سند صرف (مرتجع)؛ آجلة: إشعار مدين أو دائن. الطباعة حسب إعداد كل نوع.
         final editEventId = result.editEventId;
+        if (editEventId != null) {
+          WaAutoDocs.editVoucherSaved(editEventId, legacyCashVoucherId: legacyCashVoucherId);
+        }
         if (editEventId != null && mounted) {
           try {
             await VoucherPrint.offerEditEvent(context, editEventId, legacyCashVoucherId: legacyCashVoucherId);

@@ -445,52 +445,39 @@ class VoucherPrint {
     await printEditEvent(context, eventId, legacyCashVoucherId: legacyCashVoucherId, prepared: r);
   }
 
-  /// يطبع سند حدث تعديل (التصميم المختار، أو الشكل الحالي).
-  /// [wa]: بدل الفتح للطباعة يُرسل إلى واتساب صاحب الفاتورة عبر الخادم (نسخة مسجّلة مثل الطباعة).
-  static Future<void> printEditEvent(BuildContext context, int eventId,
-      {int? legacyCashVoucherId, (String, InvoicePrintData)? prepared, bool wa = false}) async {
-    if (wa && !await WaDocSender.precheck(context)) return;
+  /// ملف سند التعديل كما يُطبع (نفس التصميم والأرقام)، ويُسجَّل نسخةً في سجل السندات المطبوعة.
+  /// null = لا حدث بهذا الرقم. فشل التسجيل يُرمى (ورقة بلا سجل لا يُتحقق منها).
+  static Future<({Uint8List bytes, String kind, InvoicePrintData data, int? customerId})?> editEventPdf(int eventId,
+      {int? legacyCashVoucherId, (String, InvoicePrintData)? prepared}) async {
     final r = prepared ?? await editEventData(eventId);
-    if (r == null) return;
+    if (r == null) return null;
     final (kind, raw) = r;
-    int? customerId;
-    // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة؛ فشله يوقفها (ورقة بلا سجل لا يُتحقق منها)
-    final PrintStamp stamp;
-    try {
-      final db = await DatabaseService().database;
-      final e = await InvoiceEditEvents.byId(db, eventId);
-      final invId = (e?['invoice_id'] as num?)?.toInt() ?? 0;
-      final inv = invId == 0
-          ? const <Map<String, Object?>>[]
-          : await db.query('invoices', columns: ['customer_id'], where: 'id = ?', whereArgs: [invId], limit: 1);
-      customerId = inv.isEmpty ? null : (inv.first['customer_id'] as num?)?.toInt();
-      stamp = await PrintedVouchers.forEditEvent(
-        eventId: eventId,
-        kind: kind,
-        voucherNo: raw.field('voucherNo'),
-        amount: raw.totals['voucherAmount'] ?? 0,
-        customerName: raw.field('customer'),
-        customerId: customerId,
-        invoiceId: invId,
-        invoiceNo: raw.field('invoiceNo'),
-        details: {
-          'invoice_before': raw.totals['invoiceBefore'],
-          'invoice_after': raw.totals['invoiceAfter'],
-          'debt_before': raw.totals['previousDebt'],
-          'debt_after': raw.totals['currentDebt'],
-          'reason': raw.field('voucherReason'),
-          'recorded_by': raw.field('user'),
-        },
-      );
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('لم يُطبع السند: تعذّر تسجيله في سجل السندات المطبوعة ($e)'),
-          backgroundColor: Colors.red,
-        ));
-      }
-      return;
-    }
+    final db = await DatabaseService().database;
+    final e = await InvoiceEditEvents.byId(db, eventId);
+    final invId = (e?['invoice_id'] as num?)?.toInt() ?? 0;
+    final inv = invId == 0
+        ? const <Map<String, Object?>>[]
+        : await db.query('invoices', columns: ['customer_id'], where: 'id = ?', whereArgs: [invId], limit: 1);
+    final customerId = inv.isEmpty ? null : (inv.first['customer_id'] as num?)?.toInt();
+    // 🧾 سجل السندات المطبوعة: يُسجَّل قبل الطباعة
+    final stamp = await PrintedVouchers.forEditEvent(
+      eventId: eventId,
+      kind: kind,
+      voucherNo: raw.field('voucherNo'),
+      amount: raw.totals['voucherAmount'] ?? 0,
+      customerName: raw.field('customer'),
+      customerId: customerId,
+      invoiceId: invId,
+      invoiceNo: raw.field('invoiceNo'),
+      details: {
+        'invoice_before': raw.totals['invoiceBefore'],
+        'invoice_after': raw.totals['invoiceAfter'],
+        'debt_before': raw.totals['previousDebt'],
+        'debt_after': raw.totals['currentDebt'],
+        'reason': raw.field('voucherReason'),
+        'recorded_by': raw.field('user'),
+      },
+    );
     final data = InvoicePrintData(
       company: raw.company,
       fields: {...raw.fields, 'verifyCode': stamp.line},
@@ -508,6 +495,31 @@ class VoucherPrint {
     }
     // بلا تصميم ولا سند قديم: قالب البرنامج الافتراضي لهذا النوع
     bytes ??= await _render(InvoiceLayoutTemplates.defaultFor(kind), data);
+    return (bytes: bytes, kind: kind, data: data, customerId: customerId);
+  }
+
+  /// يطبع سند حدث تعديل (التصميم المختار، أو الشكل الحالي).
+  /// [wa]: بدل الفتح للطباعة يُرسل إلى واتساب صاحب الفاتورة عبر الخادم (نسخة مسجّلة مثل الطباعة).
+  static Future<void> printEditEvent(BuildContext context, int eventId,
+      {int? legacyCashVoucherId, (String, InvoicePrintData)? prepared, bool wa = false}) async {
+    if (wa && !await WaDocSender.precheck(context)) return;
+    final ({Uint8List bytes, String kind, InvoicePrintData data, int? customerId})? built;
+    try {
+      built = await editEventPdf(eventId, legacyCashVoucherId: legacyCashVoucherId, prepared: prepared);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('لم يُطبع السند: تعذّر تسجيله في سجل السندات المطبوعة ($e)'),
+          backgroundColor: Colors.red,
+        ));
+      }
+      return;
+    }
+    if (built == null) return;
+    final kind = built.kind;
+    final data = built.data;
+    final bytes = built.bytes;
+    final customerId = built.customerId;
     if (!context.mounted) return;
     final name = '${VoucherKinds.title(kind)}_${data.field('voucherNo')}';
     if (wa) {

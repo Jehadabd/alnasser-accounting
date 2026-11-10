@@ -13,6 +13,7 @@ import '../owner/wa_auto/wa_server_screen.dart';
 import '../owner/wa_auto/wa_usage_banner.dart';
 import '../screens/debt_reminders_screen.dart';
 import '../widgets/settings_kit.dart';
+import 'wa_auto_docs_screen.dart';
 import 'wa_message_log.dart';
 import 'wa_phone_book_screen.dart';
 import 'wa_rules.dart';
@@ -131,6 +132,12 @@ class _WaMessagesHubScreenState extends State<WaMessagesHubScreen> {
               title: 'سجل الرسائل',
               subtitle: 'ما أُرسل، وما فشل ولماذا، ومن تُخطّي لأنه سدّد',
               onTap: () => _go(const WaLogScreen()),
+            ),
+            SetActionRow(
+              icon: Icons.auto_mode_rounded,
+              title: 'الإرسال التلقائي للعملاء',
+              subtitle: 'عملاء تختارهم: تصلهم الفاتورة أو وصل القبض لحظة الحفظ، بلا ضغطة',
+              onTap: () => _go(const WaAutoDocsScreen()),
             ),
             SetActionRow(
               icon: Icons.verified_user_rounded,

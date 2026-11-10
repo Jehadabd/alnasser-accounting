@@ -15,6 +15,7 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
+import '../../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائي
 import '../../wa_messages/wa_doc_sender.dart';
 import 'receipt_pdf.dart';
 import 'receipts_service.dart';
@@ -134,6 +135,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         docNo: _docNo.text.trim(),
         notes: _notes.text.trim(),
       );
+      // 🤖 عميل في «الإرسال التلقائي»؟ يصله الوصل في الخلفية (الوصل الجماعي لا يُرسل)
+      if (res.errors.isEmpty) WaAutoDocs.receiptSaved(res.receiptId);
       if (!mounted) return;
       if (res.errors.isNotEmpty) {
         await showDialog<void>(

@@ -37,6 +37,7 @@ import '../models/app_user.dart' show AppPermissions; // 🔐 دين يدوي / 
 import '../services/auth_service.dart';
 import '../erp/debts/receipt_screen.dart' show ReceiptScreen; // 🧾 وصل قبض متقدم
 import '../erp/pickers.dart' show PartyLite;
+import '../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائي للعملاء المختارين
 import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال الوصل لصاحبه عبر واتساب
 
 class AddTransactionScreen extends StatefulWidget {
@@ -633,6 +634,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         ),
       ],
     );
+    // 🤖 عميل في «الإرسال التلقائي»؟ يصله الوصل في الخلفية
+    if (res.errors.isEmpty) WaAutoDocs.receiptSaved(res.receiptId);
     if (!mounted) return;
     if (res.errors.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(

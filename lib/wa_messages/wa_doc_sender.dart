@@ -162,6 +162,22 @@ class WaDocSender {
       phone = ok;
     }
 
+    final err = await transmit(doc, phone, source: source);
+    if (err == null && key != null && phone != saved) {
+      // 📒 بعد أول إرسال ناجح: هذا هو رقمه، والمرات القادمة بلا سؤال
+      try {
+        await WaPhoneBook.confirm(key, doc.customerName, phone);
+      } catch (_) {}
+    }
+    if (!WaSendNotice.available && context.mounted) {
+      _notify(context, null, err == null ? WaNoticeState.ok : WaNoticeState.failed,
+          err == null ? 'أُرسل ${doc.label} ✓' : 'فشل إرسال ${doc.label}', err);
+    }
+  }
+
+  /// الإرسال نفسه (بلا شاشة) — للزر وللإرسال التلقائي: الخادم، سجل الرسائل، علامة الاستعمال،
+  /// والإشعار أعلى الشاشة. يعيد null عند النجاح، وإلا السبب.
+  static Future<String?> transmit(WaDoc doc, String phone, {required String source, String? ruleId}) async {
     final who = doc.customerName.isEmpty ? phone : doc.customerName;
     final nid = WaSendNotice.available ? WaSendNotice.start('جارٍ إرسال ${doc.label} إلى $who…') : null;
     String? err;
@@ -180,33 +196,31 @@ class WaDocSender {
     } catch (e) {
       err = '$e';
     }
-    await WaMessageLog.add(
-      customerId: doc.customerId,
-      name: doc.customerName,
-      phone: phone,
-      source: source,
-      ruleName: doc.fileName,
-      status: err == null ? 'sent' : 'failed',
-      error: err ?? note,
-      amount: 0,
-      attach: 'PDF',
-    );
-    if (err == null) {
-      await WaUsageMark.record('server', sends: 1);
-      // 📒 بعد أول إرسال ناجح: هذا هو رقمه، والمرات القادمة بلا سؤال
-      if (key != null && phone != saved) {
-        try {
-          await WaPhoneBook.confirm(key, doc.customerName, phone);
-        } catch (_) {}
+    try {
+      await WaMessageLog.add(
+        customerId: doc.customerId,
+        name: doc.customerName,
+        phone: phone,
+        source: source,
+        ruleId: ruleId,
+        ruleName: doc.fileName,
+        status: err == null ? 'sent' : 'failed',
+        error: err ?? note,
+        amount: 0,
+        attach: 'PDF',
+      );
+      if (err == null) await WaUsageMark.record('server', sends: 1);
+    } catch (_) {}
+    if (WaSendNotice.available) {
+      if (err != null) {
+        WaSendNotice.finish(nid, WaNoticeState.failed, 'فشل إرسال ${doc.label} إلى $who', err);
+      } else if (note != null) {
+        WaSendNotice.finish(nid, WaNoticeState.warn, 'وصلت رسالة ${doc.label} إلى $who دون الملف', note);
+      } else {
+        WaSendNotice.finish(nid, WaNoticeState.ok, 'أُرسل ${doc.label} إلى $who ✓');
       }
     }
-    if (err != null) {
-      _notify(context, nid, WaNoticeState.failed, 'فشل إرسال ${doc.label} إلى $who', err);
-    } else if (note != null) {
-      _notify(context, nid, WaNoticeState.warn, 'وصلت رسالة ${doc.label} إلى $who دون الملف', note);
-    } else {
-      _notify(context, nid, WaNoticeState.ok, 'أُرسل ${doc.label} إلى $who ✓');
-    }
+    return err;
   }
 }
 

@@ -14,12 +14,12 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../services/auth_service.dart';
 import '../services/database/business/deep_check_repair.dart';
 import '../services/database_service.dart';
+import '../widgets/settings_kit.dart';
 import 'create_invoice_screen.dart';
+import 'deep_check/repair_parts.dart';
 
 const _navy = Color(0xFF0F3460);
 const _red = Color(0xFFB91C1C);
-const _green = Color(0xFF047857);
-const _muted = Color(0xFF64748B);
 
 final _n = NumberFormat('#,##0.##', 'en');
 
@@ -142,11 +142,12 @@ class _RepairDialogState extends State<_RepairDialog> {
             )));
   }
 
-  Widget _kv(String k, String v, {Color? c}) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
+  Widget _section(String title, IconData icon) => Padding(
+        padding: const EdgeInsets.only(top: 18, bottom: 8),
         child: Row(children: [
-          SizedBox(width: 170, child: Text(k, style: const TextStyle(color: _muted))),
-          Expanded(child: Text(v, style: TextStyle(fontWeight: FontWeight.w700, color: c))),
+          Icon(icon, size: 18, color: kSetNavy),
+          const SizedBox(width: 8),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: kSetText)),
         ]),
       );
 
@@ -154,71 +155,84 @@ class _RepairDialogState extends State<_RepairDialog> {
   Widget build(BuildContext context) {
     final block = i.ledgerTruthBlock;
     final invBlock = i.invoiceTruthBlock;
-    final cid = i.customerId;
-    return AlertDialog(
-      title: Text('فاتورة ${i.number} — ${i.customerName}'),
-      content: SizedBox(
-        width: 620,
-        child: SingleChildScrollView(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-            _kv('النوع والحالة', '${i.paymentType} — ${i.deleted ? 'محذوفة' : i.status}'),
-            _kv('الإجمالي / المسدد', '${_n.format(i.total)} / ${_n.format(i.paid)}'
-                '${i.cashSettlements.abs() > 0.01 ? ' (تسويات نقدية ${_n.format(i.cashSettlements)})' : ''}'),
-            _kv('حسب الفاتورة على العميل', _n.format(i.expected)),
-            _kv('في سجل الديون لعميلها', _n.format(i.recordedCurrent),
-                c: (i.expected - i.recordedCurrent).abs() > 0.01 ? _red : _green),
-            if (i.recordedOthers.abs() > 0.01) _kv('على عملاء آخرين', _n.format(i.recordedOthers), c: _red),
-            if (cid != null && i.balances.containsKey(cid)) _kv('رصيد العميل الآن', _n.format(i.balances[cid])),
-            const Divider(height: 22),
-            const Text('معاملاتها في سجل الديون', style: TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 4),
-            if (i.txs.isEmpty) const Text('لا شيء', style: TextStyle(color: _muted)),
-            for (final t in i.txs)
-              Text(
-                '${t.date.length >= 16 ? t.date.substring(0, 16).replaceFirst('T', ' ') : t.date} — '
-                '${_n.format(t.amount)} — ${t.type} — ${t.customerName}${t.description.isEmpty ? '' : ' — ${t.description}'}',
-                style: const TextStyle(fontSize: 12, height: 1.6),
-              ),
-            const Divider(height: 22),
-            const Text('أيهما الصحيح؟ أنت تعرف: هل دفع الزبون هذه الفاتورة عند البيع، أم بقيت ديناً عليه؟',
-                style: TextStyle(fontWeight: FontWeight.w700, height: 1.6)),
-            if (block != null && !i.consistent)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text('«اعتمد سجل الديون» غير ممكن: $block', style: const TextStyle(fontSize: 12, color: _muted)),
-              ),
-            if (invBlock != null && !i.consistent)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text('«اعتمد الفاتورة» غير ممكن: $invBlock', style: const TextStyle(fontSize: 12, color: _muted)),
-              ),
-            if (_err != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text('هنا وقع خطأ: $_err', style: const TextStyle(color: _red)),
-              ),
-            if (_busy) const Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator()),
-          ]),
-        ),
+    final size = MediaQuery.sizeOf(context);
+    // الأقرب: سجل الديون حين يمكن (لا يتغير أي دين)، وإلا الفاتورة
+    final preferLedger = block == null && !i.consistent;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 680, maxHeight: size.height * 0.88),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          RepairHeader(i, onClose: _busy ? null : () => Navigator.pop(context, false)),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            child: _busy ? const LinearProgressIndicator(minHeight: 3) : const SizedBox.shrink(),
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                RepairCompare(i),
+                _section('معاملاتها في سجل الديون', Icons.timeline_rounded),
+                RepairTimeline(i.txs),
+                if (!i.consistent) ...[
+                  _section('أيهما الصحيح؟', Icons.help_outline_rounded),
+                  const Text(
+                    'أنت تعرف: هل دفع الزبون هذه الفاتورة عند البيع، أم بقيت ديناً عليه وسدّدها لاحقاً؟',
+                    style: TextStyle(fontSize: 13, height: 1.6, color: Color(0xFF334155)),
+                  ),
+                  const SizedBox(height: 10),
+                  RepairChoice(
+                    icon: Icons.account_balance_wallet_rounded,
+                    title: 'اعتمد سجل الديون',
+                    tag: 'لا يتغير أي دين',
+                    color: kSetGreen,
+                    recommended: preferLedger,
+                    text: 'تُصحَّح الفاتورة فقط: ${i.paymentType} ← ${i.newPaymentType}، '
+                        'المسدد ${repairNum.format(i.paid)} ← ${repairNum.format(i.newPaid)}. رصيد العميل يبقى كما هو.',
+                    blockedWhy: block == null ? null : 'غير ممكن: $block',
+                    onTap: _busy ? null : _ledgerTruth,
+                  ),
+                  RepairChoice(
+                    icon: Icons.receipt_long_rounded,
+                    title: 'اعتمد الفاتورة',
+                    tag: 'يتغير الدين',
+                    color: kSetRed,
+                    recommended: !preferLedger,
+                    text: 'يُضبط سجل الديون على ما تقوله الفاتورة (المتبقي ${repairNum.format(i.expected)}). '
+                        'ترى رصيد كل عميل قبل وبعد قبل التأكيد.',
+                    blockedWhy: invBlock == null ? null : 'غير ممكن: $invBlock',
+                    onTap: _busy ? null : _invoiceTruth,
+                  ),
+                ],
+                RepairChoice(
+                  icon: Icons.open_in_new_rounded,
+                  title: 'فتح الفاتورة',
+                  tag: 'تصحيح يدوي',
+                  color: kSetNavy,
+                  text: 'تفتح الفاتورة لتصحيحها بنفسك (مثلاً اختيار العميل). الحفظ يضبط سجل الديون تلقائياً.',
+                  onTap: _busy ? null : _open,
+                ),
+                RepairChoice(
+                  icon: Icons.task_alt_rounded,
+                  title: 'مُراجَعة — أبقها كما هي',
+                  tag: 'بلا تغيير',
+                  color: kSetMuted,
+                  text: 'لا يتغير شيء، ولا تظهر في الفحص ما دامت أرقامها كما هي. أي تغيير فيها يعيد إظهارها.',
+                  onTap: _busy ? null : _ack,
+                ),
+                if (_err != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: SetBanner('هنا وقع خطأ: $_err', kind: SetBannerKind.error),
+                  ),
+              ]),
+            ),
+          ),
+        ]),
       ),
-      actionsOverflowButtonSpacing: 6,
-      actions: [
-        TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('إغلاق')),
-        TextButton.icon(onPressed: _busy ? null : _ack, icon: const Icon(Icons.task_alt_rounded), label: const Text('مُراجَعة')),
-        OutlinedButton.icon(onPressed: _busy ? null : _open, icon: const Icon(Icons.open_in_new_rounded), label: const Text('فتح الفاتورة')),
-        OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(foregroundColor: _red),
-          onPressed: _busy || invBlock != null ? null : _invoiceTruth,
-          icon: const Icon(Icons.receipt_long_rounded),
-          label: const Text('اعتمد الفاتورة'),
-        ),
-        FilledButton.icon(
-          style: FilledButton.styleFrom(backgroundColor: _green),
-          onPressed: _busy || block != null || i.consistent ? null : _ledgerTruth,
-          icon: const Icon(Icons.account_balance_wallet_rounded),
-          label: const Text('اعتمد سجل الديون'),
-        ),
-      ],
     );
   }
 }
