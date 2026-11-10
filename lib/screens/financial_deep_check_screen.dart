@@ -1,7 +1,8 @@
 // lib/screens/financial_deep_check_screen.dart
 //
 // 🔬 شاشة الفحص العميق — يعمل فقط حين يضغط المستخدم «ابدأ الفحص».
-// قراءة فقط: لا زر إصلاح هنا. النتيجة تُنسخ أو تُشارك كنص.
+// الفحص قراءة فقط. ملاحظات الفواتير لها زر «معالجة» (deep_check_repair_dialog.dart):
+// لا يتغير شيء إلا بقرار المدير وتأكيده، فاتورة فاتورة. النتيجة تُنسخ أو تُشارك كنص.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../services/database_service.dart';
 import '../services/database/business/financial_deep_check.dart';
+import 'deep_check_repair_dialog.dart';
 
 const _navy = Color(0xFF0F3460);
 const _red = Color(0xFFB91C1C);
@@ -117,7 +119,8 @@ class _FinancialDeepCheckScreenState extends State<FinancialDeepCheckScreen> {
         ),
         child: const Text(
           'يعيد حساب كل دين من مصدره — الفاتورة والمعاملة — ويقارنه بما هو محفوظ، '
-          'ثم الموردين والمخزون والدفتر. لا يغيّر أي رقم ولا يصلح شيئاً: يقول ما وجد فقط.\n'
+          'ثم الموردين والمخزون والدفتر. الفحص لا يغيّر أي رقم. ملاحظات الفواتير لها «معالجة»: '
+          'تختار أنت أيهما الصحيح — الفاتورة أو سجل الديون — ولا يتغير شيء قبل تأكيدك.\n'
           'إن كان أحد يبيع على جهاز آخر أثناء الفحص فقد يظهر فرق مؤقت — أعد الفحص للتأكد.',
           style: TextStyle(fontSize: 13, height: 1.6, color: Color(0xFF334155)),
         ),
@@ -173,10 +176,23 @@ class _FinancialDeepCheckScreenState extends State<FinancialDeepCheckScreen> {
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(f.explain, style: const TextStyle(fontSize: 12.5, height: 1.5, color: Color(0xFF334155))),
             ),
-          for (final row in f.rows)
+          for (var k = 0; k < f.rows.length; k++)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 3),
-              child: SelectableText('• $row', style: const TextStyle(fontSize: 12.5)),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: SelectableText('• ${f.rows[k]}', style: const TextStyle(fontSize: 12.5))),
+                if (k < f.invoiceRefs.length)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                    onPressed: _running
+                        ? null
+                        : () async {
+                            if (await showDeepCheckRepair(context, f.invoiceRefs[k]) && mounted) await _run();
+                          },
+                    icon: const Icon(Icons.healing_rounded, size: 18),
+                    label: const Text('معالجة'),
+                  ),
+              ]),
             ),
           if (f.total > f.rows.length)
             Text('… و${f.total - f.rows.length} غيرها — يظهر أول ${f.rows.length} فقط',

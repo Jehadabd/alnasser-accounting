@@ -15,19 +15,24 @@
 import 'package:intl/intl.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'deep_check_repair.dart';
 import 'invoice_debt_reconciler.dart';
 import 'financial_black_box.dart';
 
 enum DeepSeverity { error, warning, info }
 
 class DeepFinding {
-  DeepFinding(this.severity, this.area, this.title, this.explain, {this.rows = const [], this.total = 0});
+  DeepFinding(this.severity, this.area, this.title, this.explain,
+      {this.rows = const [], this.total = 0, this.invoiceRefs = const []});
   final DeepSeverity severity;
   final String area;
   final String title;
   final String explain;
   final List<String> rows;
   final int total;
+
+  /// لملاحظات الفواتير: معرّف الفاتورة لكل سطر (بالترتيب نفسه) — لزر «معالجة».
+  final List<int> invoiceRefs;
 }
 
 class DeepCheckReport {
@@ -87,8 +92,9 @@ class FinancialDeepCheck {
   Future<bool> _hasCol(String t, String c) async =>
       (await db.rawQuery('PRAGMA table_info($t)')).any((r) => r['name'] == c);
 
-  void _add(DeepSeverity s, String area, String title, String explain, List<String> rows) {
-    _findings.add(DeepFinding(s, area, title, explain, rows: rows.take(_show).toList(), total: rows.length));
+  void _add(DeepSeverity s, String area, String title, String explain, List<String> rows, {List<int> refs = const []}) {
+    _findings.add(DeepFinding(s, area, title, explain,
+        rows: rows.take(_show).toList(), total: rows.length, invoiceRefs: refs.take(_show).toList()));
   }
 
   /// يشغّل كل الفحوص. [onStep] لعرض التقدّم.
@@ -168,9 +174,22 @@ class FinancialDeepCheck {
         [...InvoiceDebtReconciler.nonContributionTypes, ...InvoiceDebtReconciler.nonContributionTypes]);
 
     final missing = <String>[], wrong = <String>[], ghost = <String>[], other = <String>[], noCustomer = <String>[];
+    final rMissing = <int>[], rWrong = <int>[], rGhost = <int>[], rOther = <int>[], rNoCustomer = <int>[];
+    // ملاحظات راجعها المدير وأبقاها كما هي: تُخفى ما دامت أرقامها لم تتغير
+    final acks = await DeepCheckRepair.acknowledged(db);
+    var hidden = 0;
     var checked = 0;
     for (final r in rows) {
       checked++;
+      final id = r['id'] as int;
+      final ack = acks['inv:$id'];
+      if (ack != null) {
+        final info = await DeepCheckRepair.load(db, id);
+        if (info != null && info.fingerprint == ack) {
+          hidden++;
+          continue;
+        }
+      }
       final exp = (r['expected'] as num).toDouble();
       final cur = (r['rec_cur'] as num).toDouble();
       final oth = (r['rec_other'] as num).toDouble();
@@ -178,47 +197,63 @@ class FinancialDeepCheck {
       if (r['pt'] == 'دين' && r['del'] == 0 && r['st'] != 'معلقة' && exp > _tol &&
           (r['cid'] == null || (r['cid'] as int) <= 0)) {
         noCustomer.add('$label: دين ${m(exp)} بلا عميل مرتبط');
+        rNoCustomer.add(id);
         continue;
       }
       if (exp > _tol && cur.abs() <= _tol) {
         missing.add('$label: المتوقع ${m(exp)} — في سجل الديون صفر');
+        rMissing.add(id);
       } else if ((exp - cur).abs() > _tol) {
         if (exp.abs() <= _tol) {
-          final why = r['del'] == 1 ? 'محذوفة' : (r['st'] == 'معلقة' ? 'معلّقة' : 'نقد');
+          final why = r['del'] == 1
+              ? 'محذوفة'
+              : (r['st'] == 'معلقة' ? 'معلّقة' : (r['pt'] == 'دين' ? 'دين مسددة بالكامل على الفاتورة' : 'نقد'));
           ghost.add('$label ($why): ما زال لها في سجل الديون ${m(cur)}');
+          rGhost.add(id);
         } else {
           wrong.add('$label: المتوقع ${m(exp)} — المسجّل ${m(cur)} — الفرق ${m(cur - exp)}');
+          rWrong.add(id);
         }
       }
-      if (oth.abs() > _tol) other.add('$label: ${m(oth)} مسجّلة على عميل غير عميل الفاتورة');
+      if (oth.abs() > _tol) {
+        other.add('$label: ${m(oth)} مسجّلة على عميل غير عميل الفاتورة');
+        rOther.add(id);
+      }
     }
     var any = false;
     if (missing.isNotEmpty) {
       any = true;
       _add(DeepSeverity.error, 'فواتير الدين', '${missing.length} فاتورة دين لم تصل إلى سجل الديون',
-          'الفاتورة تقول إن على العميل مبلغاً، وسجل الديون لا يحمل منه شيئاً.', missing);
+          'الفاتورة تقول إن على العميل مبلغاً، وسجل الديون لا يحمل منه شيئاً.', missing,
+          refs: rMissing);
     }
     if (wrong.isNotEmpty) {
       any = true;
       _add(DeepSeverity.error, 'فواتير الدين', '${wrong.length} فاتورة مبلغها في سجل الديون غير المتبقي عليها',
-          'المتبقي = الإجمالي − المسدد (− التسويات النقدية). الفرق الموجب = سجل الديون أكثر من الفاتورة.', wrong);
+          'المتبقي = الإجمالي − المسدد (− التسويات النقدية). الفرق الموجب = سجل الديون أكثر من الفاتورة.', wrong,
+          refs: rWrong);
     }
     if (ghost.isNotEmpty) {
       any = true;
       _add(DeepSeverity.error, 'فواتير الدين', '${ghost.length} فاتورة لا يجب أن تحمل ديناً وما زال لها أثر',
-          'فاتورة نقد أو محذوفة أو معلّقة مساهمتها صفر.', ghost);
+          'فاتورة نقد أو محذوفة أو معلّقة أو دين مسددة بالكامل: مساهمتها صفر، وسجل الديون ما زال يحمل لها مبلغاً.',
+          ghost,
+          refs: rGhost);
     }
     if (other.isNotEmpty) {
       any = true;
       _add(DeepSeverity.error, 'فواتير الدين', '${other.length} فاتورة لها دين على عميل آخر',
-          'غالباً بعد تغيير عميل الفاتورة: بقي أثرها على العميل السابق.', other);
+          'غالباً بعد تغيير عميل الفاتورة: بقي أثرها على العميل السابق.', other,
+          refs: rOther);
     }
     if (noCustomer.isNotEmpty) {
       any = true;
       _add(DeepSeverity.warning, 'فواتير الدين', '${noCustomer.length} فاتورة دين بلا عميل',
-          'لا تظهر في حساب أي عميل.', noCustomer);
+          'لا تظهر في حساب أي عميل.', noCustomer,
+          refs: rNoCustomer);
     }
     if (!any) _passed.add('كل فواتير هذا الجهاز تطابق سجل الديون ($checked فاتورة)');
+    if (hidden > 0) _passed.add('$hidden ملاحظة فاتورة راجعتها سابقاً وأبقيتها كما هي (مخفية ما دامت أرقامها لم تتغير)');
   }
 
   // ─── 3) صف تسوية واحد فقط لكل (فاتورة، عميل) ───────────────────────────
