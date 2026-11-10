@@ -6,16 +6,15 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 
 import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../widgets/settings_kit.dart';
+import 'wa_customer_picker.dart';
 import 'wa_outbox.dart';
 import 'wa_rules.dart';
 
 const kWaGreen = Color(0xFF047857);
 const kWaMuted = Color(0xFF64748B);
-final _n = NumberFormat('#,##0', 'en');
 
 // ═════════════════════ اختيار العملاء ═════════════════════
 
@@ -26,89 +25,12 @@ Future<Set<int>?> showWaCustomerPicker(BuildContext context,
   if (!context.mounted) return null;
   return showDialog<Set<int>>(
     context: context,
-    builder: (_) => _PickDialog(
+    builder: (_) => WaCustomerPickerDialog(
       all: debtorsOnly ? [for (final t in all) if (t.debt > 0) t] : all,
       initial: initial,
       title: title,
     ),
   );
-}
-
-class _PickDialog extends StatefulWidget {
-  const _PickDialog({required this.all, required this.initial, required this.title});
-  final List<WaTarget> all;
-  final Set<int> initial;
-  final String title;
-  @override
-  State<_PickDialog> createState() => _PickDialogState();
-}
-
-class _PickDialogState extends State<_PickDialog> {
-  late final Set<int> _sel = {...widget.initial};
-  String _q = '';
-  int _late = 0; // 0 = الكل، وإلا: متأخر N شهراً فأكثر
-
-  @override
-  Widget build(BuildContext context) {
-    final q = _q.trim();
-    final list = [
-      for (final t in widget.all)
-        if ((q.isEmpty || t.name.contains(q) || t.phone.contains(q)) && (_late == 0 || (t.lateMonths ?? -1) >= _late)) t
-    ];
-    return AlertDialog(
-      title: Text('${widget.title} (${_sel.length} مختار)'),
-      content: SizedBox(
-        width: 560,
-        height: 520,
-        child: Column(children: [
-          TextField(
-            autofocus: true,
-            decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search), hintText: 'بحث بالاسم أو الرقم', border: OutlineInputBorder(), isDense: true),
-            onChanged: (v) => setState(() => _q = v),
-          ),
-          const SizedBox(height: 8),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final m in const [0, 1, 2, 3, 6])
-              ChoiceChip(
-                label: Text(m == 0 ? 'الكل' : 'بلا تسديد $m ${m == 1 ? 'شهر' : (m == 2 ? 'شهرين' : 'أشهر')}+'),
-                selected: _late == m,
-                onSelected: (_) => setState(() => _late = m),
-              ),
-            ActionChip(
-              avatar: const Icon(Icons.done_all_rounded, size: 18),
-              label: Text('تحديد الظاهرين (${list.length})'),
-              onPressed: () => setState(() => _sel.addAll(list.map((t) => t.id))),
-            ),
-          ]),
-          const SizedBox(height: 6),
-          Expanded(
-            child: widget.all.isEmpty
-                ? const Center(child: Text('لا يوجد عميل له رقم هاتف صالح'))
-                : ListView.builder(
-                    itemCount: list.length,
-                    itemBuilder: (_, i) {
-                      final t = list[i];
-                      return CheckboxListTile(
-                        dense: true,
-                        value: _sel.contains(t.id),
-                        onChanged: (v) => setState(() => v == true ? _sel.add(t.id) : _sel.remove(t.id)),
-                        title: Text(t.name),
-                        subtitle: Text('${t.phone} • ${t.debt > 0 ? '${_n.format(t.debt.round())} دينار' : 'لا دين'}'
-                            '${t.lateMonths != null && t.lateMonths! > 0 ? ' • بلا تسديد منذ ${t.lateMonths} شهر' : ''}'),
-                      );
-                    },
-                  ),
-          ),
-        ]),
-      ),
-      actions: [
-        TextButton(onPressed: () => setState(_sel.clear), child: const Text('إلغاء الكل')),
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
-        FilledButton(onPressed: () => Navigator.pop(context, _sel), child: const Text('حفظ الاختيار')),
-      ],
-    );
-  }
 }
 
 // ═════════════════════ خيارات الرسالة ═════════════════════
