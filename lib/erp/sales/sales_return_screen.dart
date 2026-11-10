@@ -2,6 +2,8 @@
 //
 // ↩️ شاشة مرتجع المبيعات + سجل المرتجعات.
 
+import 'dart:typed_data';
+
 import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
 
@@ -16,6 +18,7 @@ import '../report_export.dart';
 import '../stock_helpers.dart';
 import 'doc_pdf.dart';
 import 'sales_return_service.dart';
+import '../../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائي
 import '../../wa_messages/wa_doc_sender.dart';
 import '../../services/settings_manager.dart';
 import '../../services/invoice_edit_log.dart';
@@ -215,6 +218,8 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
         ],
         notes: _notes.text.trim(),
       );
+      // 🤖 زبون في «الإرسال التلقائي»؟ يصله مستند المرتجع في الخلفية
+      if (_customer != null) WaAutoDocs.salesReturnSaved(id);
       if (!mounted) return;
       showOk(context, 'حُفظ المرتجع (#$id)');
       // رسالة الطباعة حسب الإعداد: اسأل / اطبع دائماً / لا تطبع
@@ -603,10 +608,8 @@ String _modeLabel(Map<String, Object?> r) {
   }
 }
 
-/// طباعة مستند مرتجع مبيعات (بالمبلغ كتابةً).
-Future<void> printSalesReturn(BuildContext context, int id, {bool wa = false}) async {
-  if (wa && !await WaDocSender.precheck(context)) return;
-  try {
+/// ملف مستند مرتجع المبيعات كما يُطبع، مع رأسه (للإرسال بلا شاشة).
+Future<({Uint8List bytes, Map<String, Object?> header})> salesReturnPdf(int id) async {
     final db = await erpDb();
     final h = (await db.rawQuery(
             'SELECT r.*, (SELECT inv.invoice_number FROM invoices inv WHERE inv.id = r.original_invoice_id) AS invoice_number '
@@ -639,6 +642,16 @@ Future<void> printSalesReturn(BuildContext context, int id, {bool wa = false}) a
       total: d0(h['total']),
       notes: h['notes'] as String?,
     );
+    return (bytes: bytes, header: h);
+}
+
+/// طباعة مستند مرتجع مبيعات (بالمبلغ كتابةً).
+Future<void> printSalesReturn(BuildContext context, int id, {bool wa = false}) async {
+  if (wa && !await WaDocSender.precheck(context)) return;
+  try {
+    final built = await salesReturnPdf(id);
+    final bytes = built.bytes;
+    final h = built.header;
     if (!context.mounted) return;
     if (wa) {
       // 📨 إلى واتساب الزبون عبر الخادم

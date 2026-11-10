@@ -3,7 +3,8 @@
 // 🤖 «عملاء الإرسال التلقائي»: عملاء يختارهم المدير، ولكل واحد ما يصله تلقائياً عبر الخادم
 // لحظة الحفظ — بلا أي ضغطة:
 //   • الفاتورة عند حفظها أول مرة.            • الفاتورة من جديد بعد تعديلها.
-//   • وصل القبض (التسديد) عند حفظه.         • سند تعديل الفاتورة (إضافة/مرتجع).
+//   • وصل القبض (التسديد) عند حفظه.         • سند تعديل الفاتورة (إضافة/مرتجع: قبض/صرف/مدين/دائن).
+//   • مستند مرتجع المبيعات عند حفظه.
 // القواعد:
 //   • الرقم يُؤكَّد مرة واحدة عند إضافة العميل هنا (يُحفظ في «الأرقام المؤكَّدة»)؛ لا رقم
 //     مؤكَّد ⇒ لا إرسال (لا يُخمَّن رقم ويُرسل له بلا سؤال).
@@ -21,6 +22,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../erp/debts/receipt_pdf.dart';
 import '../erp/debts/receipts_service.dart';
+import '../erp/sales/sales_return_screen.dart' show salesReturnPdf;
 import '../models/invoice.dart';
 import '../services/customer_balance_guard.dart';
 import '../services/database_service.dart';
@@ -37,7 +39,8 @@ enum WaAutoDocKind {
   invoice('الفاتورة عند حفظها'),
   invoiceEdited('الفاتورة بعد تعديلها'),
   receipt('وصل القبض (التسديد)'),
-  editVoucher('سند تعديل الفاتورة (إضافة/مرتجع)');
+  editVoucher('سند تعديل الفاتورة (إضافة/مرتجع)'),
+  salesReturn('مستند مرتجع المبيعات');
 
   const WaAutoDocKind(this.label);
   final String label;
@@ -236,6 +239,36 @@ class WaAutoDocs {
           caption: '$title رقم $no — الفاتورة ${built.data.field('invoiceNo')}',
           customerId: built.customerId ?? cid,
           customerName: built.data.field('customer'),
+        ),
+        phone,
+        rule,
+      );
+    });
+  }
+
+  /// مرتجع مبيعات حُفظ.
+  static void salesReturnSaved(int returnId) {
+    _enqueue(() async {
+      final rule = 'auto_sales_return_$returnId';
+      if ((await WaMessageLog.lastSent(rule)).isNotEmpty) return;
+      final db = await DatabaseService().database;
+      final h = await db.query('sales_returns',
+          columns: ['customer_id', 'customer_name', 'return_no'], where: 'id = ?', whereArgs: [returnId], limit: 1);
+      if (h.isEmpty) return;
+      final cid = (h.first['customer_id'] as num?)?.toInt();
+      if (cid == null || !(await kindsFor(cid)).contains(WaAutoDocKind.salesReturn)) return;
+      final name = '${h.first['customer_name'] ?? ''}'.trim();
+      final phone = await _gate(cid, name, rule, 'مرتجع المبيعات ${h.first['return_no']}');
+      if (phone == null) return;
+      final built = await salesReturnPdf(returnId);
+      await _send(
+        WaDoc(
+          showsDebt: false,
+          bytes: built.bytes,
+          fileName: 'مرتجع_مبيعات_${h.first['return_no']}.pdf',
+          caption: 'مرتجع مبيعات رقم ${h.first['return_no']} — $name',
+          customerId: cid,
+          customerName: name,
         ),
         phone,
         rule,
