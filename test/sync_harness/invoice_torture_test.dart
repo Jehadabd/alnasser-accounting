@@ -230,10 +230,13 @@ void main() {
         final t = inv == null ? null : h.truth.invoices[inv];
         final oldC = t?.contribution ?? 0.0;
         final newC = x.ptype == 'دين' ? max(0.0, x.finalTotal - x.paid) : 0.0;
-        if (t != null && t.cust != x.cust) {
-          return h.truth.balance(t.cust) - oldC < -0.01 || h.truth.balance(x.cust) + newC < -0.01;
-        }
-        return h.truth.balance(x.cust) - oldC + newC < -0.01;
+        // كما في InvoiceController.validateDebtChangeWontCauseNegativeBalance: يُفحص العميل
+        // القديم وحده، ويُرفض فقط إن كان التعديل نفسه يُنقصه إلى ما دون الصفر. «اسم عميل جديد»
+        // تغيير عميل أيضاً (ينقل الدين كله عن العميل القديم) — كان النموذج يعدّه العميل نفسه.
+        final moves = t != null && (t.cust != x.cust || (x.nameField?.contains('عميل جديد') ?? false));
+        final delta = (x.ptype == 'نقد' || moves) ? -oldC : newC - oldC;
+        final base = t?.cust ?? x.cust;
+        return delta < -0.01 && h.truth.balance(base) + delta < -0.01;
       }
 
       Future<Map<String, Object?>> custBalance(String dev, String cust) async =>
