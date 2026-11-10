@@ -46,25 +46,11 @@ class _WaAutoDocsScreenState extends State<WaAutoDocsScreen> {
   Future<void> _add() async {
     final p = await Pickers.customer(context, title: 'عميل يصله الإرسال التلقائي');
     if (p == null || !mounted) return;
-    final existing = _subs?.where((s) => s.customerId == p.id).firstOrNull;
-    await _edit(p.id, p.name, existing?.kinds ?? {WaAutoDocKind.invoice, WaAutoDocKind.receipt}, p.phone);
+    await _edit(p.id, p.name, p.phone);
   }
 
-  Future<void> _edit(int id, String name, Set<WaAutoDocKind> kinds, String? phoneHint) async {
-    final saved = await WaPhoneBook.phoneOf(WaPhoneBook.keyOf(id, name));
-    final phone = saved ?? await WaDocSender.resolvePhone(phone: phoneHint, customerId: id, customerName: name);
-    if (!mounted) return;
-    final r = await showDialog<({String phone, Set<WaAutoDocKind> kinds})>(
-      context: context,
-      builder: (_) => _SubDialog(name: name, phone: phone, kinds: kinds),
-    );
-    if (r == null) return;
-    try {
-      await WaAutoDocs.save(id, name.trim(), r.phone, r.kinds);
-    } catch (e) {
-      if (mounted) setToast(context, '$e', error: true);
-    }
-    await _load();
+  Future<void> _edit(int id, String name, String? phoneHint) async {
+    if (await showWaAutoDocsEditor(context, customerId: id, name: name, phoneHint: phoneHint)) await _load();
   }
 
   Future<void> _remove(WaAutoDocSub s) async {
@@ -140,7 +126,7 @@ class _WaAutoDocsScreenState extends State<WaAutoDocsScreen> {
       child: Material(
         type: MaterialType.transparency,
         child: InkWell(
-          onTap: () => _edit(s.customerId, s.name, s.kinds, phone),
+          onTap: () => _edit(s.customerId, s.name, phone),
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -168,7 +154,7 @@ class _WaAutoDocsScreenState extends State<WaAutoDocsScreen> {
                             color: kSetGreen.withValues(alpha: 0.09),
                             borderRadius: BorderRadius.circular(20),
                           ),
-                          child: Text(k.label,
+                          child: Text(k.short,
                               style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: kSetGreen)),
                         ),
                   ]),
@@ -187,12 +173,43 @@ class _WaAutoDocsScreenState extends State<WaAutoDocsScreen> {
   }
 }
 
+/// إعداد الإرسال التلقائي لعميل واحد — من هذه الشاشة أو من بطاقة العميل في سجل الديون.
+/// يعيد true إن حُفظ شيء.
+Future<bool> showWaAutoDocsEditor(BuildContext context,
+    {required int customerId, required String name, String? phoneHint}) async {
+  final kinds = await WaAutoDocs.kindsFor(customerId);
+  final saved = await WaPhoneBook.phoneOf(WaPhoneBook.keyOf(customerId, name));
+  final phone = saved ?? await WaDocSender.resolvePhone(phone: phoneHint, customerId: customerId, customerName: name);
+  if (!context.mounted) return false;
+  final r = await showDialog<({String phone, Set<WaAutoDocKind> kinds})>(
+    context: context,
+    builder: (_) => _SubDialog(
+      name: name,
+      phone: phone,
+      kinds: kinds.isEmpty ? {WaAutoDocKind.invoiceDebt, WaAutoDocKind.receipt} : kinds,
+      existing: kinds.isNotEmpty,
+    ),
+  );
+  if (r == null) return false;
+  try {
+    await WaAutoDocs.save(customerId, name.trim(), r.phone, r.kinds);
+    if (context.mounted) {
+      setToast(context, r.kinds.isEmpty ? 'أُوقف الإرسال التلقائي لـ ${name.trim()}' : 'حُفظ الإرسال التلقائي لـ ${name.trim()} ✓');
+    }
+    return true;
+  } catch (e) {
+    if (context.mounted) setToast(context, '$e', error: true);
+    return false;
+  }
+}
+
 /// رقم العميل (يُؤكَّد هنا) وما يصله تلقائياً.
 class _SubDialog extends StatefulWidget {
-  const _SubDialog({required this.name, required this.phone, required this.kinds});
+  const _SubDialog({required this.name, required this.phone, required this.kinds, this.existing = false});
   final String name;
   final String? phone;
   final Set<WaAutoDocKind> kinds;
+  final bool existing;
   @override
   State<_SubDialog> createState() => _SubDialogState();
 }
@@ -235,21 +252,35 @@ class _SubDialogState extends State<_SubDialog> {
                   isDense: true,
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               const Text('ما يصله تلقائياً عند الحفظ', style: TextStyle(fontWeight: FontWeight.w800)),
-              for (final k in WaAutoDocKind.values)
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  value: _kinds.contains(k),
-                  onChanged: (v) => setState(() => v == true ? _kinds.add(k) : _kinds.remove(k)),
-                  title: Text(k.label),
+              for (final g in const ['الفواتير', 'السندات']) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: 10, bottom: 2),
+                  child: Text(g, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: kSetMuted)),
                 ),
+                for (final k in WaAutoDocKind.values)
+                  if (k.group == g)
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      activeColor: kSetGreen,
+                      value: _kinds.contains(k),
+                      onChanged: (v) => setState(() => v == true ? _kinds.add(k) : _kinds.remove(k)),
+                      title: Text(k.label),
+                    ),
+              ],
             ]),
           ),
         ),
         actions: [
+          if (widget.existing)
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: kSetRed),
+              onPressed: () => Navigator.pop(context, (phone: _phone.text, kinds: <WaAutoDocKind>{})),
+              child: const Text('إيقاف له'),
+            ),
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
           FilledButton.icon(
             style: FilledButton.styleFrom(backgroundColor: kSetGreen),

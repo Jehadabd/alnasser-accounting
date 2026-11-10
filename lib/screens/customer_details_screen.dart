@@ -35,6 +35,7 @@ import '../models/app_user.dart' show AppPermissions; // 🔐 صلاحيات ا�
 import '../services/auth_service.dart';
 import '../widgets/edit_customer_dialog.dart'; // ✏️ تعديل معلومات العميل
 import 'person_details_screen.dart'; // 📊 تقرير العميل
+import '../wa_messages/wa_auto_docs_screen.dart' show showWaAutoDocsEditor; // 🤖 الإرسال التلقائي
 import 'product_reports_screen.dart'; // 📦 بضاعة العميل
 
 class CustomerDetailsScreen extends StatefulWidget {
@@ -785,6 +786,13 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       showWaSendDialog(context, [WaRecipient(widget.customer.id!, c.name, c.phone)], source: 'card');
                     }
                     break;
+                  case 'wa_auto_docs':
+                    // 🤖 ما يصل هذا العميل تلقائياً عند الحفظ (فواتير نقد/دين، سندات)
+                    if (widget.customer.id != null) {
+                      final c = context.read<AppProvider>().selectedCustomer ?? widget.customer;
+                      showWaAutoDocsEditor(context, customerId: widget.customer.id!, name: c.name, phoneHint: c.phone);
+                    }
+                    break;
                   case 'debt_reminders':
                     // 📅 مواعيد المطالبة بالسداد لهذا العميل (والعامة في: التحصيل والتقارير)
                     if (widget.customer.id != null) {
@@ -894,6 +902,18 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                       Icon(Icons.send_rounded, color: Color(0xFF047857), size: 20),
                       SizedBox(width: 12),
                       Text('مطالبة واتساب (إرسال آلي)'),
+                    ],
+                  ),
+                ),
+                // 🤖 الإرسال التلقائي عند الحفظ لهذا العميل
+                if (WaAutoReminder.allowed)
+                const PopupMenuItem(
+                  value: 'wa_auto_docs',
+                  child: Row(
+                    children: [
+                      Icon(Icons.auto_mode_rounded, color: Color(0xFF047857), size: 20),
+                      SizedBox(width: 12),
+                      Text('إرسال تلقائي عند الحفظ (واتساب)'),
                     ],
                   ),
                 ),

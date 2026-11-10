@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 
 import '../../accounting/screens/acc_ui.dart' show accRoute;
+import '../../wa_messages/wa_auto_docs_screen.dart';
 import '../../wa_messages/wa_messages_hub_screen.dart';
 import '../../wa_messages/wa_rules_screen.dart';
 import '../../wa_messages/wa_send_screen.dart';
@@ -43,6 +44,13 @@ class WaAutoEntryCard extends StatelessWidget {
           subtitle: 'مطالبات ترسل وحدها حسب التأخر واليوم والساعة',
           color: green,
           onTap: () => Navigator.push(context, accRoute(const WaRulesScreen())),
+        ),
+        SetActionRow(
+          icon: Icons.auto_mode_rounded,
+          title: 'الإرسال التلقائي للعملاء',
+          subtitle: 'عملاء تختارهم: الفاتورة (نقد/دين) والسندات تصلهم لحظة الحفظ، بلا ضغطة',
+          color: green,
+          onTap: () => Navigator.push(context, accRoute(const WaAutoDocsScreen())),
         ),
       ]),
     );

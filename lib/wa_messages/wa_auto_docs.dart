@@ -36,14 +36,28 @@ import 'wa_send_notice.dart';
 
 /// ما يُرسل تلقائياً.
 enum WaAutoDocKind {
-  invoice('الفاتورة عند حفظها'),
-  invoiceEdited('الفاتورة بعد تعديلها'),
-  receipt('وصل القبض (التسديد)'),
-  editVoucher('سند تعديل الفاتورة (إضافة/مرتجع)'),
-  salesReturn('مستند مرتجع المبيعات');
+  invoiceCash('فاتورة النقد عند حفظها', 'الفواتير'),
+  invoiceDebt('فاتورة الدين عند حفظها', 'الفواتير'),
+  invoiceEdited('الفاتورة من جديد بعد تعديلها', 'الفواتير'),
+  receipt('وصل القبض (التسديد)', 'السندات'),
+  editVoucher('سند تعديل الفاتورة: قبض/صرف نقدي، إشعار مدين/دائن', 'السندات'),
+  salesReturn('مستند مرتجع المبيعات', 'السندات');
 
-  const WaAutoDocKind(this.label);
+  const WaAutoDocKind(this.label, this.group);
   final String label;
+
+  /// القسم في نافذة الإعداد.
+  final String group;
+
+  /// اسم قصير للشارات.
+  String get short => switch (this) {
+        invoiceCash => 'فاتورة نقد',
+        invoiceDebt => 'فاتورة دين',
+        invoiceEdited => 'الفاتورة المعدّلة',
+        receipt => 'وصل القبض',
+        editVoucher => 'سند التعديل',
+        salesReturn => 'المرتجع',
+      };
 }
 
 class WaAutoDocSub {
@@ -77,7 +91,11 @@ class WaAutoDocs {
   static Set<WaAutoDocKind> _parse(Object? raw) {
     try {
       final l = jsonDecode('${raw ?? '[]'}') as List;
-      return {for (final k in WaAutoDocKind.values) if (l.contains(k.name)) k};
+      return {
+        for (final k in WaAutoDocKind.values) if (l.contains(k.name)) k,
+        // الإعداد الأول (قبل فصل النقد والدين): «الفاتورة» = الاثنان
+        if (l.contains('invoice')) ...{WaAutoDocKind.invoiceCash, WaAutoDocKind.invoiceDebt},
+      };
     } catch (_) {
       return {};
     }
@@ -139,7 +157,9 @@ class WaAutoDocs {
     if (id == null || cid == null || inv.status != 'محفوظة') return;
     _enqueue(() async {
       final kinds = await kindsFor(cid);
-      final kind = firstSave ? WaAutoDocKind.invoice : WaAutoDocKind.invoiceEdited;
+      final kind = !firstSave
+          ? WaAutoDocKind.invoiceEdited
+          : (inv.paymentType == 'دين' ? WaAutoDocKind.invoiceDebt : WaAutoDocKind.invoiceCash);
       if (!kinds.contains(kind)) return;
       // الفاتورة تُرسل عند أول حفظ مرة واحدة فقط
       final rule = firstSave ? 'auto_invoice_$id' : 'auto_invoice_edit_${id}_${DateTime.now().millisecondsSinceEpoch}';
