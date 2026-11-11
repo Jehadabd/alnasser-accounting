@@ -60,6 +60,19 @@ String _dur(int seconds) {
   return h > 0 ? '${h}س ${m}د' : '${m}د';
 }
 
+/// للتوزيع: ثوانٍ في التشغيل القصير
+String _durFine(int seconds) {
+  if (seconds < 60) return '$secondsث';
+  final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60, s = seconds % 60;
+  return h > 0 ? '$hس $mد' : '$mد $sث';
+}
+
+/// شريط تقدّم نصي: [██████░░░░░░░░░░░░░░]
+String _bar(double pct) {
+  final n = (pct / 5).floor().clamp(0, 20);
+  return '[${'█' * n}${'░' * (20 - n)}]';
+}
+
 DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
 DateTime _plusDays(DateTime d, int n) => DateTime(d.year, d.month, d.day + n);
 
@@ -204,7 +217,7 @@ void main() {
       final keys = rows.keys.toList()..sort((a, b) => rows[b]!.compareTo(rows[a]!));
       return [
         for (final k in keys)
-          '  $k: ${_dur(rows[k]! ~/ 1000000)} (${(rows[k]! * 100 / all).toStringAsFixed(1)}%)'
+          '  $k: ${_durFine(rows[k]! ~/ 1000000)} (${(rows[k]! * 100 / all).toStringAsFixed(1)}%)'
       ].join('\n');
     }
 
@@ -225,10 +238,10 @@ void main() {
 
     void live(String phase) {
       flushProblems();
-      final pct = (done * 100 / totalEdits).clamp(0, 100).toStringAsFixed(1);
+      final p = (done * 100 / totalEdits).clamp(0, 100).toDouble();
       final s = loopWatch.elapsed.inSeconds;
       final eta = done > 0 ? (s * (totalEdits - done) / done).round() : null;
-      final line = '$pct% — $done/$totalEdits تعديل — مضى ${_dur(sw.elapsed.inSeconds)}'
+      final line = '${_bar(p)} ${p.toStringAsFixed(1)}% — $done/$totalEdits تعديل — مضى ${_dur(sw.elapsed.inSeconds)}'
           '${eta == null ? '' : ' — المتبقي ≈ ${_dur(eta)}'} — مشاكل=${problems.length} — $phase';
       try {
         File(_progressPath)
@@ -978,6 +991,8 @@ void main() {
           ..specs = randomSpecs()
           ..ptype = rnd.nextInt(3) < 2 ? 'دين' : 'نقد';
         x.extra = randomExtra(positive: x.specs.isEmpty);
+        // كل الأسطر هدايا بلا بند يدوي = إجمالي صفر: يرفضه التطبيق بحق (التشغيل الأول seed=196248)
+        if (!hasMoney(x)) x.extra = 1500;
         x.paid = x.ptype == 'نقد' ? x.finalTotal : (rnd.nextBool() ? 0 : r2(x.finalTotal * 0.3));
         final u = (temp && rnd.nextBool()) ? await hold(null, x, '$label (تعليق جديدة)') : await save(null, x, label);
         if (u != null) {

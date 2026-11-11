@@ -905,6 +905,7 @@ void main() {
           ..specs = randomSpecs()
           ..ptype = rnd.nextInt(3) < 2 ? 'دين' : 'نقد';
         x.extra = randomExtra(positive: x.specs.isEmpty);
+        if (!hasMoney(x)) x.extra = 1500; // كل الأسطر هدايا: إجمالي صفر يرفضه التطبيق بحق
         x.paid = x.ptype == 'نقد' ? x.finalTotal : (rnd.nextBool() ? 0 : r2(x.finalTotal * 0.3));
         final u = await save(null, x, label);
         if (u != null) {
