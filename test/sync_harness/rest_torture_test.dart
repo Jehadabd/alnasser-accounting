@@ -804,9 +804,7 @@ void main() {
           final dc = <String>[];
           for (final d in devs) {
             final r = (await h.d(d).call('deepCheck', const {}, const Duration(minutes: 5)) as Map).cast<String, Object?>();
-            for (final e in (r['errors'] as List)) {
-              dc.add('$d: $e');
-            }
+            if (((r['errors'] as num?) ?? 0) > 0) dc.add('$d: ${r['text']}');
           }
           for (final e in dc.take(5)) {
             bad('$label الفحص العميق: $e');

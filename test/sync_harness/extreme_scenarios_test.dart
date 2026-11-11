@@ -463,9 +463,7 @@ void main() {
       current = 'الفحص العميق الأخير';
       for (final d in const ['D1', 'D2']) {
         final r = (await h.d(d).call('deepCheck', const {}, const Duration(minutes: 5)) as Map).cast<String, Object?>();
-        for (final e in (r['errors'] as List).take(5)) {
-          bad('$d: $e');
-        }
+        if (((r['errors'] as num?) ?? 0) > 0) bad('$d الفحص العميق:\n${r['text']}');
       }
       for (final e in (await h.deviceErrors()).take(5)) {
         bad('خطأ غير ممسوك: $e');
