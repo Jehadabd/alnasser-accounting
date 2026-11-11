@@ -60,6 +60,19 @@ import 'remote_firestore.dart';
 
 const _fileLog = bool.fromEnvironment('DEVLOG');
 
+/// ⚡ --dart-define=FAST_DISK=true: «PRAGMA synchronous = NORMAL» في إعدادات القاعدة
+/// يصير OFF لأجهزة الاختبار فقط (لا انتظار لتأكيد القرص). الاختبارات لا تختبر انقطاع
+/// الكهرباء أصلاً، فلا يتغير ما تختبره. كود التطبيق نفسه لا يُمسّ.
+const _fastDisk = bool.fromEnvironment('FAST_DISK');
+final _syncPragma = RegExp(r'^\s*PRAGMA\s+synchronous\s*=', caseSensitive: false);
+
+Object? _fastDiskArgs(Object? arguments) {
+  if (!_fastDisk || arguments is! Map) return arguments;
+  final sql = arguments['sql'];
+  if (sql is! String || !_syncPragma.hasMatch(sql)) return arguments;
+  return {...arguments, 'sql': 'PRAGMA synchronous = OFF'};
+}
+
 /// نقطة دخول خيط الجهاز.
 void deviceMain(DeviceBoot boot) {
   final logs = <String>[];
@@ -95,7 +108,7 @@ Future<void> _run(DeviceBoot boot, List<String> logs, List<String> errors) async
   databaseFactory = buildDatabaseFactory(
     tag: 'harness',
     invokeMethod: (String method, [Object? arguments]) =>
-        sqliteServer.handle(FfiMethodCall(method, arguments)),
+        sqliteServer.handle(FfiMethodCall(method, _fastDiskArgs(arguments))),
   );
   PathProviderPlatform.instance = FakePathProvider(boot.dir);
   SharedPreferences.setMockInitialValues(boot.prefs);

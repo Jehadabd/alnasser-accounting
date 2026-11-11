@@ -3488,6 +3488,7 @@ class FirebaseSyncService {
 
     // 3️⃣ رفع الفواتير والمنتجات غير المرفوعة (85-100%).
     onProgress?.call(0.85, 'جاري رفع الفواتير والمنتجات...');
+    await _requeueInvoicesOfPendingTxs();
     try {
       await InvoiceSyncService().syncPendingInvoices();
       await ProductSyncService().syncPendingProducts();
@@ -3500,6 +3501,33 @@ class FirebaseSyncService {
     await FirebaseSyncConfig.setLastSyncTime(DateTime.now());
     debugPrint('✅ تمت مزامنة التغييرات المعلقة');
   }
+  /// 🛡️ معاملة فاتورة أُعيدت إلى «غير مرفوعة» (مستند قديم لها وصل من إعادة بث،
+  /// أو تغيّرت أثناء رفعها…) لا تُرفع منفردة — تُرفع مع حزمة فاتورتها فقط
+  /// (_ownedPendingWhere يستثنيها). فإن كانت فاتورتها مؤشَّرة «مرفوعة» بقيت المعاملة
+  /// عالقة حتى تُعدَّل الفاتورة مرة أخرى (اختبار التعديلات المركّبة، seed=637699).
+  /// نعيد فواتير هذا الجهاز التي لها معاملة كهذه إلى طابور الرفع؛ رفع الحزمة يؤشّر
+  /// معاملاتها. لا يغيّر أي مبلغ.
+  Future<void> _requeueInvoicesOfPendingTxs() async {
+    try {
+      final db = await _db.database;
+      final n = await db.rawUpdate('''
+        UPDATE invoices SET is_synced = 0
+        WHERE COALESCE(is_synced, 0) = 1
+          AND COALESCE(is_created_by_me, 1) = 1
+          AND invoice_uuid IS NOT NULL AND invoice_uuid != ''
+          AND invoice_uuid IN (
+            SELECT t.invoice_sync_uuid FROM transactions t
+            WHERE (t.is_uploaded = 0 OR t.is_uploaded IS NULL)
+              AND (t.is_created_by_me = 1 OR t.is_created_by_me IS NULL)
+              AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+              AND t.invoice_sync_uuid IS NOT NULL AND t.invoice_sync_uuid != '')
+      ''');
+      if (n > 0) debugPrint('🔁 أُعيدت $n فاتورة إلى طابور الرفع (معاملة لها لم تُرفع)');
+    } catch (e) {
+      debugPrint('⚠️ إعادة فواتير المعاملات المعلّقة إلى الرفع: $e');
+    }
+  }
+
   /// مزامنة كاملة (تنزيل + رفع) مع دعم مؤشر التقدم
   /// مزامنة كاملة (تنزيل + رفع) مع دعم مؤشر التقدم
   /// يرجع true عند اكتمال المزامنة بنجاح، و false عند الفشل أو عدم الاتصال
