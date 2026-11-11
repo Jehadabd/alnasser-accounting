@@ -20,6 +20,8 @@ import '../../accounting/screens/acc_ui.dart';
 import '../../accounting/vouchers_service.dart';
 import '../erp_common.dart';
 import 'customer_money.dart';
+import '../../providers/app_provider.dart';
+import '../../utils/iqd.dart'; // 💵
 import 'receipts_service.dart';
 
 const Map<String, String> dueKindLabels = {
@@ -115,7 +117,9 @@ class DueItemsService {
 
   /// إنشاء استحقاق (أو عدة أقساط إن كان [installments] > 1).
   Future<List<int>> create(
-    BuildContext context, {
+    BuildContext? context, {
+    // بلا شاشة (الاختبار على الكود الحقيقي): المزوّد يُمرَّر صراحةً
+    AppProvider? provider,
     required String kind,
     required String partyType, // customer | supplier
     required int partyId,
@@ -139,17 +143,25 @@ class DueItemsService {
     if (receivable && partyType != 'customer') throw ErpException('أوراق القبض تكون على عميل');
     if (!receivable && partyType != 'supplier') throw ErpException('أوراق الدفع تكون لمورد');
     if (kind == 'installment') affectBalance = false;
+    // 💵 بالدينار: المبلغ دينار صحيح (ورقة قبض ينقص بها الدين — النصف للأسفل؛ ورقة دفع
+    //    لمورد — النصف للأعلى)، فيكون كل ما يُشتق منه (الأقساط، التحصيل، الارتداد) صحيحاً
+    //    ولا يختلف ما نزل من الرصيد عما يعود إليه عند الارتداد.
+    if (currency == 'IQD') {
+      amount = receivable ? Iqd.down(amount) : Iqd.up(amount);
+      if (amount <= 0) throw ErpException('المبلغ أقل من نصف دينار');
+    }
     await PeriodLock.assertOpen(issueDate);
     final db = await erpDb();
-    final base = currency == 'IQD' ? roundMoney(amount) : roundMoney(amount * fxRate);
+    final base = currency == 'IQD' ? amount : (receivable ? Iqd.down(amount * fxRate) : roundMoney(amount * fxRate));
 
     // الأثر على الرصيد (مرة واحدة للمبلغ كله)
     String? balanceRef;
     if (affectBalance) {
       if (partyType == 'customer') {
-        if (!context.mounted) throw ErpException('أُغلقت الشاشة');
+        if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
         balanceRef = await CustomerMoney.post(
           context,
+          provider: provider,
           customerId: partyId,
           amount: -base,
           kind: CustomerTxKind.cheque,
@@ -179,8 +191,8 @@ class DueItemsService {
 
     final ids = <int>[];
     final planRef = installments > 1 ? 'P${DateTime.now().millisecondsSinceEpoch}' : null;
-    // تقسيم المبلغ: الأقساط متساوية والفرق (كسور) على القسط الأخير
-    final each = roundMoney(amount / installments);
+    // تقسيم المبلغ: الأقساط متساوية والفرق على القسط الأخير (💵 بالدينار: أقساط صحيحة)
+    final each = currency == 'IQD' ? (amount / installments).floorToDouble() : roundMoney(amount / installments);
     await db.transaction((txn) async {
       for (var i = 0; i < installments; i++) {
         final isLast = i == installments - 1;
@@ -229,7 +241,8 @@ class DueItemsService {
 
   /// تحصيل/صرف استحقاق (كلياً أو جزئياً).
   Future<void> settle(
-    BuildContext context, {
+    BuildContext? context, {
+    AppProvider? provider,
     required int dueId,
     required double amount,
     required DateTime date,
@@ -242,6 +255,10 @@ class DueItemsService {
     final total = d0(d['amount']);
     final paid = d0(d['paid_amount']);
     final remaining = roundMoney(total - paid);
+    // 💵 تحصيل بالدينار: دينار صحيح (تحصيل من عميل — النصف للأسفل؛ صرف لمورد — للأعلى)
+    if (((d['currency'] as String?) ?? 'IQD') == 'IQD') {
+      amount = dueIsReceivable(d['kind'] as String) ? Iqd.down(amount) : Iqd.up(amount);
+    }
     if (amount <= 0) throw ErpException('المبلغ يجب أن يكون أكبر من صفر');
     if (amount > remaining + kMoneyEpsilon) {
       throw ErpException('المبلغ أكبر من المتبقي (${fmtMoney(remaining)})');
@@ -250,9 +267,9 @@ class DueItemsService {
     final kind = d['kind'] as String;
     final currency = (d['currency'] as String?) ?? 'IQD';
     final rate = d0(d['fx_rate']) <= 0 ? 1.0 : d0(d['fx_rate']);
-    final base = currency == 'IQD' ? roundMoney(amount) : roundMoney(amount * rate);
     final affects = (d['affects_balance'] as int? ?? 0) == 1;
     final receivable = dueIsReceivable(kind);
+    final base = currency == 'IQD' ? amount : (receivable ? Iqd.down(amount * rate) : roundMoney(amount * rate));
     final label = '${dueKindLabels[kind]} رقم ${d['due_no']}${(d['doc_no'] as String?)?.isNotEmpty == true ? ' (${d['doc_no']})' : ''}';
     final db = await erpDb();
 
@@ -272,9 +289,10 @@ class DueItemsService {
         userId: currentUserId(),
       );
     } else if (receivable) {
-      if (!context.mounted) throw ErpException('أُغلقت الشاشة');
+      if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
       balanceRef = await CustomerMoney.post(
         context,
+        provider: provider,
         customerId: d['party_id'] as int,
         amount: -base,
         kind: CustomerTxKind.cash,
@@ -320,7 +338,8 @@ class DueItemsService {
   }
 
   /// ارتداد شيك قبض (أو إلغاء ورقة) قبل تحصيل أي جزء منها: يعود المبلغ ديناً على العميل.
-  Future<void> bounce(BuildContext context, {required int dueId, required DateTime date, String? note}) async {
+  Future<void> bounce(BuildContext? context,
+      {AppProvider? provider, required int dueId, required DateTime date, String? note}) async {
     final d = await _get(dueId);
     final status = d['status'] as String;
     if (status != 'open' && status != 'partial') throw ErpException('الاستحقاق ليس مفتوحاً');
@@ -332,12 +351,14 @@ class DueItemsService {
     final remaining = roundMoney(d0(d['amount']) - d0(d['paid_amount']));
     final currency = (d['currency'] as String?) ?? 'IQD';
     final rate = d0(d['fx_rate']) <= 0 ? 1.0 : d0(d['fx_rate']);
-    final base = currency == 'IQD' ? remaining : roundMoney(remaining * rate);
+    // 💵 كما نزل عند الإنشاء (Iqd.down) يعود — لا يزيد دينار ولا ينقص
+    final base = currency == 'IQD' ? remaining : Iqd.down(remaining * rate);
     String? ref;
     if ((d['affects_balance'] as int? ?? 0) == 1 && base > 0) {
-      if (!context.mounted) throw ErpException('أُغلقت الشاشة');
+      if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
       ref = await CustomerMoney.post(
         context,
+        provider: provider,
         customerId: d['party_id'] as int,
         amount: base,
         kind: CustomerTxKind.chequeBounce,

@@ -130,8 +130,10 @@ class DebtReturnService {
     final db = await DatabaseService().database;
     await ensureSchema(db);
     final t = await db.query('transactions',
-        columns: ['id', 'transaction_date'], where: 'transaction_uuid = ?', whereArgs: [transactionUuid], limit: 1);
+        columns: ['id', 'transaction_date', 'amount_changed'], where: 'transaction_uuid = ?', whereArgs: [transactionUuid], limit: 1);
     final txId = t.isEmpty ? null : t.first['id'] as int?;
+    // 💵 المبلغ كما حُفظ في سجل الديون (مقرَّباً لأقرب دينار)، لا كما كُتب
+    if (t.isNotEmpty) amount = ((t.first['amount_changed'] as num?)?.toDouble() ?? -amount).abs();
     final now = DateTime.now().toIso8601String();
     await db.insert('returns', {
       'transaction_id': txId,

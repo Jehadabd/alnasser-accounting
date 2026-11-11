@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import '../../accounting/ledger.dart';
 import '../erp_common.dart';
 import 'customer_money.dart';
+import '../../providers/app_provider.dart';
+import '../../utils/iqd.dart'; // 💵
 
 class StatementLine {
   StatementLine({
@@ -188,20 +190,25 @@ class StatementService {
   /// يسجّل مطابقة. إن [adjust] والفرق ليس صفراً تُضاف معاملة «فرق مطابقة» تجعل
   /// الرصيد = المتفق عليه (عبر المسار الأصلي).
   Future<void> reconcile(
-    BuildContext context, {
+    BuildContext? context, {
+    AppProvider? provider,
     required int customerId,
     required DateTime date,
     required double agreedBalance,
     required bool adjust,
     String? notes,
   }) async {
+    // 💵 الرصيد المتفق عليه دينار صحيح (النصف للأعلى)، فيكون الفرق المسجّل هو نفسه
+    //    مبلغ معاملة الفرق ويصير الرصيد = المتفق عليه بالضبط
+    agreedBalance = Iqd.up(agreedBalance);
     final ours = await balanceAt(customerId, date);
     final diff = roundMoney(agreedBalance - ours);
     String? uuid;
     if (adjust && diff.abs() >= kMoneyEpsilon) {
-      if (!context.mounted) throw ErpException('أُغلقت الشاشة');
+      if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
       uuid = await CustomerMoney.post(
         context,
+        provider: provider,
         customerId: customerId,
         amount: diff,
         kind: CustomerTxKind.reconcile,

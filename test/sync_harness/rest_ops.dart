@@ -9,7 +9,10 @@
 
 import 'dart:async';
 
+import 'package:alnaser/erp/debts/customer_money.dart';
+import 'package:alnaser/erp/debts/due_items_service.dart';
 import 'package:alnaser/erp/debts/receipts_service.dart';
+import 'package:alnaser/erp/debts/statement_service.dart';
 import 'package:alnaser/erp/purchases/purchase_return_service.dart';
 import 'package:alnaser/erp/sales/sales_return_service.dart';
 import 'package:alnaser/erp/stock_helpers.dart';
@@ -19,6 +22,7 @@ import 'package:alnaser/models/supplier.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
 import 'package:alnaser/services/database_service.dart';
+import 'package:alnaser/services/debt_return_service.dart';
 import 'package:alnaser/services/import/data_import.dart';
 import 'package:alnaser/services/import/sheet_reader.dart';
 import 'package:alnaser/services/purchase_service.dart';
@@ -363,11 +367,74 @@ Future<Object?> _restOp(String op, Map<String, Object?> a) async {
         ],
       };
 
+    // ─────────────────────── الاستحقاقات والأقساط ───────────────────────
+    case 'dueCreate':
+      final cid = await _custId(db, a['cust'] as String);
+      final before = await _txMax(db);
+      final ids = await DueItemsService().create(null,
+          provider: AppProvider(),
+          kind: a['kind'] as String,
+          partyType: 'customer',
+          partyId: cid,
+          partyName: 'عميل',
+          amount: _d(a['amount']),
+          currency: a['currency'] as String,
+          fxRate: _d(a['fx']),
+          issueDate: DateTime.now(),
+          dueDate: DateTime.now().add(const Duration(days: 30)),
+          installments: (a['n'] as num).toInt(),
+          affectBalance: a['affect'] == true);
+      return {'ok': true, 'ids': ids, 'dues': [for (final id in ids) await _due(db, id)], 'txs': await _newTxs(db, before)};
+
+    case 'dueSettle':
+    case 'dueBounce':
+    case 'dueCancel':
+      final id = (a['id'] as num).toInt();
+      final before = await _txMax(db);
+      final svc = DueItemsService();
+      if (op == 'dueSettle') {
+        final box = await _box(db);
+        await svc.settle(null, provider: AppProvider(), dueId: id, amount: _d(a['amount']), date: DateTime.now(), cashBoxId: box!);
+      } else if (op == 'dueBounce') {
+        await svc.bounce(null, provider: AppProvider(), dueId: id, date: DateTime.now());
+      } else {
+        await svc.cancel(id);
+      }
+      return {'ok': true, 'due': await _due(db, id), 'txs': await _newTxs(db, before)};
+
+    // ─────────────────────── مطابقة كشف الحساب، وتسديد دين راجع ───────────────────────
+    case 'reconcile':
+      final cid = await _custId(db, a['cust'] as String);
+      final before = await _txMax(db);
+      await StatementService().reconcile(null,
+          provider: AppProvider(), customerId: cid, date: DateTime.now(), agreedBalance: _d(a['agreed']), adjust: true);
+      final r = (await db.query('customer_reconciliations', where: 'customer_id = ?', whereArgs: [cid], orderBy: 'id DESC', limit: 1)).first;
+      return {'ok': true, 'diff': _d(r['diff']), 'agreed': _d(r['agreed_balance']), 'txs': await _newTxs(db, before)};
+
+    case 'debtReturn':
+      // كما في شاشة إضافة معاملة («تسديد دين راجع»): تسديد على الحساب ثم تسجيله راجعاً
+      final cid = await _custId(db, a['cust'] as String);
+      final before = await _txMax(db);
+      final uuid = await CustomerMoney.post(null,
+          provider: AppProvider(),
+          customerId: cid,
+          amount: -_d(a['amount']),
+          kind: CustomerTxKind.salesReturn,
+          note: 'تسديد دين راجع ${a['marker']}');
+      await DebtReturnService.recordReturn(transactionUuid: uuid, customerId: cid, amount: _d(a['amount']));
+      final r = (await db.query('returns', where: 'customer_id = ?', whereArgs: [cid], orderBy: 'id DESC', limit: 1)).first;
+      return {'ok': true, 'returned': _d(r['amount']), 'txs': await _newTxs(db, before)};
+
     // ─────────────────────── الثوابت بعد كل شيء (وبعد الانقطاع) ───────────────────────
     case 'invariants':
       return await _invariants(db);
   }
   throw StateError('unknown rest op $op');
+}
+
+Future<Map<String, Object?>> _due(Database db, int id) async {
+  final d = (await db.query('due_items', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+  return {'id': id, 'amount': _d(d['amount']), 'paid': _d(d['paid_amount']), 'status': d['status'], 'affects': d['affects_balance']};
 }
 
 Future<Map<String, Object?>> _receiptState(Database db, int id) async {
