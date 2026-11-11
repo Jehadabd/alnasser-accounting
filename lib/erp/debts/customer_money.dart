@@ -18,6 +18,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../accounting/ledger.dart';
+import '../../utils/iqd.dart'; // 💵
 import '../../models/transaction.dart';
 import '../../providers/app_provider.dart';
 import '../erp_common.dart';
@@ -66,12 +67,14 @@ class CustomerMoney {
     String? refType,
     int? refId,
   }) async {
-    final amt = roundMoney(amount);
-    if (amt.abs() < kMoneyEpsilon) throw ErpException('المبلغ صفر');
     final app = provider ?? context!.read<AppProvider>();
     final when = date ?? DateTime.now();
     await PeriodLock.assertOpen(when);
     final db = await erpDb();
+    // 💵 دينار صحيح والنصف لصالح المحل؛ والكسر يُقبل فقط إن صفّى كسراً قديماً في
+    //    رصيد العميل (Iqd.ledgerAmount). أقل من نصف دينار = صفر.
+    final amt = Iqd.ledgerAmount(roundMoney(amount), await balance(db, customerId));
+    if (amt.abs() < kMoneyEpsilon) throw ErpException('المبلغ صفر');
     final uuid = const Uuid().v4();
 
     // 1) الوصف أولاً: إن فشل إدراج المعاملة بعده يبقى سطر وصف بلا معاملة (لا أثر له)،

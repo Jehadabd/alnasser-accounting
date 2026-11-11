@@ -32,6 +32,16 @@ class ReceiptPdf {
     String? recordedBy, // 👤 من سجّل الوصل (المحاسب) — بلا قيمة: المستخدم الحالي (وقت الإنشاء)
     PrintStamp? stamp, // 🔐 رمز التحقق ورقم النسخة (سجل السندات المطبوعة)
   }) async {
+    // 💵 مبالغ الدينار تُطبع أرقاماً صحيحة: تسديدٌ صفّى كسراً قديماً في رصيد العميل
+    //    (1,250.2 مثلاً) يظهر 1,250 — كما في سجل العميل. المخزَّن لا يتغير.
+    lines = [
+      for (final l in lines)
+        {
+          ...l,
+          for (final k in const ['amount', 'discount', 'balance_before', 'balance_after'])
+            if (l[k] is num) k: (l[k] as num).toDouble().roundToDouble(),
+        },
+    ];
     // 🎨 تصميم «سند قبض» من مصمم السندات إن اختير؛ وإلا هذا الشكل كما هو
     try {
       final designed = await VoucherPrint.receiptPdf(

@@ -1,6 +1,7 @@
 // models/invoice_item.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../utils/iqd.dart';
 
 class InvoiceItem {
   // دالة تنسيق الأرقام مع فواصل كل ثلاث خانات
@@ -24,7 +25,26 @@ class InvoiceItem {
   set appliedPrice(double value) => appliedPriceCents = (value * 100).round();
 
   double get itemTotal => itemTotalCents / 100.0;
-  set itemTotal(double value) => itemTotalCents = (value * 100).round();
+  // 💵 مبلغ السطر بالدينار رقم صحيح دائماً (lib/utils/iqd.dart)
+  set itemTotal(double value) => itemTotalCents = _iqdLineCents(null, value);
+
+  /// 💵 مبلغ السطر بالفلس مقرَّباً لأقرب دينار (النصف للأعلى). من المبلغ نفسه لا من
+  /// فلوسه: 2.495 ⇒ 2 (التقريب للفلس أولاً كان سيجعلها 2.50 ⇒ 3).
+  static int _iqdLineCents(int? cents, double total) =>
+      cents != null ? Iqd.centsUp(cents) : (Iqd.up(total) * 100).round();
+
+  /// 💵 سعر الوحدة بعد تقريب السطر: يصير ديناراً صحيحاً إن بقي (الكمية × السعر
+  /// الصحيح) مساوياً لمبلغ السطر المقرَّب؛ وإلا يبقى بفلوسه (سعر مشتق، مثل
+  /// 10,000 مكتوبة مجموعاً لثلاث قطع ⇒ 3,333.33). ما يُدان به العميل هو مبلغ
+  /// السطر، وهو صحيح في الحالتين.
+  static int _iqdPriceCents(int priceCents, double? qi, double? ql, int lineCents) {
+    if (priceCents % 100 == 0) return priceCents;
+    final q = (ql ?? 0) > 0 ? ql! : (qi ?? 0);
+    if (q <= 0) return priceCents;
+    final whole = Iqd.centsUp(priceCents);
+    final line = _iqdLineCents(null, q * whole / 100);
+    return line == lineCents ? whole : priceCents;
+  }
 
   double? costPrice; // Added: The cost price of the item at the time of sale (made nullable)
   double? actualCostPrice; // التكلفة الفعلية للمنتج في وقت البيع - للحسابات الدقيقة
@@ -71,7 +91,7 @@ class InvoiceItem {
     if (discountType == 'percent') {
       // النسبة كما أُدخلت ما دامت تطابق السعر الحالي؛ وإلا تُحسب من السعرين
       final v = discountValue;
-      final consistent = v != null && (priceBeforeDiscount! * (1 - v / 100) - appliedPrice).abs() < 0.011;
+      final consistent = v != null && (priceBeforeDiscount! * (1 - v / 100) - appliedPrice).abs() <= 0.51; // 💵 السعر مقرَّب لأقرب دينار
       final pct = consistent ? v : (perUnit / priceBeforeDiscount! * 100);
       return '${NumberFormat('#,##0.##', 'en_US').format(pct)}%';
     }
@@ -110,8 +130,13 @@ class InvoiceItem {
     this.discountType,
     this.discountValue,
   })  : unitPriceCents = unitPriceCents ?? (unitPrice * 100).round(),
-        appliedPriceCents = appliedPriceCents ?? (appliedPrice * 100).round(),
-        itemTotalCents = itemTotalCents ?? (itemTotal * 100).round(),
+        // 💵 السطر لأقرب دينار (النصف للأعلى)، ثم السعر صحيحاً إن طابقه
+        appliedPriceCents = _iqdPriceCents(
+            appliedPriceCents ?? (appliedPrice * 100).round(),
+            quantityIndividual,
+            quantityLargeUnit,
+            _iqdLineCents(itemTotalCents, itemTotal)),
+        itemTotalCents = _iqdLineCents(itemTotalCents, itemTotal),
         uniqueId = uniqueId ?? 'item_${DateTime.now().microsecondsSinceEpoch}' {
     // Initialize controllers with initial values - مع تنسيق الأرقام بفواصل
     productNameController = TextEditingController(text: productName);

@@ -560,7 +560,8 @@ class FinancialIntegrityGuard {
     double recalculatedItemsTotal = 0.0;
     for (final item in completeSavedItems) {
       final expectedItemTotal = (item.quantityIndividual ?? item.quantityLargeUnit ?? 0) * item.appliedPrice;
-      if (!MoneyCalculator.areEqual(item.itemTotal, expectedItemTotal)) {
+      // 💵 مبلغ السطر مقرَّب لأقرب دينار (lib/utils/iqd.dart): فرق حتى نصف دينار ليس خللاً
+      if ((item.itemTotal - expectedItemTotal).abs() > 0.5 + 0.0001) {
         anomalies.add(GuardResult.fail(
           'PO06', 'itemTotal غير صحيح للصنف "${item.productName}": المسجّل ${item.itemTotal}، المحسوب $expectedItemTotal',
           details: 'invoice_id: ${savedInvoice.id}',

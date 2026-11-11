@@ -5,6 +5,9 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database_service.dart';
+import '../utils/iqd.dart'; // 💵
+
+double? _iqdOrNull(Object? v) => v is num ? Iqd.up(v) : null;
 
 class ProductsImportService {
   static const String _importedKey = 'products_imported_v1';
@@ -73,15 +76,16 @@ class ProductsImportService {
           final productMap = <String, dynamic>{
             'name': name,
             'unit': productData['unit'] ?? 'piece',
-            'unit_price': (productData['unit_price'] as num?)?.toDouble() ?? 0.0,
+            // 💵 أسعار البيع دنانير صحيحة (النصف للأعلى)؛ الكلفة بكسورها
+            'unit_price': Iqd.up((productData['unit_price'] as num?)?.toDouble() ?? 0.0),
             'cost_price': (productData['cost_price'] as num?)?.toDouble(),
             'pieces_per_unit': productData['pieces_per_unit'],
             'length_per_unit': (productData['length_per_unit'] as num?)?.toDouble(),
-            'price1': (productData['price1'] as num?)?.toDouble() ?? 0.0,
-            'price2': (productData['price2'] as num?)?.toDouble(),
-            'price3': (productData['price3'] as num?)?.toDouble(),
-            'price4': (productData['price4'] as num?)?.toDouble(),
-            'price5': (productData['price5'] as num?)?.toDouble(),
+            'price1': Iqd.up((productData['price1'] as num?)?.toDouble() ?? 0.0),
+            'price2': _iqdOrNull(productData['price2']),
+            'price3': _iqdOrNull(productData['price3']),
+            'price4': _iqdOrNull(productData['price4']),
+            'price5': _iqdOrNull(productData['price5']),
             'unit_hierarchy': productData['unit_hierarchy'],
             'unit_costs': productData['unit_costs'],
             'created_at': DateTime.now().toIso8601String(),

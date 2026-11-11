@@ -6,6 +6,8 @@ import '../../../models/invoice.dart';
 import '../../../models/invoice_item.dart';
 import '../../../models/invoice_adjustment.dart';
 import '../business/invoice_debt_reconciler.dart';
+import '../../invoice_safety/iqd_normalize.dart'; // 💵
+import '../../../utils/iqd.dart';
 
 class InvoiceDao {
   // دالة للحصول على قاعدة البيانات
@@ -16,6 +18,8 @@ class InvoiceDao {
   // 1️⃣ إدخال فاتورة (بدون Transaction Logic المعقد - فقط إدخال Row)
   Future<int> insertInvoice(Invoice invoice) async {
     final db = await getDatabase();
+    // 💵 دنانير صحيحة: المعلّقة يُقرَّب رأسها كله (تُبنى من الشاشة)، وغيرها مبلغ الإرجاع
+    IqdNormalize.invoice(invoice, headerToo: invoice.status == 'معلقة');
     final map = invoice.toMap();
     map.remove('id'); // auto-increment
     return await db.insert('invoices', map);
@@ -154,6 +158,8 @@ class InvoiceDao {
     // الكائن القادم من الشاشة قد يحمل نسخة أقدم من الصف (رفعتها التسوية أو
     // تعديل سابق)، وكتابته كما هو كانت تُنزل النسخة؛ فيأخذ التعديل التالي رقماً
     // سبق رفعه بمحتوى مختلف، وتتجاهله الأجهزة الأخرى فيبقى دينها القديم.
+    // 💵 كما في insertInvoice: لا يتغير مبلغ فاتورة محفوظة بتحديث حقل آخر فيها
+    IqdNormalize.invoice(invoice, headerToo: invoice.status == 'معلقة');
     return await db.transaction((txn) async {
       final cur = await txn.query('invoices',
           columns: ['version'], where: 'id = ?', whereArgs: [invoice.id], limit: 1);
@@ -216,6 +222,9 @@ class InvoiceDao {
     final db = await getDatabase();
     final map = adj.toMap();
     map.remove('id');
+    // 💵 فرق التسوية على دين العميل: دينار صحيح، والنصف لصالح المحل (نحو +∞)
+    final adjustmentAmount = Iqd.up(adj.amountDelta);
+    map['amount_delta'] = adjustmentAmount;
     
     // إضافة التعديل وتحديث إجمالي الفاتورة في نفس الوقت
     return await db.transaction((txn) async {
@@ -236,8 +245,7 @@ class InvoiceDao {
         }
       }
       
-      // تحديث إجمالي الفاتورة (انعكاس التعديل)
-      final adjustmentAmount = adj.amountDelta;
+      // تحديث إجمالي الفاتورة (انعكاس التعديل) — بالمبلغ المقرَّب أعلاه
       await txn.rawUpdate(
         'UPDATE invoices SET total_amount = total_amount + ? WHERE id = ?',
         [adjustmentAmount, adj.invoiceId]

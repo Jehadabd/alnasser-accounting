@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../../models/transaction.dart';
 import '../../../models/customer.dart';
 import '../../../utils/money_calculator.dart';
+import '../../../utils/iqd.dart'; // 💵 دنانير صحيحة
 import '../core/database_helpers.dart';
 import '../business/customer_locking.dart';
 import '../business/tx_author.dart';
@@ -84,6 +85,18 @@ class TransactionDao {
           debugPrint('🛡️ رصيد العميل ${transaction.customerId} المخزّن '
               '(${customer.currentTotalDebt}) ≠ مجموع معاملاته '
               '($verifiedBalanceBefore) — اعتُمد المجموع');
+        }
+
+        // 💵 مبلغ يكتبه المستخدم (لا معاملة فاتورة ولا واردة): دينار صحيح، والنصف
+        //    لصالح المحل. استثناء واحد: عميل في رصيده كسر قديم يُقبل منه كسر يجعل
+        //    رصيده صحيحاً (Iqd.ledgerAmount) — هكذا يُصفّى الكسر العالق.
+        if (transaction.invoiceId == null &&
+            (transaction.invoiceSyncUuid ?? '').isEmpty &&
+            !transaction.isUploaded) {
+          final iqdAmount = Iqd.ledgerAmount(transaction.amountChanged, verifiedBalanceBefore);
+          if (iqdAmount != transaction.amountChanged) {
+            transaction = transaction.copyWith(amountChanged: iqdAmount);
+          }
         }
         
         // 3. حساب الرصيد الجديد
@@ -280,6 +293,22 @@ class TransactionDao {
         // 🔥 حماية الملكية: لا تعديل محلي لمعاملة من إنشاء جهاز آخر (إلا من المزامنة)
         if (!fromSync && !oldTx.isCreatedByMe) {
           throw Exception('هذه المعاملة أُنشئت على جهاز آخر ولا يمكن تعديلها من هذا الجهاز.');
+        }
+
+        // 💵 المبلغ الجديد دينار صحيح (كما في insertTransaction)، والكسر يُقبل فقط
+        //    إن جعل رصيد العميل صحيحاً. التعديل الوارد بالمزامنة يُكتب كما جاء.
+        if (!fromSync) {
+          final sumRows = await txn.rawQuery(
+            'SELECT COALESCE(SUM(amount_changed), 0) AS total FROM transactions '
+            'WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+            [oldTx.customerId],
+          );
+          final others = ((sumRows.first['total'] as num?)?.toDouble() ?? 0.0) -
+              (((oldTxRes.first['is_deleted'] as num?)?.toInt() ?? 0) == 1 ? 0.0 : oldTx.amountChanged);
+          final iqdAmount = Iqd.ledgerAmount(updated.amountChanged, others);
+          if (iqdAmount != updated.amountChanged) {
+            updated = updated.copyWith(amountChanged: iqdAmount);
+          }
         }
 
         // جلب المعاملات السابقة لحساب الرصيد

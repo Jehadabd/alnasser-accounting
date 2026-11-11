@@ -19,6 +19,7 @@ import '../../services/purchase_service.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
 import 'customer_money.dart';
+import '../../utils/iqd.dart'; // 💵
 
 class ReceiptLineInput {
   ReceiptLineInput({required this.customerId, required this.customerName, this.amountFc = 0, this.discount = 0, this.note});
@@ -64,9 +65,26 @@ class ReceiptsService {
     final isBase = currency == 'IQD';
     final db = await erpDb();
 
+    // 💵 مبلغ كل سطر وخصمه بالدينار الصحيح قبل كتابة أي شيء (كما يقرّبهما
+    //    CustomerMoney.post): التسديد والخصم ينقصان الدين، والنصف لصالح المحل،
+    //    والكسر يُقبل فقط إن صفّى كسراً قديماً في رصيد العميل.
+    final payOf = <ReceiptLineInput, double>{};
+    final discOf = <ReceiptLineInput, double>{};
+    for (final l in valid) {
+      final b = await CustomerMoney.balance(db, l.customerId);
+      final raw = isBase ? roundMoney(l.amountFc) : roundMoney(l.amountFc * fxRate);
+      final pay = raw > 0 ? -Iqd.ledgerAmount(-raw, b) : 0.0;
+      final disc = l.discount > 0 ? -Iqd.ledgerAmount(-roundMoney(l.discount), b - pay) : 0.0;
+      payOf[l] = pay;
+      discOf[l] = disc;
+    }
+    if (valid.every((l) => payOf[l]! <= 0 && discOf[l]! <= 0)) {
+      throw ErpException('المبلغ أقل من نصف دينار');
+    }
+
     // رأس الوصل أولاً — الرقم يُحسب ويُحجز في المعاملة نفسها (لا رقم مكرر لو حُفظ وصلان معاً)
-    final totalBase = valid.fold<double>(0, (s, l) => s + (isBase ? l.amountFc : roundMoney(l.amountFc * fxRate)));
-    final totalDisc = valid.fold<double>(0, (s, l) => s + l.discount);
+    final totalBase = valid.fold<double>(0, (s, l) => s + payOf[l]!);
+    final totalDisc = valid.fold<double>(0, (s, l) => s + discOf[l]!);
     late final int receiptNo;
     final receiptId = await db.transaction((txn) async {
       receiptNo = await nextDocNumber(txn, 'customer_receipts', 'receipt_no');
@@ -101,7 +119,7 @@ class ReceiptsService {
         }
         String? payUuid;
         String? discUuid;
-        final amountBase = isBase ? roundMoney(l.amountFc) : roundMoney(l.amountFc * fxRate);
+        final amountBase = payOf[l]!; // 💵 مقرَّب أعلاه
         if (amountBase > 0) {
           payUuid = await CustomerMoney.post(
             context,
@@ -121,12 +139,12 @@ class ReceiptsService {
             refId: receiptId,
           );
         }
-        if (l.discount > 0) {
+        if (discOf[l]! > 0) {
           if (!context.mounted) throw ErpException('أُغلقت الشاشة');
           discUuid = await CustomerMoney.post(
             context,
             customerId: l.customerId,
-            amount: -roundMoney(l.discount),
+            amount: -discOf[l]!,
             kind: CustomerTxKind.discount,
             note: 'خصم مع وصل القبض رقم $receiptNo',
             date: date,
@@ -141,7 +159,7 @@ class ReceiptsService {
           'receipt_id': receiptId,
           'customer_id': l.customerId,
           'amount': amountBase,
-          'discount': roundMoney(l.discount),
+          'discount': discOf[l]!,
           'fc_amount': isBase ? null : l.amountFc,
           'pay_tx_uuid': payUuid,
           'disc_tx_uuid': discUuid,

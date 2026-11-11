@@ -13,6 +13,7 @@ import '../../models/product.dart';
 import '../../services/database_service.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
+import '../../utils/iqd.dart'; // 💵
 
 const List<String> priceFieldNames = ['مفرد', 'مفرد 2', 'منزل', 'جملة', 'جملة 2', 'أخرى'];
 
@@ -21,8 +22,9 @@ Product productWithCategory(Product p, int? categoryId) =>
     Product.fromMap({...p.toMap(), 'category_id': categoryId, 'last_modified_at': DateTime.now().toIso8601String()});
 
 double roundToStep(double v, double step) {
-  if (step <= 0) return roundMoney(v);
-  return roundMoney((v / step).roundToDouble() * step);
+  // 💵 سعر البيع دينار صحيح دائماً (النصف للأعلى)، ثم لأقرب خطوة إن طُلبت
+  if (step <= 0) return Iqd.up(v);
+  return Iqd.up((v / step).roundToDouble() * step);
 }
 
 class PriceChange {

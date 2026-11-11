@@ -28,6 +28,7 @@ import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../services/database/business/customer_name_rule.dart'; // 🔤 الاسم بلا مسافات
 import '../services/disk_space/disk_space_guard.dart'; // 💽 حماية امتلاء القرص
 import '../services/invoice_safety/debt_to_cash_confirm.dart'; // 🛑 تأكيد التحويل إلى نقد
+import '../services/invoice_safety/iqd_normalize.dart';
 import '../services/invoice_safety/line_math_check.dart'; // 🚨 مبلغ السطر = الكمية × السعر
 // import '../services/drive_service.dart'; // Removed
 import '../services/printed_invoice_pdf.dart'; // 🖨️ التصميم الأصلي الموحّد (طباعة + تيليجرام)
@@ -208,7 +209,8 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
 
     final controller = InvoiceController(db: db, storage: storage);
 
-    final inputData = InvoiceInputData(
+    // 💵 المبالغ كما ستُحفظ: دنانير صحيحة، والنصف لصالح المحل
+    final inputData = IqdNormalize.invoiceInput(InvoiceInputData(
       invoiceToManage: invoiceToManage,
       customerName: customerNameController.text,
       customerPhone: customerPhoneController.text,
@@ -222,7 +224,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       paymentType: paymentType,
       selectedDate: selectedDate,
       invoiceItems: invoiceItems,
-    );
+    ));
 
     // 1. Validation
     final validation = controller.validateInvoiceData(inputData);

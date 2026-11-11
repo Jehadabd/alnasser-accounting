@@ -12,6 +12,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 
+import 'package:alnaser/utils/iqd.dart'; // 💵 التطبيق يحفظ الدينار صحيحاً
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' show sqfliteFfiInit;
 import 'package:sqflite_common_ffi/src/isolate.dart' show SqfliteIsolate, createIsolate;
 
@@ -233,7 +234,8 @@ class Harness {
     final tu = await d(dev).call('addTx', {'cust': cust, 'amount': amount, 'marker': marker})
         as String?;
     if (tu != null) {
-      truth.txs[tu] = TruthTx(cust, dev, amount, amount >= 0 ? 'manual_debt' : 'manual_payment');
+      // 💵 التطبيق يقرّب لأقرب دينار والنصف لصالح المحل (أرصدة الحقيقة صحيحة دائماً)
+      truth.txs[tu] = TruthTx(cust, dev, Iqd.up(amount), amount >= 0 ? 'manual_debt' : 'manual_payment');
     }
     progress('J addTx $dev tx=$tu cust=$cust amount=$amount online=${d(dev).online}');
     return tu;
@@ -341,7 +343,7 @@ class Harness {
   Future<void> editTx(String dev, String tx, double amount) async {
     final r = await d(dev).call('editTx', {'tx': tx, 'amount': amount});
     if (_locked(r, 'editTx $dev tx=$tx')) return;
-    truth.txs[tx]?.amount = amount;
+    truth.txs[tx]?.amount = Iqd.up(amount); // 💵
     progress('J editTx $dev tx=$tx amount=$amount online=${d(dev).online}');
   }
 
@@ -396,7 +398,8 @@ class Harness {
     progress('J saveInvoice $dev inv=$uuid cust=$savedCust total=$total paid=$savedPaid '
         '$ptype edit=${inv != null} online=${d(dev).online}');
     final prev = truth.invoices[uuid];
-    final ti = TruthInvoice(savedCust, dev, total, savedPaid, ptype, 'محفوظة');
+    // 💵 الأسطر وبند الاختبار المكمِّل مقرَّبة: الإجمالي المحفوظ = المجموع لأقرب دينار
+    final ti = TruthInvoice(savedCust, dev, Iqd.up(total), savedPaid, ptype, 'محفوظة');
     if (prev != null) ti.voidedFor = {...prev.voidedFor}; // إبطال حذف العميل نهائي (له)
     ti.items = _baseItems(items);
     ti.specs = [for (final s in items) Map<String, Object?>.from(s)];
@@ -514,7 +517,7 @@ class Harness {
     final uuid = r['uuid'] as String?;
     final c = r['cust'] as String?;
     if (uuid == null || c == null) return null;
-    truth.invoices[uuid] = TruthInvoice(c, dev, total, 0.0, 'دين', 'معلقة')
+    truth.invoices[uuid] = TruthInvoice(c, dev, Iqd.up(total), 0.0, 'دين', 'معلقة') // 💵
       ..items = _baseItems(items);
     return uuid;
   }

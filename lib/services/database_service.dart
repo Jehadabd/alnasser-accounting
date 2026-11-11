@@ -34,6 +34,7 @@ import 'smart_pricing_service.dart';
 // Core
 import 'database/core/database_config.dart';
 import 'database/core/schema_healer.dart'; // 🩹 إكمال الجداول/الأعمدة الناقصة
+import 'database/core/iqd_guard.dart'; // 💵 القاعدة ترفض كسور الدينار
 import '../lan/lan_settings.dart'; // 🖧 وضع الشبكة (مستقل/سيرفر/طرفية)
 import '../lan/lan_codec.dart' show LanConnectionException;
 import '../accounting/accounting_schema.dart'; // 🏛️ مخطط النسخة المحاسبية
@@ -439,6 +440,14 @@ class DatabaseService {
       await FinancialBlackBox.ensure(db);
     } catch (e) {
       debugPrint('⚠️ Error running FinancialBlackBox.ensure: $e');
+    }
+
+    // 💵 الدينار بلا كسور: القاعدة ترفض مبلغاً بالدينار فيه كسور يكتبه هذا الجهاز
+    // (التطبيق يقرّب قبل الحفظ؛ هذه شبكة الأمان تحته). آمن التكرار.
+    try {
+      await IqdGuard.ensure(db);
+    } catch (e) {
+      debugPrint('⚠️ Error running IqdGuard.ensure: $e');
     }
 
     // 🛡️ سجل الديون: لا حسابان بالاسم نفسه. عمود الدمج + قيد فريد في القاعدة

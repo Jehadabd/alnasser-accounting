@@ -8,6 +8,7 @@ import '../core/database_helpers.dart';
 import '../business/customer_name_rule.dart';
 import '../../name_search.dart'; // 🔤 الأسماء بلا مسافات
 import '../business/tx_author.dart';
+import '../../../utils/iqd.dart'; // 💵
 import '../../../services/firebase_sync/uuid_helper.dart';
 import '../../../services/sync/sync_security.dart';
 import '../business/customer_owner_rule.dart';
@@ -46,6 +47,10 @@ class CustomerDao {
       // بدونها يبقى sync_uuid فارغاً فلا يراه أي مسار رفع أبداً
       // (كان هذا سبب عدم وصول العملاء الجدد للأجهزة الأخرى).
       final customerMap = customer.toMap();
+      // 💵 الرصيد الافتتاحي دينار صحيح، والنصف لصالح المحل (نحو +∞)
+      final opening = Iqd.up(customer.currentTotalDebt);
+      customerMap['current_total_debt'] = opening;
+      customerMap['current_total_debt_cents'] = (opening * 100).round();
       if ((customerMap['sync_uuid'] as String?)?.isEmpty != false) {
         customerMap['sync_uuid'] = newCustomerUuid();
       }
@@ -75,6 +80,8 @@ class CustomerDao {
             syncUuid: oldSyncUuid ?? (customerMap['sync_uuid'] as String),
           );
           final updateMap = updatedCustomer.toMap();
+          updateMap['current_total_debt'] = opening; // 💵
+          updateMap['current_total_debt_cents'] = (opening * 100).round();
           updateMap['is_created_by_me'] = existingRows.first['is_created_by_me'];
           updateMap['last_modified_at'] = DateTime.now().toIso8601String();
           // 🛡️ إعادة تنشيط صريحة: تُرفع isDeleted=false مرة واحدة لتلغي شاهد الحذف
@@ -96,7 +103,7 @@ class CustomerDao {
 
       // إذا كان هناك رصيد مبدئي، أضف معاملة تلقائية (موجب = عليه، سالب = له)
       // كان الشرط «> 0»: رصيد سالب يُكتب في بطاقة العميل بلا معاملة تسنده.
-      if (customer.currentTotalDebt.abs() > 0.0005) {
+      if (opening.abs() > 0.0005) {
         final now = openingDate ?? DateTime.now();
         final txUuid = openingUuid ?? UuidHelper.newTransactionUuid();
         await txn.insert('transactions', await TxAuthor.stamped(txn, {
@@ -104,8 +111,8 @@ class CustomerDao {
           'transaction_uuid': txUuid, // 🆔 هوية فورية — لا ننتظر backfill الإقلاع
           'sync_uuid': txUuid,
           'transaction_date': now.toIso8601String(),
-          'amount_changed': customer.currentTotalDebt,
-          'new_balance_after_transaction': customer.currentTotalDebt,
+          'amount_changed': opening,
+          'new_balance_after_transaction': opening,
           'transaction_note': openingNote ?? 'الدين المبدئي عند إضافة العميل',
           'transaction_type': 'opening_balance',
           'description': 'رصيد افتتاحي',
@@ -116,7 +123,7 @@ class CustomerDao {
           'is_uploaded': 0,
         }));
 
-        debugPrint('✅ تم إضافة معاملة الدين المبدئي: ${customer.currentTotalDebt} دينار للعميل: ${customer.name}');
+        debugPrint('✅ تم إضافة معاملة الدين المبدئي: $opening دينار للعميل: ${customer.name}');
       }
 
       return customerId;

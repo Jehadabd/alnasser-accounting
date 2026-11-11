@@ -1,5 +1,6 @@
 // models/product.dart
 import 'dart:convert';
+import '../utils/iqd.dart';
 
 class Product {
   final int? id;
@@ -91,16 +92,17 @@ class Product {
       'id': id,
       'name': name,
       'unit': unit,
-      'unit_price': unitPrice,
+      // 💵 أسعار البيع بالدينار الصحيح (النصف للأعلى). الكلفة تبقى بكسورها.
+      'unit_price': Iqd.up(unitPrice),
       'cost_price': costPrice,
       'pieces_per_unit': piecesPerUnit,
       'length_per_unit': lengthPerUnit,
-      'price1': price1,
-      'price2': price2,
-      'price3': price3,
-      'price4': price4,
-      'price5': price5,
-      'price6': price6,
+      'price1': Iqd.up(price1),
+      'price2': price2 == null ? null : Iqd.up(price2!),
+      'price3': price3 == null ? null : Iqd.up(price3!),
+      'price4': price4 == null ? null : Iqd.up(price4!),
+      'price5': price5 == null ? null : Iqd.up(price5!),
+      'price6': price6 == null ? null : Iqd.up(price6!),
       'unit_hierarchy': unitHierarchy,
       'unit_costs': unitCosts,
       'created_at': createdAt.toIso8601String(),

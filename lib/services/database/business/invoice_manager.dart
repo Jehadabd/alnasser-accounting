@@ -14,6 +14,7 @@ import '../../invoice_settings_service.dart';
 import 'invoice_numbering.dart';
 import 'tx_author.dart';
 import 'financial_integrity_guard.dart';
+import '../../invoice_safety/iqd_normalize.dart'; // 💵
 
 class InvoiceManager {
   final Future<Database> Function() getDatabase;
@@ -36,6 +37,16 @@ class InvoiceManager {
   /// كل هذا يتم داخل Transaction واحدة لضمان تماسك البيانات
   Future<int> saveCompleteInvoice(Invoice invoice, List<InvoiceItem> items, {String? createdBy}) async {
     final db = await getDatabase();
+
+    // 💵 رأس الفاتورة بدنانير صحيحة (الأسطر مقرَّبة في InvoiceItem). مجموع الأسطر
+    //    المقرَّبة يُعتمد إن كان فرقه عن الرأس تقريباً فقط؛ وإلا يُشتق من الرأس
+    //    فيبقى أي خلل حقيقي ظاهراً للحارس.
+    {
+      final sum = items.fold<double>(0, (s, i) => s + i.itemTotal);
+      final fromHeader = invoice.totalAmount - invoice.loadingFee + invoice.discount;
+      final explained = (sum - fromHeader).abs() <= 0.5 * items.length + 0.01;
+      IqdNormalize.invoice(invoice, itemsTotal: explained ? sum : null);
+    }
 
     // 🛡️ Pre-save guard
     if (integrityGuard != null) {

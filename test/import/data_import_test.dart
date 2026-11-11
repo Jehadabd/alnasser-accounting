@@ -235,8 +235,9 @@ void main() {
       expect(plan.existingTotal, 1000);
       expect(plan.newRows.length, 3);
       expect(plan.positiveTotal, 251000);
-      expect(plan.negativeTotal, -1500.5);
-      expect(plan.balanceByCurrency['IQD'], 249499.5);
+      // 💵 الرصيد بالدينار صحيح: (1,500.5) له علينا ⇒ −1,500 (النصف لصالح المحل)
+      expect(plan.negativeTotal, -1500);
+      expect(plan.balanceByCurrency['IQD'], 249500);
       expect(plan.errors.map((e) => e.line), [5]);
       expect(plan.skipped.length, 4);
       expect(plan.skipped.firstWhere((s) => s.line == 4).reason, contains('مكرر في الملف'));

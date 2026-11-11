@@ -41,6 +41,7 @@ import '../services/database_service.dart';
 import '../widgets/formatters.dart';
 import 'item_card_screen.dart' show ItemCardService, ItemCardScreen, ErpStockReserved, itemTypeLabels;
 import '../services/keyboard_layout/english_code_focus.dart'; // ⌨️ رمز المادة بالإنجليزية
+import '../utils/iqd.dart'; // 💵
 
 // ─────────────────────────── ألوان الواجهة ───────────────────────────
 class _C {
@@ -529,7 +530,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       'alert_unit': _alertUnitKey,
       'unit_hierarchy': levels.isEmpty ? null : jsonEncode(levels),
       'cost_price': _p(_cost) ?? 0.0,
-      for (var i = 0; i < 6; i++) 'price${i + 1}': _p(_price[i]) ?? 0.0,
+      // 💵 أسعار البيع بالدينار الصحيح (النصف للأعلى)
+      for (var i = 0; i < 6; i++) 'price${i + 1}': Iqd.up(_p(_price[i]) ?? 0.0),
       for (final e in _detailsValues().entries) 'd.${e.key}': e.value,
     };
   }

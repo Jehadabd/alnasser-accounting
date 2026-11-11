@@ -53,6 +53,7 @@ import '../database/supplier_compat.dart';
 import '../database_service.dart';
 import '../firebase_sync/uuid_helper.dart';
 import '../../utils/money_calculator.dart';
+import '../../utils/iqd.dart'; // 💵
 import '../name_search.dart';
 import 'sheet_reader.dart';
 
@@ -576,7 +577,7 @@ class DataImport {
           seenBarcode[barcode] = line;
         }
         row
-          ..price = ImportNumbers.money(price)
+          ..price = Iqd.up(ImportNumbers.money(price)) // 💵 سعر البيع دينار صحيح (الكلفة بكسورها)
           ..cost = cost == null ? null : ImportNumbers.money(cost)
           ..qty = qty
           ..barcode = barcode
@@ -591,6 +592,13 @@ class DataImport {
             continue;
           }
           row.currency = cur ?? o.defaultCurrency;
+        }
+        // 💵 الأرصدة بالدينار أرقام صحيحة — تظهر مقرَّبة في المعاينة قبل الاستيراد.
+        //    العميل: النصف للأعلى (دينه)، المورد: النصف للأسفل (ما علينا). الدولار كما هو.
+        if (kind == ImportKind.customers) {
+          row.balance = Iqd.up(row.balance);
+        } else if (kind == ImportKind.suppliers && row.currency == 'IQD') {
+          row.balance = Iqd.down(row.balance);
         }
         if (addTo) {
           if (row.balance.abs() < 0.005) {
@@ -679,6 +687,7 @@ class DataImport {
           (plan.kind == ImportKind.products && (!r.price.isFinite || r.price <= 0 || !r.qty.isFinite || r.qty < 0));
       if (bad) throw ArgumentError('الصف ${r.line} «${r.name}»: قيمة غير صالحة — صحّحها في المعاينة');
     }
+    _iqdRows(plan); // 💵 ما عُدّل في المعاينة بكسور يُقرَّب كما عند القراءة
     if (plan.undecided.isNotEmpty) {
       throw ArgumentError('اختر لكل اسم موجود عندنا: دمج الدينين، أو مبلغ الملف هو الصحيح، أو الدين الحالي هو الصحيح '
           '(${plan.undecided.length} بلا اختيار)');
@@ -902,8 +911,23 @@ class DataImport {
       ..kept = kept;
   }
 
+  /// 💵 الأرصدة والأسعار بالدينار أرقام صحيحة (كما في plan): العميل للأعلى عند النصف،
+  /// المورد بالدينار للأسفل، سعر البيع للأعلى؛ الدولار والكلفة كما هي.
+  static void _iqdRows(ImportPlan plan) {
+    for (final r in plan.rows) {
+      if (plan.kind == ImportKind.customers) {
+        r.balance = Iqd.up(r.balance);
+      } else if (plan.kind == ImportKind.suppliers && r.currency == 'IQD') {
+        r.balance = Iqd.down(r.balance);
+      } else if (plan.kind == ImportKind.products) {
+        r.price = Iqd.up(r.price);
+      }
+    }
+  }
+
   /// للاختبار فقط: تنفيذ العملاء على قاعدة معطاة (بلا نسخة احتياطية ولا فحص الفترة).
   static Future<ImportResult> debugExecuteCustomers(Database db, ImportPlan plan, ImportOptions o, String fileName) async {
+    _iqdRows(plan); // 💵
     await _ensureRowLedger(db);
     return _customers(db, plan, o, '', fileName, null);
   }

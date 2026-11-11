@@ -16,6 +16,8 @@ import '../erp/inventory/usd_cost_service.dart' show UsdCostService;
 import '../accounting/ledger.dart' show roundMoney;
 import 'database/supplier_compat.dart';
 import 'name_search.dart'; // 🔤 الأسماء بلا مسافات
+import '../utils/iqd.dart'; // 💵
+import 'invoice_safety/iqd_normalize.dart'; // 💵
 
 /// خدمة المشتريات والموردين (Odoo-Style)
 class PurchaseService with ChangeNotifier {
@@ -317,6 +319,8 @@ class PurchaseService with ChangeNotifier {
   Future<void> updatePurchaseInvoiceWithReversal(PurchaseInvoice oldInvoice, PurchaseInvoice newInvoice, List<PurchaseInvoiceItem> oldItems, List<PurchaseInvoiceItem> newItems,
       {int? warehouseId, int? cashBoxId}) async {
     final db = await _db.database;
+    // 💵 فاتورة بالدينار: أسطرها وإجماليها ومدفوعها دنانير صحيحة (الدولار كما هو)
+    (newInvoice, newItems) = IqdNormalize.purchase(newInvoice, newItems);
     
     String costingMethod = 'last_purchase';
     try {
@@ -387,6 +391,8 @@ class PurchaseService with ChangeNotifier {
   Future<void> savePurchaseInvoice(PurchaseInvoice invoice, List<PurchaseInvoiceItem> items,
       {bool confirm = false, int? warehouseId, int? cashBoxId}) async {
     final db = await _db.database;
+    // 💵 فاتورة بالدينار: أسطرها وإجماليها ومدفوعها دنانير صحيحة (الدولار كما هو)
+    (invoice, items) = IqdNormalize.purchase(invoice, items);
     
     // Load costing method from settings
     String costingMethod = 'last_purchase'; // Default
@@ -674,6 +680,10 @@ class PurchaseService with ChangeNotifier {
   /// يسجّل سند دفع لمورد ويعيد معرّفه.
   Future<int> registerPayment(SupplierPayment payment) async {
     final db = await _db.database;
+    // 💵 دفعة بالدينار: دينار صحيح؛ ما ندفعه للمورد — النصف للأعلى (ينقص ما علينا)
+    if (payment.currency == 'IQD' && Iqd.up(payment.amount) != payment.amount) {
+      payment = payment.copyWith(amount: Iqd.up(payment.amount));
+    }
     await _ensurePaymentColumns(db);
 
     final newId = await db.transaction((txn) async {
@@ -794,6 +804,8 @@ class PurchaseService with ChangeNotifier {
     String? note,
   }) async {
     final db = await _db.database;
+    // 💵 رصيد افتتاحي بالدينار: دينار صحيح؛ النصف لصالح المحل (ما علينا للأسفل)
+    if (currency == 'IQD') amount = Iqd.down(amount);
     await PeriodLock.assertOpen(date, db);
     final old = await db.query('supplier_transactions',
         columns: ['transaction_date'],

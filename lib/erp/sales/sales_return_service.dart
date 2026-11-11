@@ -21,6 +21,7 @@ import '../../providers/app_provider.dart';
 import '../debts/customer_money.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
+import '../../utils/iqd.dart'; // 💵
 import '../stock_helpers.dart';
 import '../../services/auth_service.dart';
 
@@ -39,7 +40,9 @@ class ReturnLine {
   double price;
 
   double get baseQty => quantity * unit.factor;
-  double get total => roundMoney(quantity * price);
+
+  /// 💵 مبلغ السطر دينار صحيح؛ المرتجع يعطيه المحل فالنصف إلى الأسفل
+  double get total => Iqd.down(quantity * price);
 }
 
 /// الجزء النقدي من مرتجع (من الصندوق).
@@ -219,7 +222,7 @@ class SalesReturnService {
     }
 
     final total = roundMoney(valid.fold(0.0, (s, l) => s + l.total));
-    final cashPart = refundMode == 'cash' ? total : (refundMode == 'mixed' ? roundMoney(cashAmount) : 0.0);
+    final cashPart = refundMode == 'cash' ? total : (refundMode == 'mixed' ? Iqd.down(cashAmount) : 0.0); // 💵
     final creditPart = roundMoney(total - cashPart);
     if (refundMode == 'mixed') {
       if (cashPart <= kMoneyEpsilon || cashPart >= total - kMoneyEpsilon) {

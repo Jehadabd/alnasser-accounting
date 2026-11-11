@@ -18,6 +18,7 @@ import '../services/database/business/stock_ledger.dart';
 import '../services/database/business/supplier_debt_reconciler.dart';
 import '../services/database_service.dart';
 import '../services/firebase_sync/uuid_helper.dart';
+import '../utils/iqd.dart'; // 💵
 
 class PurchaseReturnLine {
   PurchaseReturnLine({required this.productId, required this.name, required this.quantity, required this.unitPrice});
@@ -53,7 +54,8 @@ class PurchaseReturnService {
   }) async {
     final valid = lines.where((l) => l.quantity > 0).toList();
     if (valid.isEmpty) throw Exception('أضف مادة واحدة على الأقل');
-    final total = valid.fold(0.0, (s, l) => s + l.total);
+    // 💵 بالدينار: كل سطر دينار صحيح، وما يعيده المورد لنا — النصف للأعلى
+    final total = valid.fold(0.0, (s, l) => s + (currency == 'IQD' ? Iqd.up(l.total) : l.total));
     if (total <= 0) throw Exception('قيمة المرتجع يجب أن تكون أكبر من صفر');
     final db = await _db;
     await db.transaction((txn) async {

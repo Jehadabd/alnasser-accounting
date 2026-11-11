@@ -29,6 +29,8 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:alnaser/utils/iqd.dart';
+
 import 'harness.dart';
 
 const _quick = bool.fromEnvironment('QUICK', defaultValue: false);
@@ -90,9 +92,25 @@ class _Inv {
   /// كما يحفظها التطبيق: مبلغ كل سطر بالفلس (InvoiceItem.itemTotalCents = round(كمية × سعر × 100)).
   /// بلا هذا التقريب يفرق المجموع هنا عن مجموع الأسطر في التطبيق بأجزاء فلس، فيصير
   /// بند الاختبار المكمِّل سالباً (-0.005) ويرفضه التطبيق «ينقص السعر».
+  // 💵 كما يحفظها التطبيق: كل سطر لأقرب دينار (InvoiceItem)، والبند المكمِّل كذلك،
+  //    والرأس بـ Iqd.invoiceTotals (الخصم والمسدد للأسفل عند النصف، الأجور للأعلى)
   double get itemsTotal =>
-      specs.fold(0.0, (s, x) => s + ((x['qty'] as double) * _applied(x) * 100).round() / 100) + extra;
-  double get finalTotal => itemsTotal + fee - discount;
+      specs.fold(0.0, (s, x) => s + Iqd.up((x['qty'] as double) * _applied(x))) + Iqd.up(extra);
+  IqdInvoiceTotals get iqd =>
+      Iqd.invoiceTotals(itemsTotal: itemsTotal, discount: discount, loadingFee: fee, paid: paid);
+  double get finalTotal => iqd.total;
+  double get nDiscount => iqd.discount;
+  double get nFee => iqd.loadingFee;
+  double get nPaid => iqd.paid;
+
+  /// بعد الحفظ تفتح الشاشة الفاتورة بما حُفظ: المبالغ المقرَّبة
+  void settleIqd() {
+    final t = iqd;
+    discount = t.discount;
+    fee = t.loadingFee;
+    paid = t.paid;
+    extra = Iqd.up(extra);
+  }
 
   _Inv copy() => _Inv(dev, cust, date)
     ..specs = [for (final s in specs) Map<String, Object?>.from(s)]
@@ -216,12 +234,18 @@ void main() {
         if (locked) return 'فترة مثبّتة';
         if (x.nameField != null && x.nameField!.trim().isEmpty) return 'اسم فارغ';
         if (x.incomplete) return 'سطر بلا كمية';
-        if (x.discount < 0) return 'خصم سالب';
-        if (x.fee < 0) return 'تحميل سالب';
-        if (x.paid < 0) return 'مسدد سالب';
-        if (x.discount >= x.itemsTotal) return 'خصم ≥ الإجمالي';
-        if (x.paid > x.finalTotal + 0.01) return 'مسدد > الإجمالي';
-        if (x.ptype == 'نقد' && (x.paid - x.finalTotal).abs() > 0.01) return 'نقد بمسدد ناقص';
+        // 💵 سطر أقل من نصف دينار يصير صفراً فيرفضه التطبيق «ينقص المبلغ»، وفاتورة بلا
+        //    أصناف وبند مكمِّل صفر كذلك. وما بعده على المبالغ كما ستُحفظ.
+        if (x.specs.any((s) => s['gift'] != true && Iqd.up((s['qty'] as double) * _applied(s)) <= 0)) {
+          return 'سطر أقل من نصف دينار';
+        }
+        if (x.specs.isEmpty && Iqd.up(x.extra) <= 0) return 'فاتورة بلا مبلغ';
+        if (x.nDiscount < 0) return 'خصم سالب';
+        if (x.nFee < 0) return 'تحميل سالب';
+        if (x.nPaid < 0) return 'مسدد سالب';
+        if (x.nDiscount >= x.itemsTotal) return 'خصم ≥ الإجمالي';
+        if (x.nPaid > x.finalTotal + 0.01) return 'مسدد > الإجمالي';
+        if (x.ptype == 'نقد' && (x.nPaid - x.finalTotal).abs() > 0.01) return 'نقد بمسدد ناقص';
         return null;
       }
 
@@ -229,7 +253,7 @@ void main() {
       bool wouldGoNegative(String? inv, _Inv x) {
         final t = inv == null ? null : h.truth.invoices[inv];
         final oldC = t?.contribution ?? 0.0;
-        final newC = x.ptype == 'دين' ? max(0.0, x.finalTotal - x.paid) : 0.0;
+        final newC = x.ptype == 'دين' ? max(0.0, x.finalTotal - x.nPaid) : 0.0;
         // كما في InvoiceController.validateDebtChangeWontCauseNegativeBalance: يُفحص العميل
         // القديم وحده، ويُرفض فقط إن كان التعديل نفسه يُنقصه إلى ما دون الصفر. «اسم عميل جديد»
         // تغيير عميل أيضاً (ينقل الدين كله عن العميل القديم) — كان النموذج يعدّه العميل نفسه.
@@ -280,6 +304,7 @@ void main() {
 
       void record(String uuid, _Inv x, String status) {
         final prev = h.truth.invoices[uuid];
+        x.settleIqd(); // 💵 ما حُفظ فعلاً
         h.truth.invoices[uuid] = TruthInvoice(x.cust, x.dev, x.finalTotal, x.paid, x.ptype, status)
           ..voidedFor = {...?prev?.voidedFor}
           ..items = baseItems(x.specs)
@@ -343,8 +368,10 @@ void main() {
         } else if (savedCust != x.cust) {
           problems.add('$label: حُفظت على عميل آخر ${names[savedCust] ?? savedCust} بدل ${names[x.cust]}');
         }
-        final savedPaid = (r['paid'] as num?)?.toDouble() ?? x.paid;
-        if ((savedPaid - x.paid).abs() > 0.01) problems.add('$label: غيّر التطبيق المسدد بصمت: ${x.paid} ← $savedPaid');
+        final savedPaid = (r['paid'] as num?)?.toDouble() ?? x.nPaid;
+        if ((savedPaid - x.nPaid).abs() > 0.01) {
+          problems.add('$label: المسدد المحفوظ $savedPaid والمتوقع بعد التقريب ${x.nPaid} (المكتوب ${x.paid})');
+        }
         record(uuid, x, 'محفوظة');
         count(inv == null ? 'فاتورة جديدة' : 'تعديل مقبول');
         return uuid;
@@ -388,7 +415,7 @@ void main() {
         }
 
         void keepDiscount() {
-          if (x.discount >= x.itemsTotal) x.discount = 0;
+          if (x.nDiscount >= x.itemsTotal) x.discount = 0;
         }
 
         void ensureMoney() {
@@ -556,7 +583,7 @@ void main() {
             final amount = (bal * 0.4 / 250).floorToDouble() * 250;
             final u = await h.d(dev).call('receipt', {'cust': c, 'amount': amount, 'marker': 'T$ops'}) as String?;
             if (u != null) {
-              h.truth.txs[u] = TruthTx(c, dev, -amount, 'manual_payment');
+              h.truth.txs[u] = TruthTx(c, dev, Iqd.up(-amount), 'manual_payment'); // 💵
               count('وصل قبض');
             }
           }
@@ -592,8 +619,8 @@ void main() {
               }
               // سعر الوحدة بعد خصم بنسبة قد يحمل كسر فلس (1750.5 × 0.99 = 1732.995) والتطبيق
               // يقرّب المرتجع إلى فلس: الفرق حتى نصف فلس تقريب صحيح لا خطأ.
-              if ((sum + price).abs() > 0.00501) {
-                problems.add('$label (مرتجع على الحساب) أثره على الدين = $sum والمتوقع ${-price}');
+              if ((sum + Iqd.down(price)).abs() > 0.00501) { // 💵 ReturnLine.total
+                problems.add('$label (مرتجع على الحساب) أثره على الدين = $sum والمتوقع ${-Iqd.down(price)}');
               }
               h.truth.products[pipe]!.movements += 1;
               cur.returned = true;

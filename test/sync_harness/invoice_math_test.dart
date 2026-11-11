@@ -6,6 +6,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:alnaser/utils/iqd.dart';
+
 import 'harness.dart';
 
 void main() {
@@ -61,9 +63,12 @@ void main() {
           return null;
         }
         final uuid = r['uuid'] as String;
-        final total = itemsTotal + fee - discount;
+        // 💵 التطبيق يحفظ الدينار صحيحاً: الأسطر لأقرب دينار، والرأس كما يقرّبه
+        final t = Iqd.invoiceTotals(
+            itemsTotal: Iqd.up(itemsTotal), discount: discount, loadingFee: fee, paid: paid);
+        final total = t.total;
         final prev = h.truth.invoices[uuid];
-        h.truth.invoices[uuid] = TruthInvoice(cust, 'D1', total, paid, ptype, 'محفوظة')
+        h.truth.invoices[uuid] = TruthInvoice(cust, 'D1', total, t.paid, ptype, 'محفوظة')
           ..voidedFor = {...?prev?.voidedFor}
           ..items = {
             for (final it in items)
@@ -259,7 +264,8 @@ void main() {
       expectNear('رصيد العميل الأول بعد النقل', h.truth.balance(x), 0);
       expectNear('رصيد العميل الثاني بعد النقل', h.truth.balance(y), 1150);
 
-      // ── 7) كسور: 3 × 333.33 − خصم 0.99 = 999.00 (سنتات بلا انجراف)
+      // ── 7) كسور ⇒ دنانير صحيحة: 3 × 333.33 = 999.99 ⇒ سطر 1,000؛ خصم 0.99 ⇒ 1؛
+      //       مسدد 0.5 ⇒ 0 (النصف لصالح المحل)؛ الإجمالي 999 والدين 999
       final inv2 = await save(
         label: 'كسور',
         cust: y,
@@ -274,8 +280,8 @@ void main() {
       errs = await h.settle();
       problems.addAll(errs);
       await verifyStored(inv2!, 'كسور',
-          total: 999.0, paid: 0.5, discount: 0.99, fee: 0, ptype: 'دين', cust: y,
-          itemTotals: [999.99], recon: 998.5);
+          total: 999.0, paid: 0, discount: 1, fee: 0, ptype: 'دين', cust: y,
+          itemTotals: [1000], recon: 999);
 
       // ── 8) تحقق الإدخال: كل هذه مرفوضة
       await save(label: 'خصم = المجموع', cust: y, items: [{'prod': c, 'qty': 1.0, 'price': 100.0}],

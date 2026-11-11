@@ -40,6 +40,7 @@ import '../erp/pickers.dart' show PartyLite;
 import '../widgets/after_save_dialog.dart'; // ✅ نافذة ما بعد الحفظ
 import '../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائي للعملاء المختارين
 import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال الوصل لصاحبه عبر واتساب
+import '../utils/iqd.dart'; // 💵
 
 class AddTransactionScreen extends StatefulWidget {
   final Customer customer;
@@ -170,8 +171,19 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       setState(() => _isSaving = true);
       
       try {
-      final amount = double.parse(_amountController.text.replaceAll(',', ''));
-      final amountChanged = _isDebt ? amount : -amount;
+      final typed = double.parse(_amountController.text.replaceAll(',', ''));
+      // 💵 دينار صحيح والنصف لصالح المحل؛ الكسر يُقبل فقط إن صفّى كسراً قديماً في
+      //    رصيد العميل (Iqd.ledgerAmount) — المبلغ المحفوظ والمطبوع هو نفسه.
+      final amountChanged =
+          Iqd.ledgerAmount(_isDebt ? typed : -typed, widget.customer.currentTotalDebt);
+      final amount = amountChanged.abs();
+      if (amount < 0.005) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('المبلغ أقل من نصف دينار — المبالغ تُحفظ بالدينار الصحيح'),
+          backgroundColor: Colors.red,
+        ));
+        return;
+      }
       
       // ═══════════════════════════════════════════════════════════════════════════
       // 🔒 تحسين الأمان: استخدام MoneyCalculator لضمان دقة الحسابات

@@ -31,6 +31,7 @@ import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/services/database/business/stock_ledger.dart';
 import 'package:alnaser/services/database/business/financial_deep_check.dart';
 import 'package:alnaser/services/held_invoices.dart';
+import 'package:alnaser/utils/iqd.dart'; // 💵
 import 'package:alnaser/services/license_service.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
@@ -520,14 +521,17 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       // 📦 بنود أصناف حقيقية (تخصم من المخزون) + بند اختبار يكمل المجموع
       final productItems = await _productItems(db, a['items'], existing?.id ?? 0);
       final productTotal = productItems.fold(0.0, (s, i) => s + i.itemTotal);
+      // 💵 أسطر الأصناف مقرَّبة لأقرب دينار في InvoiceItem: البند المكمِّل يكمل
+      //    المجموع المقرَّب (Iqd.up) فيبقى ديناراً صحيحاً هو الآخر
+      final filler = Iqd.up(total - productTotal);
       final item = InvoiceItem(
         invoiceId: existing?.id ?? 0,
         productName: 'صنف اختبار',
         unit: 'قطعة',
-        unitPrice: total - productTotal,
+        unitPrice: filler,
         quantityIndividual: 1,
-        appliedPrice: total - productTotal,
-        itemTotal: total - productTotal,
+        appliedPrice: filler,
+        itemTotal: filler,
         saleType: 'قطعة',
       );
       final controller = InvoiceController(db: DatabaseService());
@@ -551,7 +555,7 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         paymentType: ptype,
         selectedDate: a['date'] == null ? DateTime.now() : DateTime.parse(a['date'] as String),
         invoiceItems: [
-          if ((total - productTotal).abs() > 0.001 || productItems.isEmpty) item,
+          if (filler.abs() > 0.001 || productItems.isEmpty) item,
           ...productItems,
           if (a['incomplete'] == true)
             InvoiceItem(
@@ -1050,19 +1054,20 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final total = (a['total'] as num).toDouble();
       final productItems = await _productItems(db, a['items'], existing?.id ?? 0);
       final productTotal = productItems.fold(0.0, (s, i) => s + i.itemTotal);
+      final filler = Iqd.up(total - productTotal); // 💵 كما في saveInvoice
       try {
         final held = await HeldInvoices.hold(
           existing: existing,
           items: [
-            if ((total - productTotal).abs() > 0.001 || productItems.isEmpty)
+            if (filler.abs() > 0.001 || productItems.isEmpty)
               InvoiceItem(
                 invoiceId: existing?.id ?? 0,
                 productName: 'صنف اختبار',
                 unit: 'قطعة',
-                unitPrice: total - productTotal,
+                unitPrice: filler,
                 quantityIndividual: 1,
-                appliedPrice: total - productTotal,
-                itemTotal: total - productTotal,
+                appliedPrice: filler,
+                itemTotal: filler,
                 saleType: 'قطعة',
               ),
             ...productItems,

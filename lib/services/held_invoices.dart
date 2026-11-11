@@ -14,6 +14,7 @@
 import '../models/invoice.dart';
 import '../models/invoice_item.dart';
 import 'database_service.dart';
+import '../utils/iqd.dart';
 
 class HeldInvoices {
   HeldInvoices._();
@@ -65,6 +66,9 @@ class HeldInvoices {
     final name = customerName.trim();
     final customer = name.isEmpty ? null : await dbs.findCustomerByNormalizedName(name);
     final itemsTotal = lines.fold<double>(0, (s, i) => s + i.itemTotal);
+    // 💵 دنانير صحيحة (الأسطر مقرَّبة في InvoiceItem؛ هنا الخصم والأجور والمسدد)
+    final t = Iqd.invoiceTotals(
+        itemsTotal: itemsTotal, discount: discount, loadingFee: loadingFee, paid: paid);
     final now = DateTime.now();
 
     var inv = Invoice(
@@ -75,10 +79,10 @@ class HeldInvoices {
       installerName: (installerName ?? '').trim().isEmpty ? null : installerName!.trim(),
       invoiceDate: invoiceDate,
       paymentType: paymentType,
-      totalAmount: itemsTotal + loadingFee - discount,
-      discount: discount,
-      amountPaidOnInvoice: paid,
-      loadingFee: loadingFee,
+      totalAmount: t.total,
+      discount: t.discount,
+      amountPaidOnInvoice: t.paid,
+      loadingFee: t.loadingFee,
       createdAt: existing?.createdAt ?? now,
       lastModifiedAt: now,
       customerId: customer?.id,

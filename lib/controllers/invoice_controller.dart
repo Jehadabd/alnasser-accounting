@@ -13,6 +13,7 @@ import '../models/invoice_item.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
 import '../services/database/business/invoice_debt_reconciler.dart';
+import '../services/invoice_safety/iqd_normalize.dart'; // 💵 دنانير صحيحة
 import '../services/smart_search/smart_search.dart';
 import '../services/smart_pricing_service.dart';
 import '../services/auth_service.dart';
@@ -135,6 +136,8 @@ class InvoiceController {
   // ═══════════════════════════════════════════════════════════════════════════
 
   InvoiceValidationResult validateInvoiceData(InvoiceInputData data) {
+    // 💵 الفحص على المبالغ كما ستُحفظ: دنانير صحيحة (الشاشة والحفظ والاختبار سواء)
+    data = IqdNormalize.invoiceInput(data);
     // 0. Check for Customer Name (Mandatory)
     if (data.customerName.trim().isEmpty) {
       return InvoiceValidationResult(isValid: false, errorMessage: 'اسم العميل مطلوب');
@@ -221,6 +224,7 @@ class InvoiceController {
   }
 
   Future<InvoiceValidationResult> validateDebtChangeWontCauseNegativeBalance(InvoiceInputData data) async {
+    data = IqdNormalize.invoiceInput(data); // 💵
     // Only for existing invoices (edits)
     if (data.invoiceToManage == null || data.invoiceToManage!.id == null) {
       return InvoiceValidationResult(isValid: true);
@@ -330,6 +334,9 @@ class InvoiceController {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<InvoiceSaveResult> saveInvoice(InvoiceInputData data) async {
+    // 💵 الخصم والأجور والمسدد لأقرب دينار، والنصف لصالح المحل (الأسطر مقرَّبة
+    //    في InvoiceItem). كل ما بعده — الفحص والحارس والحفظ — على هذه المبالغ.
+    data = IqdNormalize.invoiceInput(data);
     // 🛡️ حماية الفواتير المستوردة من التعديل
     if (!data.isNewInvoice && data.invoiceToManage != null && !data.invoiceToManage!.isCreatedByMe) {
       return InvoiceSaveResult(

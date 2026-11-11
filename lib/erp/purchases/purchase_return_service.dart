@@ -20,6 +20,7 @@ import '../../services/database/business/supplier_debt_reconciler.dart';
 import '../../services/firebase_sync/uuid_helper.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
+import '../../utils/iqd.dart'; // 💵
 import '../stock_helpers.dart';
 
 class PurchaseReturnLine {
@@ -119,9 +120,14 @@ class PurchaseReturnService {
     }
     if (currency != 'IQD' && fxRate <= 0) throw ErpException('أدخل سعر الصرف');
     if (refundMode != 'debt' && cashBoxId == null) throw ErpException('اختر الصندوق الذي يُستلم فيه المبلغ');
-    final total = roundMoney(valid.fold(0.0, (s, l) => s + l.total));
+    // 💵 مرتجع بالدينار: كل سطر دينار صحيح، وما يعيده المورد لنا — النصف للأعلى
+    final iqd = currency == 'IQD';
+    double lineTotal(PurchaseReturnLine l) => iqd ? Iqd.up(l.total) : l.total;
+    final total = roundMoney(valid.fold(0.0, (s, l) => s + lineTotal(l)));
     if (total <= 0) throw ErpException('قيمة المرتجع يجب أن تكون أكبر من صفر');
-    final cashPart = refundMode == 'cash' ? total : (refundMode == 'mixed' ? roundMoney(cashAmount) : 0.0);
+    final cashPart = refundMode == 'cash'
+        ? total
+        : (refundMode == 'mixed' ? (iqd ? Iqd.up(cashAmount) : roundMoney(cashAmount)) : 0.0);
     final debtPart = roundMoney(total - cashPart);
     if (refundMode == 'mixed' && (cashPart <= kMoneyEpsilon || cashPart >= total - kMoneyEpsilon)) {
       throw ErpException('في المختلط يكون المبلغ النقدي أكبر من صفر وأقل من الإجمالي (${fmtMoney(total)})');
@@ -206,7 +212,7 @@ class PurchaseReturnService {
           'quantity': l.quantity,
           'base_qty': l.baseQty,
           'price': l.price,
-          'total': l.total,
+          'total': lineTotal(l),
           'unit_cost': unitCost,
           'movement_uuid': mv,
         });
