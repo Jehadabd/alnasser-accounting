@@ -590,8 +590,33 @@ class Harness {
       errs = await check();
       if (errs.isEmpty) return errs;
     }
+    // ⏱️ حد الرفع في التطبيق: 600 عملية في الدقيقة لكل جهاز (SyncRateLimiter). الاختبار
+    //    يضغط ساعات من العمل في ثوانٍ فيبلغه؛ التطبيق الحقيقي يؤجّل المحجوب (طابور الإعادة
+    //    كل 30 ثانية + المزامنة الخلفية) ولا يُسقطه. فإن بقي ما لم يُرفع: ننتظر انفتاح نافذة
+    //    الدقيقة ثم نعيد — وما يبقى بعدها عالقاً فهو خطأ حقيقي يُبلَّغ كما هو.
+    for (var w = 0; w < 2 && errs.any((e) => e.contains('لم تُرفع')); w++) {
+      rateLimitWaits++;
+      print('⏱️ حد الرفع (600/دقيقة): ما زال ما لم يُرفع — انتظار انفتاح الدقيقة ثم إعادة');
+      await Future<void>.delayed(const Duration(seconds: 62));
+      for (var r = 0; r < 2; r++) {
+        await Future.wait([
+          for (final h in devices.values)
+            h.call('kick').catchError((Object e) {
+              opErrors.add('kick ${h.name}: $e');
+              return null;
+            })
+        ]);
+        await waitCloudQuiet();
+        await _waitBootstraps();
+        errs = await check();
+        if (errs.isEmpty) return errs;
+      }
+    }
     return errs;
   }
+
+  /// كم مرة انتظر settle انفتاح حد الرفع (يُطبع في الملخص — لا يُخفى).
+  int rateLimitWaits = 0;
 
   /// جهاز جديد/مستعيد ينتظر إعادة بثّ الأجهزة (استطلاع كل 10 ثوانٍ ثم سحب
   /// كامل): فحصه قبل انتهاء ذلك يُظهر نقصاً مؤقتاً لا خللاً.

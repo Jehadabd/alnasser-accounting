@@ -310,6 +310,7 @@ void main() {
         ..writeln('مسارات الدين الباقية — seed=$seed — ${failed ? 'FAIL' : 'PASS'} — ${sw.elapsed.inMinutes} دقيقة')
         ..writeln('مشاكل: ${problems.length}')
         ..writeAll(problems.take(_maxProblems).map((p) => '  ✗ $p\n'))
+        ..writeln('انتظار حد الرفع (600/دقيقة لكل جهاز): ${h.rateLimitWaits} مرة')
         ..writeln('العمليات:')
         ..writeAll(keys.map((k) => '  $k: ${stats[k]}\n'));
       File('${out.path}${Platform.pathSeparator}summary.txt').writeAsStringSync(summary.toString());
