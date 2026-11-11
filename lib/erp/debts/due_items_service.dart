@@ -149,6 +149,8 @@ class DueItemsService {
     if (currency == 'IQD') {
       amount = receivable ? Iqd.down(amount) : Iqd.up(amount);
       if (amount <= 0) throw ErpException('المبلغ أقل من نصف دينار');
+      // أقساط بالدينار الصحيح: لا قسط بصفر دينار
+      if (amount < installments) throw ErpException('المبلغ أصغر من عدد الأقساط — كل قسط دينار واحد على الأقل');
     }
     await PeriodLock.assertOpen(issueDate);
     final db = await erpDb();

@@ -1040,7 +1040,11 @@ void main() {
             if (w < 0.45 || bal < 1) {
               final amount = [5000.0, 1250.75, 0.25, 0.01, 250000.0, 33333.33][rnd.nextInt(6)];
               final u = await h.addTx(dev, c, amount);
-              if (u == null) {
+              if (Iqd.up(amount) == 0) {
+                // 💵 أقل من نصف دينار: يجب أن يُرفض
+                if (u != null) problems.add('$label: حُفظ دين يدوي $amount (أقل من نصف دينار)');
+                if (u == null) count('رُفض كما يجب: مبلغ أقل من نصف دينار');
+              } else if (u == null) {
                 problems.add('$label: لم يُحفظ دين يدوي $amount على ${cname(c)}');
               } else {
                 manual.add(u);
@@ -1048,7 +1052,7 @@ void main() {
               }
             } else {
               final amount = [r2(bal * 0.4), r2(bal * 0.137), r2(bal)][rnd.nextInt(3)];
-              if (amount < 0.01) return;
+              if (amount < 0.01 || Iqd.up(-amount) == 0) return; // 💵 أقل من نصف دينار
               if (w < 0.7) {
                 final u = await h.addTx(dev, c, -amount);
                 if (u == null) {
@@ -1108,12 +1112,13 @@ void main() {
             if (old >= 0) {
               next = [r2(old * 0.5), r2(old * 2), r2(old + 0.37), 0.01][rnd.nextInt(4)];
               if (next < 0.01) next = 0.01;
+              if (Iqd.up(next) == 0) next = 1; // 💵 تعديل إلى أقل من نصف دينار يُرفض (يُختبر في extreme_scenarios)
               if (bal + (next - old) < 0) return; // إنقاص دين أكثر من الرصيد
             } else {
               final room = bal + (-old); // أقصى تسديد لا يجعل الرصيد سالباً
               final want = [r2(-old * 0.5), r2(-old * 1.5), r2(-old + 0.37)][rnd.nextInt(3)];
               final abs = min(want, r2(room));
-              if (abs < 0.01) return;
+              if (abs < 0.01 || Iqd.up(-abs) == 0) return;
               next = -abs;
             }
             final underLock = w < 0.2;

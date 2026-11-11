@@ -231,8 +231,15 @@ class Harness {
 
   Future<String?> addTx(String dev, String cust, double amount) async {
     final marker = 'H${++_marker}';
-    final tu = await d(dev).call('addTx', {'cust': cust, 'amount': amount, 'marker': marker})
-        as String?;
+    final String? tu;
+    try {
+      tu = await d(dev).call('addTx', {'cust': cust, 'amount': amount, 'marker': marker}) as String?;
+    } catch (e) {
+      // 💵 مبلغ أقل من نصف دينار يُرفض (TransactionDao) — رفض صحيح لا خطأ
+      if (!'$e'.contains('أقل من نصف دينار')) rethrow;
+      progress('J addTx $dev cust=$cust amount=$amount REFUSED (أقل من نصف دينار)');
+      return null;
+    }
     if (tu != null) {
       // 💵 التطبيق يقرّب لأقرب دينار والنصف لصالح المحل (أرصدة الحقيقة صحيحة دائماً)
       truth.txs[tu] = TruthTx(cust, dev, Iqd.up(amount), amount >= 0 ? 'manual_debt' : 'manual_payment');

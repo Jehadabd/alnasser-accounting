@@ -94,6 +94,10 @@ class TransactionDao {
             (transaction.invoiceSyncUuid ?? '').isEmpty &&
             !transaction.isUploaded) {
           final iqdAmount = Iqd.ledgerAmount(transaction.amountChanged, verifiedBalanceBefore);
+          // مبلغ مكتوب صار صفراً بالتقريب (أقل من نصف دينار) = لا معاملة، لا «صفر» صامت
+          if (iqdAmount == 0 && transaction.amountChanged.abs() > 0.0001) {
+            throw Exception('المبلغ أقل من نصف دينار — المبالغ تُحفظ بالدينار الصحيح');
+          }
           if (iqdAmount != transaction.amountChanged) {
             transaction = transaction.copyWith(amountChanged: iqdAmount);
           }
@@ -307,6 +311,9 @@ class TransactionDao {
           final others = sumNow -
               (((oldTxRes.first['is_deleted'] as num?)?.toInt() ?? 0) == 1 ? 0.0 : oldTx.amountChanged);
           final iqdAmount = Iqd.ledgerAmount(updated.amountChanged, others);
+          if (iqdAmount == 0 && updated.amountChanged.abs() > 0.0001) {
+            throw Exception('المبلغ أقل من نصف دينار — المبالغ تُحفظ بالدينار الصحيح');
+          }
           if (iqdAmount != updated.amountChanged) {
             updated = updated.copyWith(amountChanged: iqdAmount);
           }

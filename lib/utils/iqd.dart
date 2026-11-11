@@ -11,16 +11,16 @@
 //              (خصم، مسدد على الفاتورة، مرتجع، وفي حساب المورد: ما علينا له).
 // أمثلة (up): 20.83 ← 21، 52.5 ← 53، 52.4 ← 52، 20.49 ← 20.
 //
-// التقريب يُحسب على أجزاء من عشرة آلاف من الدينار أولاً، فضجيج الكسور العشرية
-// (52.49999999 بدل 52.5) لا يغيّر النتيجة، و52.495 تبقى أقل من النصف.
+// الكسر يُقاس مباشرة (المبلغ − أرضيته، حساب دقيق)، وما كان على بُعد جزء من مليون من
+// النصف يُعدّ نصفاً: فضجيج الحساب (52.49999999 بدل 52.5) لا يغيّر النتيجة، و52.495
+// تبقى أقل من النصف، والمبالغ الضخمة (ترليونات) لا تفيض كما في الضرب بعشرة آلاف.
 //
 // لا يعتمد على أي نموذج أو قاعدة: الاختبارات تستعمله كما هو.
 
 class Iqd {
   Iqd._();
 
-  static const int _scale = 10000;
-  static const int _half = 5000;
+  static const double _halfTol = 0.000001;
 
   /// سماحية «رقم صحيح»: أقل من عُشر فلس (ضجيج الحساب العشري لا يُعدّ كسراً)
   static const double wholeTolerance = 0.0001;
@@ -33,11 +33,15 @@ class Iqd {
   static double _toWhole(num v, bool halfUp) {
     final d = v.toDouble();
     if (!d.isFinite) return d;
-    final u = (d * _scale).round();
-    final f = _floorDiv(u, _scale);
-    final r = u - f * _scale; // 0 .. 9999
-    final whole = (r > _half || (r == _half && halfUp)) ? f + 1 : f;
-    return whole == 0 ? 0.0 : whole.toDouble(); // لا «-0.0»
+    final fl = d.floorToDouble();
+    final frac = d - fl; // 0 ≤ frac < 1، دقيق
+    final double whole;
+    if ((frac - 0.5).abs() <= _halfTol) {
+      whole = halfUp ? fl + 1 : fl;
+    } else {
+      whole = frac > 0.5 ? fl + 1 : fl;
+    }
+    return whole == 0 ? 0.0 : whole; // لا «-0.0»
   }
 
   /// لأقرب دينار، والنصف إلى الأعلى (نحو +∞).
