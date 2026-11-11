@@ -520,10 +520,14 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final controller = InvoiceController(db: DatabaseService());
       final data = InvoiceInputData(
         invoiceToManage: existing,
-        // كالشاشة: فتح فاتورة قائمة يملأ حقل العميل بالاسم المحفوظ فيها (حتى لو تغيّر اسم
-        // العميل في بطاقته بعدها)؛ واختيار عميل آخر يكتب اسمه هو.
+        // كالشاشة: تعديل فاتورة يعرض اسم عميلها الحالي من بطاقته؛ و'storedName' = الاسم
+        // المحفوظ فيها وقت البيع (كما تمرّره مسارات أخرى وتمرّره الشاشة قبل تعديل الحقل).
+        // اختيار عميل آخر يكتب اسمه هو.
         customerName: nameField ??
-            ((existing != null && existing.customerId != null && existing.customerId == cust['id'])
+            ((a['storedName'] == true &&
+                    existing != null &&
+                    existing.customerId != null &&
+                    existing.customerId == cust['id'])
                 ? existing.customerName
                 : cust['name'] as String),
         customerPhone: (a['phone'] as String?) ?? (cust['phone'] as String?) ?? '',

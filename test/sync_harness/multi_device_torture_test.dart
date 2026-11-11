@@ -341,6 +341,8 @@ void main() {
             'discount': x.discount,
             'loadingFee': x.fee,
             'incomplete': x.incomplete,
+            // نصف التعديلات بالاسم المحفوظ في الفاتورة ونصفها باسم العميل الحالي (الشاشة)
+            'storedName': rnd.nextBool(),
           }) as Map)
               .cast<String, Object?>();
         } catch (e) {

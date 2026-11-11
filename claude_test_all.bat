@@ -44,8 +44,8 @@ echo [06] الموردون
 call flutter test test\sync_harness\supplier_flows_test.dart > %OUT%\06_suppliers.txt 2>&1
 call :result 06_suppliers "الموردون"
 
-echo [07] المزامنة: دخان، مخاطر متبقية، دمج الأصناف، ترحيل المخزون
-call flutter test test\sync_harness\smoke_test.dart test\sync_harness\residual_risks_test.dart test\sync_harness\product_merge_test.dart test\sync_harness\stock_migration_test.dart > %OUT%\07_sync.txt 2>&1
+echo [07] المزامنة: دخان، مخاطر متبقية، دمج الأصناف، ترحيل المخزون، هوية العميل
+call flutter test test\sync_harness\smoke_test.dart test\sync_harness\residual_risks_test.dart test\sync_harness\product_merge_test.dart test\sync_harness\stock_migration_test.dart test\sync_harness\customer_identity_test.dart > %OUT%\07_sync.txt 2>&1
 call :result 07_sync "المزامنة"
 
 echo [08] فوضى المزامنة

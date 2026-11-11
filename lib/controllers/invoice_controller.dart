@@ -267,7 +267,8 @@ class InvoiceController {
     // 🛡️ «نفس العميل» = اسم الفاتورة المحفوظ أو اسمه الحالي في بطاقته. بعد تغيير اسم
     // العميل تبقى فواتيره القديمة بالاسم القديم، فكتابة اسمه الجديد كانت تُعدّ «تغيير عميل»
     // فيُرفض الحفظ بحجة رصيد سالب للعميل نفسه (التعذيب متعدد الأجهزة 2026-11-11).
-    String nameKey(String n) => n.replaceAll(' ', '').toLowerCase();
+    // نفس مفتاح الحفظ (saveInvoice): بلا أي فراغات، وبلا فرق حالة الأحرف
+    String nameKey(String n) => n.replaceAll(RegExp(r'\s+'), '').toLowerCase();
     final isCustomerChanged = nameKey(newCustomerName) != nameKey(oldCustomerName) &&
                               nameKey(newCustomerName) != nameKey(oldCustomer.name);
     
@@ -461,17 +462,19 @@ class InvoiceController {
           // كان البحث بالاسم + الهاتف معاً، فاسم موجود مع رقم مختلف (أو بلا رقم)
           // يُنشئ حساباً ثانياً بالاسم نفسه ويقسم دينه على حسابين.
 
-          // تعديل فاتورة محفوظة بالاسم نفسه ⇒ هي لعميلها نفسه (بالمعرّف)، حتى
-          // لو تغيّر اسمه في بطاقته بعد إنشاء الفاتورة.
+          // 👤 تعديل فاتورة لعميلها نفسه ⇒ بالمعرّف لا بالاسم: الاسم المكتوب هو اسم الفاتورة
+          // المحفوظ (وقت البيع) أو اسم العميل الحالي في بطاقته. هكذا لا يغيّر تغييرُ اسم العميل
+          // ولا وجودُ حساب مكرر قديم بالاسم نفسه صاحبَ الدين. اسم غيرهما = عميل آخر (أو جديد).
           final old = data.invoiceToManage;
-          if (!data.isNewInvoice &&
-              old != null &&
-              old.customerId != null &&
-              nameKey(old.customerName) == nameKey(data.customerName)) {
+          if (!data.isNewInvoice && old != null && old.customerId != null) {
             final byId = await txn.query('customers',
                 where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [old.customerId], limit: 1);
             if (byId.isNotEmpty) {
-              customer = Customer.fromMap(byId.first);
+              final current = Customer.fromMap(byId.first);
+              final typed = nameKey(data.customerName);
+              if (typed == nameKey(old.customerName) || typed == nameKey(current.name)) {
+                customer = current;
+              }
             }
           }
 

@@ -1892,6 +1892,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
 
         _loadInvoiceItems();
+        // فُتحت للتعديل مباشرة (معلّقة مثلاً): اسم العميل الحالي من بطاقته
+        if (!isViewOnly) _showCurrentCustomerName();
       } else {
         _totalAmountController.text = '0';
         _loadFounderDefaultRate();
@@ -2902,6 +2904,31 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   }
 
 
+  /// 👤 تعديل فاتورة: حقل العميل يعرض اسمه الحالي من بطاقته (بالمعرّف) لا الاسم المحفوظ
+  /// وقت البيع، فتغيير اسم العميل لا يجعل فاتورته تبدو لغيره. العرض والطباعة قبل التعديل
+  /// يبقيان بالاسم المحفوظ (الفاتورة كما صدرت)؛ والحفظ يربطها بعميلها بالمعرّف
+  /// (InvoiceController.saveInvoice) ويكتب عليها اسمه الحالي.
+  /// لا يمسّ الحقل إن غيّره المستخدم، ولا يعدّ هذا «تغييراً غير محفوظ».
+  Future<void> _showCurrentCustomerName() async {
+    final inv = invoiceToManage;
+    final cid = inv?.customerId;
+    if (inv == null || cid == null || widget.settlementForInvoice != null) return;
+    try {
+      final rows = await (await db.database).query('customers',
+          columns: ['name'], where: 'id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [cid], limit: 1);
+      if (!mounted || rows.isEmpty) return;
+      final current = ((rows.first['name'] as String?) ?? '').trim();
+      String key(String v) => v.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+      if (current.isEmpty || key(current) == key(inv.customerName)) return;
+      if (key(customerNameController.text) != key(inv.customerName)) return; // غيّره المستخدم
+      final hadChanges = hasUnsavedChanges;
+      customerNameController.text = current;
+      hasUnsavedChanges = hadChanges;
+    } catch (e) {
+      debugPrint('⚠️ اسم العميل الحالي للفاتورة: $e');
+    }
+  }
+
   // دالة تفعيل وضع التعديل
   Future<void> _enableEditMode() async {
     // 👤 تعديل فاتورة محفوظة يحتاج صلاحية «تعديل الفواتير»
@@ -2914,6 +2941,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     }
     // 🔒 تثبيت الإدخالات: لا تعديل لفاتورة داخل فترة مثبّتة
     if (!await PeriodLock.guard(context, invoiceToManage?.invoiceDate)) return;
+    if (!mounted) return;
+    await _showCurrentCustomerName();
     if (!mounted) return;
     setState(() {
       isViewOnly = false;
