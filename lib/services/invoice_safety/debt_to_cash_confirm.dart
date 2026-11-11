@@ -62,7 +62,8 @@ class DebtToCashConfirm {
     if (c == null) return true;
     if (!context.mounted) return false;
     final amount = c.ledgerDebt.toStringAsFixed(c.ledgerDebt == c.ledgerDebt.roundToDouble() ? 0 : 2);
-    final dup = c.samePaymentDate != null;
+    final dupDate = c.samePaymentDate; // متغير محلي: داخل الدالة المغلقة لا يُعرف أن c ليس null
+    final dup = dupDate != null;
     final ok = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -74,7 +75,7 @@ class DebtToCashConfirm {
         content: Text(
           'لهذه الفاتورة دين مسجّل في حساب العميل قدره $amount.\n'
           'تحويلها إلى نقد سيطرح $amount من حساب العميل.\n\n'
-          '${dup ? 'يوجد وصل قبض بنفس المبلغ بعد تاريخ الفاتورة (${c.samePaymentDate}).\n'
+          '${dup ? 'يوجد وصل قبض بنفس المبلغ بعد تاريخ الفاتورة ($dupDate).\n'
               'إن كان ذلك الوصل هو ثمن هذه الفاتورة نفسها فلا تحوّلها إلى نقد، '
               'لأن المبلغ سيُطرح مرتين.\n\n' : ''}'
           'هل تريد المتابعة؟',

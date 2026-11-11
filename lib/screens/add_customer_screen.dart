@@ -7,7 +7,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection; // TextDirection من Flutter (ltr)
 import 'package:provider/provider.dart';
 
 import '../models/customer.dart';
