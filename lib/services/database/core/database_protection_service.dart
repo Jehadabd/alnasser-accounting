@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../../../models/transaction.dart';
 import '../../../models/invoice.dart';
+import '../../disk_space/disk_space_guard.dart'; // 💽 حماية امتلاء القرص
 
 /// خدمة حماية قاعدة البيانات
 /// تضمن عدم تلف الفواتير والمعاملات المالية
@@ -634,6 +635,8 @@ class DatabaseProtectionService {
       if (!await backupDir.exists()) {
         await backupDir.create(recursive: true);
       }
+      // 💽 بقايا نسخ ناقصة من محاولة فشلت (قرص ممتلئ مثلاً)
+      await DiskSpaceGuard.removeLeftovers(backupDir);
       
       // 4. إنشاء اسم الملف مع التاريخ والوقت
       final now = DateTime.now();
@@ -652,17 +655,28 @@ class DatabaseProtectionService {
         );
       }
       
-      await sourceFile.copy(backupPath);
-      
-      // 6. نسخ ملفات WAL و SHM إذا كانت موجودة
+      // 💽 نسخ ذرّي: لا يبقى ملف ناقص باسم نسخة سليمة إن امتلأ القرص أثناء النسخ،
+      // ولا تُحذف النسخ القديمة (الخطوة 7) إلا بعد نجاح هذه كاملة.
       final walFile = File('$dbPath-wal');
       final shmFile = File('$dbPath-shm');
-      
-      if (await walFile.exists()) {
-        await walFile.copy('$backupPath-wal');
-      }
-      if (await shmFile.exists()) {
-        await shmFile.copy('$backupPath-shm');
+      try {
+        await DiskSpaceGuard.copyAtomically(sourceFile, backupPath);
+
+        // 6. نسخ ملفات WAL و SHM إذا كانت موجودة
+        if (await walFile.exists()) {
+          await DiskSpaceGuard.copyAtomically(walFile, '$backupPath-wal');
+        }
+        if (await shmFile.exists()) {
+          await DiskSpaceGuard.copyAtomically(shmFile, '$backupPath-shm');
+        }
+      } catch (_) {
+        // نسخة غير مكتملة لا تُحسب نسخة: تُحذف أجزاؤها كلها
+        for (final f in [backupPath, '$backupPath-wal', '$backupPath-shm']) {
+          try {
+            if (await File(f).exists()) await File(f).delete();
+          } catch (_) {}
+        }
+        rethrow;
       }
       
       // 7. حذف النسخ القديمة (الإبقاء على آخر 5 نسخ فقط)
@@ -676,7 +690,9 @@ class DatabaseProtectionService {
     } catch (e) {
       return LocalBackupResult(
         success: false,
-        message: 'فشل إنشاء النسخة الاحتياطية: $e',
+        message: DiskSpaceGuard.isDiskFullError(e)
+            ? DiskSpaceGuard.friendlyMessage('النسخة الاحتياطية (النسخ السابقة باقية كما هي)')
+            : 'فشل إنشاء النسخة الاحتياطية: $e',
         backupPath: null,
       );
     }

@@ -43,6 +43,7 @@ import '../services/license_service.dart'; // 🔐 نظام التراخيص
 import '../widgets/invoice_range_dialog.dart';
 import '../services/backup_package.dart';
 import '../services/upload_eta.dart';
+import '../services/disk_space/disk_space_guard.dart'; // 💽 حماية امتلاء القرص
 // ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
 // تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
 class MainScreen extends StatefulWidget {
@@ -84,6 +85,8 @@ class _MainScreenState extends State<MainScreen> {
         WaAutoScheduler.start(context, primarySeat: SeatService.isPrimary);
         // 📣 النشر الآلي للمنشورات المجدولة (الجهاز الرئيسي فقط؛ لا شيء ما لم يُفعَّل)
         if (SeatService.isPrimary) MarketingPublisher.start();
+        // 💽 فراغ القرص: تنبيه قبل أن يمتلئ (عند التشغيل وكل 30 دقيقة)
+        if (mounted) DiskSpaceGuard.startMonitor(context);
       });
       // 📊 ملخص المالك اليومي على تيليجرام (إن فُعّل على هذا الجهاز)
       OwnerSummary.start();

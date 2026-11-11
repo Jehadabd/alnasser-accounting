@@ -26,6 +26,9 @@ import '../wa_messages/wa_auto_docs.dart'; // 🤖 الإرسال التلقائ
 import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال عبر واتساب
 import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../services/database/business/customer_name_rule.dart'; // 🔤 الاسم بلا مسافات
+import '../services/disk_space/disk_space_guard.dart'; // 💽 حماية امتلاء القرص
+import '../services/invoice_safety/debt_to_cash_confirm.dart'; // 🛑 تأكيد التحويل إلى نقد
+import '../services/invoice_safety/line_math_check.dart'; // 🚨 مبلغ السطر = الكمية × السعر
 // import '../services/drive_service.dart'; // Removed
 import '../services/printed_invoice_pdf.dart'; // 🖨️ التصميم الأصلي الموحّد (طباعة + تيليجرام)
 import '../erp/sales/roll_invoice_pdf.dart'; // 🧾 طباعة 80mm
@@ -231,6 +234,25 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       return null;
     }
 
+    // 1.أ 🚨 مبلغ كل سطر = الكمية × السعر (منقول من التطبيق القديم): خلل في الشاشة
+    //      لا يُحفظ بصمت
+    {
+      final mismatch = LineMathCheck.firstMismatch(inputData.invoiceItems);
+      if (mismatch != null) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('⚠️ خلل حسابي في صنف', style: TextStyle(color: Colors.red)),
+              content: Text(mismatch, style: const TextStyle(height: 1.6)),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+            ),
+          );
+        }
+        return null;
+      }
+    }
+
     // 2. Debt Validation
     final debtValidation = await controller.validateDebtChangeWontCauseNegativeBalance(inputData);
     if (!debtValidation.isValid) {
@@ -250,6 +272,15 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         );
       }
       return null;
+    }
+
+    // 🛑 تحويل فاتورة لها دين في السجل إلى نقد: تأكيد صريح، وتحذير إن وُجد وصل قبض
+    //    بالمبلغ نفسه (يُطرح المبلغ مرتين) — منقول من التطبيق القديم
+    if (!inputData.isNewInvoice && widget.settlementForInvoice == null) {
+      if (!mounted) return null;
+      if (!await DebtToCashConfirm.ask(context, inputData.invoiceToManage, inputData.paymentType)) {
+        return null;
+      }
     }
 
     // 🚫 سقف الدين: فاتورة آجلة جديدة، أو زيادة دين فاتورة عند تعديلها (الفرق فقط)
@@ -314,6 +345,24 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         if (mounted) {
           ScaffoldMessenger.of(context)
               .showSnackBar(SnackBar(content: Text(block), backgroundColor: Colors.red.shade700));
+        }
+        return null;
+      }
+    }
+
+    // 💽 القرص شبه ممتلئ: لا محاولة كتابة (رسالة واضحة بدل خطأ تقني)
+    {
+      final full = await DiskSpaceGuard.blockSaveReason('الفاتورة');
+      if (full != null) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('💽 القرص ممتلئ', style: TextStyle(color: Colors.red)),
+              content: Text(full, style: const TextStyle(height: 1.6)),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+            ),
+          );
         }
         return null;
       }
@@ -499,7 +548,11 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('فشل حفظ الفاتورة: $e'), backgroundColor: Colors.red),
+              content: Text(DiskSpaceGuard.isDiskFullError(e)
+                  ? DiskSpaceGuard.friendlyMessage('الفاتورة')
+                  : 'فشل حفظ الفاتورة: $e'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: DiskSpaceGuard.isDiskFullError(e) ? 10 : 4)),
         );
       }
       return null;
