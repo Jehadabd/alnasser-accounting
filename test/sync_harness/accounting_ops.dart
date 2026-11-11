@@ -163,7 +163,7 @@ Future<Object?> _acctOp(String op, Map<String, Object?> a) async {
       var cod = 0;
       for (final o in (a['orders'] as List).cast<Map>()) {
         final id = await st.saveOrder(DeliveryOrder(
-            companyId: cid, customerName: 'زبون توصيل', codFils: (o['cod'] as num).toInt(), feeFils: (o['fee'] as num).toInt()));
+            companyId: cid, customerName: 'زبون توصيل', codFils: (o['cod'] as num).toInt(), feeFils: (o['fee'] as num).toInt(), createdAt: DateTime.now()));
         var ord = (await st.orders(companyId: cid)).firstWhere((x) => x.id == id);
         await st.setStatus(ord, DeliveryStatus.out);
         ord = (await st.orders(companyId: cid)).firstWhere((x) => x.id == id);

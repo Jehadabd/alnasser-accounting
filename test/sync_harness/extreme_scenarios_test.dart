@@ -312,7 +312,7 @@ void main() {
           bad('60 قسطاً رُفضت: ${inst['err']}');
         } else {
           final parts = (inst['dues'] as List).cast<Map>();
-          near('مجموع الستين قسطاً', parts.fold(0.0, (a, p) => a + (p['amount'] as num).toDouble()), 100000);
+          near('مجموع الستين قسطاً', parts.fold<double>(0.0, (sum, p) => sum + (p['amount'] as num).toDouble()), 100000);
           if (parts.any((p) => !Iqd.isWhole(p['amount'] as num))) bad('قسط بكسور من الستين');
           for (final p in parts.take(3)) {
             final s = (await h.rest('D2', 'dueSettle', {'id': p['id'], 'amount': p['amount']}) as Map);
