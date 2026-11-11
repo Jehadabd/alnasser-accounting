@@ -151,6 +151,10 @@ class DueItemsService {
       if (amount <= 0) throw ErpException('المبلغ أقل من نصف دينار');
       // أقساط بالدينار الصحيح: لا قسط بصفر دينار
       if (amount < installments) throw ErpException('المبلغ أصغر من عدد الأقساط — كل قسط دينار واحد على الأقل');
+    } else {
+      // 💵 بالعملة الأجنبية: لأقرب سنت — فما يُخزَّن هو ما يُحسب منه أثره بالدينار
+      amount = roundMoney(amount);
+      if (amount <= 0) throw ErpException('المبلغ يجب أن يكون أكبر من صفر');
     }
     await PeriodLock.assertOpen(issueDate);
     final db = await erpDb();
@@ -260,6 +264,10 @@ class DueItemsService {
     // 💵 تحصيل بالدينار: دينار صحيح (تحصيل من عميل — النصف للأسفل؛ صرف لمورد — للأعلى)
     if (((d['currency'] as String?) ?? 'IQD') == 'IQD') {
       amount = dueIsReceivable(d['kind'] as String) ? Iqd.down(amount) : Iqd.up(amount);
+    } else {
+      // 💵 بالعملة الأجنبية: لأقرب سنت — المحصَّل المخزَّن وأثره بالدينار من الرقم نفسه،
+      //    والمتبقي (المقرَّب لسنت) لا يُتجاوز بأجزاء سنت
+      amount = roundMoney(amount);
     }
     if (amount <= 0) throw ErpException('المبلغ يجب أن يكون أكبر من صفر');
     if (amount > remaining + kMoneyEpsilon) {
