@@ -718,11 +718,16 @@ void main() {
         count('جولة مزامنة');
       }
 
+      var reported = 0;
       void progress() {
         if (ops % 1000 != 0) return;
         final s = sw.elapsed.inSeconds;
         final eta = ops == 0 ? 0 : (s * (totalOps - ops) / ops).round();
         print('… $ops/$totalOps عملية — ${s ~/ 60}د — المتبقي ≈ ${eta ~/ 60}د — مشاكل=${problems.length}');
+        // تُطبع المشكلة لحظة ظهورها: إن انطفأ الحاسوب قبل النهاية لا تضيع تفاصيلها
+        for (; reported < problems.length; reported++) {
+          print('   ⚠️ مشكلة ${reported + 1}: ${problems[reported]}');
+        }
       }
 
       // ── 1) الإنشاء: محلية على D1، ثم مزامنة، ثم فواتير D2 (تصل بالمزامنة) ──

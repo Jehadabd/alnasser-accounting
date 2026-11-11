@@ -131,6 +131,7 @@ void main() {
 
     bool stop() => problems.length >= _maxProblems;
 
+    var reported = 0; // المشاكل تُطبع لحظة ظهورها (لا تضيع إن انطفأ الحاسوب)
     final loopWatch = Stopwatch(); // يبدأ مع العمليات بالقرعة (التجهيز لا يُحسب في التقدير)
     void live(String phase) {
       final pct = (ops * 100 / _ops).clamp(0, 100).toStringAsFixed(1);
@@ -553,8 +554,13 @@ void main() {
             }
           case 'اسم العميل بمسافات زائدة':
             {
-              final n = nameOn(x.dev, x.cust);
-              x.nameField = '  ${n.replaceFirst(' ', '   ')} ';
+              // اسم غيّره جهاز آخر ولم تكتمل المزامنة: قد يكون وصل هذا الجهاز لحظياً أو لا،
+              // فلا يُعرف أي اسم «موجود» عليه — يُكتب الاسم فقط حين يكون معروفاً بلا شك.
+              final p = pendingRename[x.cust];
+              if (p == null || p.$1 == x.dev) {
+                final n = nameOn(x.dev, x.cust);
+                x.nameField = '  ${n.replaceFirst(' ', '   ')} ';
+              }
             }
           case 'اسم عميل جديد':
             x.nameField = 'عميل جديد متعدد ${++newCustomers}';
@@ -736,7 +742,10 @@ void main() {
             count('رُفض كما يجب: تغيير اسم عميل جهاز آخر');
           }
           final b = await custBalance(dev, c);
-          if (b['name'] != nameOn(dev, c)) problems.add('$label: تغيّر الاسم على $dev رغم الرفض: ${b['name']}');
+          // الاسم الصحيح أو اسمه قبل تغيير صاحبه (إن لم يصل بعد) — غير ذلك = تغيّر رغم الرفض
+          if (b['name'] != names[c] && b['name'] != pendingRename[c]?.$2) {
+            problems.add('$label: تغيّر الاسم على $dev رغم الرفض: ${b['name']}');
+          }
           return;
         }
         if (owned.isEmpty) return;
@@ -862,6 +871,9 @@ void main() {
           sinceSync = 0;
         }
         if (ops % 1000 == 0) {
+          for (; reported < problems.length; reported++) {
+            print('   ⚠️ مشكلة ${reported + 1}: ${problems[reported]}');
+          }
           final s = sw.elapsed.inSeconds;
           final eta = (s * (_ops - ops) / ops).round();
           print('… $ops/$_ops عملية — ${s ~/ 60}د — المتبقي ≈ ${eta ~/ 60}د — فواتير=${state.length} '
