@@ -96,6 +96,62 @@ void main() {
         if (countWant != null && txs.length != countWant) bad('$label: ${txs.length} معاملة والمتوقع $countWant');
       }
 
+      // 🔬 عند أول فرق في المزامنة: تشخيص كامل في ملف (مرة واحدة) — أي جهاز ينقصه ماذا،
+      //    هل وصل إلى السحابة، حالة كل جهاز، وآخر سجلّاته.
+      var diagDone = false;
+      Future<void> diag(String label, List<String> all) async {
+        if (diagDone) return;
+        diagDone = true;
+        final b = StringBuffer()..writeln('🔬 تشخيص المزامنة عند $label — seed=$seed');
+        b.writeln('كل الفروق (${all.length}):');
+        for (final e in all) {
+          b.writeln('  $e');
+        }
+        final cloudTx = h.cloud.collection('transactions');
+        final cloudInv = h.cloud.collection('invoices');
+        b.writeln('السحابة: ${cloudTx.length} معاملة، ${cloudInv.length} فاتورة — الحقيقة: ${h.truth.txs.length} معاملة');
+        for (final d in devs) {
+          final st = (await h.d(d).call('state') as Map).cast<String, Object?>();
+          final txs = (st['txs'] as List).cast<Map>();
+          final have = {for (final t in txs) t['uuid'] as String?: t};
+          b.writeln('══ $d: معلّقة=${st['pending']} استعادة=${st['recovering']} تمهيد=${st['bootstrapping']} '
+              'أخطاء=${st['errors']} معاملات=${txs.length}');
+          final missing = h.truth.txs.entries.where((e) => !e.value.deleted && !have.containsKey(e.key)).toList();
+          b.writeln('   غائبة عنه من الحقيقة: ${missing.length} (منها في السحابة: ${missing.where((e) => cloudTx.containsKey(e.key)).length})');
+          for (final e in missing.take(20)) {
+            final c = cloudTx[e.key];
+            b.writeln('   ✗ ${e.key} ${e.value.amount} نوع=${e.value.type} مالك=${e.value.owner} '
+                'عميل=${h.truth.customers[e.value.cust]?.name} '
+                'في السحابة=${c == null ? 'لا' : 'نعم del=${c['isDeleted']} من=${c['deviceId']}'}');
+          }
+          final extra = txs.where((t) => t['uuid'] != null && !h.truth.txs.containsKey(t['uuid']) && (t['del'] ?? 0) == 0).toList();
+          b.writeln('   زائدة عنده ليست في الحقيقة: ${extra.length}');
+          for (final t in extra.take(10)) {
+            b.writeln('   + $t');
+          }
+          final unUp = txs.where((t) => (t['up'] ?? 0) == 0 && (t['mine'] ?? 1) != 0).length;
+          b.writeln('   لم تُرفع: $unUp');
+          final errs = (await h.d(d).call('errors') as List).cast<String>();
+          for (final e in errs.take(10)) {
+            b.writeln('   ❌ ${e.split('\n').take(6).join(' | ')}');
+          }
+          final logs = (await h.d(d).call('logs', {'n': 3000}) as List).cast<String>();
+          final key = RegExp(r'❌|⚠️|Exception|Error|خطأ|فشل|تعذّر|IQD|رُفض|abort', caseSensitive: false);
+          final hits = logs.where((l) => key.hasMatch(l) && !l.contains('FTS5')).toList();
+          b.writeln('   سجلّ (${hits.length} سطراً مهماً من ${logs.length}):');
+          for (final l in hits.skip(hits.length > 60 ? hits.length - 60 : 0)) {
+            b.writeln('     ${l.length > 400 ? l.substring(0, 400) : l}');
+          }
+        }
+        final m = RegExp(r'رصيد (.+?) = ').firstMatch(all.first);
+        if (m != null) {
+          final cu = h.truth.customers.entries.where((e) => e.value.name == m.group(1)).map((e) => e.key).firstOrNull;
+          if (cu != null) b.writeln(await h.explain(cu));
+        }
+        File('${out.path}${Platform.pathSeparator}diag_$seed.txt').writeAsStringSync(b.toString());
+        print('🔬 التشخيص: ${out.path}${Platform.pathSeparator}diag_$seed.txt');
+      }
+
       for (var i = 1; i <= _ops; i++) {
         if (problems.length >= _maxProblems) break;
         final dev = devs[rnd.nextInt(2)];
@@ -228,6 +284,7 @@ void main() {
         }
         if (i % (_quick ? 50 : 250) == 0 || i == _ops) {
           errs = await h.settle();
+          if (errs.isNotEmpty) await diag(label, errs);
           for (final e in errs.take(5)) {
             bad('$label مزامنة: $e');
           }
