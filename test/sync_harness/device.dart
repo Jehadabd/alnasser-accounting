@@ -33,6 +33,7 @@ import 'package:alnaser/services/database/business/financial_deep_check.dart';
 import 'package:alnaser/services/held_invoices.dart';
 import 'package:alnaser/utils/iqd.dart'; // 💵
 import 'rest_ops.dart'; // 🔨 اختبار البقية القاسي
+import 'accounting_ops.dart'; // 🏦 الصندوق والمحاسبة
 import 'package:alnaser/services/license_service.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
@@ -1220,6 +1221,10 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
 
     case 'errors':
       return List<String>.from(errors);
+
+    case 'acct':
+      // 🏦 أفعال الصندوق والمحاسبة (accounting_ops.dart)
+      return await acctOp(a['op'] as String, ((a['args'] as Map?) ?? const {}).cast<String, Object?>());
 
     case 'rest':
       // 🔨 أفعال اختبار البقية (rest_ops.dart)

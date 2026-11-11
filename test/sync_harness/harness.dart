@@ -814,8 +814,12 @@ class Harness {
       h.replies.close();
     }
     devices.clear();
-    for (final iso in _frozen) {
-      iso.kill();
+    // 📊 قياس التغطية (claude_money_coverage.bat): الأجهزة تبقى موقوفة لا مقتولة حتى
+    // يجمع flutter test ما نفّذته من أسطر التطبيق
+    if (!const bool.fromEnvironment('COVERAGE')) {
+      for (final iso in _frozen) {
+        iso.kill();
+      }
     }
     cloud.close();
     if (keepFiles) {
