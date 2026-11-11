@@ -807,8 +807,11 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
             cashBoxId: box.isEmpty ? null : box.first['id'] as int,
             date: DateTime.now(),
             lines: lines);
+        // معاملات هذا المرتجع فقط: أنشأها هذا الجهاز، وليست معاملة فاتورة. (الأجهزة تعمل
+        // معاً: معاملة واردة بالمزامنة في اللحظة نفسها كانت تُحسب منه — الشامل seed=653456)
         final tx = await db.rawQuery(
-            'SELECT transaction_uuid AS u, amount_changed AS a FROM transactions WHERE id > ? AND customer_id = ?',
+            'SELECT transaction_uuid AS u, amount_changed AS a FROM transactions WHERE id > ? AND customer_id = ? '
+            "AND COALESCE(is_created_by_me, 1) = 1 AND (invoice_sync_uuid IS NULL OR invoice_sync_uuid = '')",
             [before.first['m'], cid]);
         return {'ok': true, 'id': id, 'txs': [for (final t in tx) [t['u'], (t['a'] as num).toDouble()]]};
       } catch (e) {
@@ -823,7 +826,11 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       } catch (e) {
         return {'ok': false, 'err': '$e'};
       }
-      final tx = await db.rawQuery('SELECT transaction_uuid AS u, amount_changed AS a FROM transactions WHERE id > ?',
+      // معاملات هذا الإلغاء فقط (انظر salesReturn): معاملة فاتورة 15000.01 وصلت بالمزامنة أثناء
+      // الإلغاء فحُسبت منه (الشامل seed=653456، عملية 3010)
+      final tx = await db.rawQuery(
+          'SELECT transaction_uuid AS u, amount_changed AS a FROM transactions WHERE id > ? '
+          "AND COALESCE(is_created_by_me, 1) = 1 AND (invoice_sync_uuid IS NULL OR invoice_sync_uuid = '')",
           [before.first['m']]);
       return {'ok': true, 'txs': [for (final t in tx) [t['u'], (t['a'] as num).toDouble()]]};
 
