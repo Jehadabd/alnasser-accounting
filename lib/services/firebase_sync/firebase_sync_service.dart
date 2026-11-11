@@ -2880,7 +2880,13 @@ class FirebaseSyncService {
 
     // 🔒 القفل يُؤخذ قبل أي await (الفحص ثم الانتظار ثم الأخذ كان يسمح برفعين متوازيين)
     final lockKey = 'customer_$syncUuid';
-    if (_uploadLocks[lockKey] == true) return true;
+    if (_uploadLocks[lockKey] == true) {
+      // 🛡️ رفع جارٍ قرأ الصف قبل هذا الطلب (اسم غُيّر للتو بعد حفظ فاتورة مثلاً):
+      // كان يُتخطّى هذا الطلب بصمت، ثم يؤشّر الرفع الجاري «مرفوعاً» فيضيع الاسم
+      // الجديد إلى الأبد. نطلب جولة رفع ثانية بعد انتهائه (اختبار التعديلات المركّبة).
+      _customerUploadAgain.add(syncUuid);
+      return true;
+    }
     _uploadLocks[lockKey] = true;
 
     String? walOperationId;
@@ -2985,8 +2991,11 @@ class FirebaseSyncService {
       );
       await _coordinator!.markFirebaseSynced('customer', syncUuid);
 
+      // 🛡️ مقارنة قبل التأشير: تغيّر الصف أثناء الرفع (اسم/هاتف جديد) = يبقى
+      // معلّقاً فتلتقطه الجولة التالية. كان يُؤشَّر «مرفوعاً» دائماً فيُفقد التعديل.
       await db.update('customers', {'synced_at': now.toIso8601String()},
-          where: 'sync_uuid = ?', whereArgs: [syncUuid]);
+          where: 'sync_uuid = ? AND last_modified_at IS ?',
+          whereArgs: [syncUuid, row['last_modified_at']]);
       if (tomb == 2) {
         await db.update('customers', {'tombstoned': 1},
             where: 'sync_uuid = ? AND tombstoned = 2', whereArgs: [syncUuid]);
@@ -3022,6 +3031,24 @@ class FirebaseSyncService {
       return false;
     } finally {
       _uploadLocks.remove(lockKey);
+      if (_customerUploadAgain.remove(syncUuid)) {
+        unawaited(_uploadCustomerAgain(syncUuid));
+      }
+    }
+  }
+
+  /// عملاء طُلب رفعهم أثناء رفع جارٍ لهم (انظر uploadCustomer).
+  final Set<String> _customerUploadAgain = <String>{};
+
+  /// جولة رفع ثانية بالصف الحالي من القاعدة.
+  Future<void> _uploadCustomerAgain(String syncUuid) async {
+    try {
+      final db = await _db.database;
+      final rows = await db.query('customers', where: 'sync_uuid = ?', whereArgs: [syncUuid], limit: 1);
+      if (rows.isEmpty) return;
+      await uploadCustomer(Map<String, dynamic>.from(rows.first));
+    } catch (e) {
+      debugPrint('⚠️ جولة رفع ثانية للعميل $syncUuid: $e (ستتكفل بها المزامنة الخلفية)');
     }
   }
 
@@ -5781,9 +5808,10 @@ class FirebaseSyncService {
           .timeout(const Duration(seconds: 60));
 
       final db = await _db.database;
+      // 🛡️ لا نؤشّر «مرفوعاً» صفاً تغيّر بعد قراءته (انظر uploadCustomer)
       await db.rawUpdate(
-        'UPDATE customers SET synced_at = ? WHERE sync_uuid = ?',
-        [DateTime.now().toIso8601String(), syncUuid],
+        'UPDATE customers SET synced_at = ? WHERE sync_uuid = ? AND last_modified_at IS ?',
+        [DateTime.now().toIso8601String(), syncUuid, customerData['last_modified_at']],
       );
     } catch (e) {
       await _addToRetryQueue(_RetryOperation(

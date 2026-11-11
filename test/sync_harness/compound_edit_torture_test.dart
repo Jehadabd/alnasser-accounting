@@ -1178,9 +1178,31 @@ void main() {
       // ─────────────────────────── المزامنة والفحص الشامل ───────────────────────────
 
       final closed = <String>{};
+      /// تشخيص «معاملة لم تُرفع»: حالة فاتورتها محلياً وفي السحابة.
+      Future<String> uploadDiag(String dev, String tx, String inv) async {
+        try {
+          final r = (await h.d(dev).call('invoiceDetail', {'inv': inv}) as Map?)?.cast<String, Object?>();
+          final i = (r?['invoice'] as Map?)?.cast<String, Object?>();
+          final c = h.cloud.collection('invoices')[inv];
+          final ct = ((c?['transactions'] as List?) ?? const [])
+              .cast<Map>()
+              .where((t) => t['transaction_uuid'] == tx)
+              .map((t) => '${t['amount_changed']}${t['is_deleted'] == 1 ? ' محذوفة' : ''}')
+              .join('،');
+          return ' ⟵ تشخيص: الفاتورة على $dev is_synced=${i?['is_synced']} نسخة=${i?['version']} '
+              'حالة=${i?['status']}؛ في السحابة: ${c == null ? 'غائبة' : 'نسخة=${c['version']} '
+                  'مبلغ المعاملة=${ct.isEmpty ? 'غير موجودة' : ct}'}';
+        } catch (e) {
+          return ' ⟵ تعذّر التشخيص: $e';
+        }
+      }
+
       Future<void> crossCheck(String label) async {
         final e = await h.settle();
-        problems.addAll(e.map((x) => '$label: $x'));
+        for (final x in e) {
+          final m = RegExp(r'^(D\d): .*لم تُرفع: (\S+) .*فاتورة=(inv_\S+)').firstMatch(x);
+          problems.add('$label: $x${m == null ? '' : await uploadDiag(m.group(1)!, m.group(2)!, m.group(3)!)}');
+        }
         homeOnly.clear();
         offline.clear(); // settle يعيد الكل متصلاً
         for (final dev in devs) {

@@ -338,11 +338,13 @@ class AppProvider with ChangeNotifier {
       }
       _applySearchFilter();
       notifyListeners();
-
-      // 🚀 رفع فوري للتعديل أيضاً (الاسم/الهاتف/العنوان تصل فوراً)
-      final editedId = customer.id;
-      if (editedId != null) unawaited(_syncCustomerNow(editedId));
     }
+
+    // 🚀 رفع فوري للتعديل أيضاً (الاسم/الهاتف/العنوان تصل فوراً) — حتى لو لم يكن
+    // العميل في الصفحة المحمّلة من القائمة (فُتح من البحث أو من فاتورة): كان لا
+    // يُرفع حينها إلا بالدورة الخلفية بعد دقائق.
+    final editedId = customer.id;
+    if (editedId != null) unawaited(_syncCustomerNow(editedId));
   }
 
   Future<void> deleteCustomer(int id) async {
