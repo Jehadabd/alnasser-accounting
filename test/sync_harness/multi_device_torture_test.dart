@@ -701,7 +701,11 @@ void main() {
             h.truth.txs[t[0] as String] = TruthTx(cur.cust, dev, (t[1] as num).toDouble(), 'manual_payment');
             sum += (t[1] as num).toDouble();
           }
-          near('$label (مرتجع على الحساب) أثره على الدين', sum, -price);
+          // سعر الوحدة بعد خصم بنسبة قد يحمل كسر فلس (1750.5 × 0.99 = 1732.995) والتطبيق
+          // يقرّب المرتجع إلى فلس: الفرق حتى نصف فلس تقريب صحيح لا خطأ.
+          if ((sum + price).abs() > 0.00501) {
+            problems.add('$label (مرتجع على الحساب) أثره على الدين = $sum والمتوقع ${-price}');
+          }
           h.truth.products[pipe]!.movements += 1;
           cur.returned = true;
           touch(dev, cur.cust);
