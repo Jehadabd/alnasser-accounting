@@ -6,6 +6,7 @@
 // والثوابت المحاسبية بعد كل فعل. كل فعل يعيد نتيجته أو {'ok': false, 'err': ...}.
 
 import 'package:alnaser/accounting/ledger.dart';
+import 'package:alnaser/accounting/posting_engine.dart';
 import 'package:alnaser/accounting/vouchers_service.dart';
 import 'package:alnaser/erp/control/cash_count_service.dart';
 import 'package:alnaser/erp/control/fixed_assets_service.dart';
@@ -17,6 +18,10 @@ import 'package:alnaser/services/database_service.dart';
 import 'package:sqflite/sqflite.dart';
 
 double _d(Object? v) => (v as num?)?.toDouble() ?? 0.0;
+
+/// ما يظهر عند قراءة أرصدة الصناديق، يُسلَّم مع الفحص التالي (acctInvariants)
+final _pendingProblems = <String>[];
+final _pendingNotes = <String>{};
 
 Future<Object?> acctOp(String op, Map<String, Object?> a) async {
   try {
@@ -44,10 +49,30 @@ Future<Object?> _acctOp(String op, Map<String, Object?> a) async {
         'boxes': [for (final b in boxes) b.id],
         'accounts': [for (final r in accs) r['id']],
         'expense': [for (final r in accs) if (r['type'] == 'expense') r['id']],
+        'revenue': [for (final r in accs) if (r['type'] == 'revenue') r['id']],
       };
 
     case 'boxBalances':
-      return {for (final e in (await VouchersService().cashBoxBalances()).entries) '${e.key}': e.value};
+      // كما تفعل الشاشة الرئيسية للمحاسبة: ترحيل المستندات (الأصول، الاستبعاد، الجرد، التوصيل...)
+      // ثم قراءة الأرصدة من الدفتر. ما يختلف قبل الترحيل وبعده يُسجَّل ملاحظةً:
+      // هو ما تعرضه شاشة الصناديق إن فُتحت قبل أي ترحيل.
+      final vs = VouchersService();
+      final raw = await vs.cashBoxBalances();
+      final s = await PostingEngine().syncAll();
+      for (final e in s.errors) {
+        _pendingProblems.add('الترحيل: $e');
+      }
+      final posted = await vs.cashBoxBalances();
+      final srcs = await db.rawQuery('''
+        SELECT DISTINCT e.source_type AS t FROM journal_entries e JOIN journal_lines l ON l.entry_id = e.id
+        WHERE l.account_id IN (SELECT account_id FROM cash_boxes)''');
+      for (final e in posted.entries) {
+        if (((raw[e.key] ?? 0) - e.value).abs() > 0.005) {
+          _pendingNotes.add('رصيد الصندوق قبل الترحيل لا يشمل كل المستندات (شاشة الصناديق لا ترحّل) — '
+              'مصادر قيود الصندوق: ${srcs.map((r) => r['t']).join('، ')}');
+        }
+      }
+      return {for (final e in posted.entries) '${e.key}': e.value};
 
     case 'voucher':
       final id = await VouchersService().create(
@@ -235,5 +260,9 @@ Future<Map<String, Object?>> _invariants(Database db) async {
   for (final r in frac) {
     notes.add('${r['n']} سطر قيد بكسور من «${r['st']}»');
   }
+  out.addAll(_pendingProblems);
+  _pendingProblems.clear();
+  notes.addAll(_pendingNotes);
+  _pendingNotes.clear();
   return {'problems': out, 'notes': notes};
 }

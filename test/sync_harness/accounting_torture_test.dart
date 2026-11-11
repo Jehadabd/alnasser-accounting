@@ -64,6 +64,8 @@ void main() {
         return;
       }
       final expAcc = expense.isNotEmpty ? expense.first : accs.first;
+      final revenue = (setup['revenue'] as List).map((x) => (x as num).toInt()).toList();
+      final revAcc = revenue.isNotEmpty ? revenue.first : accs.first;
       final start = (await op('boxBalances')).map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
       final box = {for (final b in boxes) b: start[b] ?? 0.0}; // الحقيقة
       final vouchers = <int, (String, int, int?, double)>{}; // سند ← (نوعه، صندوقه، صندوق التحويل، مبلغه)
@@ -99,7 +101,7 @@ void main() {
           final type = const ['receipt', 'income', 'payment', 'expense', 'transfer'][rnd.nextInt(5)];
           final amount = pick([1000, 25000.5, 0.4, 999999999.75, 0, -50, 3000000]);
           final to = type == 'transfer' ? boxes.firstWhere((x) => x != b) : null;
-          final acc = type == 'transfer' ? null : (type == 'expense' ? expAcc : accs[rnd.nextInt(accs.length)]);
+          final acc = type == 'transfer' ? null : (type == 'expense' ? expAcc : type == 'income' ? revAcc : accs[rnd.nextInt(accs.length)]);
           final r = await op('voucher', {'type': type, 'amount': amount, 'box': b, 'toBox': to, 'acc': acc});
           if (amount <= 0) {
             if (r['ok'] == true) bad('$label: قُبل سند $type بمبلغ $amount');
