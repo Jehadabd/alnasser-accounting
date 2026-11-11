@@ -318,7 +318,9 @@ void main() {
         if (x.paid < 0) return 'مسدد سالب';
         if (x.discount >= x.itemsTotal) return 'خصم ≥ الإجمالي';
         if (x.paid > x.finalTotal + 0.01) return 'مسدد > الإجمالي';
-        if (x.ptype == 'نقد' && (x.paid - x.finalTotal).abs() > 0.01) return 'نقد بمسدد ناقص';
+        // بالفلس: فحص السلامة المالية (FinancialIntegrityGuard) يرفض نقداً ينقصه فلس واحد،
+        // وإن سمح به التحقق الأول (سماحية 0.01). الشامل seed=653456: إجمالي 0.01 ومسدد 0 (عملية 1540).
+        if (x.ptype == 'نقد' && (x.paid - x.finalTotal).abs() >= 0.005) return 'نقد بمسدد ناقص';
         return null;
       }
 
