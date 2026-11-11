@@ -303,12 +303,15 @@ class TransactionDao {
             'WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
             [oldTx.customerId],
           );
-          final others = ((sumRows.first['total'] as num?)?.toDouble() ?? 0.0) -
+          final sumNow = (sumRows.first['total'] as num?)?.toDouble() ?? 0.0;
+          final others = sumNow -
               (((oldTxRes.first['is_deleted'] as num?)?.toInt() ?? 0) == 1 ? 0.0 : oldTx.amountChanged);
           final iqdAmount = Iqd.ledgerAmount(updated.amountChanged, others);
           if (iqdAmount != updated.amountChanged) {
             updated = updated.copyWith(amountChanged: iqdAmount);
           }
+          // 🛡️ كما في تعديل الفاتورة: يُمنع تعديل يُنقص رصيد العميل إلى ما دون الصفر
+          assertNotNegative(before: sumNow, after: others + updated.amountChanged, what: 'تعديل هذه المعاملة');
         }
 
         // جلب المعاملات السابقة لحساب الرصيد
@@ -392,6 +395,17 @@ class TransactionDao {
     }
   }
 
+  /// 🛡️ قاعدة الرصيد السالب (كما في InvoiceController.validateDebtChangeWontCauseNegativeBalance):
+  /// يُرفض التغيير فقط إن كان هو نفسه يُنقص رصيد العميل إلى ما دون الصفر. عميل رصيده
+  /// سالب أصلاً لا يُمنع من تعديل يزيد رصيده أو لا يغيّره.
+  static void assertNotNegative({required double before, required double after, required String what}) {
+    if (after < before - 0.005 && after < -0.01) {
+      String f(double v) => v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2);
+      throw Exception('لا يمكن $what: رصيد العميل سيصبح ${f(after)} (سالباً). '
+          'رصيده الحالي ${f(before)}.');
+    }
+  }
+
   /// تحويل نوع المعاملة
   Future<void> convertTransactionType(int transactionId) async {
     final db = await getDatabase();
@@ -410,6 +424,18 @@ class TransactionDao {
       // يقلب رصيد هذا الجهاز وحده ولا يصل لأي جهاز — تباعد دائم بضعف المبلغ.
       if (!transaction.isCreatedByMe) {
         throw Exception('هذه المعاملة أُنشئت على جهاز آخر ولا يمكن تحويلها من هذا الجهاز.');
+      }
+
+      // 🛡️ كما في تعديل الفاتورة: تحويل دين إلى تسديد لا يجعل رصيد العميل سالباً
+      {
+        final sumRows = await db.rawQuery(
+          'SELECT COALESCE(SUM(amount_changed), 0) AS total FROM transactions '
+          'WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+          [transaction.customerId],
+        );
+        final sumNow = (sumRows.first['total'] as num?)?.toDouble() ?? 0.0;
+        assertNotNegative(
+            before: sumNow, after: sumNow - 2 * transaction.amountChanged, what: 'تحويل هذه المعاملة إلى تسديد');
       }
 
       final transactions = await getCustomerTransactions(

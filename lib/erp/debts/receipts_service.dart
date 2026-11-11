@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import '../../accounting/ledger.dart';
 import '../../accounting/vouchers_service.dart';
 import '../../models/supplier_payment.dart';
+import '../../providers/app_provider.dart';
 import '../../services/purchase_service.dart';
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
@@ -45,7 +46,9 @@ class ReceiptsService {
   /// يحفظ وصل قبض. يعيد رقم الوصل. الأسطر تُنفَّذ واحداً واحداً؛ إن فشل سطر
   /// (مثلاً عميل مقفل من جهاز آخر) يُبلَّغ عنه ولا يُلغى ما نجح قبله.
   Future<ReceiptResult> createCustomerReceipt(
-    BuildContext context, {
+    BuildContext? context, {
+    // بلا شاشة (الاختبار على الكود الحقيقي): المزوّد يُمرَّر صراحةً
+    AppProvider? provider,
     required DateTime date,
     required int cashBoxId,
     required String currency,
@@ -107,13 +110,13 @@ class ReceiptsService {
 
     final errors = <String>[];
     for (final l in valid) {
-      if (!context.mounted) {
+      if (context != null && !context.mounted) {
         errors.add('أُغلقت الشاشة قبل إكمال الوصل');
         break;
       }
       try {
         final before = await CustomerMoney.balance(db, l.customerId);
-        if (!context.mounted) {
+        if (context != null && !context.mounted) {
           errors.add('أُغلقت الشاشة قبل إكمال الوصل');
           break;
         }
@@ -123,6 +126,7 @@ class ReceiptsService {
         if (amountBase > 0) {
           payUuid = await CustomerMoney.post(
             context,
+            provider: provider,
             customerId: l.customerId,
             amount: -amountBase,
             kind: CustomerTxKind.cash,
@@ -140,9 +144,10 @@ class ReceiptsService {
           );
         }
         if (discOf[l]! > 0) {
-          if (!context.mounted) throw ErpException('أُغلقت الشاشة');
+          if (context != null && !context.mounted) throw ErpException('أُغلقت الشاشة');
           discUuid = await CustomerMoney.post(
             context,
+            provider: provider,
             customerId: l.customerId,
             amount: -discOf[l]!,
             kind: CustomerTxKind.discount,

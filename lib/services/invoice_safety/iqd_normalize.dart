@@ -56,10 +56,13 @@ class IqdNormalize {
       loadingFee: inv.loadingFee,
       paid: inv.amountPaidOnInvoice,
     );
+    // المسدد = الإجمالي المكتوب في الرأس (نقد، أو دين مسدد كاملاً) ⇒ الإجمالي الجديد
+    // نفسه، حتى لو اختلف مجموع الأسطر المقرَّبة عن الرأس قبل تقريبه
+    final paid = (inv.amountPaidOnInvoice - inv.totalAmount).abs() <= 0.01 ? t.total : t.paid;
     inv
       ..discount = t.discount
       ..loadingFee = t.loadingFee
-      ..amountPaidOnInvoice = t.paid
+      ..amountPaidOnInvoice = paid
       ..totalAmount = t.total;
     return inv;
   }

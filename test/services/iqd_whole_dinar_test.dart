@@ -11,6 +11,7 @@ import 'package:alnaser/models/purchase_invoice.dart';
 import 'package:alnaser/models/purchase_invoice_item.dart';
 import 'package:alnaser/services/database/core/database_migrations.dart';
 import 'package:alnaser/services/database/core/iqd_guard.dart';
+import 'package:alnaser/services/database/dao/transaction_dao.dart';
 import 'package:alnaser/services/invoice_safety/iqd_normalize.dart';
 import 'package:alnaser/utils/iqd.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -79,6 +80,20 @@ void main() {
     test('عميل رصيده 1250.2: كسر لا يصفّيه يُقرَّب، والصحيح يبقى صحيحاً', () {
       expect(Iqd.ledgerAmount(-1250.7, 1250.2), -1251);
       expect(Iqd.ledgerAmount(-1000, 1250.2), -1000);
+    });
+  });
+
+  group('🛡️ قاعدة الرصيد السالب في تعديل المعاملة اليدوية وتحويلها', () {
+    void check(double before, double after) => TransactionDao.assertNotNegative(before: before, after: after, what: 'التعديل');
+    test('تعديل يُنقص الرصيد إلى ما دون الصفر يُرفض', () {
+      expect(() => check(5000, -1000), throwsA(predicate((e) => '$e'.contains('رصيد العميل سيصبح'))));
+      expect(() => check(0, -250), throwsException);
+    });
+    test('ما لا يُنقص الرصيد تحت الصفر يمر — حتى لعميل رصيده سالب أصلاً', () {
+      check(5000, 0);
+      check(5000, 1000);
+      check(-3000, -2000); // سالب أصلاً والتعديل يرفعه
+      check(-3000, -3000); // لا تغيير
     });
   });
 

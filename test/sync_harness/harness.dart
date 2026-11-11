@@ -340,15 +340,36 @@ class Harness {
     return false;
   }
 
+  /// 🛡️ قاعدة الرصيد السالب (TransactionDao.assertNotNegative): التطبيق يرفض تعديلاً
+  /// أو تحويلاً يُنقص رصيد العميل إلى ما دون الصفر — رفض صحيح لا خطأ.
+  int negativeRefused = 0;
+  bool _negativeRefusal(Object e) => '$e'.contains('رصيد العميل سيصبح');
+
   Future<void> editTx(String dev, String tx, double amount) async {
-    final r = await d(dev).call('editTx', {'tx': tx, 'amount': amount});
+    final Object? r;
+    try {
+      r = await d(dev).call('editTx', {'tx': tx, 'amount': amount});
+    } catch (e) {
+      if (!_negativeRefusal(e)) rethrow;
+      negativeRefused++;
+      progress('J editTx $dev tx=$tx amount=$amount REFUSED (رصيد سالب)');
+      return;
+    }
     if (_locked(r, 'editTx $dev tx=$tx')) return;
     truth.txs[tx]?.amount = Iqd.up(amount); // 💵
     progress('J editTx $dev tx=$tx amount=$amount online=${d(dev).online}');
   }
 
   Future<void> convertTx(String dev, String tx) async {
-    final raw = await d(dev).call('convertTx', {'tx': tx});
+    final Object? raw;
+    try {
+      raw = await d(dev).call('convertTx', {'tx': tx});
+    } catch (e) {
+      if (!_negativeRefusal(e)) rethrow;
+      negativeRefused++;
+      progress('J convertTx $dev tx=$tx REFUSED (رصيد سالب)');
+      return;
+    }
     if (_locked(raw, 'convertTx $dev tx=$tx')) return;
     final r = (raw as Map).cast<String, Object?>();
     final t = truth.txs[tx];
@@ -454,6 +475,10 @@ class Harness {
     await initDevice(dev);
     progress('restart $dev: done');
   }
+
+  /// 🔨 فعل من أفعال اختبار البقية (rest_ops.dart) على [dev].
+  Future<Object?> rest(String dev, String op, [Map<String, Object?> args = const {}, Duration? timeout]) =>
+      d(dev).call('rest', {'op': op, 'args': args}, timeout);
 
   Future<void> backup(String dev) async {
     final dir = Directory('${root.path}${Platform.pathSeparator}backups')..createSync(recursive: true);
