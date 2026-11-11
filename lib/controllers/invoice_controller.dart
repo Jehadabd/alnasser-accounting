@@ -264,8 +264,12 @@ class InvoiceController {
     // Check Customer Change
     final newCustomerName = data.customerName.trim();
     final oldCustomerName = oldInvoice.customerName.trim();
-    final isCustomerChanged = newCustomerName.replaceAll(' ', '').toLowerCase() != 
-                              oldCustomerName.replaceAll(' ', '').toLowerCase();
+    // 🛡️ «نفس العميل» = اسم الفاتورة المحفوظ أو اسمه الحالي في بطاقته. بعد تغيير اسم
+    // العميل تبقى فواتيره القديمة بالاسم القديم، فكتابة اسمه الجديد كانت تُعدّ «تغيير عميل»
+    // فيُرفض الحفظ بحجة رصيد سالب للعميل نفسه (التعذيب متعدد الأجهزة 2026-11-11).
+    String nameKey(String n) => n.replaceAll(' ', '').toLowerCase();
+    final isCustomerChanged = nameKey(newCustomerName) != nameKey(oldCustomerName) &&
+                              nameKey(newCustomerName) != nameKey(oldCustomer.name);
     
     double debtChange = 0.0;
     

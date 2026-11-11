@@ -2312,12 +2312,20 @@ class FirebaseSyncService {
 
       // 8️⃣ الرصيد = مجموع المعاملات، لا رصيد سابق + مبلغ.
       final authoritativeBalance = await _sumTransactions(txn, localCustomerId);
+      // 🛡️ تعديل محلي لم يُرفع بعد (اسم/هاتف غيّره هذا الجهاز: last_modified_at > synced_at)
+      // يبقى «بانتظار الرفع». كان وصول معاملة من جهاز آخر يكتب synced_at = الآن فيعدّه
+      // مرفوعاً، فلا يُرفع الاسم الجديد أبداً ويعود قديماً (التعذيب متعدد الأجهزة 2026-11-11).
+      final pendingRow = await txn.query('customers',
+          columns: ['last_modified_at', 'synced_at', 'is_created_by_me'],
+          where: 'id = ?', whereArgs: [localCustomerId], limit: 1);
+      final pendingLocal = pendingRow.isNotEmpty && _hasUnsyncedLocalEdit(pendingRow.first);
+      final nowIso = DateTime.now().toIso8601String();
       await txn.update(
         'customers',
         {
           'current_total_debt': authoritativeBalance,
-          'last_modified_at': DateTime.now().toIso8601String(),
-          'synced_at': DateTime.now().toIso8601String(),
+          'last_modified_at': nowIso,
+          if (!pendingLocal) 'synced_at': nowIso,
         },
         where: 'id = ?',
         whereArgs: [localCustomerId],
@@ -2845,6 +2853,15 @@ class FirebaseSyncService {
   ///
   /// 🛡️ يقرأ الصف الحالي من القاعدة دائماً — ما يُمرَّر (من طابور الإعادة أو
   /// WAL أو الشاشات) قد يكون لقطة قديمة.
+  /// تعديل محلي على بطاقة العميل لم يُرفع بعد؟ (نفس شرط uploadCustomer وsync_watchdog)
+  static bool _hasUnsyncedLocalEdit(Map<String, Object?> row) {
+    final lm = DateTime.tryParse('${row['last_modified_at'] ?? ''}');
+    final sa = DateTime.tryParse('${row['synced_at'] ?? ''}');
+    // عميل هذا الجهاز لم يُرفع قط: يبقى بانتظار رفعه الأول (عميل غيره لا يرفعه هذا الجهاز)
+    if (row['synced_at'] == null) return (row['is_created_by_me'] as int?) != 0;
+    return lm != null && sa != null && lm.isAfter(sa);
+  }
+
   Future<bool> uploadCustomer(Map<String, dynamic> customerData) async {
     if (!_isInitialized || _groupId == null) return true;
     // 🛡️ أوفلاين: لا ننتظر مهلة 60 ثانية تحبس القفل — المعلّق يُلتقط عند العودة
