@@ -26,6 +26,7 @@ Future<String?> showAfterSaveDialog(
   required String subtitle,
   String? amount,
   List<AfterSaveAction> actions = const [kAfterSavePrint, kAfterSaveShare, kAfterSaveWa],
+  String question = 'ماذا تريد أن تفعل بالوصل؟',
 }) =>
     showGeneralDialog<String>(
       context: context,
@@ -33,7 +34,8 @@ Future<String?> showAfterSaveDialog(
       barrierLabel: 'إغلاق',
       barrierColor: const Color(0x660F172A),
       transitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (_, __, ___) => _AfterSaveDialog(title: title, subtitle: subtitle, amount: amount, actions: actions),
+      pageBuilder: (_, __, ___) =>
+          _AfterSaveDialog(title: title, subtitle: subtitle, amount: amount, actions: actions, question: question),
       transitionBuilder: (_, a, __, child) => FadeTransition(
         opacity: a,
         child: ScaleTransition(scale: Tween(begin: 0.94, end: 1.0).animate(CurvedAnimation(parent: a, curve: Curves.easeOutBack)), child: child),
@@ -41,8 +43,9 @@ Future<String?> showAfterSaveDialog(
     );
 
 class _AfterSaveDialog extends StatelessWidget {
-  const _AfterSaveDialog({required this.title, required this.subtitle, required this.amount, required this.actions});
-  final String title, subtitle;
+  const _AfterSaveDialog(
+      {required this.title, required this.subtitle, required this.amount, required this.actions, required this.question});
+  final String title, subtitle, question;
   final String? amount;
   final List<AfterSaveAction> actions;
 
@@ -85,10 +88,10 @@ class _AfterSaveDialog extends StatelessWidget {
                     ),
                   ],
                   const SizedBox(height: 20),
-                  const Align(
+                  Align(
                     alignment: AlignmentDirectional.centerStart,
-                    child: Text('ماذا تريد أن تفعل بالوصل؟',
-                        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: kSetMuted)),
+                    child: Text(question,
+                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: kSetMuted)),
                   ),
                   const SizedBox(height: 8),
                   Row(children: [

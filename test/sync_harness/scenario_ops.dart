@@ -12,6 +12,7 @@ import 'package:alnaser/models/invoice.dart';
 import 'package:alnaser/models/invoice_input_data.dart';
 import 'package:alnaser/models/invoice_item.dart';
 import 'package:alnaser/services/database_service.dart';
+import 'package:alnaser/services/invoice_edit_events.dart';
 import 'package:alnaser/services/invoice_edit_voucher.dart';
 import 'package:alnaser/services/invoice_safety/line_math_check.dart';
 
@@ -68,6 +69,14 @@ Future<Map<String, Object?>> _invoiceInfo(String uuid) async {
         },
     ],
   };
+}
+
+/// سند حدث التعديل كما يُطبع: نوعه ورقمه ومبلغه.
+Future<Map<String, Object?>?> _editEvent(int id) async {
+  final db = await DatabaseService().database;
+  final e = await InvoiceEditEvents.byId(db, id);
+  if (e == null) return null;
+  return {'kind': e['doc_kind'], 'no': e['doc_no'], 'amount': InvoiceEditEvents.voucherAmount(e)};
 }
 
 Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
@@ -171,6 +180,7 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
         'uuid': saved.invoiceUuid,
         'before': before == null ? null : {'total': before.total, 'payment': before.payment},
         'voucher': voucher,
+        'editEvent': res.editEventId == null ? null : await _editEvent(res.editEventId!),
         ...await _invoiceInfo(saved.invoiceUuid!),
       };
   }

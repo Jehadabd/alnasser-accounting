@@ -71,6 +71,7 @@ class InvoiceEditEvents {
   static const kindCashRefund = 'cash_refund'; // سند صرف — مرتجع فاتورة نقدية
   static const kindDebitNote = 'debit_note'; // إشعار مدين — إضافة على فاتورة آجلة
   static const kindCreditNote = 'credit_note'; // إشعار دائن — مرتجع فاتورة آجلة
+  static const kindInvoiceSettlement = 'invoice_settlement'; // سند قبض — تسديد فاتورة (آجل ← نقد)
 
   static const double _eps = 0.005;
 
@@ -195,11 +196,31 @@ class InvoiceEditEvents {
   }
 
   /// نوع المستند حسب نوع الدفع بعد التعديل وإشارة فرق المجموع (null = لا فرق في المجموع).
-  static String? docKindFor(String paymentAfter, double totalDelta) {
+  /// 🧾 تحويل فاتورة آجلة إلى نقد = قبض ما بقي منها ⇒ «سند قبض — تسديد فاتورة» بما قُبض الآن
+  ///    ([paidDelta])؛ وإن نقص المقبوض (خُفّض مجموعها تحت ما سُدّد) ⇒ سند صرف بالفرق.
+  static String? docKindFor(String paymentAfter, double totalDelta,
+      {String? paymentBefore, double paidDelta = 0}) {
+    if (isSettlement(paymentBefore, paymentAfter)) {
+      if (paidDelta >= 0.5) return kindInvoiceSettlement;
+      if (paidDelta <= -0.5) return kindCashRefund;
+      return null;
+    }
     if (totalDelta.abs() < 0.5) return null;
     final cash = paymentAfter == 'نقد';
     if (totalDelta > 0) return cash ? kindCashReceipt : kindDebitNote;
     return cash ? kindCashRefund : kindCreditNote;
+  }
+
+  /// هل الحدث تحويل فاتورة آجلة إلى نقد؟
+  static bool isSettlement(String? paymentBefore, String? paymentAfter) =>
+      paymentBefore == 'دين' && paymentAfter == 'نقد';
+
+  /// مبلغ سند الحدث: في التحويل إلى نقد ما قُبض (أو رُدّ) الآن، وإلا فرق المجموع.
+  static double voucherAmount(Map<String, Object?> e) {
+    double d(Object? v) => v is num ? v.toDouble() : 0.0;
+    return isSettlement(e['payment_before'] as String?, e['payment_after'] as String?)
+        ? (d(e['paid_after']) - d(e['paid_before'])).abs()
+        : (d(e['total_after']) - d(e['total_before'])).abs();
   }
 
   /// يسجّل الحدث إن تغيّر ما له أثر مالي. يعيد معرّفه أو null. داخل معاملة الحفظ.
@@ -224,7 +245,8 @@ class InvoiceEditEvents {
       final r = await txn.rawQuery('SELECT MAX(edited_at) AS t FROM invoice_edit_changes WHERE invoice_id = ?', [invoiceId]);
       editedAt = r.first['t'] as String?;
     } catch (_) {}
-    final kind = docKindFor(after.paymentType, after.total - before.total);
+    final kind = docKindFor(after.paymentType, after.total - before.total,
+        paymentBefore: before.paymentType, paidDelta: after.paid - before.paid);
     int? docNo;
     if (kind != null) {
       final n = await txn.rawQuery('SELECT COALESCE(MAX(doc_no), 0) + 1 AS n FROM $table WHERE doc_kind = ?', [kind]);

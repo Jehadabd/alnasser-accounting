@@ -44,6 +44,8 @@ class PrintTarget {
   // 🧾 مصمم السندات — لكل نوع سند نوع طباعة (ورق A4)
   static const vReceipt = PrintTarget('voucher_receipt', 'سند قبض — تسديد دين',
       'بعد تسديد دين من سجل الديون، ووصل القبض لعدة عملاء', false, kind: 'receipt');
+  static const vInvoiceSettlement = PrintTarget('voucher_invoice_settlement', 'سند قبض — تسديد فاتورة آجلة',
+      'تحويل فاتورة آجلة إلى نقد: ما قُبض الآن لتسديد باقيها', false, kind: 'invoice_settlement');
   static const vCashReceipt = PrintTarget('voucher_cash_receipt', 'سند قبض — إضافة على فاتورة نقدية',
       'تعديل فاتورة نقدية بالقلم وزاد مجموعها', false, kind: 'cash_receipt');
   static const vCashRefund = PrintTarget('voucher_cash_refund', 'سند صرف — مرتجع من فاتورة نقدية',
@@ -52,7 +54,7 @@ class PrintTarget {
       'تعديل فاتورة آجلة بالقلم وزاد مجموعها', false, kind: 'debit_note');
   static const vCreditNote = PrintTarget('voucher_credit_note', 'إشعار دائن — مرتجع من فاتورة آجلة',
       'تعديل فاتورة آجلة بالقلم ونقص مجموعها', false, kind: 'credit_note');
-  static const vouchers = [vReceipt, vCashReceipt, vCashRefund, vDebitNote, vCreditNote];
+  static const vouchers = [vReceipt, vInvoiceSettlement, vCashReceipt, vCashRefund, vDebitNote, vCreditNote];
   static const everything = [...all, ...vouchers];
 
   /// أنواع الطباعة لمصمم نوع مستند واحد

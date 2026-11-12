@@ -575,7 +575,9 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
     final k = widget.docKind;
     final receipt = k == 'receipt';
     final cash = k == 'cash_receipt' || k == 'cash_refund';
-    final party = k == 'cash_refund' ? 'المستلم' : (receipt || k == 'cash_receipt' ? 'الدافع' : 'العميل');
+    final party = k == 'cash_refund'
+        ? 'المستلم'
+        : (receipt || k == 'cash_receipt' || k == 'invoice_settlement' ? 'الدافع' : 'العميل');
     return [
       ('voucherTitle', 'عنوان السند', false),
       ('voucherNo', receipt ? 'رقم سند القبض' : 'رقم السند', false),

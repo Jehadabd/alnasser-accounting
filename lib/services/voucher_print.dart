@@ -34,6 +34,7 @@ import 'invoice_edit_voucher.dart';
 import 'printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة ورمز التحقق
 import 'settings_manager.dart';
 import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال السند لصاحبه
+import '../widgets/after_save_dialog.dart'; // ✅ نافذة ما بعد الحفظ (نفس شكل التسديد)
 
 /// أنواع السندات.
 class VoucherKinds {
@@ -44,13 +45,15 @@ class VoucherKinds {
   static const cashRefund = InvoiceEditEvents.kindCashRefund;
   static const debitNote = InvoiceEditEvents.kindDebitNote;
   static const creditNote = InvoiceEditEvents.kindCreditNote;
+  static const invoiceSettlement = InvoiceEditEvents.kindInvoiceSettlement;
 
-  static const all = [receipt, cashReceipt, cashRefund, debitNote, creditNote];
+  static const all = [receipt, invoiceSettlement, cashReceipt, cashRefund, debitNote, creditNote];
 
   static String targetKey(String kind) => 'voucher_$kind';
 
   static String title(String kind) => switch (kind) {
         receipt => 'سند قبض',
+        invoiceSettlement => 'سند قبض — تسديد فاتورة',
         cashReceipt => 'سند قبض — إضافة على فاتورة',
         cashRefund => 'سند صرف — مرتجع بضاعة',
         debitNote => 'إشعار مدين',
@@ -60,6 +63,7 @@ class VoucherKinds {
 
   static String label(String kind) => switch (kind) {
         receipt => 'سند قبض — تسديد دين',
+        invoiceSettlement => 'سند قبض — تسديد فاتورة آجلة',
         cashReceipt => 'سند قبض — إضافة على فاتورة نقدية',
         cashRefund => 'سند صرف — مرتجع من فاتورة نقدية',
         debitNote => 'إشعار مدين — إضافة على فاتورة آجلة',
@@ -69,6 +73,7 @@ class VoucherKinds {
 
   static String hint(String kind) => switch (kind) {
         receipt => 'بعد تسديد دين من سجل الديون، ووصل القبض لعدة عملاء',
+        invoiceSettlement => 'تحويل فاتورة آجلة إلى نقد: ما قُبض الآن لتسديد باقيها',
         cashReceipt => 'تعديل فاتورة نقدية بالقلم وزاد مجموعها: ما يُقبض من الزبون',
         cashRefund => 'تعديل فاتورة نقدية بالقلم ونقص مجموعها: ما يُرد للزبون',
         debitNote => 'تعديل فاتورة آجلة بالقلم وزاد مجموعها: يزيد دين العميل',
@@ -78,6 +83,7 @@ class VoucherKinds {
 
   static IconData icon(String kind) => switch (kind) {
         receipt => Icons.payments_rounded,
+        invoiceSettlement => Icons.task_alt_rounded,
         cashReceipt => Icons.add_card_rounded,
         cashRefund => Icons.assignment_return_rounded,
         debitNote => Icons.trending_up_rounded,
@@ -87,6 +93,7 @@ class VoucherKinds {
 
   static Color color(String kind) => switch (kind) {
         receipt => const Color(0xFF047857),
+        invoiceSettlement => const Color(0xFF15803D),
         cashReceipt => const Color(0xFF0E7490),
         cashRefund => const Color(0xFFB45309),
         debitNote => const Color(0xFF1D4ED8),
@@ -301,33 +308,28 @@ class VoucherPrint {
     final mode = await modeFor(VoucherKinds.receipt);
     if (mode == 'never' || !context.mounted) return;
     if (mode == 'ask') {
-      final ok = await _ask(context, VoucherKinds.receipt, 'هل تريد طباعة سند القبض رقم $number؟');
-      if (ok != true || !context.mounted) return;
+      final choice = await _ask(context, VoucherKinds.receipt, number: '$number', actions: const [kAfterSavePrint]);
+      if (choice != 'print' || !context.mounted) return;
     }
     final bytes = await designed() ?? await legacy();
     if (context.mounted) await ReportExport.openPdf(context, bytes, 'سند_قبض_$number');
   }
 
-  static Future<bool?> _ask(BuildContext context, String kind, String message) => showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          title: Row(children: [
-            Icon(VoucherKinds.icon(kind), color: VoucherKinds.color(kind)),
-            const SizedBox(width: 8),
-            Expanded(child: Text(VoucherKinds.title(kind))),
-          ]),
-          content: Text(message, style: const TextStyle(height: 1.6)),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('لاحقاً')),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: VoucherKinds.color(kind)),
-              onPressed: () => Navigator.pop(ctx, true),
-              icon: const Icon(Icons.print_rounded),
-              label: const Text('طباعة'),
-            ),
-          ],
-        ),
+  /// سؤال ما بعد الحفظ (إعداد النوع «اسألني»): نافذة البرنامج نفسها التي تظهر بعد تسديد
+  /// دين — العنوان والمبلغ بارز وأهم بيانات السند، ثم طباعة/واتساب أو «لا، شكراً».
+  /// يعيد 'print' أو 'wa' أو null.
+  static Future<String?> _ask(BuildContext context, String kind,
+          {String? number,
+          double? amount,
+          List<String> facts = const [],
+          List<AfterSaveAction> actions = const [kAfterSavePrint, kAfterSaveWa]}) =>
+      showAfterSaveDialog(
+        context,
+        title: number == null || number.isEmpty ? VoucherKinds.label(kind) : '${VoucherKinds.label(kind)} رقم $number',
+        subtitle: facts.join('  •  '),
+        amount: amount == null ? null : '${_m(amount)} دينار',
+        actions: actions,
+        question: 'ماذا تريد أن تفعل بالسند؟',
       );
 
   // ═══════════════════════ تعديل بالقلم (قبض/صرف/مدين/دائن) ═══════════════════════
@@ -345,7 +347,8 @@ class VoucherPrint {
     final i = inv.first;
     final tb = _d(e['total_before']);
     final ta = _d(e['total_after']);
-    final amount = (ta - tb).abs();
+    final amount = InvoiceEditEvents.voucherAmount(e);
+    final settlement = kind == VoucherKinds.invoiceSettlement;
     final when = DateTime.tryParse('${e['event_date']}') ?? DateTime.now();
     final dateStr = InvoicePrintData.dateText(when);
     final n = (i['invoice_number'] as String?)?.trim();
@@ -380,7 +383,7 @@ class VoucherPrint {
     // حساب العميل (للآجلة): الرصيد بعد السند = مجموع حركاته حتى لحظة الحدث
     double? debtAfter, debtBefore;
     final cid = (i['customer_id'] as num?)?.toInt();
-    if (cid != null && (kind == VoucherKinds.debitNote || kind == VoucherKinds.creditNote)) {
+    if (cid != null && (kind == VoucherKinds.debitNote || kind == VoucherKinds.creditNote || settlement)) {
       try {
         final r = await db.rawQuery('''
           SELECT COALESCE(SUM(amount_changed), 0) AS s FROM transactions
@@ -405,9 +408,11 @@ class VoucherPrint {
         'phone': '${i['customer_phone'] ?? ''}',
         'address': '${i['customer_address'] ?? ''}',
         'paymentType': '${i['payment_type'] ?? ''}',
-        'voucherReason': ((e['summary'] as String?) ?? '').trim().isEmpty
-            ? 'تعديل على الفاتورة رقم $invNo'
-            : 'تعديل على الفاتورة رقم $invNo: ${e['summary']}',
+        'voucherReason': settlement
+            ? 'تسديد الفاتورة رقم $invNo (حُوّلت من آجل إلى نقد)'
+            : ((e['summary'] as String?) ?? '').trim().isEmpty
+                ? 'تعديل على الفاتورة رقم $invNo'
+                : 'تعديل على الفاتورة رقم $invNo: ${e['summary']}',
         'user': recordedBy ?? '',
         'accountant': await displayNameOf(db, recordedBy),
       },
@@ -415,6 +420,7 @@ class VoucherPrint {
       totals: {
         'voucherAmount': amount,
         'net': amount,
+        if (settlement) 'paid': amount,
         'invoiceBefore': tb,
         'invoiceAfter': ta,
         if (debtBefore != null) 'previousDebt': debtBefore,
@@ -433,16 +439,27 @@ class VoucherPrint {
     final (kind, data) = r;
     final mode = await modeFor(kind);
     if (mode == 'never' || !context.mounted) return;
+    var wa = false;
     if (mode == 'ask') {
-      final ok = await _ask(
-          context,
-          kind,
-          '${VoucherKinds.title(kind)} رقم ${data.field('voucherNo')}\n'
-          'المبلغ: ${_m(data.totals['voucherAmount'] ?? 0)} دينار — الفاتورة ${data.field('invoiceNo')}\n'
-          'مجموعها من ${_m(data.totals['invoiceBefore'] ?? 0)} إلى ${_m(data.totals['invoiceAfter'] ?? 0)}');
-      if (ok != true || !context.mounted) return;
+      final before = data.totals['previousDebt'];
+      final after = data.totals['currentDebt'];
+      final choice = await _ask(
+        context,
+        kind,
+        number: data.field('voucherNo'),
+        amount: data.totals['voucherAmount'] ?? 0,
+        facts: [
+          'الفاتورة ${data.field('invoiceNo')}',
+          if (data.field('customer').isNotEmpty) data.field('customer'),
+          if (kind != VoucherKinds.invoiceSettlement)
+            'مجموعها ${_m(data.totals['invoiceBefore'] ?? 0)} ← ${_m(data.totals['invoiceAfter'] ?? 0)}',
+          if (before != null && after != null) 'حساب العميل ${_m(before)} ← ${_m(after)}',
+        ],
+      );
+      if (choice == null || !context.mounted) return;
+      wa = choice == 'wa';
     }
-    await printEditEvent(context, eventId, legacyCashVoucherId: legacyCashVoucherId, prepared: r);
+    await printEditEvent(context, eventId, legacyCashVoucherId: legacyCashVoucherId, prepared: r, wa: wa);
   }
 
   /// ملف سند التعديل كما يُطبع (نفس التصميم والأرقام)، ويُسجَّل نسخةً في سجل السندات المطبوعة.

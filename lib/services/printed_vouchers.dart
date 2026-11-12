@@ -44,6 +44,7 @@ class PrintedVoucherKind {
   static const cashRefund = 'cash_refund';
   static const debitNote = 'debit_note';
   static const creditNote = 'credit_note';
+  static const invoiceSettlement = 'invoice_settlement';
   static const legacyReceipt = 'legacy_receipt';
 
   static String label(String k) => switch (k) {
@@ -52,6 +53,7 @@ class PrintedVoucherKind {
         cashRefund => 'سند صرف — مرتجع من فاتورة نقدية',
         debitNote => 'إشعار مدين — إضافة على فاتورة آجلة',
         creditNote => 'إشعار دائن — مرتجع من فاتورة آجلة',
+        invoiceSettlement => 'سند قبض — تسديد فاتورة آجلة',
         legacyReceipt => 'سند قبض — الأرشيف القديم',
         _ => k,
       };

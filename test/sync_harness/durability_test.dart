@@ -132,6 +132,13 @@ void main() {
       if (!near(box2 - box1, 75000)) bad('التحويل غيّر الصندوق بـ ${box2 - box1} والمتوقع 75,000');
       if (!near(((s2['cust'] as Map?) ?? const {})['txsum'], 0)) bad('بعد التحويل دين العميل ${(s2['cust'] as Map?)?['txsum']} والمتوقع صفر');
       print('  التحويل: يُقبض 75,000، الصندوق كله +${box2 - box0} (ثمن الفاتورة)، دين العميل صفر');
+      // 🧾 سند قبض — تسديد فاتورة بما قُبض الآن
+      final ev = (s2['editEvent'] as Map?) ?? const {};
+      if (ev['kind'] != 'invoice_settlement' || !near(ev['amount'], 75000)) {
+        bad('سند التحويل: النوع ${ev['kind']} والمبلغ ${ev['amount']} — المتوقع «سند قبض — تسديد فاتورة» بـ 75,000');
+      } else {
+        print('  سند قبض — تسديد فاتورة رقم ${ev['no']} بمبلغ ${ev['amount']}');
+      }
 
       // الحفظ نفسه مرة ثانية لا يغيّر شيئاً
       final s3 = await op('scen', 'invSave', save(inv, 'نقد', 100000));

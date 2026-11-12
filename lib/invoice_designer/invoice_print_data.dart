@@ -145,6 +145,7 @@ class InvoicePrintData {
       'cash_receipt' => 'سند قبض — إضافة على فاتورة',
       'cash_refund' => 'سند صرف — مرتجع بضاعة',
       'debit_note' => 'إشعار مدين',
+      'invoice_settlement' => 'سند قبض — تسديد فاتورة',
       _ => 'إشعار دائن',
     };
     Map<String, String> row(Map<String, String> m) => {
