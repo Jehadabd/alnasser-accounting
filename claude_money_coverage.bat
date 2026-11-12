@@ -11,7 +11,7 @@ rem ==========================================================================
 if not exist test_results\money_coverage mkdir test_results\money_coverage
 set OUT=test_results\money_coverage\tests_output.txt
 echo [1/2] تشغيل اختبارات المال مع قياس التغطية (طويل) — السجل في %OUT%
-call flutter test --coverage --concurrency=1 --dart-define=COVERAGE=true --dart-define=QUICK=true --dart-define=FAST_DISK=true ^
+call flutter test --coverage --concurrency=1 --dart-define=COVERAGE=true --dart-define=QUICK=true ^
   test\services\iqd_whole_dinar_test.dart ^
   test\sync_harness\invoice_math_test.dart ^
   test\sync_harness\full_accounting_scenarios_test.dart ^
@@ -25,6 +25,14 @@ call flutter test --coverage --concurrency=1 --dart-define=COVERAGE=true --dart-
   test\sync_harness\rare_sync_branches_test.dart ^
   test\sync_harness\armored_approval_test.dart ^
   test\sync_harness\compound_receipt_test.dart ^
+  test\sync_harness\durability_test.dart ^
+  test\sync_harness\lan_money_test.dart ^
+  test\accounting ^
+  test\control ^
+  test\erp ^
+  test\purchases ^
+  test\services ^
+  test\widgets ^
   test\sync_harness\comprehensive_test.dart > %OUT% 2>&1
 if errorlevel 1 echo ⚠️ بعض الاختبارات فشلت — التغطية تُقاس رغم ذلك، وانظر %OUT%
 echo [2/2] الخريطة
