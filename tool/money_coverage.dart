@@ -35,13 +35,24 @@ const mixedTables = {
 final _write = RegExp(
     r'''(?:\.(insert|update|delete)\(\s*['"]([a-z_]+)['"])|(?:(INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([a-z_]+))''',
     caseSensitive: false);
-final _fn = RegExp(r'^(\s*)(?:static\s+)?(?:Future<.*?>|void|int|double|bool|String|[A-Z][\w<>?, ]*)\??\s+([a-zA-Z_]\w*)\s*\(');
+// دالة على مستوى الملف (بلا مسافة) أو عضو صنف (مسافتان) — لا الدوال المحلية ولا أسطر SQL
+final _fn = RegExp(
+    r'^( {0,2})(?:static\s+|@override\s+|external\s+)*(?:Future<.*?>+|Stream<.*?>+|void|int|double|bool|String|num|dynamic|[A-Z]\w*(?:<.*?>+)?)\??\s+([a-z_]\w*)\s*[(<]');
+
+/// احتياطي لملفات بمسافات غير معتادة: أي مسافة، والاسم يبدأ بحرف صغير (لا كلمات SQL)
+final _fnLoose = RegExp(
+    r'^( *)(?:static\s+|@override\s+)*(?:Future<.*?>+|Stream<.*?>+|void|int|double|bool|String|num|dynamic|[A-Z]\w*(?:<.*?>+)?)\??\s+([a-z_]\w*)\s*\(');
+
+/// ملفات ترحيل قاعدة البيانات: تعمل مرة عند الترقية من إصدار قديم — تُعرض وحدها ولا تدخل النسبة
+bool _isMigration(String path) => path.endsWith('/database_migrations.dart');
 
 class Point {
-  Point(this.file, this.line, this.table, this.op, this.fn);
+  Point(this.file, this.line, this.table, this.op, this.fn, {this.kind = 'code'});
   final String file;
   final int line;
   final String table, op, fn;
+  /// code = كود يُنفَّذ؛ trigger = SQL داخل مشغّل (يعمل في SQLite لا يقاس بالأسطر)؛ migration = ترحيل قاعدة بيانات
+  final String kind;
   int? hits; // null = السطر لا يظهر في التغطية
 }
 
@@ -52,9 +63,14 @@ void main(List<String> args) {
     final path = f.path.replaceAll('\\', '/');
     if (path.contains('/devtools/') || path.endsWith('.g.dart')) continue;
     final lines = f.readAsLinesSync();
+    var inTrigger = false;
     for (var i = 0; i < lines.length; i++) {
       final l = lines[i];
       if (l.trimLeft().startsWith('//')) continue;
+      // جسم المشغّل (CREATE TRIGGER ... END;) نص SQL ينفّذه SQLite نفسه — ليس سطر Dart يُقاس
+      if (RegExp(r'CREATE\s+TRIGGER', caseSensitive: false).hasMatch(l)) inTrigger = true;
+      final triggerLine = inTrigger;
+      if (inTrigger && RegExp(r'\bEND\s*;', caseSensitive: false).hasMatch(l)) inTrigger = false;
       for (final m in _write.allMatches(l)) {
         final table = (m.group(2) ?? m.group(4) ?? '').toLowerCase();
         if (!moneyTables.contains(table)) continue;
@@ -66,14 +82,21 @@ void main(List<String> args) {
         }
         var fn = '?';
         final indent = l.length - l.trimLeft().length;
-        for (var j = i; j >= 0 && j > i - 400; j--) {
+        for (var j = i; j >= 0 && j > i - 1500; j--) {
           final fm = _fn.firstMatch(lines[j]);
-          if (fm != null && fm.group(1)!.length < indent && !const {'if', 'for', 'while', 'switch', 'return'}.contains(fm.group(2))) {
+          if (fm != null && fm.group(1)!.length < indent && !const {'if', 'for', 'while', 'switch', 'return', 'catch'}.contains(fm.group(2))) {
             fn = fm.group(2)!;
             break;
           }
         }
-        points.add(Point(path, i + 1, table, (m.group(1) ?? m.group(3) ?? '').split(RegExp(r'\s')).first.toUpperCase(), fn));
+        for (var j = i; fn == '?' && j >= 0 && j > i - 1500; j--) {
+          final fm = _fnLoose.firstMatch(lines[j]);
+          if (fm != null && fm.group(1)!.length < indent && !const {'if', 'for', 'while', 'switch', 'return', 'catch'}.contains(fm.group(2))) {
+            fn = fm.group(2)!;
+          }
+        }
+        points.add(Point(path, i + 1, table, (m.group(1) ?? m.group(3) ?? '').split(RegExp(r'\s')).first.toUpperCase(), fn,
+            kind: triggerLine ? 'trigger' : _isMigration(path) ? 'migration' : 'code'));
       }
     }
   }
@@ -111,14 +134,19 @@ void main(List<String> args) {
 
   // فحص سلامة القياس: كود الأجهزة الوهمية (المزامنة) يجب أن يظهر منفَّذاً
   final syncHits = (hits['lib/services/firebase_sync/firebase_sync_service.dart'] ?? const {}).values.fold<int>(0, (a, b) => a + b);
-  final covered = points.where((p) => (p.hits ?? 0) > 0).toList();
-  final missed = points.where((p) => p.hits == 0).toList();
-  final unknown = points.where((p) => p.hits == null).toList();
+  final code = points.where((p) => p.kind == 'code').toList();
+  final triggers = points.where((p) => p.kind == 'trigger').toList();
+  final migrations = points.where((p) => p.kind == 'migration').toList();
+  final covered = code.where((p) => (p.hits ?? 0) > 0).toList();
+  final missed = code.where((p) => p.hits == 0).toList();
+  final unknown = code.where((p) => p.hits == null).toList();
 
   final out = StringBuffer()
     ..writeln('📊 خريطة مسارات المال وتغطيتها — ${DateTime.now().toIso8601String().substring(0, 16)}')
-    ..writeln('مكان يكتب مالاً: ${points.length} — نفّذه اختبار: ${covered.length} — لم ينفّذه أي اختبار: ${missed.length} — لم يُقَس: ${unknown.length}')
-    ..writeln('النسبة: ${points.isEmpty ? 0 : (100 * covered.length / (covered.length + missed.length)).toStringAsFixed(1)}% (من المقاس)')
+    ..writeln('مكان في الكود يكتب مالاً: ${code.length} — نفّذه اختبار: ${covered.length} — لم ينفّذه أي اختبار: ${missed.length} — لم يُقَس: ${unknown.length}')
+    ..writeln('النسبة: ${covered.isEmpty && missed.isEmpty ? 0 : (100 * covered.length / (covered.length + missed.length)).toStringAsFixed(1)}% (من المقاس)')
+    ..writeln('خارج النسبة: ${triggers.length} كتابة داخل مشغّلات SQLite (تعمل مع كل إدخال، لا تقاس بالأسطر) — '
+        '${migrations.length} في ترحيل قاعدة البيانات (مرة عند الترقية من إصدار قديم)')
     ..writeln(syncHits == 0
         ? '⚠️ هنا وقع خطأ في القياس: كود المزامنة يظهر غير منفَّذ — تغطية الأجهزة الوهمية لم تُجمع، فالأرقام أدناه ناقصة'
         : '✓ تغطية الأجهزة الوهمية جُمعت (كود المزامنة منفَّذ $syncHits مرة)')
@@ -140,8 +168,10 @@ void main(List<String> args) {
 
   group('❌ مسارات مال لم يمر بها أي اختبار', missed);
   group('❔ لم تُقَس (الملف كله لم يُحمَّل في أي اختبار)', unknown);
+  group('🗄️ ترحيل قاعدة البيانات — خارج النسبة (لا يعمل على تثبيت جديد)', migrations.where((p) => (p.hits ?? 0) == 0).toList());
+  group('⚙️ داخل مشغّلات SQLite — خارج النسبة', triggers);
   final tables = <String, List<int>>{};
-  for (final p in points) {
+  for (final p in code) {
     final t = tables.putIfAbsent(p.table, () => [0, 0]);
     if ((p.hits ?? 0) > 0) t[0]++;
     t[1]++;

@@ -63,7 +63,7 @@ void main() {
       final expense = (setup['expense'] as List).map((x) => (x as num).toInt()).toList();
       if (boxes.length < 2 || accs.length < 3) {
         bad('التجهيز: صناديق ${boxes.length} وحسابات ${accs.length}');
-        return;
+        throw StateError('فشل التجهيز');
       }
       final expAcc = expense.isNotEmpty ? expense.first : accs.first;
       final revenue = (setup['revenue'] as List).map((x) => (x as num).toInt()).toList();
@@ -279,7 +279,13 @@ void main() {
           } else if (k < 0.65) {
             if (runs.isEmpty) continue;
             final r = await op('depVoid', {'id': runs.removeLast()});
-            if (r['ok'] != true) notes.add('إلغاء دورة إهلاك: ${r['err']}');
+            if (r['ok'] != true) {
+              if ('${r['err']}'.contains('مستبعد')) {
+                count('رُفض كما يجب: إلغاء إهلاك أصل بِيع بعده');
+              } else {
+                bad('$label: رُفض إلغاء دورة إهلاك (${r['err']})');
+              }
+            }
             if (r['ok'] == true) count('إلغاء دورة إهلاك');
           } else if (k < 0.85) {
             final live = assets.keys.where((a) => !disposed.containsKey(a)).toList();

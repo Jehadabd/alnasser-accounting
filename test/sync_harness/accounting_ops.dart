@@ -43,6 +43,8 @@ const _srcName = {
   'invoice': 'الفواتير',
   'supplier_tx': 'معاملات الموردين',
   'purchase_invoice': 'فواتير الشراء',
+  'year_close': 'إقفال السنة',
+  'fx_reval': 'إعادة تقييم الدولار',
 };
 
 Future<Object?> acctOp(String op, Map<String, Object?> a) async {
