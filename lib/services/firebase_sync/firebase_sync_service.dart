@@ -405,6 +405,8 @@ class FirebaseSyncService {
 
       // 🛡️ هل استُعيدت قاعدة البيانات من نسخة احتياطية منذ آخر تشغيل؟
       await _loadRecoveryState();
+      // 📥 وإن استُعيدت والبرنامج يعمل: الدخول في وضع الاستعادة فوراً
+      DatabaseService.onDatabaseReplaced = onDatabaseReplaced;
       
       // تهيئة Firestore
       _firestore = FirebaseFirestore.instance;
@@ -4162,6 +4164,35 @@ class FirebaseSyncService {
     } catch (e) {
       debugPrint('⚠️ _loadRecoveryState: $e');
     }
+  }
+
+  /// 📥 استُبدلت قاعدة البيانات والبرنامج يعمل (استعادة من الإعدادات أو Dropbox، بداية
+  /// جديدة): كل ما تذكره المزامنة في الذاكرة — نوافذ المستمعات، ما عالجته من فواتير — يخص
+  /// القاعدة السابقة. ندخل وضع الاستعادة الآن كما في تشغيل جديد: علَم الاستعادة (ضبطه
+  /// restoreDatabaseFromFile)، مستمعات من جديد بنوافذ كاملة، تنزيل كامل، وطلب إعادة البث
+  /// من الأجهزة الأخرى. بلا هذا كان ما حُفظ عند الآخرين بعد النسخة لا يعود إلى هذا الجهاز
+  /// حتى يُعاد تشغيل البرنامج (اختبار L2: فاتورة 900 لم تعد بعد الاستعادة).
+  Future<void> onDatabaseReplaced() async {
+    if (!_isInitialized) return; // غير عاملة: تقرأ العلَم عند تهيئتها
+    debugPrint('📥 استُبدلت قاعدة البيانات والبرنامج يعمل — دخول وضع الاستعادة الآن');
+    await _stopListening();
+    await InvoiceSyncService().stopSync();
+    await StockMovementSyncService().stop();
+    await _loadRecoveryState();
+    try {
+      await _startListening().timeout(const Duration(seconds: 60));
+    } catch (e) {
+      debugPrint('⚠️ إعادة الاستماع بعد الاستعادة: $e');
+    }
+    try {
+      await InvoiceSyncService().startSync();
+      await StockMovementSyncService().start();
+      await ProductSyncService().downloadAllProducts().timeout(const Duration(seconds: 90), onTimeout: () {});
+    } catch (e) {
+      debugPrint('⚠️ إعادة محركات المزامنة بعد الاستعادة: $e');
+    }
+    unawaited(performFullCatchUp().catchError((_) {}));
+    unawaited(ensureNewDeviceBootstrap());
   }
 
   Future<void> _finishRecovery() async {

@@ -2545,6 +2545,12 @@ class DatabaseService {
         debugPrint('⚠️ تقرير الاستعادة: $e');
       }
       debugPrint('✅ تمت استعادة قاعدة البيانات بنجاح من الملف المستورد');
+      // 📥 المزامنة تعمل الآن على قاعدة أخرى: تدخل وضع الاستعادة فوراً (لا عند التشغيل التالي)
+      try {
+        await onDatabaseReplaced?.call();
+      } catch (e) {
+        debugPrint('⚠️ تنبيه المزامنة بالاستعادة: $e');
+      }
       return true;
     } catch (e) {
       debugPrint('❌ فشلت الاستعادة، جاري التراجع للنسخة السابقة: $e');
@@ -2590,6 +2596,10 @@ class DatabaseService {
   ///     حتى تُطلب البيانات من الأجهزة الأخرى وتُقارن نسخنا بالسحابة.
   /// (المحاكاة: سيناريو 26 + الفوضى القاسية)
   static const String restoredFlagKey = 'sync_db_restored_pending';
+
+  /// 📥 يُستدعى بعد استبدال ملف القاعدة والبرنامج يعمل (restoreDatabaseFromFile). تضبطه
+  /// خدمة المزامنة عند تهيئتها (FirebaseSyncService.onDatabaseReplaced) — بلا استيراد دائري.
+  static Future<void> Function()? onDatabaseReplaced;
 
   /// 🩺 تقرير آخر استعادة (ما فعله النظام تلقائياً + ما يحتاج قرار صاحب المحل).
   static String? lastRestoreReport;

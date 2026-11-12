@@ -59,8 +59,10 @@ const mutations = <Mutation>[
   Mutation('M06', 'قيد الصندوق لتعديل الفاتورة مضاعف', 'lib/accounting/posting_engine.dart',
       "JournalLineInput(accountId: cashAcc, debit: dc, memo: 'مقبوض إضافة على فاتورة'),",
       "JournalLineInput(accountId: cashAcc, debit: dc * 2, memo: 'مقبوض إضافة على فاتورة'),", [_durability]),
-  Mutation('M07', 'إكمال وصل منقطع يكرّر التسديد المسجّل (المعرّف المحجوز مُهمل)', 'lib/erp/debts/customer_money.dart',
-      'if (had.isNotEmpty) return presetUuid;', 'if (had.isNotEmpty && presetUuid.isEmpty) return presetUuid;', [_compound]),
+  // (كانت M07 تعطّل فحص «المعرّف المحجوز موجود» وحده فنجت: الحماية مزدوجة — TransactionDao
+  //  يرفض المعرّف المكرر أيضاً، فلا تكرار. طفرة لا تغيّر السلوك لا تكشف ثغرة.)
+  Mutation('M07', 'تسديد الوصل يُسجَّل بمعرّف جديد لا المحجوز (إكمال الوصل يكرّره)', 'lib/erp/debts/customer_money.dart',
+      'final uuid = presetUuid ?? const Uuid().v4();', 'final uuid = const Uuid().v4();', [_compound]),
   Mutation('M08', 'إكمال وصل منقطع يعيد وصف أسطر سُجّلت', 'lib/erp/debts/receipts_service.dart',
       'if (resuming && (l.uuids.isEmpty || await _lineRecorded(db, receiptId, l))) continue;',
       'if (resuming && l.uuids.isEmpty) continue;', [_compound]),

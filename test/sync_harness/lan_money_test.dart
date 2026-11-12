@@ -172,6 +172,7 @@ void main() {
 
       // ── 6) سيرفر بإصدار قاعدة أقدم من الطرفية ⇒ رفض واضح ──
       final ver = (((await h.d('D1').call('sqlRaw', {'sql': 'PRAGMA user_version'})) as List).first as Map).values.first as int;
+      print('  إصدار قاعدة السيرفر: $ver');
       await h.d('D1').call('sqlRaw', {'sql': 'PRAGMA user_version = ${ver - 1}'});
       await h.spawn('T3', online: false);
       final j3 = (await h.d('T3').call('lanJoin', {'port': port, 'secret': secret, 'name': 'T3'})) as Map;

@@ -533,7 +533,14 @@ class Harness {
   Future<bool> liveRestore(String dev) async {
     final path = _backups.remove(dev);
     if (path == null) return false;
-    if ((await d(dev).call('pendingOwnWork') as int) > 0) return false;
+    // ما زال يرفع؟ ننتظره قليلاً (الاستعادة تُضيّع ما لم يُرفع حتماً)
+    var pending = await d(dev).call('pendingOwnWork') as int;
+    for (var i = 0; i < 10 && pending > 0; i++) {
+      await d(dev).call('kick');
+      await waitCloudQuiet();
+      pending = await d(dev).call('pendingOwnWork') as int;
+    }
+    if (pending > 0) throw StateError('liveRestore $dev: بقي $pending عملاً لم يُرفع — الاستعادة تضيّعه');
     progress('J liveRestore $dev online=${d(dev).online}');
     final ok = await d(dev).call('liveRestore', {'path': path}, const Duration(minutes: 3));
     restores++;
