@@ -257,7 +257,34 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
     }
 
-    // 2. Debt Validation
+    // 🔁 تحويل فاتورة لها دين في السجل إلى نقد: ما سُدّد منها سابقاً بوصولات لا يُقبض مرتين.
+    //    النافذة تقترحه (دين الفاتورة − رصيد العميل) ويؤكده المستخدم أو يصححه؛ غير الصفر ⇒
+    //    «آجل — مسددة بالكامل» (DebtToCashSettlement). يسبق فحص الدين السالب: ذاك الفحص
+    //    يجب أن يرى ما سيُحفظ فعلاً، لا التحويل الخام الذي يطرح ما سُدّد بالوصل مرة ثانية.
+    if (!inputData.isNewInvoice && widget.settlementForInvoice == null) {
+      if (!mounted) return null;
+      final plan = await DebtToCashSettlement.plan(await db.database, inputData);
+      if (plan != null) {
+        if (!mounted) return null;
+        final prepaid = await DebtToCashDialog.ask(context, inputData.invoiceToManage!, plan);
+        if (prepaid == null) return null;
+        inputData = DebtToCashSettlement.apply(inputData, plan, prepaid);
+        final v2 = controller.validateInvoiceData(inputData);
+        if (!v2.isValid) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('تعذّر التحويل: ${v2.errorMessage}'),
+              backgroundColor: Colors.red,
+            ));
+          }
+          return null;
+        }
+      } else if (!await DebtToCashConfirm.ask(context, inputData.invoiceToManage, inputData.paymentType)) {
+        return null;
+      }
+    }
+
+    // 2. Debt Validation — على البيانات النهائية (بعد تسوية التحويل إلى نقد أعلاه)
     final debtValidation = await controller.validateDebtChangeWontCauseNegativeBalance(inputData);
     if (!debtValidation.isValid) {
       if (mounted) {
@@ -276,33 +303,6 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         );
       }
       return null;
-    }
-
-    // 🔁 تحويل فاتورة لها دين في السجل إلى نقد: ما سُدّد منها سابقاً بوصولات لا يُقبض مرتين.
-    //    النافذة تقترحه (دين الفاتورة − رصيد العميل) ويؤكده المستخدم أو يصححه؛ غير الصفر ⇒
-    //    «آجل — مسددة بالكامل» (DebtToCashSettlement). ثم تُعاد الفحوص على ما سيُحفظ فعلاً.
-    if (!inputData.isNewInvoice && widget.settlementForInvoice == null) {
-      if (!mounted) return null;
-      final plan = await DebtToCashSettlement.plan(await db.database, inputData);
-      if (plan != null) {
-        if (!mounted) return null;
-        final prepaid = await DebtToCashDialog.ask(context, inputData.invoiceToManage!, plan);
-        if (prepaid == null) return null;
-        inputData = DebtToCashSettlement.apply(inputData, plan, prepaid);
-        final v2 = controller.validateInvoiceData(inputData);
-        final d2 = v2.isValid ? await controller.validateDebtChangeWontCauseNegativeBalance(inputData) : v2;
-        if (!d2.isValid) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('تعذّر التحويل: ${d2.errorMessage}'),
-              backgroundColor: Colors.red,
-            ));
-          }
-          return null;
-        }
-      } else if (!await DebtToCashConfirm.ask(context, inputData.invoiceToManage, inputData.paymentType)) {
-        return null;
-      }
     }
 
     // 🚫 سقف الدين: فاتورة آجلة جديدة، أو زيادة دين فاتورة عند تعديلها (الفرق فقط)

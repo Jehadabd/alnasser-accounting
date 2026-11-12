@@ -332,6 +332,12 @@ void main() {
                 if (stage == 'save' || stage == 'exception' || stage == 'load') {
                   bad('$label: فشل الحفظ بعد اجتياز كل الفحوص ($stage): ${r['err']}');
                 }
+                // 🔁 التحويل إلى نقد بعد وصولات لا تتجاوز دين الفاتورة يُبقي رصيد العميل صفراً:
+                //    رفضه بحجة «رصيد سالب» خطأ (كان يحدث حين سبق فحصُ الدين التسويةَ)
+                if (stage == 'debt' && expectSettle && rcvNow <= priorR + 0.001 &&
+                    scr.itemsTotal + scr.fee - scr.discount >= expS + 1) {
+                  bad('$label: تحويل إلى نقد بعد وصل ${rcvNow.toStringAsFixed(0)} رُفض بحجة دين سالب: ${'${r['err']}'.split('\n').first}');
+                }
                 // المرفوض لا يغيّر شيئاً
                 if (before != null && scr.inv != null) {
                   final now = await scen('invInfo', {'inv': scr.inv});

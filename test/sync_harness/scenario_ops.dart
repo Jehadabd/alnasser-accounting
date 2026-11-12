@@ -2,8 +2,8 @@
 //
 // 🧾 أفعال اختبار سيناريوهات الفاتورة (invoice_scenarios_test.dart) داخل عزلة الجهاز.
 // 'invSave' يمر بمسار زر «حفظ» في الشاشة (invoice_actions) بالترتيب نفسه:
-//   التحقق من البيانات ← مبلغ كل سطر = الكمية × السعر ← فحص الدين السالب ← لقطة ما قبل
-//   التعديل ← InvoiceController.saveInvoice ← سند تعديل الفاتورة النقدية.
+//   التحقق من البيانات ← مبلغ كل سطر = الكمية × السعر ← تسوية التحويل إلى نقد ← فحص الدين
+//   السالب ← لقطة ما قبل التعديل ← InvoiceController.saveInvoice ← سند تعديل الفاتورة النقدية.
 // (حوارات الشاشة — تأكيد التحويل إلى نقد، سقف الدين، موافقة المدير — تُعتبر موافَقاً عليها.)
 // ignore_for_file: avoid_print
 
@@ -146,10 +146,8 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
       if (!v.isValid) return {'ok': false, 'stage': 'validate', 'err': v.errorMessage};
       final mismatch = LineMathCheck.firstMismatch(data.invoiceItems);
       if (mismatch != null) return {'ok': false, 'stage': 'lineMath', 'err': mismatch};
-      final dv = await controller.validateDebtChangeWontCauseNegativeBalance(data);
-      if (!dv.isValid) return {'ok': false, 'stage': 'debt', 'err': dv.errorMessage};
       // 🔁 تحويل دين ⇐ نقد (كنافذة invoice_actions والمستخدم يقبل المقترح): ما سُدّد بوصولات
-      //    لا يُقبض مرتين، ثم تُعاد الفحوص على ما سيُحفظ فعلاً
+      //    لا يُقبض مرتين. يسبق فحص الدين السالب كما في الشاشة.
       Map<String, Object?>? plan;
       if (a['settle'] != false) {
         final p = await DebtToCashSettlement.plan(db, data);
@@ -158,10 +156,11 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
           data = DebtToCashSettlement.apply(data, p, p.suggestedPrepaid);
           final v2 = controller.validateInvoiceData(data);
           if (!v2.isValid) return {'ok': false, 'stage': 'validate2', 'err': v2.errorMessage, 'plan': plan};
-          final d2 = await controller.validateDebtChangeWontCauseNegativeBalance(data);
-          if (!d2.isValid) return {'ok': false, 'stage': 'debt2', 'err': d2.errorMessage, 'plan': plan};
         }
       }
+      // فحص الدين السالب على ما سيُحفظ فعلاً (بعد التسوية) — كترتيب invoice_actions
+      final dv = await controller.validateDebtChangeWontCauseNegativeBalance(data);
+      if (!dv.isValid) return {'ok': false, 'stage': 'debt', 'err': dv.errorMessage, 'plan': plan};
       final editId = existing?.id;
       final before = editId == null ? null : await InvoiceEditVoucher.snapshot(editId);
       final res = await controller.saveInvoice(data);
