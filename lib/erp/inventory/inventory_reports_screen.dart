@@ -12,6 +12,7 @@ import '../pickers.dart';
 import '../report_export.dart';
 import '../sales/quote_order_service.dart';
 import 'inventory_reports.dart';
+import 'move_mismatch_note.dart';
 
 class _Report {
   const _Report(this.key, this.title, this.icon, this.color, this.hint);
@@ -644,7 +645,8 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
   }
 
   Future<void> _openProductCard(int productId) async {
-    final rows = await _svc.productCard(productId);
+    final card = await _svc.productCard(productId);
+    final rows = card.rows;
     final db = await erpDb();
     final p = await db.query('products', columns: ['name'], where: 'id = ?', whereArgs: [productId], limit: 1);
     if (!mounted) return;
@@ -670,9 +672,10 @@ class _InventoryReportsScreenState extends State<InventoryReportsScreen> {
                         ],
                     ]),
           ],
-          body: rows.isEmpty
+          body: rows.isEmpty && card.matches
               ? const EmptyState('لا توجد حركات')
               : ListView(padding: const EdgeInsets.all(16), children: [
+                  if (!card.matches) MoveMismatchNote(card.mismatchText),
                   SimpleTable(
                     headers: const ['التاريخ', 'النوع', 'البيان', 'الكمية', 'الرصيد'],
                     numericColumns: const {3, 4},

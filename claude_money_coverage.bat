@@ -27,6 +27,7 @@ call flutter test --coverage --concurrency=1 --dart-define=COVERAGE=true --dart-
   test\sync_harness\compound_receipt_test.dart ^
   test\sync_harness\durability_test.dart ^
   test\sync_harness\lan_money_test.dart ^
+  test\sync_harness\product_card_test.dart ^
   test\accounting ^
   test\control ^
   test\erp ^

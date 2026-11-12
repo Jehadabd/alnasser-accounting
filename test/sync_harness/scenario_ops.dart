@@ -8,6 +8,7 @@
 // ignore_for_file: avoid_print
 
 import 'package:alnaser/controllers/invoice_controller.dart';
+import 'package:alnaser/erp/inventory/inventory_reports.dart';
 import 'package:alnaser/models/invoice.dart';
 import 'package:alnaser/models/invoice_input_data.dart';
 import 'package:alnaser/models/invoice_item.dart';
@@ -108,6 +109,17 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
 
     case 'invInfo':
       return {'ok': true, ...await _invoiceInfo(a['inv'] as String)};
+
+    case 'productCard':
+      // بطاقة حركة المادة كما تعرضها الشاشة (InventoryReports.productCard)
+      final card = await InventoryReports().productCard((a['prodId'] as num).toInt());
+      return {
+        'ok': true,
+        'rows': [for (final r in card.rows) {'d': r['d'], 'q': _d(r['q']), 'kind': r['kind'], 'note': r['note'], 'balance': _d(r['balance'])}],
+        'stored': card.storedQty,
+        'ledger': card.ledgerQty,
+        'matches': card.matches,
+      };
 
     case 'invSave':
       // ── بيانات الشاشة كما تبنيها invoice_actions ──

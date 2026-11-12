@@ -21,6 +21,7 @@ import '../widgets/formatters.dart';
 import '../erp/erp_ui.dart';
 import '../erp/inventory/barcode_labels.dart';
 import '../erp/inventory/inventory_reports.dart';
+import '../erp/inventory/move_mismatch_note.dart';
 import '../erp/inventory/price_tools.dart';
 import '../erp/report_export.dart';
 import '../erp/sales/quote_order_service.dart';
@@ -729,6 +730,9 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
   List<Map<String, Object?>> _purchases = const [];
   List<Map<String, Object?>> _orders = const [];
   List<Map<String, Object?>> _moves = const [];
+
+  /// آخر رصيد في الحركات لا يطابق كمية المادة (يُعرض فوق الحركات).
+  String? _moveMismatch;
   List<Map<String, Object?>> _serials = const [];
   List<MapEntry<Warehouse, double>> _balances = const [];
   List<Warehouse> _warehouses = const [];
@@ -785,7 +789,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
     final bal = await _svc.balancesByWarehouse(widget.productId);
     final w = await OrgService().warehouses(activeOnly: true);
     final orders = await QuoteOrderService().productOrders(widget.productId);
-    final moves = await InventoryReports().productCard(widget.productId);
+    final card = await InventoryReports().productCard(widget.productId);
     final serials = await _svc.serials(widget.productId);
     final sales = await _svc.recentSales(p['sync_uuid'] as String?);
     final db = await erpDb();
@@ -800,7 +804,8 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
       _balances = bal;
       _warehouses = w;
       _orders = orders;
-      _moves = moves;
+      _moves = card.rows;
+      _moveMismatch = card.matches ? null : card.mismatchText;
       _serials = serials;
       _sales30 = sales;
       _reserved = res;
@@ -1496,13 +1501,14 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
         ),
       ]);
 
-  Widget _movesTab() => _moves.isEmpty
+  Widget _movesTab() => _moves.isEmpty && _moveMismatch == null
       ? const EmptyState('لا توجد حركات', icon: Icons.swap_vert)
       : ListView.builder(
           padding: const EdgeInsets.all(8),
-          itemCount: _moves.length,
-          itemBuilder: (_, i) {
-            final m = _moves[i];
+          itemCount: _moves.length + (_moveMismatch == null ? 0 : 1),
+          itemBuilder: (_, index) {
+            if (_moveMismatch != null && index == 0) return MoveMismatchNote(_moveMismatch!);
+            final m = _moves[index - (_moveMismatch == null ? 0 : 1)];
             final q = d0(m['q']);
             return Card(
               elevation: 0,
@@ -1515,7 +1521,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
                     color: q >= 0 ? ErpColors.green : ErpColors.orange),
                 title: Text(movementKindLabels[m['kind']] ?? '${m['kind']}'),
                 subtitle: Text('${fmtDate(parseDate(m['d']))}  ${m['note'] ?? ''}',
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
                 trailing: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.end,

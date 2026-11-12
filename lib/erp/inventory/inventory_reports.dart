@@ -7,7 +7,10 @@
 //   • الجرد بتاريخ سابق، وتقييم المخزون بطرق كلفة مختلفة
 //   • الصلاحية القريبة، الكميات المحجوزة والمتاحة
 
+import 'dart:convert';
+
 import '../../accounting/ledger.dart';
+import '../../services/invoice_edit_events.dart';
 import '../currency_service.dart';
 import '../erp_common.dart';
 import '../stock_helpers.dart';
@@ -311,30 +314,168 @@ class InventoryReports {
     }
   }
 
-  /// حركة مادة واحدة تفصيلياً (كل الحركات + المبيعات) برصيد تراكمي.
-  Future<List<Map<String, Object?>>> productCard(int productId) async {
+  /// 🗂️ حركة مادة واحدة تفصيلياً — كل ما دخل وخرج بتاريخه، والرصيد بعد كل حركة.
+  ///
+  ///   • حركات دفتر المخزون (شراء، مرتجعات، سندات، جرد، تحويل...).
+  ///   • البيع من كل فاتورة **بكميتها الأصلية يوم البيع**، ثم كل تعديل عليها **حركةً مستقلة
+  ///     بتاريخ التعديل**: «تعديل الفاتورة رقم N: كانت 10 صارت 7» (+3). الكمية الأصلية =
+  ///     الكمية الآن − مجموع ما غيّرته التعديلات (من سجل تعديل الفواتير، بالوحدة الأساسية).
+  ///   • رقم الفاتورة هو المطبوع عليها (invoice_number، واحتياط الفواتير القديمة كما يطبعه
+  ///     Invoice.formattedInvoiceNumber)، لا الرقم الداخلي.
+  ///   • آخر رصيد يُقارن بكمية المادة المخزّنة: أي فرق يُعرض صريحاً ([ProductCard.unexplained])
+  ///     ولا تُخترع له حركة.
+  Future<ProductCard> productCard(int productId) async {
     final db = await erpDb();
     final p = await ErpStock.byId(db, productId);
-    if (p == null || p.syncUuid == null) return const [];
+    if (p == null || p.syncUuid == null) {
+      return ProductCard(rows: const [], storedQty: p?.stock ?? 0, ledgerQty: 0);
+    }
     final mv = await db.rawQuery('''
       SELECT created_at AS d, delta AS q, kind, note FROM stock_movements
       WHERE product_sync_uuid = ? AND (kind != 'opening' OR movement_uuid = 'opening_' || product_sync_uuid)
     ''', [p.syncUuid]);
-    final sold = await db.rawQuery('''
-      SELECT i.invoice_date AS d, -($kItemBaseQty) AS q, 'sale' AS kind,
-             'فاتورة #' || i.id || ' — ' || COALESCE(i.customer_name, '') AS note
+
+    // ── المبيعات: الفواتير التي فيها المادة الآن، ومن سجل التعديل ما أُزيلت منه ──
+    final current = await db.rawQuery('''
+      SELECT i.id, SUM($kItemBaseQty) AS q
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
       WHERE ii.product_sync_uuid = ? AND COALESCE(i.is_deleted, 0) = 0 AND COALESCE(i.status, '') != 'معلقة'
+      GROUP BY i.id
     ''', [p.syncUuid]);
-    final all = [...mv, ...sold].map((r) => Map<String, Object?>.from(r)).toList()
-      ..sort((a, b) => ('${a['d']}').compareTo('${b['d']}'));
+    final qtyNow = <int, double>{for (final r in current) r['id'] as int: d0(r['q'])};
+    final edits = <int, List<(String, double)>>{};
+    if (await InvoiceEditEvents.exists(db)) {
+      final pat = '%"product_id":$productId%';
+      final ev = await db.rawQuery('''
+        SELECT e.invoice_id, e.event_date, e.items_before, e.items_after
+        FROM ${InvoiceEditEvents.table} e JOIN invoices i ON i.id = e.invoice_id
+        WHERE COALESCE(i.is_deleted, 0) = 0 AND COALESCE(i.status, '') != 'معلقة'
+          AND (e.items_before LIKE ? OR e.items_after LIKE ?)
+        ORDER BY e.event_date, e.id
+      ''', [pat, pat]);
+      for (final e in ev) {
+        final delta = baseQtyOf(e['items_after'], productId) - baseQtyOf(e['items_before'], productId);
+        if (delta.abs() < 1e-9) continue;
+        edits.putIfAbsent(e['invoice_id'] as int, () => []).add(('${e['event_date']}', delta));
+      }
+    }
+    final ids = {...qtyNow.keys, ...edits.keys};
+    final sold = <Map<String, Object?>>[];
+    if (ids.isNotEmpty) {
+      final heads = await db.rawQuery(
+          'SELECT id, invoice_number, invoice_date, created_at, customer_name FROM invoices WHERE id IN (${ids.join(',')})');
+      for (final h in heads) {
+        final id = h['id'] as int;
+        final no = '${h['invoice_number'] ?? ''}'.trim();
+        sold.addAll(saleMovesFor(
+          number: no.isEmpty ? '#${'$id'.padLeft(5, '0')}' : no, // كما يُطبع (Invoice.formattedInvoiceNumber)
+          invoiceDate: saleMomentOf('${h['invoice_date'] ?? ''}', '${h['created_at'] ?? ''}'),
+          customer: '${h['customer_name'] ?? ''}',
+          currentQty: qtyNow[id] ?? 0,
+          edits: edits[id] ?? const [],
+        ));
+      }
+    }
+
+    // ترتيب زمني ثابت: عند تساوي الوقت يبقى ترتيب الإدراج (البيع قبل تعديلاته).
+    final all = [...mv.map((r) => Map<String, Object?>.from(r)), ...sold];
+    final seq = Map<Object, int>.identity();
+    for (var i = 0; i < all.length; i++) {
+      seq[all[i]] = i;
+    }
+    all.sort((a, b) {
+      final c = '${a['d']}'.compareTo('${b['d']}');
+      return c != 0 ? c : seq[a]!.compareTo(seq[b]!);
+    });
     var bal = 0.0;
     for (final r in all) {
-      bal += d0(r['q']);
+      bal = _q(bal + d0(r['q']));
       r['balance'] = bal;
     }
-    return all.reversed.toList();
+    return ProductCard(rows: all.reversed.toList(), storedQty: p.stock, ledgerQty: bal);
   }
+
+  /// حركات البيع لفاتورة واحدة: البيع بكميته الأصلية يوم الفاتورة، ثم كل تعديل بتاريخه
+  /// («كانت X صارت Y»). [edits]: (تاريخ التعديل، التغيّر في الكمية المباعة)، بالترتيب.
+  /// دالة صافية (مختبرة بأرقام ثابتة).
+  static List<Map<String, Object?>> saleMovesFor({
+    required String number,
+    required String invoiceDate,
+    required String customer,
+    required double currentQty,
+    required List<(String, double)> edits,
+  }) {
+    final changed = edits.fold<double>(0, (s, e) => s + e.$2);
+    var sold = _q(currentQty - changed);
+    final who = customer.trim().isEmpty ? '' : ' — ${customer.trim()}';
+    final out = <Map<String, Object?>>[
+      if (sold.abs() > 1e-9)
+        {'d': invoiceDate, 'q': -sold, 'kind': 'sale', 'note': 'فاتورة رقم $number$who'},
+    ];
+    for (final (date, delta) in edits) {
+      final after = _q(sold + delta);
+      out.add({
+        'd': date,
+        'q': -delta,
+        'kind': 'sale_edit',
+        'note': 'تعديل الفاتورة رقم $number: كانت ${fmtQty(sold)} صارت ${fmtQty(after)}$who',
+      });
+      sold = after;
+    }
+    return out;
+  }
+
+  /// لحظة البيع في الكشف: تاريخ الفاتورة، وإن كان يوم حفظها نفسه فوقت الحفظ (التاريخ المختار
+  /// من التقويم يأتي منتصف الليل، فيسبق شراء اليوم نفسه في الترتيب ويُظهر رصيداً سالباً وهمياً).
+  static String saleMomentOf(String invoiceDate, String createdAt) {
+    if (invoiceDate.length >= 10 && createdAt.length >= 10 && invoiceDate.substring(0, 10) == createdAt.substring(0, 10)) {
+      return createdAt;
+    }
+    return invoiceDate;
+  }
+
+  /// كمية المادة في أسطر لقطة تعديل (JSON) بالوحدة الأساسية — نفس [kItemBaseQty].
+  static double baseQtyOf(Object? itemsJson, int productId) {
+    if (itemsJson is! String || itemsJson.isEmpty) return 0;
+    try {
+      var q = 0.0;
+      for (final it in (jsonDecode(itemsJson) as List).cast<Map>()) {
+        if ((it['product_id'] as num?)?.toInt() != productId) continue;
+        final ql = d0(it['ql']);
+        final uilu = d0(it['uilu']);
+        q += ql > 0 ? ql * (uilu > 0 ? uilu : 1) : d0(it['qi']);
+      }
+      return q;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static double _q(double v) => (v * 1000).roundToDouble() / 1000;
+}
+
+/// 🗂️ بطاقة حركة مادة: الحركات (الأحدث أولاً، برصيد بعد كل حركة) ومقارنة آخر رصيد بكمية
+/// المادة المخزّنة.
+class ProductCard {
+  const ProductCard({required this.rows, required this.storedQty, required this.ledgerQty});
+
+  final List<Map<String, Object?>> rows;
+
+  /// كمية المادة المخزّنة (products.stock_quantity).
+  final double storedQty;
+
+  /// آخر رصيد في الكشف (مجموع الحركات).
+  final double ledgerQty;
+
+  /// ما لا تفسّره الحركات: موجب = في المادة أكثر مما تقوله الحركات.
+  double get unexplained => ((storedQty - ledgerQty) * 1000).roundToDouble() / 1000;
+
+  bool get matches => unexplained.abs() < 0.001;
+
+  /// نص التنبيه حين لا يطابق آخر رصيد كمية المادة.
+  String get mismatchText => 'كمية المادة المسجّلة ${fmtQty(storedQty)} وآخر رصيد في الحركات '
+      '${fmtQty(ledgerQty)} — فرق ${fmtQty(unexplained)} لا تفسّره حركة مسجّلة '
+      '(رصيد قبل بدء تسجيل الحركات، أو تعديل كمية خارج المستندات). راجعه بالجرد.';
 }
 
 const Map<String, String> movementKindLabels = {
@@ -354,6 +495,7 @@ const Map<String, String> movementKindLabels = {
   'doc_production': 'تصنيع',
   'doc_void': 'إلغاء مستند',
   'sale': 'بيع',
+  'sale_edit': 'تعديل فاتورة بيع',
 };
 
 double invRound(double v) => roundMoney(v);
