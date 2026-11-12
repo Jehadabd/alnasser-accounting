@@ -41,6 +41,7 @@ import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
 import 'package:alnaser/services/database_service.dart';
 import 'package:alnaser/services/firebase_sync/armored_reconciliation_service.dart';
+import 'package:alnaser/services/firebase_sync/firebase_sync_config.dart';
 import 'package:alnaser/services/firebase_sync/firebase_sync_helper.dart';
 import 'package:alnaser/services/firebase_sync/smart_pipe_cleanup_service.dart';
 import 'package:alnaser/services/firebase_sync/firebase_sync_service.dart';
@@ -745,6 +746,53 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         return false;
       }));
       return true;
+
+    case 'armoredPushWait':
+      // «بياناتي صحيحة» وانتظار نتيجتها (نجاح / بانتظار موافقة الجهاز الآخر / فشل)
+      final svc = ArmoredReconciliationService();
+      final ok = await svc.pushMyTruthForCustomer(a['cust'] as String);
+      return {'ok': ok, 'awaiting': svc.lastPushAwaitingApproval};
+
+    case 'armoredPending':
+      // 🔐 الكشوف الواردة التي تنتظر موافقة صاحب هذا الجهاز (كما تحمّلها الشاشة الرئيسية)
+      await ArmoredReconciliationService().loadPending();
+      return [
+        for (final p in ArmoredReconciliationService().pendingApprovals.value)
+          {'cust': p.customerSyncUuid, 'name': p.customerName, ...p.preview.toJson()},
+      ];
+
+    case 'armoredDecide':
+      final svc = ArmoredReconciliationService();
+      final hit = svc.pendingApprovals.value.where((p) => p.customerSyncUuid == a['cust']).toList();
+      if (hit.isEmpty) return {'ok': false, 'err': 'لا طلب منتظر لهذا العميل'};
+      final msg = a['approve'] == true ? await svc.approve(hit.first) : await svc.reject(hit.first);
+      return {'ok': true, 'msg': msg};
+
+    case 'ghostTx':
+      // صف معاملة بلا أي أثر في السحابة (بيانات قديمة/عالقة) — لصنع تباين حقيقي تكشفه المطابقة.
+      // mine=true: من إنشاء هذا الجهاز ولم يُرفع قط؛ وإلا: «من جهاز آخر» بلا مستند ولا إقرار.
+      final db = await DatabaseService().database;
+      final cid = await _customerId(a['cust'] as String);
+      if (cid == null) throw StateError('customer not on device');
+      final mine = a['mine'] == true;
+      final uuid = 'ghost_${a['tag']}';
+      final now = DateTime.now().toIso8601String();
+      await db.insert('transactions', {
+        'customer_id': cid,
+        'transaction_date': now,
+        'amount_changed': (a['amount'] as num).toDouble(),
+        'transaction_type': (a['amount'] as num) >= 0 ? 'manual_debt' : 'manual_payment',
+        'transaction_note': 'شبح ${a['tag']}',
+        'created_at': now,
+        'is_created_by_me': mine ? 1 : 0,
+        'is_uploaded': 1,
+        'is_deleted': 0,
+        'transaction_uuid': uuid,
+        'sync_uuid': uuid,
+        'origin_device_id': mine ? await FirebaseSyncConfig.getDeviceId() : 'ghost_device',
+      });
+      await DatabaseService().recalculateAndApplyCustomerDebt(cid);
+      return uuid;
 
     case 'setOnline':
       connectivity.setOnline(a['online'] as bool);

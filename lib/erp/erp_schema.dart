@@ -628,6 +628,10 @@ class ErpSchema {
     ['product_details', 'cost_usd', 'REAL'], // كلفة الوحدة الأساسية بالدولار
     // كلفة الوحدة الأساسية يوم تسوية الفاتورة — لا تتغير بتغير كلفة المادة لاحقاً
     ['invoice_adjustments', 'base_unit_cost', 'REAL'],
+    // 🧾 الوصل المركب: in_progress أثناء التسجيل، complete، partial (سطر فشل أو قرار المستخدم)
+    //    — وصل بقي in_progress انقطع في منتصفه (انطفاء/إغلاق) فيُعرض للمستخدم ليقرر.
+    ['customer_receipts', 'status', "TEXT NOT NULL DEFAULT 'complete'"],
+    ['customer_receipts', 'plan_json', 'TEXT'], // الأسطر المخططة ومعرّفات معاملاتها المحجوزة
   ];
 
   /// حسابات يحتاجها النظام الجديد: [المفتاح، الاسم، رمز مفضّل، رمز الأب، النوع، مراقبة؟]

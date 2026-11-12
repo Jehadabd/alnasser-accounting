@@ -1,6 +1,7 @@
 // test/sync_harness/rare_sync_branches_test.dart
 //
 // 🧭 فروع المزامنة النادرة — سيناريوهات موجّهة لا عشوائية.
+// (تعديل معاملة جهاز من جهاز آخر ممنوع في التطبيق — R4 يتحقق من الرفض.)
 //
 // اختبار الفوضى العشوائي (chaos) نادراً ما يصنع الظروف الدقيقة لهذه الفروع: استعادة نسخة
 // احتياطية بعد أن رُفع تعديل، جهاز غير متصل يُحذف عميله على جهاز آخر، تعديل معاملة جهاز من
@@ -92,24 +93,36 @@ void main() {
       await h.setOnline('D1', true);
     });
 
-    await _scenario(run, 'R4 جهاز آخر عدّل معاملتي وأنا غير متصل ← يصل تعديله ولا أكتب فوقه بنسختي', 2,
-        (h) async {
+    await _scenario(run, 'R4 جهاز آخر لا يستطيع تعديل معاملتي (مرفوض) ولا يتغيّر شيء', 2, (h) async {
       final c = (await h.addCustomer('D1', 'زبون R4'))!;
       final t = (await h.addTx('D1', c, 1200))!;
       await _stable(h, 'البداية');
-      await h.setOnline('D1', false);
-      await h.editTx('D2', t, 700);
-      await h.setOnline('D1', true);
+      try {
+        await h.d('D2').call('editTx', {'tx': t, 'amount': 700});
+        throw StateError('جهاز آخر عدّل معاملة ليست له — كان يجب أن يُرفض');
+      } catch (e) {
+        if (!'$e'.contains('أُنشئت على جهاز آخر')) rethrow;
+      }
     });
 
-    await _scenario(run, 'R5 نسخة احتياطية قديمة على جهاز وجهاز آخر عدّل معاملته بعدها', 2, (h) async {
+    await _scenario(run, 'R4ب صاحب المعاملة عدّلها والجهاز الآخر غير متصل ثم أُعيد تشغيله', 2, (h) async {
+      final c = (await h.addCustomer('D1', 'زبون R4ب'))!;
+      final t = (await h.addTx('D1', c, 1200))!;
+      await _stable(h, 'البداية');
+      await h.setOnline('D2', false);
+      await h.editTx('D1', t, 700);
+      await h.restart('D2');
+      await h.setOnline('D2', true);
+    });
+
+    await _scenario(run, 'R5 جهاز آخر استعاد نسخة فيها نسخة قديمة من معاملتي ← لا تمحو تعديلي', 2, (h) async {
       final c = (await h.addCustomer('D1', 'زبون R5'))!;
       final t = (await h.addTx('D1', c, 900))!;
       await _stable(h, 'البداية');
-      await h.backup('D1');
-      await h.editTx('D2', t, 450);
-      await _stable(h, 'بعد تعديل الجهاز الآخر');
-      if (!await h.restoreBackup('D1')) throw StateError('لم تُستعد النسخة');
+      await h.backup('D2'); // عند D2: المعاملة 900
+      await h.editTx('D1', t, 450);
+      await _stable(h, 'بعد التعديل');
+      if (!await h.restoreBackup('D2')) throw StateError('لم تُستعد النسخة');
     });
 
     await _scenario(run, 'R6 استعادة نسختين قديمتين على جهازين معاً', 3, (h) async {
@@ -140,14 +153,16 @@ void main() {
       await h.setOnline('D1', true);
     });
 
-    await _scenario(run, 'R8 تعديلان على معاملة واحدة من جهازين كلاهما غير متصل', 3, (h) async {
+    await _scenario(run, 'R8 صاحب المعاملة عدّلها مرتين بلا إنترنت وأُعيد تشغيله، والآخر غير متصل', 3, (h) async {
       final c = (await h.addCustomer('D1', 'زبون R8'))!;
       final t = (await h.addTx('D1', c, 1000))!;
       await _stable(h, 'البداية');
       await h.setOnline('D1', false);
       await h.setOnline('D2', false);
       await h.editTx('D1', t, 200);
-      await h.editTx('D2', t, 900); // الأخير في الحقيقة
+      await h.restart('D1');
+      await h.editTx('D1', t, 900);
+      await h.addTx('D2', c, -100);
       await h.setOnline('D1', true);
       await h.setOnline('D2', true);
     });

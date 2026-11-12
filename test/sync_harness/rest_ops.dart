@@ -180,6 +180,58 @@ Future<Object?> _restOp(String op, Map<String, Object?> a) async {
           notes: a['marker'] as String?);
       return {'ok': true, 'errors': res.errors, ...await _receiptState(db, res.receiptId)};
 
+    case 'receiptCrash':
+      // 🧾 وصل مركّب «ينقطع» بعد [stopAfter] سطر (كانطفاء الحاسوب بين عميل وآخر)
+      final box = await _box(db);
+      if (box == null) throw StateError('no cash box');
+      final lines = <ReceiptLineInput>[];
+      for (final l in (a['lines'] as List).cast<Map>()) {
+        final cid = await _custId(db, l['cust'] as String);
+        lines.add(ReceiptLineInput(
+            customerId: cid, customerName: '${l['cust']}', amountFc: _d(l['amount']), discount: _d(l['discount'])));
+      }
+      ReceiptsService.debugStopAfterLines = (a['stopAfter'] as num?)?.toInt();
+      ReceiptsService.debugStopInsideLine = (a['stopInside'] as num?)?.toInt();
+      try {
+        await ReceiptsService().createCustomerReceipt(null,
+            provider: AppProvider(),
+            date: DateTime.now(),
+            cashBoxId: box,
+            currency: 'IQD',
+            fxRate: 1,
+            lines: lines,
+            commission: _d(a['commission']),
+            notes: a['marker'] as String?);
+        return {'ok': false, 'err': 'لم يحدث الانقطاع'};
+      } on SimulatedReceiptCrash {
+        return {'ok': true};
+      } finally {
+        ReceiptsService.debugStopAfterLines = null;
+        ReceiptsService.debugStopInsideLine = null;
+      }
+
+    case 'receiptsIncomplete':
+      return [
+        for (final r in await ReceiptsService().incompleteReceipts())
+          {
+            'id': r.receiptId,
+            'no': r.receiptNo,
+            'planned': r.plannedLines,
+            'posted': r.postedLines,
+            'postedAmount': r.postedAmount,
+            'missing': r.missingAmount,
+          }
+      ];
+
+    case 'receiptComplete':
+      final res = await ReceiptsService()
+          .completeIncomplete(null, (a['id'] as num).toInt(), provider: AppProvider());
+      return {'ok': true, 'errors': res.errors, ...await _receiptStateOrNull(db, (a['id'] as num).toInt())};
+
+    case 'receiptKeep':
+      await ReceiptsService().keepPostedOnly((a['id'] as num).toInt());
+      return {'ok': true, ...await _receiptStateOrNull(db, (a['id'] as num).toInt())};
+
     case 'receiptByNote':
       final r = await db.query('customer_receipts', columns: ['id'], where: 'notes = ?', whereArgs: [a['marker']], limit: 1);
       if (r.isEmpty) return null;
@@ -435,6 +487,12 @@ Future<Object?> _restOp(String op, Map<String, Object?> a) async {
 Future<Map<String, Object?>> _due(Database db, int id) async {
   final d = (await db.query('due_items', where: 'id = ?', whereArgs: [id], limit: 1)).first;
   return {'id': id, 'amount': _d(d['amount']), 'paid': _d(d['paid_amount']), 'status': d['status'], 'affects': d['affects_balance']};
+}
+
+Future<Map<String, Object?>> _receiptStateOrNull(Database db, int id) async {
+  final h = await db.query('customer_receipts', columns: ['status', 'commission'], where: 'id = ?', whereArgs: [id]);
+  if (h.isEmpty) return {'exists': false};
+  return {'exists': true, 'status': h.first['status'], 'commission': _d(h.first['commission']), ...await _receiptState(db, id)};
 }
 
 Future<Map<String, Object?>> _receiptState(Database db, int id) async {

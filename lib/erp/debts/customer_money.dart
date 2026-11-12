@@ -66,16 +66,26 @@ class CustomerMoney {
     int? receiptId,
     String? refType,
     int? refId,
+    // 🧾 معرّف محجوز مسبقاً (الوصل المركب): إن كانت المعاملة به موجودة فلا تُسجَّل مرتين
+    //    — إكمال وصل انقطع في منتصفه يعيد السطر نفسه بلا تكرار.
+    String? presetUuid,
   }) async {
     final app = provider ?? context!.read<AppProvider>();
     final when = date ?? DateTime.now();
-    await PeriodLock.assertOpen(when);
     final db = await erpDb();
+    if (presetUuid != null) {
+      final had = await db.query('transactions',
+          columns: ['id'], where: 'transaction_uuid = ?', whereArgs: [presetUuid], limit: 1);
+      if (had.isNotEmpty) return presetUuid;
+      // وصف بقي من محاولة انقطعت قبل المعاملة: لا أثر مالي له، يُستبدل
+      await db.delete('customer_tx_ext', where: 'transaction_uuid = ?', whereArgs: [presetUuid]);
+    }
+    await PeriodLock.assertOpen(when);
     // 💵 دينار صحيح والنصف لصالح المحل؛ والكسر يُقبل فقط إن صفّى كسراً قديماً في
     //    رصيد العميل (Iqd.ledgerAmount). أقل من نصف دينار = صفر.
     final amt = Iqd.ledgerAmount(roundMoney(amount), await balance(db, customerId));
     if (amt.abs() < kMoneyEpsilon) throw ErpException('المبلغ صفر');
-    final uuid = const Uuid().v4();
+    final uuid = presetUuid ?? const Uuid().v4();
 
     // 1) الوصف أولاً: إن فشل إدراج المعاملة بعده يبقى سطر وصف بلا معاملة (لا أثر له)،
     //    أما العكس فيجعل معاملة خصم تُرحَّل مؤقتاً كتسديد نقدي.

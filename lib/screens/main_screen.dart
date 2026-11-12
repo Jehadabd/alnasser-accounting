@@ -35,6 +35,8 @@ import '../widgets/app_side_nav.dart';
 import '../widgets/home_destinations.dart';
 import '../widgets/user_menu_button.dart'; // 👤
 import '../widgets/sync_health_banner.dart'; // 🩺 تنبيهات صحة المزامنة
+import '../widgets/armored_approval_banner.dart'; // 🔐 موافقة على كشف جهاز آخر
+import '../widgets/incomplete_receipts_banner.dart'; // 🧾 وصل انقطع في منتصفه
 import '../lan/lan_status_banner.dart';
 import '../erp/currency_service.dart' show CurrencyService;
 import '../widgets/report_kit.dart' show repMoney, repCanSeeProfit;
@@ -888,6 +890,10 @@ class _MainScreenState extends State<MainScreen> {
                   _buildHeader(),
                   // 🩺 تنبيهات صحة المزامنة (لا يظهر شيء ما دام كل شيء سليماً)
                   const SyncHealthBanner(),
+                  // 🔐 كشف جهاز آخر سيغيّر معاملات هنا: لا يُطبَّق إلا بموافقتك
+                  const ArmoredApprovalBanner(),
+                  // 🧾 وصل قبض انقطع في منتصفه: أكمله أو أبقِ ما سُجّل (القرار لك)
+                  const IncompleteReceiptsBanner(),
                   // 🖧 حالة الاتصال بحاسبة السيرفر (طرفية) أو عدد الطرفيات (سيرفر)
                   const LanStatusBanner(),
                   // 🧪 شريط الوضع التجريبي

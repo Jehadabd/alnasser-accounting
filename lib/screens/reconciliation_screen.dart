@@ -195,7 +195,7 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
       // 🛡️ المطابقة المحصّنة المغلقة: رفع الكشف الكامل → الطرف الآخر يطبّق
       //    إدمبوتنت → يرد برصيده → نتحقق من التطابق → حذف فوري من فولدر المطابقة.
       final armored = ArmoredReconciliationService();
-      int done = 0, success = 0;
+      int done = 0, success = 0, awaiting = 0;
       for (final uuid in targetUuids) {
         if (mounted) {
           setState(() => _progress =
@@ -203,6 +203,8 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
         }
         final ok = await armored.pushMyTruthForCustomer(uuid);
         if (ok) success++;
+        // 🔐 الكشف سيغيّر معاملات الجهاز الآخر: ينتظر موافقة صاحبه (لا يُطبَّق قبلها)
+        if (!ok && armored.lastPushAwaitingApproval) awaiting++;
         done++;
       }
       if (!mounted) return;
@@ -211,8 +213,9 @@ class _ReconciliationScreenState extends State<ReconciliationScreen> {
           content: success == targetUuids.length
               ? Text('✅ تمت مطابقة ${targetUuids.length} عميل مع «$peerName» '
                   'وتأكيد التطابق — ونُظّف فولدر المطابقة!')
-              : Text('⚠️ نجحت مطابقة $success من ${targetUuids.length} — '
-                  'راجع الرسائل لمعرفة غير المتطابق'),
+              : Text('⚠️ نجحت مطابقة $success من ${targetUuids.length}'
+                  '${awaiting > 0 ? ' — و$awaiting بانتظار موافقة صاحب «$peerName» على جهازه' : ''}'
+                  ' — راجع الرسائل لمعرفة غير المتطابق'),
           backgroundColor: success == targetUuids.length ? Colors.green : Colors.orange,
         ),
       );

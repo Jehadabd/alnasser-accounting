@@ -28,7 +28,6 @@ import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../services/database/business/customer_name_rule.dart'; // 🔤 الاسم بلا مسافات
 import '../services/disk_space/disk_space_guard.dart'; // 💽 حماية امتلاء القرص
 import '../services/invoice_safety/debt_to_cash_confirm.dart'; // 🛑 تأكيد التحويل إلى نقد
-import '../services/invoice_safety/debt_to_cash_dialog.dart'; // 🔁 نافذة التحويل إلى نقد
 import '../services/invoice_safety/debt_to_cash_settlement.dart'; // 🔁 ما سُدّد بوصولات لا يُقبض مرتين
 import '../services/invoice_safety/iqd_normalize.dart';
 import '../services/invoice_safety/line_math_check.dart'; // 🚨 مبلغ السطر = الكمية × السعر
@@ -257,18 +256,15 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
     }
 
-    // 🔁 تحويل فاتورة لها دين في السجل إلى نقد: ما سُدّد منها سابقاً بوصولات لا يُقبض مرتين.
-    //    النافذة تقترحه (دين الفاتورة − رصيد العميل) ويؤكده المستخدم أو يصححه؛ غير الصفر ⇒
-    //    «آجل — مسددة بالكامل» (DebtToCashSettlement). يسبق فحص الدين السالب: ذاك الفحص
-    //    يجب أن يرى ما سيُحفظ فعلاً، لا التحويل الخام الذي يطرح ما سُدّد بالوصل مرة ثانية.
+    // 🔁 تحويل فاتورة لها دين في السجل إلى نقد = سُدّدت بالكامل (قرار صاحب المحل: بلا سؤال).
+    //    ما سُدّد منها سابقاً بوصولات (دين الفاتورة − رصيد العميل) لا يُقبض مرتين: تُحفظ
+    //    «آجل — مسددة بالكامل» ويُقبض الآن الباقي فقط (DebtToCashSettlement). يسبق فحص الدين
+    //    السالب: ذاك الفحص يجب أن يرى ما سيُحفظ فعلاً، لا التحويل الخام.
     if (!inputData.isNewInvoice && widget.settlementForInvoice == null) {
       if (!mounted) return null;
       final plan = await DebtToCashSettlement.plan(await db.database, inputData);
       if (plan != null) {
-        if (!mounted) return null;
-        final prepaid = await DebtToCashDialog.ask(context, inputData.invoiceToManage!, plan);
-        if (prepaid == null) return null;
-        inputData = DebtToCashSettlement.apply(inputData, plan, prepaid);
+        inputData = DebtToCashSettlement.apply(inputData, plan, plan.suggestedPrepaid);
         final v2 = controller.validateInvoiceData(inputData);
         if (!v2.isValid) {
           if (mounted) {

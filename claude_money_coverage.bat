@@ -22,6 +22,9 @@ call flutter test --coverage --concurrency=1 --dart-define=COVERAGE=true --dart-
   test\sync_harness\accounting_torture_test.dart ^
   test\sync_harness\features_torture_test.dart ^
   test\sync_harness\invoice_scenarios_test.dart ^
+  test\sync_harness\rare_sync_branches_test.dart ^
+  test\sync_harness\armored_approval_test.dart ^
+  test\sync_harness\compound_receipt_test.dart ^
   test\sync_harness\comprehensive_test.dart > %OUT% 2>&1
 if errorlevel 1 echo ⚠️ بعض الاختبارات فشلت — التغطية تُقاس رغم ذلك، وانظر %OUT%
 echo [2/2] الخريطة

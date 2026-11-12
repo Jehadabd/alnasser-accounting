@@ -38,8 +38,12 @@
 //   • الطلب يحمل nonce: الأجزاء والرد مربوطة به، فلا يُخلط رد قديم أو جزء من
 //     دفعة أخرى بالطلب الحالي.
 //   • وثائق الكشف لا تُحذف عند أول رد: أجهزة أخرى قد لم تقرأه بعد. تُحذف بعد 24 ساعة.
+//   • 🔐 لا كتابة على جهاز دون علم صاحبه: كشف «بياناتي صحيحة» الوارد من جهاز آخر
+//     يُعاين أولاً (ما سيُضاف وما سيُبطل والرصيد قبل وبعد). إن كان سيغيّر معاملة واحدة
+//     على الأقل لا يُطبَّق، بل ينتظر موافقة صاحب هذا الجهاز (ArmoredApprovalBanner)
+//     ويُرد على الطالب «بانتظار الموافقة». ما لا يغيّر شيئاً يُرد عليه فوراً كما كان.
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint, visibleForTesting;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -169,6 +173,7 @@ class ArmoredReconciliationService {
     if (!await FirebaseSyncConfig.isEnabled()) return;
     _listening = true;
     final myId = await _deviceId();
+    await _loadPending();
 
     _requestsSub = _firestore.collection(_requestsCol).snapshots().listen(
       (snap) async {
@@ -183,7 +188,11 @@ class ArmoredReconciliationService {
           // 🛡️ المستمع يدمج التغييرات: قد لا نرى pending أبداً بل completed
           // مباشرة (بعد رد جهاز آخر). طلب الدفع يُطبَّق في أي من هذه الحالات.
           final actionable = mode == 'truth_push'
-              ? (status == 'pending' || status == 'completed' || status == 'mismatch')
+              ? (status == 'pending' ||
+                  status == 'completed' ||
+                  status == 'mismatch' ||
+                  status == _awaitingStatus ||
+                  status == _rejectedStatus)
               : status == 'pending';
           if (!actionable) continue;
           if (_isTooOld(data['createdAt'])) continue;
@@ -261,6 +270,7 @@ class ArmoredReconciliationService {
     }
 
     final nonce = _newNonce();
+    _lastPushAwaitingApproval = false;
     await _writeLedger(customerSyncUuid, ledger, nonce);
 
     final requestId = '${customerSyncUuid}_$myId';
@@ -378,26 +388,32 @@ class ArmoredReconciliationService {
         _emit('⚠️ وصل الطلب بدون كشف مكتمل — تجاهل');
         return;
       }
-      final applied = await _applyCustomerLedger(ledger);
-      final balance = await _localBalanceFor(customerSyncUuid);
-
-      await _firestore
-          .collection(_resultsCol)
-          .doc('${customerSyncUuid}_$myId')
-          .set({
+      // 🔐 معاينة بلا كتابة: إن كان الكشف سيغيّر معاملة واحدة هنا فالقرار لصاحب الجهاز
+      final preview = await previewLedger(ledger);
+      if (!preview.changesMoney) {
+        await _applyAndRespond(customerSyncUuid, nonce, ledger, myId);
+        return;
+      }
+      final approval = ArmoredApproval(
+        requestId: requestId,
+        nonce: nonce,
+        customerSyncUuid: customerSyncUuid,
+        customerName: '${data['customerName'] ?? ledger['customerName'] ?? ''}',
+        requesterDeviceId: '${data['requesterDeviceId'] ?? ''}',
+        receivedAt: DateTime.now(),
+        preview: preview,
+      );
+      await _addPending(approval);
+      await _firestore.collection(_resultsCol).doc('${customerSyncUuid}_$myId').set({
         'customerSyncUuid': customerSyncUuid,
         'applierDeviceId': myId,
         'nonce': nonce,
-        'balanceAfter': balance,
-        'appliedCount': applied,
-        // 🔒 تفسير أي تباين
-        'preservedCount': _lastPreservedCount,
-        'preservedSum': _lastPreservedSum,
-        'keptCount': _lastKeptCount,
-        'voidedCount': _lastVoidedCount,
+        'awaitingApproval': true,
+        ...preview.toJson(),
         'respondedAt': FieldValue.serverTimestamp(),
       });
-      _emit('✅ طبّقتُ $applied معاملة — رصيدي الآن $balance. ${_explainLastApply()}');
+      _emit('🔐 كشف «${approval.customerName}» سيغيّر معاملات هذا الجهاز — ينتظر موافقتك: '
+          '${preview.describe()}');
     } else if (mode == 'truth_pull') {
       // 🛡️ مزوّد واحد فقط: أول جهاز يحجز الطلب يرفع كشفه، وإلا تداخلت
       // أجزاء كشوف أجهزة مختلفة في نفس الوثائق.
@@ -434,6 +450,218 @@ class ArmoredReconciliationService {
       _emit('✅ رفعتُ الكشف — الجهاز الطالب سيطبّقه ويتحقق');
     }
   }
+
+  /// يطبّق الكشف ويرد على الطالب برصيدي بعده (السلوك الأصلي لـ truth_push).
+  Future<void> _applyAndRespond(
+      String customerSyncUuid, String nonce, Map<String, dynamic> ledger, String myId) async {
+    final applied = await _applyCustomerLedger(ledger);
+    final balance = await _localBalanceFor(customerSyncUuid);
+
+    await _firestore
+        .collection(_resultsCol)
+        .doc('${customerSyncUuid}_$myId')
+        .set({
+      'customerSyncUuid': customerSyncUuid,
+      'applierDeviceId': myId,
+      'nonce': nonce,
+      'balanceAfter': balance,
+      'appliedCount': applied,
+      // 🔒 تفسير أي تباين
+      'preservedCount': _lastPreservedCount,
+      'preservedSum': _lastPreservedSum,
+      'keptCount': _lastKeptCount,
+      'voidedCount': _lastVoidedCount,
+      'respondedAt': FieldValue.serverTimestamp(),
+    });
+    _emit('✅ طبّقتُ $applied معاملة — رصيدي الآن $balance. ${_explainLastApply()}');
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  🔐 موافقة صاحب الجهاز على كشف يغيّر معاملاته
+  // ══════════════════════════════════════════════════════════════════════
+
+  static const String _awaitingStatus = 'awaiting_approval';
+  static const String _rejectedStatus = 'rejected';
+  static const String _pendingPrefsKey = 'armored_pending_approvals';
+
+  /// الكشوف الواردة التي تنتظر قرار صاحب هذا الجهاز (تعرضها ArmoredApprovalBanner).
+  final ValueNotifier<List<ArmoredApproval>> pendingApprovals =
+      ValueNotifier<List<ArmoredApproval>>(const []);
+
+  bool _lastPushAwaitingApproval = false;
+
+  /// هل انتهى آخر «بياناتي صحيحة» إلى انتظار موافقة صاحب الجهاز الآخر؟
+  bool get lastPushAwaitingApproval => _lastPushAwaitingApproval;
+
+  bool _pendingLoaded = false;
+
+  /// يحمّل الطلبات المنتظرة المحفوظة (مرة واحدة) — تستدعيه الشاشة الرئيسية عند فتحها
+  /// كي يظهر الطلب حتى قبل أن تبدأ المزامنة.
+  Future<void> loadPending() => _loadPending();
+
+  Future<void> _loadPending() async {
+    if (_pendingLoaded) return;
+    _pendingLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getStringList(_pendingPrefsKey) ?? const [];
+      pendingApprovals.value = [
+        for (final r in raw)
+          if (ArmoredApproval.tryParse(r) case final a?) a,
+      ];
+    } catch (e) {
+      debugPrint('⚠️ تعذّر تحميل طلبات المطابقة المنتظرة: $e');
+    }
+  }
+
+  Future<void> _savePending(List<ArmoredApproval> list) async {
+    pendingApprovals.value = List.unmodifiable(list);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_pendingPrefsKey, [for (final a in list) jsonEncode(a.toJson())]);
+    } catch (e) {
+      debugPrint('⚠️ تعذّر حفظ طلبات المطابقة المنتظرة: $e');
+    }
+  }
+
+  /// طلب واحد منتظر لكل عميل: الأحدث يحلّ محل الأقدم (الأقدم لم يعد يصف الحاضر).
+  Future<void> _addPending(ArmoredApproval a) async {
+    await _savePending([
+      for (final p in pendingApprovals.value)
+        if (p.customerSyncUuid != a.customerSyncUuid) p,
+      a,
+    ]);
+  }
+
+  Future<void> _removePending(ArmoredApproval a) async {
+    await _savePending([
+      for (final p in pendingApprovals.value)
+        if (p.key != a.key) p,
+    ]);
+  }
+
+  /// يوافق صاحب الجهاز: يُطبَّق الكشف نفسه الذي عُرض عليه (نفس nonce) ويُرد على الطالب.
+  /// يُرجع رسالة للمستخدم.
+  Future<String> approve(ArmoredApproval a) async {
+    if (!pendingApprovals.value.any((p) => p.key == a.key)) return 'الطلب لم يعد موجوداً';
+    if (FirebaseSyncService().isRecovering) {
+      return 'هذا الجهاز يستعيد نسخة احتياطية الآن — وافق بعد أن يكتمل استلام البيانات';
+    }
+    if (a.isExpired) {
+      await _removePending(a);
+      return 'انتهت صلاحية الطلب (أقدم من ساعتين) — اطلب من الجهاز الآخر إعادة المطابقة';
+    }
+    final ledger = await _readLedger(a.customerSyncUuid, a.nonce);
+    if (ledger == null) {
+      await _removePending(a);
+      return 'الكشف لم يعد موجوداً في السحابة أو استُبدل بأحدث — اطلب إعادة المطابقة';
+    }
+    await _applyAndRespond(a.customerSyncUuid, a.nonce, ledger, await _deviceId());
+    await _removePending(a);
+    final balance = await _localBalanceFor(a.customerSyncUuid);
+    return '✅ طُبّق كشف «${a.customerName}» — رصيده الآن ${_fmt(balance)}';
+  }
+
+  /// يرفض صاحب الجهاز: لا يتغيّر شيء هنا، ويعلم الطالب بالرفض.
+  Future<String> reject(ArmoredApproval a) async {
+    final myId = await _deviceId();
+    try {
+      await _firestore.collection(_resultsCol).doc('${a.customerSyncUuid}_$myId').set({
+        'customerSyncUuid': a.customerSyncUuid,
+        'applierDeviceId': myId,
+        'nonce': a.nonce,
+        'rejected': true,
+        'respondedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('⚠️ تعذّر إبلاغ الطالب بالرفض: $e');
+    }
+    await _removePending(a);
+    return 'رُفض كشف «${a.customerName}» — لم يتغيّر شيء على هذا الجهاز';
+  }
+
+  /// معاينة الكشف على هذا الجهاز بلا أي كتابة: نفس قواعد [_applyCustomerLedger]
+  /// (ما يُضاف بالـ UUID، وما يُبطل لغياب كل دليل، وما يُصان من إنشائي).
+  @visibleForTesting
+  Future<ArmoredPreview> previewLedger(Map<String, dynamic> ledger) async {
+    final db = await _db.database;
+    final myId = await _deviceId();
+    final cs = ledger['customerSyncUuid'] as String? ?? '';
+    final customerId = await _findCustomerReadOnly(db, ledger);
+    final txs = (ledger['transactions'] as List?) ?? const [];
+
+    final incoming = <String>{};
+    var addCount = 0;
+    var addSum = 0.0;
+    for (final raw in txs) {
+      if (raw is! Map) continue;
+      final tu = ((raw['transaction_uuid'] as String?)?.isNotEmpty == true
+          ? raw['transaction_uuid']
+          : raw['sync_uuid']) as String?;
+      if (tu == null || tu.isEmpty) continue;
+      incoming.add(tu);
+      if (myId.isNotEmpty && raw['origin_device_id'] == myId) continue;
+      final existing = await db.query('transactions',
+          columns: ['id'], where: 'transaction_uuid = ? OR sync_uuid = ?', whereArgs: [tu, tu], limit: 1);
+      if (existing.isNotEmpty) continue;
+      addCount++;
+      addSum += (raw['amount_changed'] as num?)?.toDouble() ?? 0.0;
+    }
+
+    var voidCount = 0;
+    var voidSum = 0.0;
+    var preserved = 0;
+    var balanceNow = 0.0;
+    if (customerId != null) {
+      final active = await db.query('transactions',
+          where: 'customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)', whereArgs: [customerId]);
+      for (final r in active) {
+        final amt = (r['amount_changed'] as num?)?.toDouble() ?? 0.0;
+        balanceNow += amt;
+        final tu = (r['transaction_uuid'] as String?)?.isNotEmpty == true
+            ? r['transaction_uuid'] as String
+            : r['sync_uuid'] as String?;
+        if (tu != null && tu.isNotEmpty && incoming.contains(tu)) continue;
+        if (((r['is_created_by_me'] as int?) ?? 1) == 1) {
+          preserved++;
+          continue;
+        }
+        if (!await _hasEvidenceOfLife(db, r)) {
+          voidCount++;
+          voidSum += amt;
+        }
+      }
+    }
+    return ArmoredPreview(
+      customerSyncUuid: cs,
+      newCustomer: customerId == null,
+      addCount: addCount,
+      addSum: _money(addSum),
+      voidCount: voidCount,
+      voidSum: _money(voidSum),
+      preservedCount: preserved,
+      balanceNow: _money(balanceNow),
+      balanceAfter: _money(balanceNow + addSum - voidSum),
+      referenceBalance: _money((ledger['referenceBalance'] as num?)?.toDouble() ?? 0.0),
+    );
+  }
+
+  /// مثل [_resolveCustomer] بلا أي كتابة (لا ربط هوية ولا إنشاء).
+  Future<int?> _findCustomerReadOnly(Database db, Map<String, dynamic> ledger) async {
+    final cs = ledger['customerSyncUuid'] as String? ?? '';
+    final found = await CustomerNameRule.byUuidResolved(db, cs, columns: ['id']);
+    if (found != null) return found['id'] as int;
+    final normName = DatabaseHelpers.normalizeArabic((ledger['customerName'] as String?) ?? '');
+    final legacy = await db.query('customers',
+        columns: ['id', 'name'], where: "sync_uuid IS NULL OR sync_uuid = ''");
+    for (final c in legacy) {
+      if (DatabaseHelpers.normalizeArabic(c['name'] as String? ?? '') == normName) return c['id'] as int;
+    }
+    return null;
+  }
+
+  static double _money(double v) => (v * 100).roundToDouble() / 100;
+  static String _fmt(double v) => ArmoredPreview.fmt(v);
 
   // ══════════════════════════════════════════════════════════════════════
   //  بناء الكشف (Ledger) ورفعه وقراءته
@@ -880,6 +1108,22 @@ class ArmoredReconciliationService {
         final data = change.doc.data();
         if (data == null || data['nonce'] != nonce) continue; // رد طلب سابق
         if (completer.isCompleted) return;
+        final who = data['applierDeviceId'] as String? ?? 'جهاز';
+        // 🔐 الجهاز الآخر سيتغيّر: القرار لصاحبه. لا نجاح ولا تباين — ينتظر موافقته.
+        if (data['awaitingApproval'] == true || data['rejected'] == true) {
+          final rejected = data['rejected'] == true;
+          _lastPushAwaitingApproval = !rejected;
+          _emit(rejected
+              ? '⛔ رفض صاحب $who تطبيق الكشف — لم يتغيّر شيء عنده'
+              : '🔐 الكشف سيغيّر معاملات $who: ${ArmoredPreview.fromJson(data).describe()} — '
+                  'أُرسل لصاحبه ليوافق أو يرفض، ولا يُطبَّق قبل موافقته');
+          await _firestore.collection(_requestsCol).doc(requestId).set(
+              {'status': rejected ? _rejectedStatus : _awaitingStatus}, SetOptions(merge: true));
+          await sub.cancel();
+          timeout?.cancel();
+          if (!completer.isCompleted) completer.complete(false);
+          return;
+        }
         final balanceAfter = (data['balanceAfter'] as num?)?.toDouble() ?? 0.0;
         final applier = data['applierDeviceId'] as String? ?? 'جهاز';
         final applied = (data['appliedCount'] as num?)?.toInt() ?? 0;
@@ -959,5 +1203,134 @@ class ArmoredReconciliationService {
   Future<bool> _verifyLocalBalance(String customerSyncUuid, double reference) async {
     final balance = await _localBalanceFor(customerSyncUuid);
     return (balance - reference).abs() <= _balanceTolerance;
+  }
+}
+
+/// 🔐 معاينة أثر كشف وارد على هذا الجهاز (بلا كتابة).
+class ArmoredPreview {
+  const ArmoredPreview({
+    required this.customerSyncUuid,
+    required this.newCustomer,
+    required this.addCount,
+    required this.addSum,
+    required this.voidCount,
+    required this.voidSum,
+    required this.preservedCount,
+    required this.balanceNow,
+    required this.balanceAfter,
+    required this.referenceBalance,
+  });
+
+  final String customerSyncUuid;
+  final bool newCustomer;
+  final int addCount;
+  final double addSum;
+  final int voidCount;
+  final double voidSum;
+  final int preservedCount;
+  final double balanceNow;
+  final double balanceAfter;
+  final double referenceBalance;
+
+  /// هل سيغيّر الكشف معاملة واحدة على الأقل (إضافة أو إبطال)؟
+  bool get changesMoney => addCount > 0 || voidCount > 0;
+
+  static String fmt(double v) {
+    final neg = v < 0;
+    final whole = v.abs().round().toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+    return neg ? '-$whole' : whole;
+  }
+
+  String describe() {
+    final parts = <String>[
+      if (newCustomer) 'عميل جديد على هذا الجهاز',
+      if (addCount > 0) 'يُضاف $addCount معاملة مجموعها ${fmt(addSum)}',
+      if (voidCount > 0) 'يُبطل $voidCount معاملة مجموعها ${fmt(voidSum)}',
+    ];
+    return '${parts.join('، ')} — الرصيد ${fmt(balanceNow)} ← ${fmt(balanceAfter)}';
+  }
+
+  Map<String, Object?> toJson() => {
+        'previewNewCustomer': newCustomer,
+        'previewAddCount': addCount,
+        'previewAddSum': addSum,
+        'previewVoidCount': voidCount,
+        'previewVoidSum': voidSum,
+        'previewPreservedCount': preservedCount,
+        'previewBalanceNow': balanceNow,
+        'previewBalanceAfter': balanceAfter,
+        'previewReferenceBalance': referenceBalance,
+      };
+
+  factory ArmoredPreview.fromJson(Map<String, dynamic> m, {String customerSyncUuid = ''}) {
+    double d(String k) => (m[k] as num?)?.toDouble() ?? 0.0;
+    int i(String k) => (m[k] as num?)?.toInt() ?? 0;
+    return ArmoredPreview(
+      customerSyncUuid: customerSyncUuid.isNotEmpty ? customerSyncUuid : '${m['customerSyncUuid'] ?? ''}',
+      newCustomer: m['previewNewCustomer'] == true,
+      addCount: i('previewAddCount'),
+      addSum: d('previewAddSum'),
+      voidCount: i('previewVoidCount'),
+      voidSum: d('previewVoidSum'),
+      preservedCount: i('previewPreservedCount'),
+      balanceNow: d('previewBalanceNow'),
+      balanceAfter: d('previewBalanceAfter'),
+      referenceBalance: d('previewReferenceBalance'),
+    );
+  }
+}
+
+/// 🔐 كشف «بياناتي صحيحة» من جهاز آخر ينتظر قرار صاحب هذا الجهاز.
+class ArmoredApproval {
+  const ArmoredApproval({
+    required this.requestId,
+    required this.nonce,
+    required this.customerSyncUuid,
+    required this.customerName,
+    required this.requesterDeviceId,
+    required this.receivedAt,
+    required this.preview,
+  });
+
+  final String requestId;
+  final String nonce;
+  final String customerSyncUuid;
+  final String customerName;
+  final String requesterDeviceId;
+  final DateTime receivedAt;
+  final ArmoredPreview preview;
+
+  String get key => '$requestId|$nonce';
+
+  /// الكشف يصف لحظة إرساله: بعد ساعتين لا يُطبَّق (كقاعدة الطلبات الواردة).
+  bool get isExpired =>
+      DateTime.now().difference(receivedAt) > ArmoredReconciliationService._requestMaxAge;
+
+  Map<String, Object?> toJson() => {
+        'requestId': requestId,
+        'nonce': nonce,
+        'customerSyncUuid': customerSyncUuid,
+        'customerName': customerName,
+        'requesterDeviceId': requesterDeviceId,
+        'receivedAt': receivedAt.toIso8601String(),
+        ...preview.toJson(),
+      };
+
+  static ArmoredApproval? tryParse(String raw) {
+    try {
+      final m = (jsonDecode(raw) as Map).cast<String, dynamic>();
+      final cs = m['customerSyncUuid'] as String;
+      return ArmoredApproval(
+        requestId: m['requestId'] as String,
+        nonce: m['nonce'] as String,
+        customerSyncUuid: cs,
+        customerName: (m['customerName'] as String?) ?? '',
+        requesterDeviceId: (m['requesterDeviceId'] as String?) ?? '',
+        receivedAt: DateTime.parse(m['receivedAt'] as String),
+        preview: ArmoredPreview.fromJson(m, customerSyncUuid: cs),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }
