@@ -25,6 +25,7 @@ import 'landed_cost_service.dart';
 import 'print_audit.dart';
 import 'printed_vouchers_screen.dart';
 import 'purchase_suggestions_screen.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 DateTime _monthStart() {
   final n = DateTime.now();
@@ -148,7 +149,12 @@ class _CashCountsScreenState extends State<CashCountsScreen> {
       ? ErpColors.muted
       : (c.matched ? ErpColors.green : (c.isOver ? ErpColors.orange : ErpColors.red));
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _review(CashCount c) async {
+    await SaveLock.run(() => _reviewUnlocked(c));
+  }
+
+  Future<void> _reviewUnlocked(CashCount c) async {
     final note = TextEditingController();
     final r = await showDialog<String>(
       context: context,
@@ -206,7 +212,12 @@ class _CashCountsScreenState extends State<CashCountsScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _voidReviewed(CashCount c) async {
+    await SaveLock.run(() => _voidReviewedUnlocked(c));
+  }
+
+  Future<void> _voidReviewedUnlocked(CashCount c) async {
     final reason = await askText(context, 'سبب إلغاء العدّ', label: 'السبب');
     if (reason == null || reason.trim().isEmpty) return;
     try {
@@ -664,7 +675,12 @@ class _LandedCostsScreenState extends State<LandedCostsScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _void(Map<String, Object?> r) async {
+    await SaveLock.run(() => _voidUnlocked(r));
+  }
+
+  Future<void> _voidUnlocked(Map<String, Object?> r) async {
     final ok = await confirmDialog(
         context,
         'إلغاء سجل الشحن',

@@ -11,6 +11,7 @@ import '../erp_common.dart';
 import '../pickers.dart';
 import 'batch_models.dart';
 import 'batch_store.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 final _q = NumberFormat('#,##0.##', 'en');
 final _d = DateFormat('yyyy/MM/dd', 'en');
@@ -38,7 +39,12 @@ class _BatchScreenState extends State<BatchScreen> {
     if (mounted) setState(() => _all = a);
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _add() async {
+    await SaveLock.run(() => _addUnlocked());
+  }
+
+  Future<void> _addUnlocked() async {
     final p = await Pickers.product(context, title: 'مادة الدفعة');
     if (p == null || !mounted) return;
     final lotNo = TextEditingController();
@@ -137,7 +143,7 @@ class _BatchScreenState extends State<BatchScreen> {
                     onPressed: () async {
                       final ok = await confirmDialog(context, 'حذف الدفعة', 'تُحذف من سجل الصلاحيات فقط — الكمية لا تتغير.', ok: 'حذف');
                       if (ok && r.l.lot.id != null) {
-                        await _store.remove(r.l.lot.id!);
+                        await SaveLock.run(() => _store.remove(r.l.lot.id!));
                         await _load();
                       }
                     },

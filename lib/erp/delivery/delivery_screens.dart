@@ -12,6 +12,7 @@ import '../erp_common.dart';
 import '../pickers.dart';
 import 'delivery_models.dart';
 import 'delivery_store.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 final _n = NumberFormat('#,##0', 'en');
 String _m(int fils) => _n.format(fromFils(fils).round());
@@ -83,7 +84,12 @@ class _DeliveryHubScreenState extends State<DeliveryHubScreen> {
     if (saved == true) await _load();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _changeStatus(DeliveryOrder o) async {
+    await SaveLock.run(() => _changeStatusUnlocked(o));
+  }
+
+  Future<void> _changeStatusUnlocked(DeliveryOrder o) async {
     if (o.settled) return;
     final to = await showModalBottomSheet<DeliveryStatus>(
       context: context,
@@ -254,8 +260,9 @@ class _CompanyCardState extends State<_CompanyCard> {
     );
     if (!ok || !mounted) return;
     try {
-      final r = await widget.store.settle(c.id!);
-      if (!mounted) return;
+      // 🔒 التسوية وحدها تحت القفل: وصل القبض بعدها شاشة لها قفلها
+      final r = await SaveLock.run(() => widget.store.settle(c.id!));
+      if (r == null || !mounted) return;
       setToast(context, 'سُوّيت ${r.balance.orders.length} طلباً — الصافي ${_m(r.balance.netFils)}');
       await widget.onChanged();
       await _load();
@@ -330,7 +337,12 @@ class _CompanyDialogState extends State<_CompanyDialog> {
     super.dispose();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     try {
       await widget.store.saveCompany(DeliveryCompany(
         id: widget.company?.id,
@@ -419,7 +431,12 @@ class _OrderDialogState extends State<_OrderDialog> {
     super.dispose();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     final o = widget.order;
     try {
       await widget.store.saveOrder(DeliveryOrder(

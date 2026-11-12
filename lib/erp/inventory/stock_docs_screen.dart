@@ -13,6 +13,7 @@ import '../erp_ui.dart';
 import '../pickers.dart';
 import '../report_export.dart';
 import 'stock_docs_service.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 const Map<String, IconData> _docIcons = {
   'in': Icons.move_to_inbox_rounded,
@@ -418,7 +419,12 @@ class _StockDocEditorScreenState extends State<StockDocEditorScreen> {
 
   bool get _isIn => widget.docType != 'out';
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     if (!await PeriodLock.guard(context, _date)) return;
     if (!mounted) return;
     final valid = _lines.where((l) => l.quantity > 0).toList();
@@ -634,7 +640,12 @@ class _StockDocViewScreenState extends State<StockDocViewScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _void() async {
+    await SaveLock.run(() => _voidUnlocked());
+  }
+
+  Future<void> _voidUnlocked() async {
     final h = _h;
     if (h == null) return;
     if (!await PeriodLock.guard(context, parseDate(h['doc_date']))) return;

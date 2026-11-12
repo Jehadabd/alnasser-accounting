@@ -26,6 +26,7 @@ import 'debt_reports_screen.dart';
 import 'due_items_screen.dart';
 import 'receipt_screen.dart';
 import 'statement_service.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 const List<String> weekDays = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
 
@@ -104,7 +105,12 @@ class _CustomerCardScreenState extends State<CustomerCardScreen> {
     if (!_dirty) setState(() => _dirty = true);
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     final e = _ext!;
     e.code = _code.text.trim();
     e.title = _title.text.trim();

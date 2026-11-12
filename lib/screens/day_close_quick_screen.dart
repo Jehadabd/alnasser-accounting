@@ -23,6 +23,7 @@ import '../models/app_user.dart' show AppPermissions;
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
 import 'day_close_screen.dart';
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 const _navy = Color(0xFF0F3460);
 const _teal = Color(0xFF0F766E);
@@ -266,7 +267,12 @@ class _DayCloseQuickScreenState extends State<DayCloseQuickScreen> {
 
   // ─────────── الحفظ: كل سطر بمساره الأصلي ───────────
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     final box = _boxId;
     if (_saving || box == null || _pending.isEmpty) return;
     setState(() => _saving = true);

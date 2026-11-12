@@ -9,6 +9,7 @@ import '../erp_common.dart';
 import '../erp_ui.dart';
 import 'bank_rec_service.dart';
 import 'control_common.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 class BankRecListScreen extends StatefulWidget {
   const BankRecListScreen({super.key});
@@ -91,8 +92,9 @@ class _BankRecListScreenState extends State<BankRecListScreen> {
       return;
     }
     try {
-      final id = await BankRecService.create(boxId: boxId, statementDate: date, statementBalance: v);
-      if (!mounted) return;
+      // 🔒 الإنشاء وحده تحت القفل: شاشة المطابقة بعده لها أقفالها
+      final id = await SaveLock.run(() => BankRecService.create(boxId: boxId, statementDate: date, statementBalance: v));
+      if (id == null || !mounted) return;
       await Navigator.push(context, MaterialPageRoute(builder: (_) => BankRecScreen(recId: id)));
       _load();
     } catch (e) {
@@ -138,20 +140,20 @@ class _BankRecListScreenState extends State<BankRecListScreen> {
                             IconButton(
                               tooltip: 'إلغاء الاعتماد',
                               icon: const Icon(Icons.lock_open_rounded),
-                              onPressed: () async {
+                              onPressed: () => SaveLock.run(() async {
                                 try {
                                   await BankRecService.reopen(r.id);
                                   _load();
                                 } catch (e) {
                                   if (context.mounted) showError(context, e);
                                 }
-                              },
+                              }),
                             ),
                           if (!r.isFinal)
                             IconButton(
                               tooltip: 'حذف',
                               icon: const Icon(Icons.delete_outline_rounded, color: ErpColors.red),
-                              onPressed: () async {
+                              onPressed: () => SaveLock.run(() async {
                                 final ok = await confirmDialog(context, 'حذف المطابقة المفتوحة', 'تُحذف العلامات فقط — لا يتغير أي قيد.',
                                     ok: 'حذف', color: ErpColors.red);
                                 if (!ok) return;
@@ -161,7 +163,7 @@ class _BankRecListScreenState extends State<BankRecListScreen> {
                                 } catch (e) {
                                   if (context.mounted) showError(context, e);
                                 }
-                              },
+                              }),
                             ),
                         ]),
                         onTap: () async {
@@ -201,7 +203,12 @@ class _BankRecScreenState extends State<BankRecScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _toggle(BankLine l, bool v) async {
+    await SaveLock.run(() => _toggleUnlocked(l, v));
+  }
+
+  Future<void> _toggleUnlocked(BankLine l, bool v) async {
     if (_busy) return;
     _busy = true;
     try {
@@ -214,7 +221,12 @@ class _BankRecScreenState extends State<BankRecScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _finalize() async {
+    await SaveLock.run(() => _finalizeUnlocked());
+  }
+
+  Future<void> _finalizeUnlocked() async {
     try {
       await BankRecService.finalize(widget.recId);
       if (mounted) {

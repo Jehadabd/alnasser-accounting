@@ -16,6 +16,7 @@ import '../inventory/usd_reprice_dialog.dart';
 import '../pickers.dart';
 import 'accounting_plus_service.dart';
 import 'voucher_pdf.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 // ═══════════════════════════ العملات ═══════════════════════════
 
@@ -48,7 +49,12 @@ class _CurrenciesScreenState extends State<CurrenciesScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _edit([Currency? c]) async {
+    await SaveLock.run(() => _editUnlocked(c));
+  }
+
+  Future<void> _editUnlocked([Currency? c]) async {
     final code = TextEditingController(text: c?.code ?? '');
     final name = TextEditingController(text: c?.name ?? '');
     final symbol = TextEditingController(text: c?.symbol ?? '');
@@ -336,7 +342,7 @@ class _CompoundVouchersScreenState extends State<CompoundVouchersScreen> {
                           ),
                           IconButton(
                             icon: const Icon(Icons.delete_outline, color: ErpColors.red),
-                            onPressed: () async {
+                            onPressed: () => SaveLock.run(() async {
                               final ok = await confirmDialog(
                                   context, 'حذف السند', 'سيُحذف قيده من الدفتر ويبقى السند في السجل كمحذوف.',
                                   color: ErpColors.red);
@@ -347,7 +353,7 @@ class _CompoundVouchersScreenState extends State<CompoundVouchersScreen> {
                               } catch (e) {
                                 if (context.mounted) showError(context, e);
                               }
-                            },
+                            }),
                           ),
                         ]),
                         children: [
@@ -432,7 +438,12 @@ class _CompoundVoucherEditorScreenState extends State<CompoundVoucherEditorScree
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     setState(() => _saving = true);
     try {
       final id = await _svc.create(
@@ -645,7 +656,12 @@ class _VoucherTemplatesScreenState extends State<VoucherTemplatesScreen> {
     if (mounted) setState(() => _rows = r);
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _edit([Map<String, Object?>? t]) async {
+    await SaveLock.run(() => _editUnlocked(t));
+  }
+
+  Future<void> _editUnlocked([Map<String, Object?>? t]) async {
     final name = TextEditingController(text: '${t?['name'] ?? ''}');
     final abbrev = TextEditingController(text: '${t?['abbrev'] ?? ''}');
     final notes = TextEditingController(text: '${t?['notes'] ?? ''}');
@@ -774,7 +790,7 @@ class _VoucherTemplatesScreenState extends State<VoucherTemplatesScreen> {
                                 final ok = await confirmDialog(context, 'حذف القالب', 'حذف «${t['name']}»؟',
                                     color: ErpColors.red);
                                 if (ok) {
-                                  await _svc.delete(t['id'] as int);
+                                  await SaveLock.run(() => _svc.delete(t['id'] as int));
                                   _load();
                                 }
                               }

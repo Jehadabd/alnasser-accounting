@@ -22,6 +22,7 @@ import '../widgets/report_kit.dart';
 import 'day_close_quick_screen.dart'; // ⏱️ ما خرج من الدرج قبل العدّ
 import 'report_parts.dart';
 import 'transactions_list_dialog.dart';
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 class DayCloseScreen extends StatefulWidget {
   const DayCloseScreen({super.key, this.initialDate});
@@ -384,7 +385,12 @@ class _DayCloseScreenState extends State<DayCloseScreen> {
     );
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _saveCount() async {
+    await SaveLock.run(() => _saveCountUnlocked());
+  }
+
+  Future<void> _saveCountUnlocked() async {
     final c = _cash;
     if (c == null || !_hasCount) return;
     if (_boxId == null) {

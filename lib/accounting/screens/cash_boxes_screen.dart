@@ -8,6 +8,7 @@ import '../../models/app_user.dart';
 import '../vouchers_service.dart';
 import 'acc_ui.dart';
 import 'account_statement_screen.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 class CashBoxesScreen extends StatefulWidget {
   const CashBoxesScreen({super.key});
@@ -42,7 +43,12 @@ class _CashBoxesScreenState extends State<CashBoxesScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _add() async {
+    await SaveLock.run(() => _addUnlocked());
+  }
+
+  Future<void> _addUnlocked() async {
     if (!requirePermission(context, AppPermissions.accountingPost)) return;
     final name = TextEditingController();
     var kind = 'cash';

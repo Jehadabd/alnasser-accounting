@@ -16,6 +16,7 @@ import '../erp_common.dart';
 import '../pickers.dart';
 import 'hr_models.dart';
 import 'hr_store.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 final _n = NumberFormat('#,##0', 'en');
 String _m(int fils) => _n.format((fils / 100).round());
@@ -52,7 +53,12 @@ class _HrScreenState extends State<HrScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _editEmployee([HrEmployee? e]) async {
+    await SaveLock.run(() => _editEmployeeUnlocked(e));
+  }
+
+  Future<void> _editEmployeeUnlocked([HrEmployee? e]) async {
     final r = await showDialog<HrEmployee>(context: context, builder: (_) => _EmployeeDialog(employee: e));
     if (r == null) return;
     try {
@@ -277,7 +283,12 @@ class _AdvancesTabState extends State<_AdvancesTab> {
 
   String _name(int id) => widget.emps.firstWhere((e) => e.id == id, orElse: () => HrEmployee(name: '#$id', salaryFils: 0)).name;
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _add() async {
+    await SaveLock.run(() => _addUnlocked());
+  }
+
+  Future<void> _addUnlocked() async {
     final active = widget.emps.where((e) => e.active).toList();
     if (active.isEmpty) return;
     HrEmployee e = active.first;
@@ -374,7 +385,12 @@ class _PayrollTabState extends State<_PayrollTab> {
     _load();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _pay(HrEmployee e) async {
+    await SaveLock.run(() => _payUnlocked(e));
+  }
+
+  Future<void> _payUnlocked(HrEmployee e) async {
     final bonus = TextEditingController(text: '0');
     final ded = TextEditingController(text: '0');
     final adv = Payslip.openAdvances(_adv, e.id!, _month);
@@ -471,7 +487,12 @@ class _CompetitionsTabState extends State<_CompetitionsTab> {
     if (mounted) setState(() => _list = l);
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _add() async {
+    await SaveLock.run(() => _addUnlocked());
+  }
+
+  Future<void> _addUnlocked() async {
     final title = await askText(context, 'عنوان المسابقة', label: 'مثل: أفضل بائع لشهر 11');
     if (title == null || !mounted) return;
     final range = await showDateRangePicker(context: context, firstDate: DateTime(2020), lastDate: DateTime(2100));

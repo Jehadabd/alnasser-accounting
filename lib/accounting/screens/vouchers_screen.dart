@@ -22,6 +22,7 @@ import '../../widgets/formatters.dart';
 import '../ledger.dart';
 import '../vouchers_service.dart';
 import 'acc_ui.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 // ═══════════════════════════ هوية كل نوع ═══════════════════════════
 
@@ -340,7 +341,12 @@ class _VouchersScreenState extends State<VouchersScreen> {
     _load();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _delete(Map<String, Object?> v) async {
+    await SaveLock.run(() => _deleteUnlocked(v));
+  }
+
+  Future<void> _deleteUnlocked(Map<String, Object?> v) async {
     if (!requirePermission(context, AppPermissions.accountingPost)) return;
     final ok = await confirmDialog(
       context,
@@ -861,7 +867,12 @@ class _VoucherFormScreenState extends State<VoucherFormScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save({bool again = false}) async {
+    await SaveLock.run(() => _saveUnlocked(again: again));
+  }
+
+  Future<void> _saveUnlocked({bool again = false}) async {
     if (_saving) return;
     final amount = parseMoney(_amount.text) ?? 0;
     if (_box == null) {

@@ -17,6 +17,7 @@ import 'doc_pdf.dart';
 import 'invoice_bridge.dart';
 import 'quote_order_service.dart';
 import '../../wa_messages/wa_doc_sender.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 const Map<String, String> quoteStatusLabels = {
   'open': 'مفتوح',
@@ -269,7 +270,10 @@ class _QuotationEditorScreenState extends State<QuotationEditorScreen> {
     });
   }
 
-  Future<bool> _save() async {
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
+  Future<bool> _save() async => (await SaveLock.run(() => _saveUnlocked())) ?? false;
+
+  Future<bool> _saveUnlocked() async {
     setState(() => _saving = true);
     try {
       _id = await _svc.saveQuotation(
@@ -670,7 +674,10 @@ class _OrderEditorScreenState extends State<OrderEditorScreen> {
     });
   }
 
-  Future<bool> _save() async {
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
+  Future<bool> _save() async => (await SaveLock.run(() => _saveUnlocked())) ?? false;
+
+  Future<bool> _saveUnlocked() async {
     if (_party == null) {
       showError(context, _sales ? 'اختر العميل' : 'اختر المورد');
       return false;

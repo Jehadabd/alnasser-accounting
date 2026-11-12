@@ -157,7 +157,12 @@ class _DueItemsScreenState extends State<DueItemsScreen> with SingleTickerProvid
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _bounce(Map<String, Object?> r) async {
+    await SaveLock.run(() => _bounceUnlocked(r));
+  }
+
+  Future<void> _bounceUnlocked(Map<String, Object?> r) async {
     final ok = await confirmDialog(context, 'ارتداد الشيك',
         'سيعود المتبقي (${fmtMoney(d0(r['amount']) - d0(r['paid_amount']))}) ديناً على ${r['party_name']}. متابعة؟',
         ok: 'ارتداد', color: ErpColors.red);
@@ -171,7 +176,12 @@ class _DueItemsScreenState extends State<DueItemsScreen> with SingleTickerProvid
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _cancel(Map<String, Object?> r) async {
+    await SaveLock.run(() => _cancelUnlocked(r));
+  }
+
+  Future<void> _cancelUnlocked(Map<String, Object?> r) async {
     final ok = await confirmDialog(context, 'إلغاء الاستحقاق', 'إلغاء هذا الاستحقاق نهائياً؟', color: ErpColors.red);
     if (!ok) return;
     try {
@@ -385,7 +395,12 @@ class _DueItemFormScreenState extends State<DueItemFormScreen> {
     if (mounted) setState(() => _rate.text = fmtMoney(r));
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     final amt = parseMoney(_amount.text) ?? 0;
     if (_party == null) {
       showError(context, 'اختر ${_receivable ? 'العميل' : 'المورد'}');

@@ -68,6 +68,7 @@ import '../services/barcode/scan_lookup.dart';
 import '../services/barcode/scan_settings.dart';
 import '../services/barcode/scan_feedback.dart';
 import '../widgets/camera_scan_button.dart'; // 📷 الكاميرا (أندرويد/آيفون)
+import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 // Helper: format product ID - show raw value without zero-padding
 String formatProductId5(int? id) {
@@ -3056,7 +3057,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   bool get _canHold =>
       !isViewOnly && !isSaving && _hasLines && (invoiceToManage == null || invoiceToManage!.status == HeldInvoices.status);
 
-  Future<bool> _holdCurrentInvoice() async {
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
+  Future<bool> _holdCurrentInvoice() async => (await SaveLock.run(() => _holdCurrentInvoiceUnlocked())) ?? false;
+
+  Future<bool> _holdCurrentInvoiceUnlocked() async {
     try {
       final held = await HeldInvoices.hold(
         existing: invoiceToManage,
@@ -3225,7 +3229,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                               ),
                             );
                             if (ok != true) return;
-                            await HeldInvoices.discard(inv);
+                            await SaveLock.run(() => HeldInvoices.discard(inv));
                             list.removeAt(i);
                             setSheet(() {});
                             await _loadHeldCount();

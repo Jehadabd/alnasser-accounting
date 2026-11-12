@@ -9,6 +9,7 @@ import '../../services/auth_service.dart';
 import '../ledger.dart';
 import 'acc_ui.dart';
 import '../../widgets/formatters.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 const Map<String, String> sourceTypeLabels = {
   'invoice': 'فاتورة بيع',
@@ -102,7 +103,7 @@ class _JournalScreenState extends State<JournalScreen> {
         actions: [
           if (isManual)
             TextButton(
-              onPressed: () async {
+              onPressed: () => SaveLock.run(() async {
                 if (!requirePermission(context, AppPermissions.accountingPost)) return;
                 try {
                   await _ledger.deleteManualEntry(e['id'] as int);
@@ -111,7 +112,7 @@ class _JournalScreenState extends State<JournalScreen> {
                 } catch (err) {
                   if (mounted) showError(context, err);
                 }
-              },
+              }),
               child: const Text('حذف القيد', style: TextStyle(color: AccColors.red)),
             ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
@@ -247,7 +248,12 @@ class _ManualEntryScreenState extends State<ManualEntryScreen> {
   double get _dr => _lines.fold(0.0, (s, l) => s + l.d);
   double get _cr => _lines.fold(0.0, (s, l) => s + l.c);
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     if (_desc.text.trim().isEmpty) {
       showError(context, 'اكتب بيان القيد');
       return;

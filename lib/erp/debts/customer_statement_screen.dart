@@ -14,6 +14,7 @@ import '../../services/customer_balance_guard.dart';
 import '../../wa_messages/wa_doc_sender.dart';
 import '../../widgets/balance_mismatch_banner.dart';
 import 'statement_service.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 class CustomerStatementScreen extends StatefulWidget {
   const CustomerStatementScreen({super.key, this.customerId, this.customerName});
@@ -93,7 +94,12 @@ class _CustomerStatementScreenState extends State<CustomerStatementScreen> {
     _load();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _reconcile() async {
+    await SaveLock.run(() => _reconcileUnlocked());
+  }
+
+  Future<void> _reconcileUnlocked() async {
     if (_customerId == null) return;
     if (!requirePermission(context, AppPermissions.collection)) return;
     DateTime date = DateTime.now();

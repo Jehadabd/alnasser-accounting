@@ -10,6 +10,7 @@ import '../erp_ui.dart';
 import '../pickers.dart' show CashBoxDropdown;
 import 'depreciation_math.dart';
 import 'fixed_assets_service.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 class FixedAssetsScreen extends StatefulWidget {
   const FixedAssetsScreen({super.key});
@@ -54,7 +55,12 @@ class _FixedAssetsScreenState extends State<FixedAssetsScreen> {
     if (ok == true) _load();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _runMonth() async {
+    await SaveLock.run(() => _runMonthUnlocked());
+  }
+
+  Future<void> _runMonthUnlocked() async {
     final now = DateTime.now();
     final prev = DateTime(now.year, now.month - 1, 1);
     final c = TextEditingController(text: periodOf(prev));
@@ -124,20 +130,20 @@ class _FixedAssetsScreenState extends State<FixedAssetsScreen> {
         case 'rename':
           final n = await askText(context, 'اسم الأصل', label: 'الاسم', initial: a.name);
           if (n == null || n.trim().isEmpty) return;
-          await FixedAssetsService.rename(a.id, name: n, category: a.category, notes: a.notes);
+          await SaveLock.run(() => FixedAssetsService.rename(a.id, name: n, category: a.category, notes: a.notes));
         case 'delete':
           final ok = await confirmDialog(context, 'حذف الأصل',
               'يُحذف «${a.name}» وقيد شرائه (إن وُجد) في الترحيل التالي. لا يُحذف أصل عليه إهلاك.',
               ok: 'حذف', color: ErpColors.red);
           if (!ok) return;
-          await FixedAssetsService.delete(a.id);
+          await SaveLock.run(() => FixedAssetsService.delete(a.id));
         case 'dispose':
           if (!mounted) return;
           await _dispose(a);
         case 'undispose':
           final ok = await confirmDialog(context, 'إلغاء الاستبعاد', 'يعود «${a.name}» قائماً ويُحذف قيد استبعاده.');
           if (!ok) return;
-          await FixedAssetsService.undispose(a.id);
+          await SaveLock.run(() => FixedAssetsService.undispose(a.id));
         case 'schedule':
           if (!mounted) return;
           await _schedule(a);
@@ -149,7 +155,12 @@ class _FixedAssetsScreenState extends State<FixedAssetsScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _dispose(FixedAsset a) async {
+    await SaveLock.run(() => _disposeUnlocked(a));
+  }
+
+  Future<void> _disposeUnlocked(FixedAsset a) async {
     DateTime on = DateTime.now();
     int? box;
     final amt = TextEditingController();
@@ -330,7 +341,7 @@ class _FixedAssetsScreenState extends State<FixedAssetsScreen> {
                           : IconButton(
                               tooltip: 'إلغاء',
                               icon: const Icon(Icons.block_rounded, color: ErpColors.red),
-                              onPressed: () async {
+                              onPressed: () => SaveLock.run(() async {
                                 final ok = await confirmDialog(context, 'إلغاء إهلاك ${r.period}',
                                     'يُحذف قيده في الترحيل التالي ويعود المجمّع كما كان.',
                                     ok: 'إلغاء الإهلاك', color: ErpColors.red);
@@ -341,7 +352,7 @@ class _FixedAssetsScreenState extends State<FixedAssetsScreen> {
                                 } catch (e) {
                                   if (context.mounted) showError(context, e);
                                 }
-                              },
+                              }),
                             ),
                     ),
             ]),
@@ -393,7 +404,12 @@ class _FixedAssetEditorState extends State<FixedAssetEditor> {
     super.dispose();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _save() async {
+    await SaveLock.run(() => _saveUnlocked());
+  }
+
+  Future<void> _saveUnlocked() async {
     final years = parseMoney(_years.text) ?? 0;
     setState(() => _busy = true);
     try {

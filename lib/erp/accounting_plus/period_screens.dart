@@ -18,6 +18,7 @@ import '../erp_settings_screen.dart';
 import '../reports/finance_reports.dart';
 import 'accounting_plus_service.dart';
 import 'currency_voucher_screens.dart';
+import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 
 // ═══════════════════════════ التثبيت والإقفال ═══════════════════════════
 
@@ -86,7 +87,12 @@ class _PeriodCloseScreenState extends State<PeriodCloseScreen> {
     _load();
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _close() async {
+    await SaveLock.run(() => _closeUnlocked());
+  }
+
+  Future<void> _closeUnlocked() async {
     final net = FiscalCloseService.netProfit(_preview);
     var lockAfter = true;
     final ok = await showDialog<bool>(
@@ -126,7 +132,12 @@ class _PeriodCloseScreenState extends State<PeriodCloseScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _reopen(int year) async {
+    await SaveLock.run(() => _reopenUnlocked(year));
+  }
+
+  Future<void> _reopenUnlocked(int year) async {
     final ok = await confirmDialog(
         context, 'إعادة فتح $year', 'سيُحذف قيد الإقفال. يمكنك إعادة الإقفال بعد التصحيح.', color: ErpColors.orange);
     if (!ok) return;
@@ -274,7 +285,12 @@ class _FxRevaluationScreenState extends State<FxRevaluationScreen> {
     }
   }
 
+  // 🔒 لا يُنفَّذ مرتين مهما كانت سرعة الضغط: القفل يُؤخذ قبل أي انتظار ويغطي الشاشة حتى ينتهي
   Future<void> _post() async {
+    await SaveLock.run(() => _postUnlocked());
+  }
+
+  Future<void> _postUnlocked() async {
     if (!await PeriodLock.guard(context, _date)) return;
     if (!mounted) return;
     final total = _rows.fold<double>(0, (s, r) => s + r.diff);
