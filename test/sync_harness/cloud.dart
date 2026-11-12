@@ -86,6 +86,18 @@ class FakeCloud {
 
   bool _isOnline(String device) => online[device] ?? true;
 
+  /// كتابات جهاز أوفلاين المنتظرة تفشل كأن التطبيق أُغلق قبل عودة الاتصال (بلا persistence):
+  /// لا تصل السحابة أبداً، والتطبيق يرى فشلها.
+  void failQueued(String device) {
+    final q = _queued.remove(device) ?? const [];
+    for (final r in q) {
+      r.replyTo.send(CloudReply(r.id, null, 'unavailable', 'client closed before reconnect'));
+    }
+  }
+
+  /// هل في السحابة مستند مساره ينتهي بـ [suffix] (مثل 'invoices/<uuid>')؟
+  bool hasDocEndingWith(String suffix) => docs.keys.any((k) => k.endsWith(suffix));
+
   // ───────────────────────── حجز كتابة (سباقات الرفع) ─────────────────────────
 
   /// كتابة واحدة قادمة من [device] على مستند يبدأ مساره بـ [pathPrefix] تُحجز: لا تُطبَّق

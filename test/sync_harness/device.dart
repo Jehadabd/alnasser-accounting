@@ -846,6 +846,11 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       }));
       return true;
 
+    case 'markArchive':
+      // إعدادات المزامنة: «اعتبار الفواتير القديمة مرفوعة»
+      final r = await FirebaseSyncService().markArchiveInvoicesAsSynced();
+      return {'marked': r.marked, 'refused': r.refused};
+
     case 'forceReupload':
       // شاشة المطابقة: «أعد رفع معاملتي» (FirebaseSyncService.forceReuploadOwnedTransaction)
       return await FirebaseSyncService().forceReuploadOwnedTransaction(a['tx'] as String);

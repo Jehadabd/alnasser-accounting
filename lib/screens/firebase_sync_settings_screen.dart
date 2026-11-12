@@ -655,7 +655,7 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
           _buildActionButton(
             icon: Icons.done_all_rounded,
             label: 'اعتبار الفواتير القديمة مرفوعة',
-            subtitle: 'مرة واحدة عند البدء لتجنّب رفع الأرشيف كاملاً',
+            subtitle: 'عند البدء والجهاز وحده في المجموعة، لتجنّب رفع الأرشيف كاملاً',
             isLoading: _isMarkingOldInvoices,
             color: const Color(0xFF475569),
             onPressed: _isMarkingOldInvoices ? null : _markOldInvoicesAsSynced,
@@ -1528,9 +1528,10 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
       builder: (context) => AlertDialog(
         title: const Text('اعتبار الفواتير القديمة مرفوعة'),
         content: const Text(
-          'سيتم تعليم كل الفواتير الحالية على أنها مرفوعة، فلا تُرسل إلى الأجهزة '
-          'الأخرى. استخدم هذا الخيار مرة واحدة عند بدء المزامنة لتجنب رفع الأرشيف '
-          'كاملاً. الفواتير الجديدة بعد ذلك سترتفع تلقائياً.',
+          'تُعلَّم فواتير هذا الجهاز غير المرفوعة «مرفوعة» فلا يُرفع الأرشيف كاملاً. '
+          'يعمل فقط وهذا الجهاز وحده في المجموعة: أي جهاز ينضم بعدها يستلم كل '
+          'الفواتير عند انضمامه. إن كان في المجموعة جهاز آخر فسيُرفض، لأن فواتيرك '
+          'غير المرفوعة لن تصل إليه أبداً فتختلف الديون والمخزون.',
         ),
         actions: [
           TextButton(
@@ -1549,15 +1550,14 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
 
     setState(() => _isMarkingOldInvoices = true);
     try {
-      final db = await DatabaseService().database;
-      final count = await db.rawUpdate(
-        'UPDATE invoices SET is_synced = 1 WHERE is_synced = 0',
-      );
+      // 🛡️ الشرط (الجهاز وحده في المجموعة) والتعليم في الخدمة: لا تعليم يُفقد ديناً جهازاً آخر
+      final r = await _firebaseSync.markArchiveInvoicesAsSynced();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('تم اعتبار $count فاتورة مرفوعة'),
-            backgroundColor: Colors.green,
+            content: Text(r.refused ?? 'تم اعتبار ${r.marked} فاتورة مرفوعة'),
+            backgroundColor: r.refused == null ? Colors.green : Colors.red,
+            duration: Duration(seconds: r.refused == null ? 4 : 8),
           ),
         );
       }

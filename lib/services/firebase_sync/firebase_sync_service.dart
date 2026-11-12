@@ -4446,6 +4446,46 @@ class FirebaseSyncService {
     }
   }
 
+  /// 🗄️ «اعتبار الفواتير القديمة مرفوعة» — يوفّر رفع الأرشيف عند بدء المزامنة، **بأمان**:
+  ///
+  /// الفاتورة المعلَّمة «مرفوعة» لا تُرفع بعدها أبداً، ودين الآجلة يسافر داخل حزمتها. فلو
+  /// كان في المجموعة جهاز آخر لما وصلته فواتير هذا الجهاز غير المرفوعة (ومنها ما أُنشئ
+  /// أوفلاين بعد بدء المزامنة)، فتختلف ديون عملائها ومخزون موادها بين الأجهزة إلى الأبد.
+  /// لذلك لا يعمل إلا وهذا الجهاز **وحده** في المجموعة: من ينضم بعده يطلب إعادة البث
+  /// ([rebroadcastMissingInvoices]) فيستلم كل الفواتير الغائبة من السحابة، المعلَّمة منها أيضاً.
+  ///
+  /// قائمة الأجهزة: من المستمع اللحظي إن وصل (يعمل أوفلاين بآخر ما عُرف)، وإلا من السحابة.
+  /// لا يمسّ إلا فواتير هذا الجهاز. يعيد عدد ما عُلِّم، أو سبب الرفض.
+  Future<({int marked, String? refused})> markArchiveInvoicesAsSynced() async {
+    if (_firestore == null || _deviceId == null) {
+      return (marked: 0, refused: 'المزامنة غير مفعّلة على هذا الجهاز');
+    }
+    Set<String> known;
+    if (_liveDevices.isNotEmpty) {
+      known = {for (final d in _liveDevices) '${d['deviceId']}'};
+    } else {
+      try {
+        final snap = await _firestore!.collection('devices').get().timeout(const Duration(seconds: 20));
+        known = {for (final d in snap.docs) d.id};
+      } catch (_) {
+        return (marked: 0, refused: 'تعذّرت معرفة أجهزة المجموعة: اتصل بالإنترنت وأعد المحاولة');
+      }
+    }
+    final others = known.where((id) => id != _deviceId).length;
+    if (others > 0) {
+      return (
+        marked: 0,
+        refused: 'في المجموعة $others جهاز آخر: الفواتير غير المرفوعة لن تصل إليه أبداً إن عُلِّمت، '
+            'فتختلف ديون العملاء والمخزون بين الأجهزة. اتركها ترتفع وحدها.'
+      );
+    }
+    final db = await _db.database;
+    final n = await db.rawUpdate('UPDATE invoices SET is_synced = 1 '
+        'WHERE COALESCE(is_synced, 0) = 0 AND COALESCE(is_created_by_me, 1) = 1');
+    SyncDiagnostics.log('sync', 'اعتُبرت $n فاتورة قديمة مرفوعة (الجهاز وحده في المجموعة)');
+    return (marked: n, refused: null);
+  }
+
   /// إعادة بثّ دفتر المجموعة كما يعرفه هذا الجهاز — للجهاز الجديد أو المستعيد.
   ///
   /// 🛡️ قواعد آمنة (المحاكاة: سيناريوهات 26، 27 + الفوضى القاسية):

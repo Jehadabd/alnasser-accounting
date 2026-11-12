@@ -661,8 +661,8 @@ class SalesFacts {
         inv.itemsCost += cost;
       }
 
-      // 3) بنود التسويات بعد الحفظ: مبلغها داخل total_amount أصلاً (insertInvoiceAdjustment
-      //    يحدّثه)، فنضيف كلفتها وكميتها فقط — وكانت الملخصات تتجاهل كلفتها.
+      // 3) بنود التسويات بعد الحفظ: مبلغها داخل total_amount أصلاً (أُضيف إليه عند
+      //    تسجيلها في الإصدارات السابقة)، فنضيف كلفتها وكميتها فقط — وكانت الملخصات تتجاهل كلفتها.
       if (includeAdjustments) {
         try {
           final adjRows = await db.rawQuery('''

@@ -5,9 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../../models/invoice.dart';
 import '../../../models/invoice_item.dart';
 import '../../../models/invoice_adjustment.dart';
-import '../business/invoice_debt_reconciler.dart';
 import '../../invoice_safety/iqd_normalize.dart'; // 💵
-import '../../../utils/iqd.dart';
 
 class InvoiceDao {
   // دالة للحصول على قاعدة البيانات
@@ -217,54 +215,8 @@ class InvoiceDao {
     return List.generate(maps.length, (i) => InvoiceItem.fromMap(maps[i]));
   }
   
-  // 🔧 تعديلات الفاتورة (Adjustments)
-  Future<int> insertInvoiceAdjustment(InvoiceAdjustment adj) async {
-    final db = await getDatabase();
-    final map = adj.toMap();
-    map.remove('id');
-    // 💵 فرق التسوية على دين العميل: دينار صحيح، والنصف لصالح المحل (نحو +∞)
-    final adjustmentAmount = Iqd.up(adj.amountDelta);
-    map['amount_delta'] = adjustmentAmount;
-    
-    // إضافة التعديل وتحديث إجمالي الفاتورة في نفس الوقت
-    return await db.transaction((txn) async {
-      final id = await txn.insert('invoice_adjustments', map);
-
-      // 💱 كلفة الوحدة الأساسية يومها: التقارير لا تتأثر إن تغيّرت كلفة المادة لاحقاً
-      // (مثلاً مادة كلفتها بالدولار وارتفع سعره).
-      if (adj.productId != null) {
-        try {
-          final p = await txn.query('products',
-              columns: ['cost_price'], where: 'id = ?', whereArgs: [adj.productId], limit: 1);
-          final c = p.isEmpty ? 0.0 : ((p.first['cost_price'] as num?)?.toDouble() ?? 0.0);
-          if (c > 0) {
-            await txn.update('invoice_adjustments', {'base_unit_cost': c}, where: 'id = ?', whereArgs: [id]);
-          }
-        } catch (_) {
-          // عمود base_unit_cost لم يُضف بعد (قاعدة قبل ErpSchema.ensure)
-        }
-      }
-      
-      // تحديث إجمالي الفاتورة (انعكاس التعديل) — بالمبلغ المقرَّب أعلاه
-      await txn.rawUpdate(
-        'UPDATE invoices SET total_amount = total_amount + ? WHERE id = ?',
-        [adjustmentAmount, adj.invoiceId]
-      );
-
-      // 🛡️ التسوية غيّرت إجمالي الفاتورة، فيجب أن ينعكس ذلك على دين العميل فوراً.
-      // قبل هذا كان التعليق يقول "يجب أن يتم عبر Manager" ولم يكن يُستدعى أحد،
-      // فكانت أول تسوية تُحدث فرقاً دائماً بين الفاتورة وسجل الديون.
-      await InvoiceDebtReconciler.reconcileInvoice(
-        txn,
-        adj.invoiceId,
-        createMissing: true,
-        reason: 'تسوية على الفاتورة',
-      );
-
-      return id;
-    });
-  }
-  
+  // 🔧 تعديلات الفاتورة (Adjustments): قراءة فقط. إضافتها (insertInvoiceAdjustment) حُذفت في p159 —
+  //    لم يكن يستدعيها شيء، والتسويات القديمة المخزّنة تُقرأ كما هي.
   Future<List<InvoiceAdjustment>> getInvoiceAdjustments(int invoiceId) async {
     final db = await getDatabase();
     final maps = await db.query(

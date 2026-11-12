@@ -2041,16 +2041,6 @@ class DatabaseService {
     return _invoiceDao.getInvoiceAdjustmentsMapForIds(invoiceIds);
   }
   
-  Future<int> insertInvoiceAdjustment(InvoiceAdjustment adj) async {
-    await database;
-    // 🛡️ Pre-adjustment guard
-    final adjGuardResult = await financialIntegrityGuard.guardPreAdjustment(adjustment: adj);
-    if (!adjGuardResult.passed) {
-      throw Exception('${adjGuardResult.errorMessage} (${adjGuardResult.errorCode})');
-    }
-    return _invoiceDao.insertInvoiceAdjustment(adj);
-  }
-  
   Future<List<InvoiceAdjustment>> getInvoiceAdjustments(int invoiceId) async {
     await database;
     return _invoiceDao.getInvoiceAdjustments(invoiceId);
@@ -2181,12 +2171,6 @@ class DatabaseService {
     await database;
     final list = await _receiptDao.getReceiptsByCustomer(customerId);
     return list.map((m) => CustomerReceiptVoucher.fromMap(m)).toList();
-  }
-  
-  Future<int> deleteCustomerReceiptVoucher(int id) async {
-     await database;
-     final db = await database;
-     return await db.delete('customer_receipt_vouchers', where: 'id = ?', whereArgs: [id]);
   }
   
   Future<int> getNextCustomerReceiptNumber() async {
