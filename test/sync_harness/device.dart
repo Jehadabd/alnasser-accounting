@@ -35,6 +35,7 @@ import 'package:alnaser/utils/iqd.dart'; // 💵
 import 'rest_ops.dart'; // 🔨 اختبار البقية القاسي
 import 'accounting_ops.dart'; // 🏦 الصندوق والمحاسبة
 import 'features_ops.dart'; // 🧩 الميزات المتبقية
+import 'scenario_ops.dart'; // 🧾 سيناريوهات الفاتورة
 import 'package:alnaser/services/license_service.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
@@ -1226,6 +1227,10 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
     case 'acct':
       // 🏦 أفعال الصندوق والمحاسبة (accounting_ops.dart)
       return await acctOp(a['op'] as String, ((a['args'] as Map?) ?? const {}).cast<String, Object?>());
+
+    case 'scen':
+      // 🧾 سيناريوهات الفاتورة (scenario_ops.dart)
+      return await scenOp(a['op'] as String, ((a['args'] as Map?) ?? const {}).cast<String, Object?>());
 
     case 'feat':
       // 🧩 أفعال الميزات المتبقية (features_ops.dart)
