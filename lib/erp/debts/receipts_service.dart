@@ -198,7 +198,7 @@ class ReceiptsService {
           errors.add('أُغلقت الشاشة قبل إكمال الوصل');
           break;
         }
-        // ما سُجّل من هذا السطر قبل الانقطاع لا يُحسب في «قبل»
+        // ما سُجّل من هذا السطر قبل الانقطاع يُعاد إلى «قبل» (الرصيد قبل السطر كله)
         final already = await _postedSum(db, [l.payUuid, l.discUuid]);
         String? payUuid;
         String? discUuid;
@@ -252,7 +252,7 @@ class ReceiptsService {
           'fc_amount': l.fcAmount,
           'pay_tx_uuid': payUuid,
           'disc_tx_uuid': discUuid,
-          'balance_before': roundMoney(before - already),
+          'balance_before': roundMoney(before + already), // already موجب = ما نقص من الدين قبل الانقطاع
           'balance_after': after,
           'note': l.note,
         });
