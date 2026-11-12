@@ -197,10 +197,8 @@ class TransactionDao {
         // تجاهل أي خطأ في الـ checkpoint - الـ transaction نجحت
       }
       
-      // 🔄 إعادة synchronous للوضع الطبيعي (لتحسين الأداء)
-      try {
-        await db.rawQuery('PRAGMA synchronous = NORMAL');
-      } catch (_) {}
+      // 🔌 لا إعادة إلى NORMAL: الاتصال مشترك، وإنزاله هنا كان يجعل حفظاً آخر يجري في
+      //    اللحظة نفسها يُنهى قبل أن يصل القرص (DatabaseConfig.applyPragmas: FULL دائماً).
       
       return result;
     } finally {
@@ -392,8 +390,7 @@ class TransactionDao {
       // 🛡️ ضمان الحفظ الفوري
       try { await db.rawQuery('PRAGMA wal_checkpoint(FULL)'); } catch (_) {}
       
-      // 🔄 إعادة الوضع للطبيعي
-      try { await db.rawQuery('PRAGMA synchronous = NORMAL'); } catch (_) {}
+      // 🔌 لا إعادة إلى NORMAL (DatabaseConfig.applyPragmas: FULL دائماً)
 
     } catch (e) {
       throw Exception(DatabaseHelpers.handleDatabaseError(e));

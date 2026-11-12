@@ -42,13 +42,12 @@ class DatabaseProtectionService {
   Future<bool> syncToDisk() async {
     final db = await getDatabase();
     try {
-      // تبديل synchronous لـ FULL مؤقتًا
+      // 🔌 synchronous = FULL (هو كذلك دائماً منذ الفتح؛ يُعاد تأكيده هنا)
       // استخدام rawQuery بدلاً من execute لتوافق أفضل مع Android
       await db.rawQuery('PRAGMA synchronous = FULL');
       // تنفيذ checkpoint
       await db.rawQuery('PRAGMA wal_checkpoint(TRUNCATE)');
-      // إعادة synchronous لـ NORMAL
-      await db.rawQuery('PRAGMA synchronous = NORMAL');
+      // 🔌 يبقى FULL (DatabaseConfig.applyPragmas) — لا إنزال إلى NORMAL
       return true;
     } catch (e) {
       debugPrint('❌ فشل المزامنة القوية: $e');

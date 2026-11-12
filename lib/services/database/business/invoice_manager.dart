@@ -268,10 +268,8 @@ class InvoiceManager {
         // تجاهل أي خطأ في الـ checkpoint - الـ transaction نجحت
       }
       
-      // 🔄 إعادة الوضع للطبيعي (لتحسين السرعة في العمليات التالية)
-      try {
-        await db.rawQuery('PRAGMA synchronous = NORMAL');
-      } catch (_) {}
+      // 🔌 لا إعادة إلى NORMAL: الاتصال مشترك، وإنزاله كان يُضعف حفظاً آخر يجري معه
+      //    (DatabaseConfig.applyPragmas: FULL دائماً).
       
       return invoiceId;
     } finally {

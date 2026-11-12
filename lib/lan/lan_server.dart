@@ -415,6 +415,7 @@ class _LanSession {
             transactionClosed: true,
           );
         }
+        _enforceDurableWrites(map);
         try {
           final result = await server._invoke(method, map);
           if (inTxnChange == true && result is Map && result['transactionId'] is int) {
@@ -434,6 +435,16 @@ class _LanSession {
       default:
         throw LanRemoteError(code: 'lan_unknown_method', message: 'عملية غير معروفة: $method');
     }
+  }
+
+  static final _syncPragma = RegExp(r'^\s*PRAGMA\s+(?:\w+\.)?synchronous\s*=', caseSensitive: false);
+
+  /// 🔌 الاتصال مشترك بين السيرفر وكل الطرفيات: طرفية بإصدار قديم كانت تُنزل
+  /// «synchronous» إلى NORMAL بعد كل حفظ، فيُنهى حفظ آخر قبل أن يصل القرص. أي أمر يغيّره
+  /// من طرفية يُحوَّل إلى FULL (لا تُرفض الطرفية، ولا يُضعَف الحفظ).
+  static void _enforceDurableWrites(Map<String, Object?> map) {
+    final sql = map['sql'];
+    if (sql is String && _syncPragma.hasMatch(sql)) map['sql'] = 'PRAGMA synchronous = FULL';
   }
 
   Future<void> _rollbackIfOpen(int dbId) async {

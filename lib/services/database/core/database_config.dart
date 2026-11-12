@@ -62,8 +62,11 @@ class DatabaseConfig {
     // استخدام rawQuery بدلاً من execute لتوافق أفضل مع Android
     await db.rawQuery('PRAGMA busy_timeout = 30000');
     
-    // Synchronous NORMAL: توازن بين السرعة والأمان (WAL يحمي البيانات)
-    await db.rawQuery('PRAGMA synchronous = NORMAL');
+    // 🔌 Synchronous FULL: كل حفظ يُثبَّت ملف WAL على القرص (fsync) قبل أن يعود، فلا تظهر
+    //    «تم الحفظ» لعملية ما زالت في ذاكرة ويندوز. مع NORMAL كان انقطاع الكهرباء بعد «تم»
+    //    يُضيّع آخر العمليات (تسديد، فاتورة). يبقى FULL طوال عمر الاتصال: لا يُنزله أي كود
+    //    (اختبار durability_test يمنع ذلك)، والسيرفر يمنع الطرفيات من إنزاله.
+    await db.rawQuery('PRAGMA synchronous = FULL');
     
     // Temp Store in Memory: تسريع العمليات المؤقتة
     await db.rawQuery('PRAGMA temp_store = MEMORY');
