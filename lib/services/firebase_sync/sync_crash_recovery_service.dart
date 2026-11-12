@@ -336,9 +336,14 @@ class SyncCrashRecoveryService {
       switch (operation.status) {
         case WalOperationStatus.pending:
         case WalOperationStatus.writing:
-          // العملية لم تكتمل - نحتاج إعادة تنفيذها
-          debugPrint('🔄 استرداد عملية معلقة: ${operation.id}');
-          return await _replayOperation(operation);
+          // 🛡️ لا «إعادة تنفيذ» من السجل: السجل يُكتب قبل **الرفع** فقط (رفع العميل
+          // والمعاملة)، أي بعد أن حُفظ الصف محلياً. القاعدة المحلية هي الحقيقة، وما لم
+          // يُرفع يبقى «غير مرفوع» فتعيد المزامنة رفعه. كانت إعادة التنفيذ تُدرج الصف
+          // من نسخة السجل إن لم تجده — فتُحيي مالاً حُذف أو دُمج بعدها (وكانت تفشل
+          // أصلاً لأن نسخة السجل تحمل عموداً ليس في الجدول). لا كتابة مال هنا.
+          debugPrint('🔄 عملية رفع انقطعت قبل بدئها: ${operation.id} — الرفع يُعاد من الصف المحلي');
+          await _updateOperationStatus(operation.id, WalOperationStatus.recovered);
+          return true;
 
         case WalOperationStatus.committed:
           // تم الحفظ محلياً لكن لم يُرفع - نحتاج رفعها فقط
@@ -369,115 +374,6 @@ class SyncCrashRecoveryService {
       return false;
     }
   }
-
-  /// إعادة تنفيذ عملية (للعمليات التي لم تكتمل)
-  Future<bool> _replayOperation(WalOperation operation) async {
-    final db = await _db.database;
-
-    try {
-      // التحقق من سلامة البيانات
-      final currentChecksum = _calculateChecksum(operation.data);
-      if (currentChecksum != operation.checksum) {
-        debugPrint('⚠️ تحذير: checksum غير متطابق للعملية ${operation.id}');
-        // نستمر على أي حال - البيانات في WAL هي المصدر الموثوق
-      }
-
-      // تنفيذ العملية حسب النوع
-      if (operation.type == 'customer') {
-        await _replayCustomerOperation(db, operation);
-      } else if (operation.type == 'transaction') {
-        await _replayTransactionOperation(db, operation);
-      }
-
-      // تحديث الحالة
-      await _updateOperationStatus(operation.id, WalOperationStatus.recovered);
-      return true;
-
-    } catch (e) {
-      debugPrint('❌ فشل إعادة تنفيذ العملية: $e');
-      await markFailed(operation.id, e.toString());
-      return false;
-    }
-  }
-
-  /// إعادة تنفيذ عملية عميل
-  Future<void> _replayCustomerOperation(Database db, WalOperation operation) async {
-    final data = operation.data;
-    final syncUuid = operation.syncUuid;
-
-    // التحقق من وجود العميل
-    final existing = await db.query(
-      'customers',
-      where: 'sync_uuid = ?',
-      whereArgs: [syncUuid],
-    );
-
-    if (operation.action == 'create' && existing.isEmpty) {
-      // إنشاء العميل
-      await db.insert('customers', {
-        ...data,
-        'sync_uuid': syncUuid,
-      });
-      debugPrint('✅ تم إعادة إنشاء العميل: $syncUuid');
-    } else if (operation.action == 'update' && existing.isNotEmpty) {
-      // تحديث العميل
-      await db.update(
-        'customers',
-        data,
-        where: 'sync_uuid = ?',
-        whereArgs: [syncUuid],
-      );
-      debugPrint('✅ تم إعادة تحديث العميل: $syncUuid');
-    }
-  }
-
-  /// إعادة تنفيذ عملية معاملة
-  Future<void> _replayTransactionOperation(Database db, WalOperation operation) async {
-    final data = operation.data;
-    final syncUuid = operation.syncUuid;
-
-    // التحقق من وجود المعاملة
-    final existing = await db.query(
-      'transactions',
-      where: 'transaction_uuid = ?',
-      whereArgs: [syncUuid],
-    );
-
-    if (operation.action == 'create' && existing.isEmpty) {
-      // إنشاء المعاملة
-      await db.insert('transactions', {
-        ...data,
-        'transaction_uuid': syncUuid,
-        'sync_uuid': syncUuid,
-      });
-      
-      // تحديث رصيد العميل
-      final customerId = data['customer_id'] as int?;
-      if (customerId != null) {
-        await _recalculateCustomerBalance(db, customerId);
-      }
-      debugPrint('✅ تم إعادة إنشاء المعاملة: $syncUuid');
-    }
-  }
-
-  /// إعادة حساب رصيد العميل
-  Future<void> _recalculateCustomerBalance(Database db, int customerId) async {
-    final result = await db.rawQuery('''
-      SELECT COALESCE(SUM(amount_changed), 0) as total
-      FROM transactions
-      WHERE customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
-    ''', [customerId]);
-
-    final total = (result.first['total'] as num?)?.toDouble() ?? 0.0;
-
-    await db.update(
-      'customers',
-      {'current_total_debt': total},
-      where: 'id = ?',
-      whereArgs: [customerId],
-    );
-  }
-
 
   /// ═══════════════════════════════════════════════════════════════════════
   /// 🔒 عمليات آمنة مع حماية كاملة (Atomic Operations)

@@ -55,13 +55,11 @@ const _points = [
       'فاتورة آجلة واردة بلا عميل ⇒ يُربط عميلها', 'بيانات إصدارات قديمة (فواتير آجلة بلا customer_id)'),
   _Point(_iss, '_ensureCreditTransaction(', "await txn.insert('transactions', {", 1,
       'فاتورة آجلة واردة بلا معاملة دين ⇒ تُنشأ', 'بيانات إصدارات قديمة (حزمة فاتورة بلا صف دين)'),
-  _Point('lib/services/firebase_sync/sync_crash_recovery_service.dart', 'Future<void> _replayTransactionOperation(',
-      "await db.insert('transactions', {", 1,
-      'إعادة معاملة من سجل الاسترداد بعد انهيار', 'انهيار بين تسجيل العملية في سجل الاسترداد وكتابتها — يحتاج حقن عطل داخل الكود'),
+  // (أُزيلت نقطة «إعادة معاملة من سجل الاسترداد»: p160 ألغى إعادة التنفيذ من السجل — rare_gaps_test R7)
   _Point('lib/services/database_service.dart', 'markDatabaseRestored(', 'UPDATE transactions SET restored_mark = 1', 1,
       'الاستعادة من الإعدادات والبرنامج يعمل (L1، L2)', 'هنا وقع خطأ: L1 وL2 يستدعيانها مباشرة'),
   _Point('lib/services/database_service.dart', 'clearRestoreIfNoSync(', 'UPDATE transactions SET restored_mark = 0', 1,
-      'استعادة على جهاز بلا مزامنة ⇒ لا قفل', 'يحتاج جهازاً بلا Firebase (الاختبار كله على أجهزة مزامنة)'),
+      'استعادة على جهاز بلا مزامنة ⇒ لا قفل', 'مغطاة في rare_gaps_test R8 (جهاز بلا مزامنة) لا في هذا الاختبار'),
 ];
 
 void main() {

@@ -98,6 +98,14 @@ class FakeCloud {
   /// هل في السحابة مستند مساره ينتهي بـ [suffix] (مثل 'invoices/<uuid>')؟
   bool hasDocEndingWith(String suffix) => docs.keys.any((k) => k.endsWith(suffix));
 
+  /// مسار المستند الذي ينتهي بـ [suffix] ونسخة من بياناته (null = غير موجود).
+  (String, Map<String, Object?>)? docEndingWith(String suffix) {
+    for (final e in docs.entries) {
+      if (e.key.endsWith(suffix)) return (e.key, _deepCopy(e.value.data));
+    }
+    return null;
+  }
+
   // ───────────────────────── حجز كتابة (سباقات الرفع) ─────────────────────────
 
   /// كتابة واحدة قادمة من [device] على مستند يبدأ مساره بـ [pathPrefix] تُحجز: لا تُطبَّق
@@ -625,4 +633,7 @@ class FakeCloud {
     docs[path] = _Doc(_deepCopy(data), ++_ver);
     _notify({path});
   }
+
+  /// مثل [putDoc] بوقت رفع الآن (uploadedAt): تلتقطه نوافذ المستمعين كأي كتابة جديدة.
+  void putDocNow(String path, Map<String, Object?> data) => putDoc(path, {...data, 'uploadedAt': _serverNow()});
 }

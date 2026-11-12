@@ -15,6 +15,10 @@ echo مسارات المال غير المغطاة — النتيجة في %OUT%
 echo يأخذ دقائق. لا تغلق النافذة.
 call flutter test --concurrency=1 ^
   test\sync_harness\archive_mark_test.dart ^
+  test\sync_harness\money_gaps_test.dart ^
+  test\sync_harness\armored_gaps_test.dart ^
+  test\sync_harness\rare_gaps_test.dart ^
+  test\erp\delivery_edit_test.dart ^
   --reporter expanded > %OUT% 2>&1
 set RC=%ERRORLEVEL%
 echo.

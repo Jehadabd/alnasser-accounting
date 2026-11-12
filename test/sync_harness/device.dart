@@ -36,6 +36,7 @@ import 'rest_ops.dart'; // 🔨 اختبار البقية القاسي
 import 'accounting_ops.dart'; // 🏦 الصندوق والمحاسبة
 import 'features_ops.dart'; // 🧩 الميزات المتبقية
 import 'scenario_ops.dart'; // 🧾 سيناريوهات الفاتورة
+import 'gap_ops.dart'; // 🕳️ مسارات المال غير المغطاة
 import 'package:alnaser/services/license_service.dart';
 import 'package:alnaser/models/transaction.dart';
 import 'package:alnaser/providers/app_provider.dart';
@@ -160,6 +161,9 @@ final Map<String, Product> _openProductScreens = {};
 /// 🖧 خادم الشبكة (حاسبة السيرفر) أو اتصال الطرفية في هذا الجهاز.
 LanDatabaseServer? _lanServer;
 LanClientConnection? _lanClient;
+
+/// «أعد رفع معاملتي» جارٍ بلا انتظار (forceReuploadStart).
+Future<bool>? _pendingForce;
 
 Future<int?> _customerId(String uuid) async {
   final db = await DatabaseService().database;
@@ -851,6 +855,16 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final r = await FirebaseSyncService().markArchiveInvoicesAsSynced();
       return {'marked': r.marked, 'refused': r.refused};
 
+    case 'forceReuploadStart':
+      // «أعد رفع معاملتي» يبدأ ولا يُنتظر: يصنع تعديلاً حقيقياً أثناء الرفع (الأوامر متسلسلة)
+      _pendingForce = FirebaseSyncService().forceReuploadOwnedTransaction(a['tx'] as String);
+      return true;
+
+    case 'forceReuploadAwait':
+      final f = _pendingForce;
+      _pendingForce = null;
+      return f == null ? null : await f;
+
     case 'forceReupload':
       // شاشة المطابقة: «أعد رفع معاملتي» (FirebaseSyncService.forceReuploadOwnedTransaction)
       return await FirebaseSyncService().forceReuploadOwnedTransaction(a['tx'] as String);
@@ -885,7 +899,17 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final mine = a['mine'] == true;
       final uuid = 'ghost_${a['tag']}';
       final now = DateTime.now().toIso8601String();
+      // صف من فاتورة (اختياري): يسافر داخل حزمة فاتورته
+      final invUuid = a['inv'] as String?;
+      int? invId;
+      if (invUuid != null) {
+        final ir = await db.query('invoices', columns: ['id'], where: 'invoice_uuid = ?', whereArgs: [invUuid], limit: 1);
+        if (ir.isEmpty) throw StateError('invoice not on device');
+        invId = ir.first['id'] as int;
+      }
       await db.insert('transactions', {
+        if (invUuid != null) 'invoice_sync_uuid': invUuid,
+        if (invId != null) 'invoice_id': invId,
         'customer_id': cid,
         'transaction_date': now,
         'amount_changed': (a['amount'] as num).toDouble(),
@@ -1403,6 +1427,10 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
     case 'scen':
       // 🧾 سيناريوهات الفاتورة (scenario_ops.dart)
       return await scenOp(a['op'] as String, ((a['args'] as Map?) ?? const {}).cast<String, Object?>());
+
+    case 'gap':
+      // 🕳️ مسارات المال التي لم يمر بها اختبار (gap_ops.dart)
+      return await gapOp(a['op'] as String, ((a['args'] as Map?) ?? const {}).cast<String, Object?>());
 
     case 'feat':
       // 🧩 أفعال الميزات المتبقية (features_ops.dart)
