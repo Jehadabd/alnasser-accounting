@@ -36,6 +36,8 @@ void main() {
     final rnd = Random(seed * 13 + 5);
     final problems = <String>[];
     final notes = <String>{};
+    final fracNotes = <String, String>{}; // مصدر ← آخر عدد أسطر بكسور
+    String? lagNote; // آخر قائمة لمصادر قيود الصندوق التي لا تظهر قبل الترحيل
     final stats = <String, int>{};
     void count(String k) => stats[k] = (stats[k] ?? 0) + 1;
     final sw = Stopwatch()..start();
@@ -82,7 +84,17 @@ void main() {
         for (final p in (inv['problems'] as List).cast<String>()) {
           bad('$label: $p');
         }
-        notes.addAll((inv['notes'] as List).cast<String>());
+        for (final n in (inv['notes'] as List).cast<String>()) {
+          // عدّاد الكسور تراكمي: نُبقي آخر قيمة لكل مصدر بدل سطر عند كل فحص
+          final k = n.indexOf('سطر قيد بكسور من');
+          if (k >= 0) {
+            fracNotes[n.substring(k)] = n;
+          } else if (n.startsWith('رصيد الصندوق قبل الترحيل')) {
+            lagNote = n;
+          } else {
+            notes.add(n);
+          }
+        }
         final bal = (await op('boxBalances')).map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
         for (final b in boxes) {
           if (((bal[b] ?? 0) - box[b]!).abs() > 0.005) bad('$label: رصيد الصندوق $b = ${bal[b]} والمتوقع ${box[b]}');
@@ -349,7 +361,7 @@ void main() {
         ..writeln('مشاكل: ${problems.length}')
         ..writeAll(problems.take(_maxProblems).map((p) => '  ✗ $p\n'))
         ..writeln('ملاحظات (سلوك يقرّره صاحب المحل):')
-        ..writeAll(notes.map((p) => '  ℹ️ $p\n'))
+        ..writeAll([...notes, ...fracNotes.values, if (lagNote != null) lagNote].map((p) => '  ℹ️ $p\n'))
         ..writeln('العمليات:')
         ..writeAll(keys.map((k) => '  $k: ${stats[k]}\n'));
       File('${out.path}${Platform.pathSeparator}summary.txt').writeAsStringSync(s.toString());
