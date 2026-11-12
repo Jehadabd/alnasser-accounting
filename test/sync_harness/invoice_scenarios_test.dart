@@ -227,6 +227,8 @@ void main() {
         Map<String, Object?>? last; // آخر حالة محفوظة
         var renames = 0;
         final trail = <String>[];
+        // تغيير اسم ينتظر الحفظ الناجح (الحفظ المرفوض لا يُسقطه: الاسم ما زال مكتوباً في الشاشة)
+        var pendingMove = false, pendingSpaces = false;
 
         for (final st in script) {
           steps++;
@@ -270,9 +272,15 @@ void main() {
                 }
               }
             case 'spaces':
-              if (cust != null) scr.name = '${scr.name.replaceFirst(' ', '  ')} ';
+              if (cust != null) {
+                scr.name = '${scr.name.replaceFirst(' ', '  ')} ';
+                pendingSpaces = true;
+              }
             case 'moveNew':
-              if (cust != null) scr.name = 'زبون منقول $seed-$sc-${trail.length}';
+              if (cust != null) {
+                scr.name = 'زبون منقول $seed-$sc-$steps';
+                pendingMove = true;
+              }
             case 'save':
               saves++;
               final before = last;
@@ -335,9 +343,9 @@ void main() {
               }
               final newCust = '${c['uuid']}';
               if (cust != null && newCust != cust) {
-                if (st == 'save' && trail.contains('moveNew')) {
+                if (pendingMove) {
                   count('نقل الفاتورة لعميل جديد');
-                } else if (trail.contains('spaces')) {
+                } else if (pendingSpaces) {
                   notes.add('اسم العميل بمسافات زائدة نقل الفاتورة إلى عميل آخر («${c['name']}»)');
                 } else {
                   bad('$label: الفاتورة انتقلت من عميلها إلى «${c['name']}» دون تغيير الاسم');
@@ -385,6 +393,8 @@ void main() {
               scr.paid = paid;
               scr.name = '${c['name']}';
               last = r;
+              pendingMove = false;
+              pendingSpaces = false;
               count('حفظ ${bf == null ? 'جديدة' : 'تعديل'} ${scr.ptype}');
           }
           trail.add(st);
