@@ -51,6 +51,67 @@ void main() {
     });
   });
 
+  group('توزيع الوصولات «الأقدم أولاً» حين للعميل أكثر من دين', () {
+    final jan = DateTime(2026, 1, 10), feb = DateTime(2026, 2, 10), mar = DateTime(2026, 3, 10);
+    double s(List<DebtItem> items, double pool, String target, double r) =>
+        DebtToCashSettlement.fifoPrepaid(items: items, pool: pool, target: target, recordedDebt: r);
+
+    test('فاتورتان (يناير 50,000 وفبراير 100,000) ووصل 25,000 ⇒ الوصل للأقدم', () {
+      final items = [
+        DebtItem(key: 'A', date: jan, order: 1, amount: 50000),
+        DebtItem(key: 'B', date: feb, order: 2, amount: 100000),
+      ];
+      expect(s(items, 25000, 'B', 100000), 0); // فبراير لم يُسدَّد منها شيء ⇒ تُقبض كاملة
+      expect(s(items, 25000, 'A', 50000), 25000); // يناير سُدّد منها 25,000 ⇒ يُقبض 25,000 فقط
+    });
+    test('وصل 80,000 ⇒ يناير كاملة (50,000) وفبراير 30,000', () {
+      final items = [
+        DebtItem(key: 'A', date: jan, order: 1, amount: 50000),
+        DebtItem(key: 'B', date: feb, order: 2, amount: 100000),
+      ];
+      expect(s(items, 80000, 'B', 100000), 30000);
+      expect(s(items, 80000, 'A', 50000), 50000);
+    });
+    test('الترتيب بالتاريخ لا بترتيب الإدخال', () {
+      final items = [
+        DebtItem(key: 'B', date: feb, order: 1, amount: 100000),
+        DebtItem(key: 'A', date: jan, order: 2, amount: 50000),
+      ];
+      expect(s(items, 60000, 'B', 100000), 10000);
+    });
+    test('تسديد مربوط بفاتورة بعينها يذهب لها أولاً، والباقي بالأقدم', () {
+      final items = [
+        DebtItem(key: 'A', date: jan, order: 1, amount: 50000),
+        DebtItem(key: 'B', date: feb, order: 2, amount: 100000, specificPaid: 10000),
+      ];
+      expect(s(items, 50000, 'B', 100000), 10000); // الـ 50,000 الحرة تسدد يناير
+      expect(s(items, 70000, 'B', 100000), 30000); // 50,000 ليناير، 20,000 + 10,000 لفبراير
+    });
+    test('دين يدوي أقدم من الفاتورة يُسدَّد قبلها', () {
+      final items = [
+        DebtItem(key: 'm', date: jan, order: 1, amount: 20000),
+        DebtItem(key: 'B', date: feb, order: 2, amount: 100000),
+      ];
+      expect(s(items, 30000, 'B', 100000), 10000);
+    });
+    test('مخصص زاد على دين فاتورته ⇒ الزائد يعود حرّاً للأقدم', () {
+      final items = [
+        DebtItem(key: 'A', date: jan, order: 1, amount: 50000, specificPaid: 60000),
+        DebtItem(key: 'C', date: mar, order: 3, amount: 40000),
+      ];
+      expect(s(items, 0, 'C', 40000), 10000);
+    });
+    test('فاتورة العميل الوحيدة: الأقدم أولاً = الصيغة البسيطة (R − B)', () {
+      final items = [DebtItem(key: 'B', date: feb, order: 1, amount: 100000)];
+      expect(s(items, 25000, 'B', 100000), 25000);
+      expect(DebtToCashSettlement.suggestPrepaid(recordedDebt: 100000, customerBalance: 75000), 25000);
+    });
+    test('لا يتجاوز دين الفاتورة ولا يُقرَّب للأعلى', () {
+      final items = [DebtItem(key: 'B', date: feb, order: 1, amount: 99999.6)];
+      expect(s(items, 200000, 'B', 99999.6), 99999);
+    });
+  });
+
   group('الحفظ بعد الموافقة', () {
     test('100,000 دين + وصل 25,000 ⇒ آجل مسددة: المسدد 75,000 ويُقبض الآن 75,000', () {
       final p = _plan(r: 100000, b: 75000);

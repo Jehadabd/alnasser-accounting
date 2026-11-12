@@ -6,15 +6,18 @@
 // كان يعتبر إجماليها كله مقبوضاً الآن، فيُحتسب ما سُدّد منها بالوصل مرتين:
 //   فاتورة 100,000 دين، وصل 25,000، ثم «نقد» ⇒ الصندوق 125,000 والعميل له 25,000. ❌
 //
-// القاعدة (بموافقة صاحب المحل):
-//   R = دين الفاتورة المسجّل في حساب العميل، B = رصيد العميل كله الآن.
-//   S = ما سُدّد منها سابقاً = R − B إن كان B أقل من R (بين 0 و R).
+// القاعدة (بموافقة صاحب المحل — التحويل إلى نقد = سُدّدت بالكامل، بلا سؤال):
+//   S = ما سُدّد من هذه الفاتورة سابقاً، بتوزيع الوصولات على ديون العميل «الأقدم أولاً»
+//   (FIFO — القاعدة المحاسبية المعتادة للمقبوضات غير المخصصة لفاتورة):
+//     • تسديد مربوط بفاتورة بعينها يذهب لها أولاً.
+//     • باقي التسديدات (وصولات القبض، الخصومات...) تُوزَّع على الديون بترتيب تاريخها:
+//       الدين اليدوي والفواتير الآجلة الأقدم تُسدَّد قبل الأحدث.
+//     • S = ما وصل هذه الفاتورة من ذلك التوزيع (بين 0 ودين الفاتورة R، دينار صحيح للأدنى).
 //   تُحفظ «آجل — مسددة بالكامل»: نوع الدفع دين، والمسدد عليها = الإجمالي − S،
 //   فيبقى عليها S بالضبط يقابله الوصل القديم. لا تُلمس أي معاملة سابقة ولا تُنشأ معاملة.
-//   ⇒ الصندوق = 25,000 (الوصل) + 75,000 (الآن) = 100,000، والعميل صفر. ✅
-//
-// حدّ معروف: إن كان للعميل فواتير دين أخرى فرصيده قد لا يكشف أن الوصل كان لهذه الفاتورة
-// (B ≥ R ⇒ S = 0). لهذا يُعرض S على المستخدم قابلاً للتعديل بين 0 و R قبل الحفظ.
+//   ⇒ فاتورة 100,000 + وصل 25,000: الصندوق = 25,000 + 75,000 = 100,000، والعميل صفر. ✅
+//   ⇒ وللعميل فاتورة أخرى: الوصل يُحسب على الأقدم منهما — فلا تُقبض الفاتورة الأحدث مرتين
+//     إن كانت هي الأقدم سداداً، ولا يُطرح الوصل من فاتورة لم يُدفع لها.
 //
 // كل الحساب هنا دوال صافية (بلا واجهة)، تستعملها الشاشة واختبارات المال بالطريقة نفسها.
 
@@ -67,7 +70,36 @@ class DebtToCashPlan {
 class DebtToCashSettlement {
   DebtToCashSettlement._();
 
-  /// S المقترح من دين الفاتورة R ورصيد العميل B. دالة صافية (مختبرة بأرقام ثابتة).
+  /// S بتوزيع «الأقدم أولاً» (FIFO). دالة صافية بأرقام ثابتة (مختبرة):
+  /// [items] ديون العميل (فواتير آجلة ودين يدوي) كلٌّ بتاريخه وما سُدّد له بعينه،
+  /// [pool] مجموع التسديدات غير المخصصة (موجب)، [target] مفتاح هذه الفاتورة.
+  static double fifoPrepaid({
+    required List<DebtItem> items,
+    required double pool,
+    required String target,
+    required double recordedDebt,
+  }) {
+    final sorted = [...items]..sort((a, b) {
+        final c = a.date.compareTo(b.date);
+        return c != 0 ? c : a.order.compareTo(b.order);
+      });
+    var free = math.max(0.0, pool);
+    // تسديد مخصص زاد على دين فاتورته: يصير غير مخصص
+    for (final it in sorted) {
+      free += math.max(0.0, it.specificPaid - it.amount);
+    }
+    var s = 0.0;
+    for (final it in sorted) {
+      final covered = it.specificPaid.clamp(0.0, math.max(0.0, it.amount)).toDouble();
+      final take = math.min(math.max(0.0, it.amount - covered), free);
+      free -= take;
+      if (it.key == target) s = covered + take;
+    }
+    return wholeDinarsWithin(s, recordedDebt);
+  }
+
+  /// صيغة الحالة البسيطة (فاتورة العميل الوحيدة أو الأحدث): S = R − max(B، 0).
+  /// تساوي [fifoPrepaid] حين لا دين أحدث من الفاتورة. دالة صافية (مختبرة بأرقام ثابتة).
   static double suggestPrepaid({required double recordedDebt, required double customerBalance}) {
     if (recordedDebt <= 0) return 0;
     return wholeDinarsWithin(recordedDebt - math.max(0.0, customerBalance), recordedDebt);
@@ -94,12 +126,13 @@ class DebtToCashSettlement {
     final r = await InvoiceDebtReconciler.recordedContribution(db, inv.id!, inv.customerId!);
     if (r < 0.5) return null;
     final b = await customerBalance(db, inv.customerId!);
+    final s = await _fifoForInvoice(db, inv.customerId!, inv.id!, roundMoney(r));
     final n = IqdNormalize.invoiceInput(data);
     final items = n.invoiceItems.fold<double>(0, (s, i) => s + i.itemTotal);
     return DebtToCashPlan(
       recordedDebt: roundMoney(r),
       customerBalance: b,
-      suggestedPrepaid: suggestPrepaid(recordedDebt: r, customerBalance: b),
+      suggestedPrepaid: s,
       paidBefore: inv.amountPaidOnInvoice,
       newTotal: roundMoney(items + n.loadingFee - n.discount),
     );
@@ -117,6 +150,48 @@ class DebtToCashSettlement {
     );
   }
 
+  /// ديون العميل وتسديداته من معاملاته الحيّة، ثم [fifoPrepaid] لهذه الفاتورة.
+  static Future<double> _fifoForInvoice(DatabaseExecutor db, int customerId, int invoiceId, double r) async {
+    final rows = await db.rawQuery('''
+      SELECT t.id, t.invoice_id, t.amount_changed AS a, t.transaction_type AS ty, t.transaction_date AS d,
+             i.invoice_date AS idate
+      FROM transactions t LEFT JOIN invoices i ON i.id = t.invoice_id
+      WHERE t.customer_id = ? AND COALESCE(t.is_deleted, 0) = 0
+      ORDER BY t.id''', [customerId]);
+    final nonContribution = InvoiceDebtReconciler.nonContributionTypes.toSet();
+    final inv = <int, ({double debt, double specific, DateTime date, int order})>{};
+    final items = <DebtItem>[];
+    var pool = 0.0;
+    DateTime when(Object? v) => DateTime.tryParse('${v ?? ''}') ?? DateTime(1970);
+    for (final row in rows) {
+      final a = (row['a'] as num?)?.toDouble() ?? 0.0;
+      final iid = row['invoice_id'] as int?;
+      final id = row['id'] as int;
+      if (iid != null) {
+        final cur = inv[iid] ?? (debt: 0.0, specific: 0.0, date: when(row['idate'] ?? row['d']), order: id);
+        inv[iid] = nonContribution.contains(row['ty'])
+            ? (debt: cur.debt, specific: cur.specific - a, date: cur.date, order: cur.order)
+            : (debt: cur.debt + a, specific: cur.specific, date: cur.date, order: cur.order);
+      } else if (a > 0) {
+        items.add(DebtItem(key: 'tx$id', date: when(row['d']), order: id, amount: a));
+      } else {
+        pool += -a;
+      }
+    }
+    for (final e in inv.entries) {
+      final v = e.value;
+      // صافي المخصص سالب (مبلغ أُعيد للعميل على فاتورته) = دين إضافي عليها
+      final debt = v.debt + math.max(0.0, -v.specific);
+      final specific = math.max(0.0, v.specific);
+      if (debt > 0) {
+        items.add(DebtItem(key: 'inv${e.key}', date: v.date, order: v.order, amount: debt, specificPaid: specific));
+      } else {
+        pool += -debt + specific; // صافي فاتورة سالب = تسديد غير مخصص
+      }
+    }
+    return fifoPrepaid(items: items, pool: pool, target: 'inv$invoiceId', recordedDebt: r);
+  }
+
   /// رصيد العميل = مجموع معاملاته الحيّة (المرجع المحاسبي، كما في CustomerMoney.balance).
   static Future<double> customerBalance(DatabaseExecutor db, int customerId) async {
     final r = await db.rawQuery(
@@ -127,4 +202,27 @@ class DebtToCashSettlement {
   }
 
   static String _key(String s) => s.replaceAll(RegExp(r'\s+'), '');
+}
+
+/// دين واحد للعميل في توزيع «الأقدم أولاً»: فاتورة آجلة (صافي دينها) أو دين يدوي.
+class DebtItem {
+  const DebtItem({
+    required this.key,
+    required this.date,
+    required this.order,
+    required this.amount,
+    this.specificPaid = 0,
+  });
+
+  final String key;
+  final DateTime date;
+
+  /// ترتيب الإدخال عند تساوي التاريخ.
+  final int order;
+
+  /// الدين.
+  final double amount;
+
+  /// ما سُدّد لهذا الدين بعينه (تسديد مربوط بالفاتورة).
+  final double specificPaid;
 }

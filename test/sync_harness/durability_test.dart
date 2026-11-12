@@ -153,6 +153,37 @@ void main() {
       final box5 = await boxTotal();
       if (!near(box5, box4)) bad('بعد القتل المفاجئ: الصندوق تغيّر بـ ${box5 - box4}');
 
+      // ── 6) للعميل فاتورتان: الوصل يُحسب على الأقدم أولاً ──
+      //   يناير 50,000 دين، ثم فبراير 100,000 دين، ثم وصل 25,000 (يسدّد الأقدم).
+      //   تحويل فاتورة فبراير إلى نقد ⇒ لم يُسدَّد منها شيء ⇒ تُقبض كاملة 100,000،
+      //   ويبقى على العميل 25,000 من فاتورة يناير. ثم تحويل يناير ⇒ يُقبض 25,000 فقط.
+      const name2 = 'زبون فاتورتين';
+      final a1 = await op('scen', 'invSave',
+          {'name': name2, 'items': [{'prodId': prod, 'qty': 1, 'price': 50000}], 'discount': 0, 'fee': 0, 'paid': 0, 'ptype': 'دين'});
+      if (a1['ok'] != true) throw StateError('فاتورة يناير: ${a1['stage']} ${a1['err']}');
+      final b1 = await op('scen', 'invSave',
+          {'name': name2, 'items': [{'prodId': prod, 'qty': 1, 'price': 100000}], 'discount': 0, 'fee': 0, 'paid': 0, 'ptype': 'دين'});
+      if (b1['ok'] != true) throw StateError('فاتورة فبراير: ${b1['stage']} ${b1['err']}');
+      final c3 = ((b1['cust'] as Map?)?['uuid']) as String;
+      await h.d(dev).call('addTx', {'cust': c3, 'amount': -25000.0, 'marker': 'وصل الأقدم'});
+      final boxB0 = await boxTotal();
+      final b2 = await op('scen', 'invSave', {
+        'inv': b1['uuid'], 'name': name2, 'items': [{'prodId': prod, 'qty': 1, 'price': 100000}],
+        'discount': 0, 'fee': 0, 'paid': 100000, 'ptype': 'نقد'});
+      if (b2['ok'] != true) throw StateError('تحويل فبراير: ${b2['stage']} ${b2['err']}');
+      print('  فبراير: سُدّد سابقاً ${((b2['plan'] as Map?) ?? const {})['S']} (المتوقع 0 — الوصل للأقدم)');
+      if (!near(((b2['plan'] as Map?) ?? const {})['S'], 0)) bad('فاتورة فبراير اعتُبر منها مسدداً ${(b2['plan'] as Map?)?['S']} والوصل للأقدم');
+      if (!near(await boxTotal() - boxB0, 100000)) bad('تحويل فبراير غيّر الصندوق بـ ${await boxTotal() - boxB0} والمتوقع 100,000');
+      if (!near(((b2['cust'] as Map?) ?? const {})['txsum'], 25000)) bad('بعد تحويل فبراير رصيد العميل ${(b2['cust'] as Map?)?['txsum']} والمتوقع 25,000 (باقي يناير)');
+      final boxA0 = await boxTotal();
+      final a2 = await op('scen', 'invSave', {
+        'inv': a1['uuid'], 'name': name2, 'items': [{'prodId': prod, 'qty': 1, 'price': 50000}],
+        'discount': 0, 'fee': 0, 'paid': 50000, 'ptype': 'نقد'});
+      if (a2['ok'] != true) throw StateError('تحويل يناير: ${a2['stage']} ${a2['err']}');
+      if (!near(((a2['plan'] as Map?) ?? const {})['S'], 25000)) bad('فاتورة يناير: سُدّد سابقاً ${(a2['plan'] as Map?)?['S']} والمتوقع 25,000');
+      if (!near(await boxTotal() - boxA0, 25000)) bad('تحويل يناير غيّر الصندوق بـ ${await boxTotal() - boxA0} والمتوقع 25,000');
+      if (!near(((a2['cust'] as Map?) ?? const {})['txsum'], 0)) bad('بعد التحويلين رصيد العميل ${(a2['cust'] as Map?)?['txsum']} والمتوقع صفر');
+
       print('\n${problems.isEmpty ? '✅ نجح: كل حفظ على القرص فوراً، ولا شيء ضاع، والصندوق صحيح' : '❌ هنا وقع خطأ: ${problems.length} مشكلة'}');
       print('أخطاء غير ممسوكة: ${await h.deviceErrors()}');
       expect(problems, isEmpty);
