@@ -23,6 +23,28 @@ double _d(Object? v) => (v as num?)?.toDouble() ?? 0.0;
 final _pendingProblems = <String>[];
 final _pendingNotes = <String>{};
 
+/// أنواع المستندات التي ظهر أثرها على الصناديق بالترحيل فقط (تراكمية طوال التشغيل)
+final _lagSources = <String>{};
+const _srcName = {
+  'voucher': 'السندات',
+  'manual': 'القيود اليدوية',
+  'cash_count': 'جرد الصندوق',
+  'asset_acq': 'شراء الأصول',
+  'asset_disp': 'بيع/استبعاد الأصول',
+  'depreciation': 'الإهلاك',
+  'inventory_valuation': 'تقييم المخزون',
+  'invoice_commission': 'عمولات الفواتير',
+  'invoice_edit': 'تعديلات الفواتير',
+  'landed_cost': 'كلفة الشحن والتخليص',
+  'purchase_return': 'مرتجعات المشتريات',
+  'sales_return': 'مرتجعات المبيعات',
+  'stock_doc': 'مستندات المخزن',
+  'customer_tx': 'معاملات العملاء',
+  'invoice': 'الفواتير',
+  'supplier_tx': 'معاملات الموردين',
+  'purchase_invoice': 'فواتير الشراء',
+};
+
 Future<Object?> acctOp(String op, Map<String, Object?> a) async {
   try {
     return await _acctOp(op, a);
@@ -53,26 +75,33 @@ Future<Object?> _acctOp(String op, Map<String, Object?> a) async {
       };
 
     case 'boxBalances':
-      // كما تفعل الشاشة الرئيسية للمحاسبة: ترحيل المستندات (الأصول، الاستبعاد، الجرد، التوصيل...)
-      // ثم قراءة الأرصدة من الدفتر. ما يختلف قبل الترحيل وبعده يُسجَّل ملاحظةً:
-      // هو ما تعرضه شاشة الصناديق إن فُتحت قبل أي ترحيل.
+      // كما تفعل الشاشة الرئيسية للمحاسبة: ترحيل المستندات ثم قراءة الأرصدة من الدفتر.
+      // نقيس أثر كل نوع مستند على الصناديق قبل الترحيل وبعده: النوع الذي تغيّر أثره هو
+      // بالضبط ما لا تعرضه شاشة الصناديق إن فُتحت قبل أي ترحيل.
+      Future<Map<String, double>> bySource() async {
+        final rows = await db.rawQuery('''
+          SELECT e.source_type AS t, COALESCE(SUM(l.debit - l.credit), 0) AS v
+          FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+          WHERE l.account_id IN (SELECT account_id FROM cash_boxes)
+          GROUP BY e.source_type''');
+        return {for (final r in rows) '${r['t']}': (r['v'] as num).toDouble()};
+      }
+
       final vs = VouchersService();
-      final raw = await vs.cashBoxBalances();
+      final before = await bySource();
       final s = await PostingEngine().syncAll();
       for (final e in s.errors) {
         _pendingProblems.add('الترحيل: $e');
       }
-      final posted = await vs.cashBoxBalances();
-      final srcs = await db.rawQuery('''
-        SELECT DISTINCT e.source_type AS t FROM journal_entries e JOIN journal_lines l ON l.entry_id = e.id
-        WHERE l.account_id IN (SELECT account_id FROM cash_boxes)''');
-      for (final e in posted.entries) {
-        if (((raw[e.key] ?? 0) - e.value).abs() > 0.005) {
-          _pendingNotes.add('رصيد الصندوق قبل الترحيل لا يشمل كل المستندات (شاشة الصناديق لا ترحّل) — '
-              'مصادر قيود الصندوق: ${srcs.map((r) => r['t']).join('، ')}');
-        }
+      final after = await bySource();
+      for (final t in {...before.keys, ...after.keys}) {
+        if (((before[t] ?? 0) - (after[t] ?? 0)).abs() > 0.005) _lagSources.add(t);
       }
-      return {for (final e in posted.entries) '${e.key}': e.value};
+      if (_lagSources.isNotEmpty) {
+        _pendingNotes.add('شاشة الصناديق لا ترحّل قبل العرض: هذه المستندات لا يظهر أثرها على الصندوق '
+            'حتى يُرحَّل الدفتر — ${(_lagSources.toList()..sort()).map((t) => _srcName[t] ?? t).join('، ')}');
+      }
+      return {for (final e in (await vs.cashBoxBalances()).entries) '${e.key}': e.value};
 
     case 'voucher':
       final id = await VouchersService().create(
@@ -258,7 +287,8 @@ Future<Map<String, Object?>> _invariants(Database db) async {
       WHERE l.currency = 'IQD' AND (ABS(l.debit - ROUND(l.debit)) > 0.0001 OR ABS(l.credit - ROUND(l.credit)) > 0.0001)
       GROUP BY e.source_type'''));
   for (final r in frac) {
-    notes.add('${r['n']} سطر قيد بكسور من «${r['st']}»');
+    final st = '${r['st']}';
+    notes.add('كسور الدينار مقبولة في «${_srcName[st] ?? st}»: ${r['n']} سطراً في الدفتر فيها كسر');
   }
   out.addAll(_pendingProblems);
   _pendingProblems.clear();

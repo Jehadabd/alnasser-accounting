@@ -37,7 +37,7 @@ void main() {
     final problems = <String>[];
     final notes = <String>{};
     final fracNotes = <String, String>{}; // مصدر ← آخر عدد أسطر بكسور
-    String? lagNote; // آخر قائمة لمصادر قيود الصندوق التي لا تظهر قبل الترحيل
+    String? lagNote; // آخر قائمة (تراكمية) بالمستندات التي لا يظهر أثرها على الصندوق قبل الترحيل
     final stats = <String, int>{};
     void count(String k) => stats[k] = (stats[k] ?? 0) + 1;
     final sw = Stopwatch()..start();
@@ -78,6 +78,7 @@ void main() {
       final disposed = <int, (double, int?)>{};
       final runs = <int>[];
       var depMonth = 0;
+      final acqBase = DateTime.now().subtract(const Duration(days: 400)); // تاريخ شراء أصول الاختبار
 
       Future<void> checkAll(String label) async {
         final inv = await op('acctInvariants');
@@ -86,10 +87,9 @@ void main() {
         }
         for (final n in (inv['notes'] as List).cast<String>()) {
           // عدّاد الكسور تراكمي: نُبقي آخر قيمة لكل مصدر بدل سطر عند كل فحص
-          final k = n.indexOf('سطر قيد بكسور من');
-          if (k >= 0) {
-            fracNotes[n.substring(k)] = n;
-          } else if (n.startsWith('رصيد الصندوق قبل الترحيل')) {
+          if (n.startsWith('كسور الدينار مقبولة في')) {
+            fracNotes[n.substring(0, n.indexOf('»') + 1)] = n;
+          } else if (n.startsWith('شاشة الصناديق لا ترحّل')) {
             lagNote = n;
           } else {
             notes.add(n);
@@ -153,7 +153,9 @@ void main() {
           count('حذف سند');
           await checkAll('$label بعد الحذف');
           final again = await op('voucherDelete', {'id': id});
-          if (again['ok'] == true) notes.add('حذف السند نفسه مرة ثانية لا يرفض (ولا يغيّر الأرصدة إن مرّ الفحص)');
+          if (again['ok'] == true) {
+            notes.add('حذف سند محذوف أصلاً يمرّ بصمت بلا رسالة — والأرصدة لم تتغيّر (الفحص التالي يؤكد)');
+          }
         } else if (w < 0.50) {
           // ── قيد يدوي متوازن أو لا ──
           final x = pick([5000, 1250.5, 77777777]);
@@ -239,23 +241,40 @@ void main() {
               'box': fromBox ? b : null,
             });
             if (r['ok'] != true) {
-              notes.add('أصل رُفض: ${r['err']}');
+              if ('${r['err']}'.contains('الخردة')) {
+                count('رُفض كما يجب: خردة لا تقل عن الكلفة');
+              } else {
+                bad('$label: رُفض أصل سليم بكلفة $cost (${r['err']})');
+              }
               continue;
             }
             assets[(r['id'] as num).toInt()] = (fromBox ? 'box' : 'opening', cost, fromBox ? b : null);
             if (fromBox) box[b] = box[b]! - cost;
             count('أصل ${fromBox ? 'من الصندوق' : 'افتتاحي'}');
           } else if (k < 0.55) {
-            final period = '2025-${(1 + depMonth % 12).toString().padLeft(2, '0')}';
+            // الأصول مشتراة قبل 400 يوم: نُهلك من شهر الشراء صعوداً، شهراً بعد شهر
+            final m = DateTime(acqBase.year, acqBase.month + depMonth);
+            final period = '${m.year}-${m.month.toString().padLeft(2, '0')}';
+            final future = m.isAfter(DateTime.now());
             final r = await op('depRun', {'period': period});
             final again = await op('depRun', {'period': period});
             if (again['ok'] == true) bad('$label: إهلاك الشهر $period رُحّل مرتين');
-            if (r['ok'] == true) {
+            if (future) {
+              if (r['ok'] == true) bad('$label: أُهلك شهر لم يبدأ بعد $period');
+              count('رُفض كما يجب: إهلاك شهر لم يبدأ');
+              depMonth = 0; // نعود للبداية — الأشهر المرحّلة يجب أن تُرفض ثانية
+            } else if (r['ok'] == true) {
               runs.add((r['id'] as num).toInt());
               depMonth++;
               count('دورة إهلاك');
+            } else if ('${r['err']}'.contains('مرحّل سابقاً')) {
+              depMonth++;
+              count('رُفض كما يجب: إهلاك شهر مرحّل سابقاً');
+            } else if ('${r['err']}'.contains('لا يوجد ما يُهلك')) {
+              depMonth++;
+              count('إهلاك: لا أصل قابل في $period');
             } else {
-              notes.add('دورة إهلاك $period: ${r['err']}');
+              bad('$label: دورة إهلاك $period رُفضت (${r['err']})');
             }
           } else if (k < 0.65) {
             if (runs.isEmpty) continue;
