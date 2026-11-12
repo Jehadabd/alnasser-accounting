@@ -177,6 +177,85 @@ void main() {
       await h.setOnline('D2', true);
     });
 
+    // ═══════════════ سباقات الرفع (كتابة سحابية محجوزة) ═══════════════
+
+    /// ينتظر حتى تُحجز كتابة الجهاز (بدأ رفعها ولم تصل السحابة بعد).
+    Future<void> untilHeld(Harness h, String dev) async {
+      for (var i = 0; i < 100 && !h.cloud.hasHeld(dev); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      if (!h.cloud.hasHeld(dev)) throw StateError('لم يبدأ رفع $dev');
+    }
+
+    await _scenario(run, 'U1 تعديل المعاملة أثناء رفعها ← لا تُعلَّم «مرفوعة» بالنسخة القديمة', 2, (h) async {
+      final c = (await h.addCustomer('D1', 'زبون U1'))!;
+      final t = (await h.addTx('D1', c, 500))!;
+      await _stable(h, 'البداية');
+      h.cloud.holdNextWrite('D1', 'transactions/$t');
+      final edit1 = h.editTx('D1', t, 650); // يبدأ الرفع ويُحجز
+      await untilHeld(h, 'D1');
+      final edit2 = h.editTx('D1', t, 800); // تعديل والرفع الأول معلّق
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      h.cloud.releaseHeld('D1');
+      await edit1;
+      await edit2;
+    });
+
+    await _scenario(run, 'U2 «أعد رفع معاملتي» من شاشة المطابقة، ومعه تعديل أثناء الرفع', 2, (h) async {
+      final c = (await h.addCustomer('D1', 'زبون U2'))!;
+      final t = (await h.addTx('D1', c, 300))!;
+      await _stable(h, 'البداية');
+      if (await h.d('D1').call('forceReupload', {'tx': t}) != true) throw StateError('إعادة الرفع فشلت');
+      await _stable(h, 'بعد إعادة الرفع');
+      h.cloud.holdNextWrite('D1', 'transactions/$t');
+      final re = h.d('D1').call('forceReupload', {'tx': t}, const Duration(minutes: 2));
+      await untilHeld(h, 'D1');
+      final edit = h.editTx('D1', t, 450);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      h.cloud.releaseHeld('D1');
+      await re;
+      await edit;
+    });
+
+    await _scenario(run, 'U3 حُذف العميل على جهاز آخر وصاحب المعاملة عدّلها دون اتصال ← الحذف نهائي', 2,
+        (h) async {
+      final c = (await h.addCustomer('D1', 'زبون U3'))!;
+      final t = (await h.addTx('D1', c, 900))!;
+      await _stable(h, 'البداية');
+      await h.setOnline('D1', false);
+      await h.deleteCustomer('D2', c);
+      await h.waitCloudQuiet();
+      await h.editTx('D1', t, 950);
+      await h.setOnline('D1', true);
+    });
+
+    // ═══════════════ الاستعادة من داخل البرنامج وهو يعمل ═══════════════
+
+    await _scenario(run, 'L1 استعادة نسخة من الإعدادات والبرنامج يعمل ← ما حُفظ بعدها يعود من السحابة', 2,
+        (h) async {
+      final c = (await h.addCustomer('D1', 'زبون L1'))!;
+      await h.addTx('D1', c, 1000);
+      await _stable(h, 'البداية');
+      await h.backup('D1');
+      final t = (await h.addTx('D1', c, 2500))!;
+      await h.addTx('D2', c, -700);
+      await h.editTx('D1', t, 2600);
+      await _stable(h, 'بعد العمل');
+      if (!await h.liveRestore('D1')) throw StateError('لم تُستعد النسخة');
+    });
+
+    await _scenario(run, 'L2 استعادة من الإعدادات ثم عمل جديد فوراً قبل أن يلحق الجهاز', 2, (h) async {
+      final c = (await h.addCustomer('D1', 'زبون L2'))!;
+      final t = (await h.addTx('D1', c, 1200))!;
+      await _stable(h, 'البداية');
+      await h.backup('D1');
+      await h.editTx('D1', t, 400);
+      await h.saveInvoice('D1', c, 900, 0, 'دين');
+      await _stable(h, 'بعد العمل');
+      if (!await h.liveRestore('D1')) throw StateError('لم تُستعد النسخة');
+      await h.addTx('D1', c, -100); // الجديد مسموح دائماً
+    });
+
     // ═══════════════ الفواتير ═══════════════
 
     await _scenario(run, 'F1 فاتورة دين عُدّلت ثم استُعيدت نسخة أقدم ← يبقى التعديل', 2, (h) async {

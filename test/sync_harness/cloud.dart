@@ -86,6 +86,37 @@ class FakeCloud {
 
   bool _isOnline(String device) => online[device] ?? true;
 
+  // ───────────────────────── حجز كتابة (سباقات الرفع) ─────────────────────────
+
+  /// كتابة واحدة قادمة من [device] على مستند يبدأ مساره بـ [pathPrefix] تُحجز: لا تُطبَّق
+  /// ولا يُرد عليها حتى [releaseHeld]. يصنع بدقة سباقاً تحدث فيه أشياء أثناء رفع معلّق
+  /// (تعديل أثناء الرفع، كتابتان تصلان بغير ترتيبهما).
+  final Map<String, String> _holdNext = {};
+  final Map<String, List<CloudRequest>> _held = {};
+
+  void holdNextWrite(String device, String pathPrefix) => _holdNext[device] = pathPrefix;
+
+  /// هل حُجزت كتابة لهذا الجهاز وتنتظر؟
+  bool hasHeld(String device) => (_held[device] ?? const []).isNotEmpty;
+
+  /// يطبّق الكتابات المحجوزة الآن (بعد كل ما مرّ بعدها) ويرد عليها.
+  void releaseHeld(String device) {
+    final q = _held.remove(device) ?? const [];
+    for (final r in q) {
+      _handle(r);
+    }
+  }
+
+  bool _shouldHold(CloudRequest msg) {
+    final prefix = _holdNext[msg.device];
+    if (prefix == null || msg.op != 'write') return false;
+    final ops = (msg.args['ops'] as List?)?.cast<WriteOp>() ?? const <WriteOp>[];
+    if (!ops.any((o) => o.path.startsWith(prefix))) return false;
+    _holdNext.remove(msg.device);
+    _held.putIfAbsent(msg.device, () => []).add(msg);
+    return true;
+  }
+
   /// يُسقط مستمعي جهاز (عند إعادة تشغيله أو إغلاقه).
   void dropDevice(String device) {
     _listeners.removeWhere((_, l) => l.device == device);
@@ -109,6 +140,7 @@ class FakeCloud {
         return;
       }
     }
+    if (_shouldHold(msg)) return;
     _handle(msg);
   }
 

@@ -4,7 +4,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 rem ==========================================================================
 rem  claude_test_rare_sync.bat        = فروع المزامنة النادرة (سيناريوهات موجّهة)
-rem  claude_test_rare_sync.bat cover  = نفسه مع خريطة الأسطر التي مرّ بها (أبطأ)
+rem  claude_test_rare_sync.bat cover  = نفسه مع خريطة الأسطر وتقرير النقاط النادرة (أبطأ)
 rem  النتيجة: test_results\rare_sync\
 rem ==========================================================================
 if not exist test_results mkdir test_results
@@ -24,7 +24,9 @@ if /i "%~1"=="cover" (
   echo الخريطة:
   call dart run tool\money_coverage.dart
   copy /y test_results\money_coverage\report.txt test_results\rare_sync\coverage_report.txt >nul
+  echo.
+  call dart run tool\rare_points_report.dart
 )
 echo.
 if "%RC%"=="0" (echo ✅ نجح الاختبار) else (echo ❌ هنا وقع خطأ — أرسل لي الملف %OUT%)
-endlocal
+endlocal & exit /b %RC%

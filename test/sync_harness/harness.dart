@@ -527,6 +527,19 @@ class Harness {
     return true;
   }
 
+  /// استعادة نسخة احتياطية من داخل البرنامج وهو يعمل (زر الإعدادات / Dropbox) — المسار
+  /// الحقيقي DatabaseService.restoreDatabaseFromFile، لا نسخ الملف والبرنامج مغلق.
+  /// مسموحة فقط إن لم يبقَ على الجهاز عمل غير مرفوع (وإلا يضيع فعلاً، كما في الاستعادة الأخرى).
+  Future<bool> liveRestore(String dev) async {
+    final path = _backups.remove(dev);
+    if (path == null) return false;
+    if ((await d(dev).call('pendingOwnWork') as int) > 0) return false;
+    progress('J liveRestore $dev online=${d(dev).online}');
+    final ok = await d(dev).call('liveRestore', {'path': path}, const Duration(minutes: 3));
+    restores++;
+    return ok == true;
+  }
+
   Future<void> joinNewDevice() async {
     final name = 'D${devices.length + joins + 1}';
     if (devices.containsKey(name)) return;

@@ -56,6 +56,11 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common/src/mixin/factory.dart' show buildDatabaseFactory;
+import 'package:sqflite_common/src/mixin/import_mixin.dart' show SqfliteInvokeHandler;
+import 'package:alnaser/lan/lan_client.dart';
+import 'package:alnaser/lan/lan_server.dart';
+import 'package:alnaser/lan/lan_settings.dart';
+import 'package:alnaser/services/database/core/database_config.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite_common_ffi/src/isolate.dart' show SqfliteIsolate;
 import 'package:sqflite_common_ffi/src/method_call.dart' show FfiMethodCall;
@@ -151,6 +156,10 @@ Future<void> _run(DeviceBoot boot, List<String> logs, List<String> errors) async
 
 /// شاشات تعديل منتج مفتوحة (الكائن كما حُمّل لحظة الفتح).
 final Map<String, Product> _openProductScreens = {};
+
+/// 🖧 خادم الشبكة (حاسبة السيرفر) أو اتصال الطرفية في هذا الجهاز.
+LanDatabaseServer? _lanServer;
+LanClientConnection? _lanClient;
 
 Future<int?> _customerId(String uuid) async {
   final db = await DatabaseService().database;
@@ -717,6 +726,96 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       await db.execute("VACUUM INTO '$target'");
       return true;
 
+    case 'liveRestore':
+      // زر «استعادة قاعدة البيانات» في الإعدادات (أو Dropbox) والبرنامج يعمل — بلا إعادة تشغيل:
+      // DatabaseService.restoreDatabaseFromFile كما تستدعيه الشاشة حرفياً
+      return await DatabaseService().restoreDatabaseFromFile(File(a['path'] as String));
+
+    // ─────────── 🖧 الشبكة المحلية: سيرفر في هذا الجهاز، أو طرفية تعمل على قاعدته ───────────
+    case 'lanServe':
+      // حاسبة السيرفر: خادم الشبكة على اتصال القاعدة نفسه الذي يستعمله البرنامج (كما في
+      // LanRuntime._startServer)، على 127.0.0.1 ومنفذ يختاره النظام
+      await DatabaseService().database;
+      AppNetworkMode.current = LanSettings(mode: LanMode.server, secret: a['secret'] as String);
+      _lanServer = LanDatabaseServer(
+        databasePath: await DatabaseConfig.getDatabasePath(),
+        secret: a['secret'] as String,
+        port: 0,
+        enableDiscovery: false,
+        transactionIdleTimeout: const Duration(seconds: 5),
+        handler: databaseFactory as SqfliteInvokeHandler,
+        log: print,
+      );
+      await _lanServer!.start();
+      return _lanServer!.boundPort;
+
+    case 'lanJoin':
+      // طرفية: كما في LanRuntime.beforeDatabase — اتصال ثم المصنع البعيد قبل أي فتح للقاعدة.
+      // لا مزامنة على الطرفية (main: ownsDatabase وحده يشغّلها).
+      AppNetworkMode.current = LanSettings(
+          mode: LanMode.client,
+          host: '127.0.0.1',
+          port: (a['port'] as num).toInt(),
+          secret: a['secret'] as String,
+          clientName: 'طرفية ${a['name'] ?? ''}');
+      final conn = LanClientConnection(
+        host: '127.0.0.1',
+        port: (a['port'] as num).toInt(),
+        secret: a['secret'] as String,
+        clientName: 'طرفية ${a['name'] ?? ''}',
+        requestTimeout: const Duration(seconds: 60),
+      );
+      await conn.connect();
+      _lanClient = conn;
+      databaseFactory = createLanDatabaseFactory(conn);
+      try {
+        await DatabaseService().database;
+        return {'ok': true};
+      } catch (e) {
+        return {'ok': false, 'err': '$e'.split('\n').first};
+      }
+
+    case 'lanDrop':
+      // الشبكة سقطت (كابل، راوتر): الطرفية تعيد الاتصال وحدها عند الطلب التالي
+      await _lanClient?.debugDropConnection();
+      return true;
+
+    case 'lanTxnDrop':
+      // معاملة على الطرفية تكتب صف دين ثم تسقط الشبكة قبل أن تكتمل ⇒ لا شيء يُحفظ
+      final db = await DatabaseService().database;
+      final cid = await _customerId(a['cust'] as String);
+      try {
+        await db.transaction((txn) async {
+          await txn.insert('transactions', {
+            'customer_id': cid,
+            'amount_changed': (a['amount'] as num).toDouble(),
+            'transaction_type': 'manual_debt',
+            'transaction_note': a['marker'],
+            'transaction_date': DateTime.now().toIso8601String(),
+            'created_at': DateTime.now().toIso8601String(),
+            'transaction_uuid': 'lan_${a['marker']}',
+            'sync_uuid': 'lan_${a['marker']}',
+          });
+          await _lanClient!.debugDropConnection();
+          await txn.insert('transactions', {
+            'customer_id': cid,
+            'amount_changed': 1.0,
+            'transaction_type': 'manual_debt',
+            'transaction_note': '${a['marker']}_2',
+            'transaction_date': DateTime.now().toIso8601String(),
+            'created_at': DateTime.now().toIso8601String(),
+          });
+        });
+        return {'committed': true};
+      } catch (e) {
+        return {'committed': false, 'err': '$e'.split('\n').first};
+      }
+
+    case 'sqlRaw':
+      // أمر SQL خام كما قد ترسله طرفية بإصدار قديم (مثل PRAGMA synchronous = NORMAL)
+      final db = await DatabaseService().database;
+      return await db.rawQuery(a['sql'] as String);
+
     case 'smartPipe':
       final r = await SmartPipeCleanupService().runManualCleanup();
       return r.deletedTransactions + r.deletedInvoices;
@@ -746,6 +845,10 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
         return false;
       }));
       return true;
+
+    case 'forceReupload':
+      // شاشة المطابقة: «أعد رفع معاملتي» (FirebaseSyncService.forceReuploadOwnedTransaction)
+      return await FirebaseSyncService().forceReuploadOwnedTransaction(a['tx'] as String);
 
     case 'armoredPushWait':
       // «بياناتي صحيحة» وانتظار نتيجتها (نجاح / بانتظار موافقة الجهاز الآخر / فشل)
