@@ -720,6 +720,22 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       final r = await SmartPipeCleanupService().runManualCleanup();
       return r.deletedTransactions + r.deletedInvoices;
 
+    case 'durability':
+      // 🔌 إعداد الكتابة على القرص الفعّال الآن على اتصال التطبيق نفسه:
+      // synchronous (2 = FULL: كل حفظ يُثبَّت على القرص قبل أن يعود) ووضع اليومية.
+      final db = await DatabaseService().database;
+      final s = await db.rawQuery('PRAGMA synchronous');
+      final j = await db.rawQuery('PRAGMA journal_mode');
+      return {
+        'sync': (s.first.values.first as num).toInt(),
+        'journal': '${j.first.values.first}'.toLowerCase(),
+      };
+
+    case 'txAlive':
+      // هل المعاملة موجودة وغير محذوفة؟ (للتحقق بعد القتل المفاجئ)
+      final row = await _txRow(a['tx'] as String);
+      return row != null && ((row['is_deleted'] as int?) ?? 0) == 0;
+
     case 'armoredPush':
       // «بياناتي صحيحة» — لا ننتظرها (تنتظر ردود الأجهزة حتى 90 ثانية)
       unawaited(ArmoredReconciliationService()
