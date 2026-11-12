@@ -189,9 +189,18 @@ void main() {
         ['cash', 'save', 'moveNew', 'credit', 'save', 'cash', 'save'],
         ['credit', 'save', 'moveNew', 'qty', 'cash', 'save'],
         ['credit', 'save', 'spaces', 'cash', 'save'],
+        // 🔁 فاتورة دين سُدّد جزء منها بوصل ثم حُوّلت إلى نقد: الجزء المسدد لا يُقبض مرتين
+        ['credit', 'save', 'receipt', 'cash', 'save'],
+        ['credit', 'paid', 'save', 'receipt', 'cash', 'save'],
+        ['credit', 'save', 'receipt', 'qty', 'cash', 'save', 'qty', 'save'],
+        ['credit', 'save', 'receipt', 'receipt', 'cash', 'save', 'cash', 'save'],
+        ['credit', 'save', 'receipt', 'cash', 'save', 'add', 'save', 'cash', 'save'],
+        ['credit', 'save', 'receipt', 'cash', 'credit', 'cash', 'save'],
+        ['credit', 'save', 'receipt', 'rename', 'cash', 'save'],
+        ['credit', 'save', 'receipt', 'moveNew', 'cash', 'save'],
       ];
-      const ops = ['cash', 'credit', 'qty', 'price', 'add', 'remove', 'discount', 'fee', 'paid', 'rename', 'spaces', 'moveNew'];
-      const weights = [14, 14, 12, 8, 6, 6, 9, 5, 9, 6, 3, 3];
+      const ops = ['cash', 'credit', 'qty', 'price', 'add', 'remove', 'discount', 'fee', 'paid', 'rename', 'spaces', 'moveNew', 'receipt'];
+      const weights = [14, 14, 12, 8, 6, 6, 9, 5, 9, 6, 3, 3, 7];
       String randomOp() {
         var x = rnd.nextInt(weights.reduce((a, b) => a + b));
         for (var k = 0; k < ops.length; k++) {
@@ -206,7 +215,7 @@ void main() {
         s.add(rnd.nextBool() ? 'cash' : 'credit');
         for (var k = rnd.nextInt(4); k > 0; k--) {
           final o = randomOp();
-          if (!const {'rename', 'spaces', 'moveNew'}.contains(o)) s.add(o);
+          if (!const {'rename', 'spaces', 'moveNew', 'receipt'}.contains(o)) s.add(o);
         }
         s.add('save');
         for (var k = 2 + rnd.nextInt(12); k > 0; k--) {
@@ -224,6 +233,8 @@ void main() {
         scr.recalc();
         String? cust; // العميل الحالي للفاتورة
         final oldCusts = <String>[]; // عملاء نُقلت منهم الفاتورة: دينهم من هذه الفاتورة صفر
+        final receiptsBy = <String, double>{}; // عميل ← ما سدّده بوصولات (كلها لهذه الفاتورة)
+        var lastPrepaid = 0.0; // ما سُدّد منها بوصولات كما في الفاتورة المحفوظة
         Map<String, Object?>? last; // آخر حالة محفوظة
         var renames = 0;
         final trail = <String>[];
@@ -281,9 +292,31 @@ void main() {
                 scr.name = 'زبون منقول $seed-$sc-$steps';
                 pendingMove = true;
               }
+            case 'receipt':
+              // وصل قبض منفصل (لا يُربط بفاتورة) لجزء من دين العميل
+              if (cust != null) {
+                final cd = await scen('custByUuid', {'cust': cust});
+                final debt = dd(cd['debt']);
+                if (debt >= 1) {
+                  final amt = Iqd.down(min(debt, pick([debt, (debt / 2).floorToDouble(), 1000.0, 1.0, 25000.0])));
+                  final u = await h.d(dev).call('addTx', {'cust': cust, 'amount': -amt, 'marker': 'وصل سيناريو $sc-$steps'});
+                  if (u is String) {
+                    receiptsBy[cust!] = (receiptsBy[cust] ?? 0) + amt;
+                    count('وصل قبض منفصل');
+                  } else {
+                    bad('$label: رُفض وصل قبض $amt لعميل دينه $debt');
+                  }
+                }
+              }
             case 'save':
               saves++;
               final before = last;
+              // 🔁 المتوقع عند تحويل فاتورة دين إلى نقد بعد وصولات: S = min(دين الفاتورة، الوصولات)
+              final priorR = before == null ? 0.0 : dd(before['linked']);
+              final rcvNow = cust == null ? 0.0 : (receiptsBy[cust] ?? 0.0);
+              final expS = (min(priorR, rcvNow) + 0.0001).floorToDouble(); // دينار صحيح للأدنى، لا يتجاوز دين الفاتورة
+              final expectSettle = scr.inv != null && scr.ptype == 'نقد' && !pendingMove && priorR >= 0.5 && expS >= 0.5;
+              final expPtype = expectSettle ? 'دين' : scr.ptype;
               final r = await scen('invSave', {
                 if (scr.inv != null) 'inv': scr.inv,
                 'name': scr.name,
@@ -315,7 +348,9 @@ void main() {
               final disc = Iqd.down(scr.discount);
               final lines = scr.items.fold<double>(0, (s, l) => s + l.total);
               final total = lines + fee - disc;
-              if (r['ptype'] != scr.ptype) bad('$label: نوع الدفع المحفوظ ${r['ptype']} والشاشة ${scr.ptype}');
+              if (r['ptype'] != expPtype) {
+                bad('$label: نوع الدفع المحفوظ ${r['ptype']} والمتوقع $expPtype (الشاشة ${scr.ptype}${expectSettle ? '، سُدّد منها $expS بوصولات' : ''})');
+              }
               if (!near(r['discount'], disc)) bad('$label: الخصم المحفوظ ${r['discount']} والمتوقع $disc (المكتوب ${scr.discount})');
               if (!near(r['fee'], fee)) bad('$label: أجور النقل المحفوظة ${r['fee']} والمتوقع $fee');
               if (!near(r['total'], total, 0.02)) {
@@ -328,14 +363,25 @@ void main() {
               }
               if (savedItems.length != scr.items.length) bad('$label: حُفظ ${savedItems.length} سطراً والشاشة ${scr.items.length}');
               final paid = dd(r['paid']), t = dd(r['total']);
-              if (scr.ptype == 'نقد') {
+              if (expPtype == 'نقد') {
                 if (!near(paid, t)) bad('$label: فاتورة نقدية مسددها $paid وإجماليها $t');
+              } else if (expectSettle) {
+                final wantPaid = max(0.0, t - expS);
+                if (!near(paid, wantPaid, 1.001)) bad('$label: تحويل بعد وصل $expS: المسدد $paid والمتوقع $wantPaid');
+                if (!near(r['prepaid'], min(expS, t), 1.001)) {
+                  bad('$label: تحويل بعد وصل $expS: المسدد بوصولات المحفوظ ${r['prepaid']} والمتوقع ${min(expS, t)}');
+                }
+                count('تحويل إلى نقد بعد وصل ⇒ آجل مسددة بالكامل');
               } else {
                 if (paid < -0.001 || paid > t + 0.001) bad('$label: فاتورة دين مسددها $paid خارج [0، $t]');
                 final want = min(Iqd.down(scr.paid), t);
                 if ((paid - want).abs() > 1.001) bad('$label: المسدد المحفوظ $paid والمكتوب ${scr.paid} (المتوقع $want)');
               }
-              final remaining = scr.ptype == 'نقد' ? 0.0 : t - paid;
+              final remaining = expPtype == 'نقد' ? 0.0 : t - paid; // دين الفاتورة في حساب العميل
+              final wantPrepaid = expPtype == 'نقد' ? 0.0 : (expectSettle ? min(expS, t) : lastPrepaid);
+              if (!near(r['prepaid'], wantPrepaid, 1.001)) {
+                bad('$label: «سُدّد بوصولات» المحفوظ ${r['prepaid']} والمتوقع $wantPrepaid');
+              }
               final c = (r['cust'] as Map?)?.cast<String, Object?>();
               if (c == null) {
                 bad('$label: الفاتورة بلا عميل');
@@ -353,13 +399,17 @@ void main() {
                 oldCusts.add(cust);
               }
               cust = newCust;
-              if (!near(c['debt'], remaining)) bad('$label: دين العميل ${c['debt']} والمتبقي من فاتورته $remaining');
+              final rcv = receiptsBy[newCust] ?? 0.0;
+              if (!near(c['debt'], remaining - rcv)) {
+                bad('$label: دين العميل ${c['debt']} والمتوقع ${remaining - rcv} (دين الفاتورة $remaining − وصولاته $rcv)');
+              }
               if (!near(c['txsum'], c['debt'])) bad('$label: دين العميل ${c['debt']} ≠ مجموع معاملاته ${c['txsum']}');
               if (!near(r['linked'], remaining)) bad('$label: معاملات الفاتورة ${r['linked']} والمتبقي $remaining');
               for (final o in oldCusts) {
                 final oc = await scen('custByUuid', {'cust': o});
-                if (oc['exists'] == true && (!near(oc['debt'], 0) || !near(oc['txsum'], 0))) {
-                  bad('$label: العميل السابق «${oc['name']}» بقي عليه ${oc['debt']} (معاملاته ${oc['txsum']}) بعد نقل فاتورته');
+                final orc = receiptsBy[o] ?? 0.0;
+                if (oc['exists'] == true && (!near(oc['debt'], -orc) || !near(oc['txsum'], -orc))) {
+                  bad('$label: العميل السابق «${oc['name']}» عليه ${oc['debt']} (معاملاته ${oc['txsum']}) والمتوقع ${-orc} (وصولاته) بعد نقل فاتورته');
                 }
               }
               // سند تعديل الفاتورة النقدية
@@ -393,6 +443,7 @@ void main() {
               scr.paid = paid;
               scr.name = '${c['name']}';
               last = r;
+              lastPrepaid = dd(r['prepaid']);
               pendingMove = false;
               pendingSpaces = false;
               count('حفظ ${bf == null ? 'جديدة' : 'تعديل'} ${scr.ptype}');

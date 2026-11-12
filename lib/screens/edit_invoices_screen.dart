@@ -453,8 +453,9 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
     final statusColor = pending ? _orange : _green;
     final adjs = _invoiceAdjustments[invoice.id] ?? const <InvoiceAdjustment>[];
     final adjTotal = _settlementTotals[invoice.id] ?? 0.0;
-    final paid = cash ? invoice.totalAmount : invoice.amountPaidOnInvoice;
-    final remaining = cash ? 0.0 : (invoice.totalAmount - invoice.amountPaidOnInvoice);
+    // 🔁 المسدد يشمل ما سُدّد بوصولات قبل تحويلها إلى «نقد» (آجل — مسددة بالكامل)
+    final paid = invoice.settledAmount;
+    final remaining = invoice.remainingAmount;
     final time = '${invoice.invoiceDate.hour.toString().padLeft(2, '0')}:${invoice.invoiceDate.minute.toString().padLeft(2, '0')}';
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -476,7 +477,7 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _navy)),
                     _pill(pending ? 'معلّقة' : 'محفوظة', statusColor,
                         icon: pending ? Icons.pause_circle_outline_rounded : Icons.check_circle_outline_rounded),
-                    _pill(cash ? 'نقد' : 'آجل', cash ? _teal : _orange),
+                    _pill(invoice.paymentLabel, cash ? _teal : (invoice.isCreditFullySettled ? _green : _orange)),
                     if (!invoice.isCreatedByMe) _pill('مستوردة', _blue, icon: Icons.cloud_download_outlined),
                     if (adjs.isNotEmpty)
                       _pill('عُدّلت ${adjs.length} مرة (${adjTotal >= 0 ? '+' : '−'}${formatCurrency(adjTotal.abs())})', _blue,

@@ -48,6 +48,26 @@ class Invoice {
   int? invoiceMonth;
   bool isCreatedByMe; // 🔥 هل هذه الفاتورة أنشئت بواسطتي؟
 
+  /// 🔁 ما سُدّد من هذه الفاتورة سابقاً بوصولات قبض (فاتورة دين حُوّلت إلى «نقد» بعد تسديد
+  /// جزء منها — DebtToCashSettlement). يُقرأ من القاعدة ولا يُكتب إلا من مسار حفظ الفاتورة
+  /// (لذلك ليس في toMap: أي كاتب آخر للفاتورة لا يمسّه).
+  double prepaidByReceipts;
+
+  /// المسدد من الفاتورة كله: على الفاتورة نفسها + بوصولات سابقة.
+  double get settledAmount => paymentType == 'نقد' ? totalAmount : amountPaidOnInvoice + prepaidByReceipts;
+
+  /// الباقي من الفاتورة (للعرض): صفر للنقد.
+  double get remainingAmount {
+    final r = totalAmount - settledAmount;
+    return r > 0.005 ? r : 0.0;
+  }
+
+  /// فاتورة دين سُدّدت كلها، ومنها جزء بوصولات قبض سابقة.
+  bool get isCreditFullySettled => paymentType != 'نقد' && prepaidByReceipts > 0.005 && remainingAmount < 0.5;
+
+  /// تسمية نوع الدفع للعرض: نقد / آجل / آجل — مسددة بالكامل.
+  String get paymentLabel => paymentType == 'نقد' ? 'نقد' : (isCreditFullySettled ? 'آجل — مسددة بالكامل' : 'آجل');
+
   Invoice({
     this.id,
     required this.customerName,
@@ -81,6 +101,7 @@ class Invoice {
     this.invoiceYear,
     this.invoiceMonth,
     this.isCreatedByMe = true,
+    this.prepaidByReceipts = 0.0,
   })  : totalAmountCents = totalAmountCents ?? (totalAmount * 100).round(),
         discountCents = discountCents ?? (discount * 100).round(),
         amountPaidOnInvoiceCents = amountPaidOnInvoiceCents ?? (amountPaidOnInvoice * 100).round();
@@ -200,6 +221,7 @@ class Invoice {
       invoiceYear: map['invoice_year'] as int?,
       invoiceMonth: map['invoice_month'] as int?,
       isCreatedByMe: ((map['is_created_by_me'] as int?) ?? 1) == 1,
+      prepaidByReceipts: (map['prepaid_by_receipts'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -234,6 +256,7 @@ class Invoice {
     int? invoiceYear,
     int? invoiceMonth,
     bool? isCreatedByMe,
+    double? prepaidByReceipts,
   }) {
     return Invoice(
       id: id ?? this.id,
@@ -265,6 +288,7 @@ class Invoice {
       invoiceYear: invoiceYear ?? this.invoiceYear,
       invoiceMonth: invoiceMonth ?? this.invoiceMonth,
       isCreatedByMe: isCreatedByMe ?? this.isCreatedByMe,
+      prepaidByReceipts: prepaidByReceipts ?? this.prepaidByReceipts,
     );
   }
 }

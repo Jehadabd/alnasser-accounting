@@ -80,7 +80,7 @@ class SavedInvoicePrintPdf {
     final preDiscountTotal = itemsTotalForDisplay + settlementsTotalForDisplay + loadingFee;
     final afterDiscount = ((preDiscountTotal - discount).clamp(0.0, double.infinity)).toDouble();
 
-    final paid = invoice.amountPaidOnInvoice;
+    final paid = invoice.amountPaidOnInvoice + invoice.prepaidByReceipts; // 🔁 ومعه ما سُدّد بوصولات سابقة
     final isCash = invoice.paymentType == 'نقد';
     double settled(String type) => [...adjs, ...sameDayAddedItemAdjs]
         .where((a) => a.settlementPaymentType == type)

@@ -581,8 +581,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         .fold(0.0, (s, a) => s + a.amountDelta);
     final entered = double.tryParse(paidAmountController.text.replaceAll(',', '')) ?? 0.0;
     final isCash = paymentType == 'نقد';
-    final paid = isCash ? net : entered + cashSettlements;
-    final rest = isCash ? 0.0 : net - paid;
+    // 🔁 ما سُدّد منها بوصولات قبل تحويلها إلى «نقد» (آجل — مسددة بالكامل) يُحسب مسدداً في العرض
+    final prepaid = isCash ? 0.0 : (invoiceToManage?.prepaidByReceipts ?? 0.0);
+    final paid = isCash ? net : entered + cashSettlements + prepaid;
+    final rest = isCash ? 0.0 : (net - paid > 0.005 ? net - paid : 0.0);
     final canEdit = !isViewOnly;
     final feeEditable = !isViewOnly && !(invoiceToManage?.isLocked ?? false);
     const navy = Color(0xFF0F3460);
@@ -755,6 +757,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         const SizedBox(width: 6),
         payBtn('دين', Icons.account_balance_wallet_outlined, const Color(0xFFDC2626)),
       ]),
+      if (prepaid > 0.005)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text('آجل — منها ${formatNumber(prepaid)} سُدّدت بوصولات سابقة',
+              style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Color(0xFF047857))),
+        ),
       const SizedBox(height: 4),
       if (!isCash && canEdit)
         input('الواصل', Icons.payments_outlined, paidAmountController,
@@ -3739,7 +3747,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       displayedPaidAmount = totalAfterAdjustments;
       displayedRemainingAmount = 0;
     } else {
-      displayedPaidAmount = enteredPaidAmount + cashSettlements;
+      // 🔁 ما سُدّد بوصولات قبل التحويل إلى «نقد» يُحسب مسدداً في العرض
+      displayedPaidAmount = enteredPaidAmount + cashSettlements + (invoiceToManage?.prepaidByReceipts ?? 0.0);
       displayedRemainingAmount = totalAfterAdjustments - displayedPaidAmount;
     }
     

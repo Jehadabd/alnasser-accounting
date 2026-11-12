@@ -83,7 +83,8 @@ class BulkInvoicePdfService {
           // حساب القيم المالية
           final itemsTotal = items.fold(0.0, (sum, item) => sum + item.itemTotal);
           final afterDiscount = (itemsTotal + invoice.loadingFee) - invoice.discount;
-          final remaining = afterDiscount - invoice.amountPaidOnInvoice;
+          // 🔁 المسدد يشمل ما سُدّد بوصولات قبل تحويلها إلى «نقد»
+          final remaining = afterDiscount - (invoice.amountPaidOnInvoice + invoice.prepaidByReceipts);
           
           // جلب الدين السابق والحالي
           double previousDebt = 0.0;
@@ -107,7 +108,7 @@ class BulkInvoicePdfService {
             selectedDate: invoice.invoiceDate,
             discount: invoice.discount,
             loadingFee: invoice.loadingFee,
-            paid: invoice.amountPaidOnInvoice,
+            paid: invoice.amountPaidOnInvoice + invoice.prepaidByReceipts,
             paymentType: invoice.paymentType,
             invoiceToManage: invoice,
             previousDebt: previousDebt,

@@ -13,6 +13,7 @@ import 'package:alnaser/models/invoice_input_data.dart';
 import 'package:alnaser/models/invoice_item.dart';
 import 'package:alnaser/services/database_service.dart';
 import 'package:alnaser/services/invoice_edit_voucher.dart';
+import 'package:alnaser/services/invoice_safety/debt_to_cash_settlement.dart';
 import 'package:alnaser/services/invoice_safety/line_math_check.dart';
 
 double _d(Object? v) => (v as num?)?.toDouble() ?? 0.0;
@@ -58,6 +59,7 @@ Future<Map<String, Object?>> _invoiceInfo(String uuid) async {
     'cust': cust,
     'linked': _d(linked.first['s']),
     'linkedN': (linked.first['n'] as num).toInt(),
+    'prepaid': _d(inv['prepaid_by_receipts']),
     'items': [
       for (final it in items)
         {
@@ -127,7 +129,7 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
           saleType: 'قطعة',
         ));
       }
-      final data = InvoiceInputData(
+      var data = InvoiceInputData(
         invoiceToManage: existing,
         customerName: a['name'] as String,
         customerPhone: '',
@@ -146,6 +148,20 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
       if (mismatch != null) return {'ok': false, 'stage': 'lineMath', 'err': mismatch};
       final dv = await controller.validateDebtChangeWontCauseNegativeBalance(data);
       if (!dv.isValid) return {'ok': false, 'stage': 'debt', 'err': dv.errorMessage};
+      // 🔁 تحويل دين ⇐ نقد (كنافذة invoice_actions والمستخدم يقبل المقترح): ما سُدّد بوصولات
+      //    لا يُقبض مرتين، ثم تُعاد الفحوص على ما سيُحفظ فعلاً
+      Map<String, Object?>? plan;
+      if (a['settle'] != false) {
+        final p = await DebtToCashSettlement.plan(db, data);
+        if (p != null) {
+          plan = {'R': p.recordedDebt, 'B': p.customerBalance, 'S': p.suggestedPrepaid};
+          data = DebtToCashSettlement.apply(data, p, p.suggestedPrepaid);
+          final v2 = controller.validateInvoiceData(data);
+          if (!v2.isValid) return {'ok': false, 'stage': 'validate2', 'err': v2.errorMessage, 'plan': plan};
+          final d2 = await controller.validateDebtChangeWontCauseNegativeBalance(data);
+          if (!d2.isValid) return {'ok': false, 'stage': 'debt2', 'err': d2.errorMessage, 'plan': plan};
+        }
+      }
       final editId = existing?.id;
       final before = editId == null ? null : await InvoiceEditVoucher.snapshot(editId);
       final res = await controller.saveInvoice(data);
@@ -171,6 +187,7 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
         'uuid': saved.invoiceUuid,
         'before': before == null ? null : {'total': before.total, 'payment': before.payment},
         'voucher': voucher,
+        'plan': plan,
         ...await _invoiceInfo(saved.invoiceUuid!),
       };
   }

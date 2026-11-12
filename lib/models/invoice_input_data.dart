@@ -20,6 +20,10 @@ class InvoiceInputData {
   final DateTime selectedDate;
   final List<InvoiceItem> invoiceItems;
 
+  /// 🔁 ما سُدّد من هذه الفاتورة سابقاً بوصولات قبض (فاتورة «آجل — مسددة بالكامل»).
+  /// null = يبقى كما هو في الفاتورة المحفوظة (ويُصفَّر إن صارت نقداً).
+  final double? prepaidByReceipts;
+
   bool get isNewInvoice => invoiceToManage == null;
 
   InvoiceInputData({
@@ -35,5 +39,29 @@ class InvoiceInputData {
     required this.paymentType,
     required this.selectedDate,
     required this.invoiceItems,
+    this.prepaidByReceipts,
   });
+
+  InvoiceInputData copyWith({
+    String? paymentType,
+    double? paidAmount,
+    double? loadingFee,
+    double? discount,
+    double? prepaidByReceipts,
+  }) =>
+      InvoiceInputData(
+        invoiceToManage: invoiceToManage,
+        customerName: customerName,
+        customerPhone: customerPhone,
+        customerAddress: customerAddress,
+        installerName: installerName,
+        pointsRate: pointsRate,
+        paidAmount: paidAmount ?? this.paidAmount,
+        loadingFee: loadingFee ?? this.loadingFee,
+        discount: discount ?? this.discount,
+        paymentType: paymentType ?? this.paymentType,
+        selectedDate: selectedDate,
+        invoiceItems: invoiceItems,
+        prepaidByReceipts: prepaidByReceipts ?? this.prepaidByReceipts,
+      );
 }
