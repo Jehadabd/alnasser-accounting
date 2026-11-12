@@ -174,6 +174,7 @@ class ReceiptsService {
     required String? docNo,
     required double commission,
     required List<_PlannedLine> plan,
+    bool resuming = false,
   }) async {
     final db = await erpDb();
     final isBase = currency == 'IQD';
@@ -188,10 +189,9 @@ class ReceiptsService {
         errors.add('أُغلقت الشاشة قبل إكمال الوصل');
         break;
       }
-      // سطر سُجّل وصفه من قبل (إكمال وصل منقطع) — لا يُعاد
-      final hasLine = await db.query('customer_receipt_lines',
-          columns: ['id'], where: 'receipt_id = ? AND customer_id = ?', whereArgs: [receiptId, l.customerId], limit: 1);
-      if (hasLine.isNotEmpty) continue;
+      // إكمال وصل منقطع: سطر سُجّل وصفه من قبل لا يُعاد، وسطر بلا مبلغ (أقل من نصف دينار)
+      // لا شيء مالياً فيه. الهوية بمعرّفات المعاملات المحجوزة لا بالعميل (قد يتكرر العميل).
+      if (resuming && (l.uuids.isEmpty || await _lineRecorded(db, receiptId, l))) continue;
       try {
         final before = await CustomerMoney.balance(db, l.customerId);
         if (context != null && !context.mounted) {
@@ -290,6 +290,17 @@ class ReceiptsService {
     return errors;
   }
 
+  /// هل لسطر الخطة وصف مسجّل في الوصل؟ (بمعرّفَي معاملتيه المحجوزين)
+  static Future<bool> _lineRecorded(DatabaseExecutor db, int receiptId, _PlannedLine l) async {
+    final ids = l.uuids;
+    final ph = List.filled(ids.length, '?').join(',');
+    final r = await db.rawQuery(
+        'SELECT 1 FROM customer_receipt_lines WHERE receipt_id = ? '
+        'AND (pay_tx_uuid IN ($ph) OR disc_tx_uuid IN ($ph)) LIMIT 1',
+        [receiptId, ...ids, ...ids]);
+    return r.isNotEmpty;
+  }
+
   /// مجموع ما سُجّل فعلاً من هذه المعرّفات (معاملات حيّة) — موجب = ما نقص من الدين.
   static Future<double> _postedSum(DatabaseExecutor db, List<String?> uuids) async {
     final ids = uuids.whereType<String>().toList();
@@ -383,7 +394,8 @@ class ReceiptsService {
         fxRate: (h['fx_rate'] as num?)?.toDouble() ?? 1,
         docNo: h['doc_no'] as String?,
         commission: commission,
-        plan: plan);
+        plan: plan,
+        resuming: true);
     final n = await _finalize(db, receiptId, errors.isEmpty ? _complete : _partial, commission: commission);
     ActivityLog.log('إكمال', 'وصل قبض', 'أُكمل وصل القبض رقم $no بعد انقطاع — $n عميل${errors.isEmpty ? '' : ' (${errors.length} خطأ)'}');
     return ReceiptResult(receiptId, no, errors);
@@ -397,9 +409,7 @@ class ReceiptsService {
     if (h == null || h['status'] != _inProgress) throw ErpException('الوصل ليس منقطعاً');
     final plan = _PlannedLine.listFrom(h['plan_json'] as String?);
     for (final l in plan) {
-      final hasLine = await db.query('customer_receipt_lines',
-          columns: ['id'], where: 'receipt_id = ? AND customer_id = ?', whereArgs: [receiptId, l.customerId], limit: 1);
-      if (hasLine.isNotEmpty) continue;
+      if (l.uuids.isEmpty || await _lineRecorded(db, receiptId, l)) continue;
       final pay = await _postedSum(db, [l.payUuid]);
       final disc = await _postedSum(db, [l.discUuid]);
       if (pay.abs() < 0.005 && disc.abs() < 0.005) continue;
@@ -552,6 +562,9 @@ class _PlannedLine {
   final String? note;
   final String? payUuid;
   final String? discUuid;
+
+  /// معرّفا معاملتي السطر المحجوزان (تسديد/خصم) — فارغ لسطر بلا مبلغ.
+  List<String> get uuids => [payUuid, discUuid].whereType<String>().toList();
 
   Map<String, Object?> toJson() => {
         'cid': customerId,

@@ -131,7 +131,7 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
               Text('فاتورة ${inv.formattedInvoiceNumber}',
                   textDirection: TextDirection.rtl,
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: kSetText)),
-              Text('${inv.paymentLabel} • ${inv.status}', style: const TextStyle(color: kSetMuted)),
+              Text('${inv.paymentType} • ${inv.status}', style: const TextStyle(color: kSetMuted)),
             ]),
           ),
           MoneyLabel(inv.totalAmount, size: 22),
@@ -210,8 +210,7 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
 
   Widget _summaryCard(Invoice inv, SalesInvoiceFact? f, bool profit) {
     final cash = inv.paymentType == 'نقد';
-    // 🔁 المسدد يشمل ما سُدّد بوصولات قبل تحويلها إلى «نقد» (آجل — مسددة بالكامل)
-    final paid = cash ? inv.totalAmount : (inv.settledAmount > inv.totalAmount ? inv.totalAmount : inv.settledAmount);
+    final paid = cash ? inv.totalAmount : (inv.amountPaidOnInvoice > inv.totalAmount ? inv.totalAmount : inv.amountPaidOnInvoice);
     final gross = f?.gross ?? 0;
     return SetCard(
       title: 'الملخص',

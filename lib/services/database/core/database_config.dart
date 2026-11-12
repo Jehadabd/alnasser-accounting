@@ -10,8 +10,9 @@ import '../../demo_mode.dart';
 
 /// إعدادات قاعدة البيانات
 class DatabaseConfig {
-  // 50: invoices.prepaid_by_receipts (فاتورة دين حُوّلت إلى نقد بعد وصل قبض). رفع الإصدار
-  //     يمنع طرفية أحدث من الكتابة في قاعدة سيرفر لم تُرقَّ بعد (فحص الطرفية في DatabaseService).
+  // 50: أضاف invoices.prepaid_by_receipts — عمود متقاعد لا يقرؤه ولا يكتبه أي كود (أُلغيت
+  //     «تسوية التحويل إلى نقد»: التحويل يطرح دين الفاتورة نفسها فقط، كما كان). يبقى الإصدار 50
+  //     لأن قواعد رُقّيت إليه ولا يجوز خفضه (فتح قاعدة أحدث بإصدار أقدم يفشل).
   static const int databaseVersion = 50;
   static const String databaseName = 'debt_book.db';
   static const bool verboseLogs = false;

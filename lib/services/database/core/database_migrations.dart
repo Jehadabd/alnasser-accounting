@@ -127,7 +127,7 @@ class DatabaseMigrations {
         amount_paid_on_invoice REAL DEFAULT 0,
         points_rate REAL DEFAULT 1.0,
         is_created_by_me INTEGER DEFAULT 1,
-        prepaid_by_receipts REAL DEFAULT 0,
+        prepaid_by_receipts REAL DEFAULT 0, -- متقاعد: لا يُقرأ ولا يُكتب (الإصدار 50)
         FOREIGN KEY (installer_id) REFERENCES installers (id) ON DELETE SET NULL,
         FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
       )
@@ -869,7 +869,8 @@ class DatabaseMigrations {
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'is_synced', 'INTEGER DEFAULT 0');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'monthly_sequence_number', 'INTEGER');
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'notes', 'TEXT');
-    // 🔁 ما سُدّد من فاتورة دين بوصولات قبل تحويلها إلى «نقد» (آجل — مسددة بالكامل)
+    // عمود متقاعد (الإصدار 50 — انظر DatabaseConfig.databaseVersion): لا يُقرأ ولا يُكتب. يبقى
+    // كي يكون شكل القاعدة واحداً على كل الأجهزة.
     await DatabaseHelpers.addColumnIfNotExists(db, 'invoices', 'prepaid_by_receipts', 'REAL DEFAULT 0');
     // فهرس فريد على invoice_uuid (يسمح بـ NULL لأداء آمن للفواتير القديمة)
     try {

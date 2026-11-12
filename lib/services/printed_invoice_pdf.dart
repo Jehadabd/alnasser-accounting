@@ -670,7 +670,7 @@ class PrintedInvoicePdf {
     final settlementsTotalForDisplay = includeSameDayOnlyCase ? 0.0 : settlementsTotal;
     final preDiscountTotal = itemsTotalForDisplay + settlementsTotalForDisplay + loadingFee;
     final afterDiscount = ((preDiscountTotal - discount).clamp(0.0, double.infinity)).toDouble();
-    final paid = invoice.amountPaidOnInvoice + invoice.prepaidByReceipts; // 🔁 ومعه ما سُدّد بوصولات سابقة
+    final paid = invoice.amountPaidOnInvoice;
     final isCash = invoice.paymentType == 'نقد';
     final cashSettlements = showSettlementSections
         ? [...adjs, ...sameDayAddedItemAdjs].where((a) => a.settlementPaymentType == 'نقد').fold(0.0, (sum, a) {

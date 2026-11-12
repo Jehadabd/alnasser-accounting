@@ -25,7 +25,20 @@ class IqdNormalize {
       paid: d.paidAmount,
     );
     if (t.discount == d.discount && t.loadingFee == d.loadingFee && t.paid == d.paidAmount) return d;
-    return d.copyWith(paidAmount: t.paid, loadingFee: t.loadingFee, discount: t.discount);
+    return InvoiceInputData(
+      invoiceToManage: d.invoiceToManage,
+      customerName: d.customerName,
+      customerPhone: d.customerPhone,
+      customerAddress: d.customerAddress,
+      installerName: d.installerName,
+      pointsRate: d.pointsRate,
+      paidAmount: t.paid,
+      loadingFee: t.loadingFee,
+      discount: t.discount,
+      paymentType: d.paymentType,
+      selectedDate: d.selectedDate,
+      invoiceItems: d.invoiceItems,
+    );
   }
 
   /// رأس فاتورة بيع (يُعدَّل في مكانه). مجموع الأسطر يُشتق من الرأس نفسه

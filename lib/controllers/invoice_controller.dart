@@ -671,20 +671,6 @@ class InvoiceController {
           invoice = Invoice.fromMap(invoiceMap).copyWith(id: invoiceId);
         }
 
-        // 🔁 ما سُدّد منها بوصولات قبل تحويلها إلى «نقد» (DebtToCashSettlement): يُكتب هنا وحده
-        //    وفي معاملة الحفظ نفسها. النقد صفر دائماً؛ والحفظ الذي لا يحدّده يُبقيه كما في القاعدة.
-        {
-          final double? prepaid = data.paymentType == 'نقد' ? 0.0 : data.prepaidByReceipts;
-          if (prepaid != null) {
-            await txn.update('invoices', {'prepaid_by_receipts': prepaid}, where: 'id = ?', whereArgs: [invoiceId]);
-            invoice.prepaidByReceipts = prepaid;
-          } else {
-            final pr = await txn.query('invoices',
-                columns: ['prepaid_by_receipts'], where: 'id = ?', whereArgs: [invoiceId], limit: 1);
-            invoice.prepaidByReceipts = pr.isEmpty ? 0.0 : ((pr.first['prepaid_by_receipts'] as num?)?.toDouble() ?? 0.0);
-          }
-        }
-
         // ═══════════════════════════════════════════════════════════════════════════
         // Protect Items
         // ═══════════════════════════════════════════════════════════════════════════

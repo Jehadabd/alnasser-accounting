@@ -28,7 +28,6 @@ import '../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../services/database/business/customer_name_rule.dart'; // 🔤 الاسم بلا مسافات
 import '../services/disk_space/disk_space_guard.dart'; // 💽 حماية امتلاء القرص
 import '../services/invoice_safety/debt_to_cash_confirm.dart'; // 🛑 تأكيد التحويل إلى نقد
-import '../services/invoice_safety/debt_to_cash_settlement.dart'; // 🔁 ما سُدّد بوصولات لا يُقبض مرتين
 import '../services/invoice_safety/iqd_normalize.dart';
 import '../services/invoice_safety/line_math_check.dart'; // 🚨 مبلغ السطر = الكمية × السعر
 // import '../services/drive_service.dart'; // Removed
@@ -211,7 +210,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     final controller = InvoiceController(db: db, storage: storage);
 
     // 💵 المبالغ كما ستُحفظ: دنانير صحيحة، والنصف لصالح المحل
-    var inputData = IqdNormalize.invoiceInput(InvoiceInputData(
+    final inputData = IqdNormalize.invoiceInput(InvoiceInputData(
       invoiceToManage: invoiceToManage,
       customerName: customerNameController.text,
       customerPhone: customerPhoneController.text,
@@ -256,31 +255,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
     }
 
-    // 🔁 تحويل فاتورة لها دين في السجل إلى نقد = سُدّدت بالكامل (قرار صاحب المحل: بلا سؤال).
-    //    ما سُدّد منها سابقاً بوصولات (دين الفاتورة − رصيد العميل) لا يُقبض مرتين: تُحفظ
-    //    «آجل — مسددة بالكامل» ويُقبض الآن الباقي فقط (DebtToCashSettlement). يسبق فحص الدين
-    //    السالب: ذاك الفحص يجب أن يرى ما سيُحفظ فعلاً، لا التحويل الخام.
-    if (!inputData.isNewInvoice && widget.settlementForInvoice == null) {
-      if (!mounted) return null;
-      final plan = await DebtToCashSettlement.plan(await db.database, inputData);
-      if (plan != null) {
-        inputData = DebtToCashSettlement.apply(inputData, plan, plan.suggestedPrepaid);
-        final v2 = controller.validateInvoiceData(inputData);
-        if (!v2.isValid) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('تعذّر التحويل: ${v2.errorMessage}'),
-              backgroundColor: Colors.red,
-            ));
-          }
-          return null;
-        }
-      } else if (!await DebtToCashConfirm.ask(context, inputData.invoiceToManage, inputData.paymentType)) {
-        return null;
-      }
-    }
-
-    // 2. Debt Validation — على البيانات النهائية (بعد تسوية التحويل إلى نقد أعلاه)
+    // 2. Debt Validation
     final debtValidation = await controller.validateDebtChangeWontCauseNegativeBalance(inputData);
     if (!debtValidation.isValid) {
       if (mounted) {
@@ -299,6 +274,15 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         );
       }
       return null;
+    }
+
+    // 🛑 تحويل فاتورة لها دين في السجل إلى نقد: تأكيد صريح، وتحذير إن وُجد وصل قبض
+    //    بالمبلغ نفسه (يُطرح المبلغ مرتين) — منقول من التطبيق القديم
+    if (!inputData.isNewInvoice && widget.settlementForInvoice == null) {
+      if (!mounted) return null;
+      if (!await DebtToCashConfirm.ask(context, inputData.invoiceToManage, inputData.paymentType)) {
+        return null;
+      }
     }
 
     // 🚫 سقف الدين: فاتورة آجلة جديدة، أو زيادة دين فاتورة عند تعديلها (الفرق فقط)

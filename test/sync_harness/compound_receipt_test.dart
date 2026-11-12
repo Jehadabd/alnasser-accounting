@@ -199,6 +199,31 @@ void main() {
       }
       await invariants('4');
 
+      // ═══ 5) العميل نفسه في سطرين ثم انقطاع بعد الأول و«أكمل» ⇐ السطر الثاني لا يُهمل ═══
+      final p5 = problems.length;
+      cs = await customers('5');
+      box0 = await box();
+      await rest('receiptCrash', {
+        'stopAfter': 1,
+        'marker': 'وصل5',
+        'lines': [
+          {'cust': cs[0], 'amount': 2000, 'discount': 0},
+          {'cust': cs[0], 'amount': 3000, 'discount': 0},
+        ],
+      });
+      await h.restart(dev);
+      inc = await incomplete();
+      if (inc.length != 1) {
+        bad('5: الوصل المنقطع لا يظهر');
+      } else {
+        final done = await rest('receiptComplete', {'id': inc.first['id']});
+        if ((done['lines'] as List).length != 2) bad('5: أسطر الوصل ${(done['lines'] as List).length} والمتوقع 2');
+        if (!near(await bal(cs[0]), 5000)) bad('5: رصيد العميل ${await bal(cs[0])} والمتوقع 5,000 (10,000 − 2,000 − 3,000)');
+        if (!near(await box() - box0, 5000)) bad('5: الصندوق +${await box() - box0} والمتوقع +5,000');
+        if (problems.length == p5) ok('5: العميل نفسه في سطرين: أُكمل الثاني ولم يُهمل');
+      }
+      await invariants('5');
+
       problems.addAll(await h.deviceErrors());
       print('\n${problems.isEmpty ? '✅ نجح: الوصل المركّب لا يبقى نصف مسجّل بلا علم، ولا يتكرر عند الإكمال' : '❌ هنا وقع خطأ: ${problems.length} مشكلة'}');
       expect(problems, isEmpty);
