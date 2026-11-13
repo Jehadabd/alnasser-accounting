@@ -4,7 +4,7 @@ import 'widgets/popup_screens.dart'; // 🪟
 import 'services/save_lock.dart'; // 🔒
 import 'services/demo_mode.dart'; // 🧪
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode; // 🌐 حراسة الويب
 import 'package:flutter/material.dart';
 import 'services/database/core/migration_guard.dart' show MigrationGuardException;
 import 'widgets/migration_guard_views.dart' show MigrationBlockedApp;
@@ -198,35 +198,33 @@ void main(List<String> args) async {
     }
   }
 
-  // تحميل ملف .env من عدة مواقع محتملة
-  bool envLoaded = false;
-  // 🌐 الويب: لا نظام ملفات — .env يُحمَّل من assets فقط (المحاولة 2 أدناه)
+  // 🔐 ملف .env (مفاتيح سرية) لا يُوزَّع مع البرنامج ولا يُضمَّن في ملفاته: يُقرأ فقط من ملف
+  //    يضعه صاحب البرنامج بيده على أجهزته — بجانب البرنامج (debt_book.exe)، أو مجلد المشروع
+  //    أثناء التطوير. بلا ملف: المفاتيح فارغة، وكل ميزة تطلب مفتاحها من إعداداتها.
+  //    (كان يُقرأ من ملفات التطبيق المضمّنة ويُنسخ مع التثبيت ⇒ يقرأ مفاتيحك كل من يثبّته.)
   if (!kIsWeb) {
+    final candidates = <String>[];
     try {
-      // محاولة 1: من مجلد التطبيق الحالي (للـ EXE)
-      final exeDir = Platform.resolvedExecutable;
-      final exePath = exeDir.substring(0, exeDir.lastIndexOf(Platform.pathSeparator));
-      final envFile = File('$exePath${Platform.pathSeparator}.env');
-
-      if (await envFile.exists()) {
-        await dotenv.load(fileName: envFile.path);
-        envLoaded = true;
-        debugPrint('✅ تم تحميل .env من مجلد التطبيق: ${envFile.path}');
+      final exe = Platform.resolvedExecutable;
+      candidates.add('${exe.substring(0, exe.lastIndexOf(Platform.pathSeparator))}${Platform.pathSeparator}.env');
+    } catch (_) {}
+    if (kDebugMode) candidates.add('.env'); // flutter run من مجلد المشروع
+    for (final path in candidates) {
+      try {
+        final f = File(path);
+        if (!await f.exists()) continue;
+        // load() يقرأ من ملفات التطبيق المضمّنة فقط؛ testLoad يقرأ نص الملف نفسه
+        dotenv.testLoad(fileInput: await f.readAsString());
+        debugPrint('✅ تم تحميل .env من ملف محلي: $path');
+        break;
+      } catch (e) {
+        debugPrint('⚠️ تعذّر قراءة .env من $path: $e');
       }
-    } catch (e) {
-      debugPrint('⚠️ فشل تحميل .env من مجلد التطبيق: $e');
     }
   }
-
-  // محاولة 2: من المجلد الافتراضي (للتطوير)
-  if (!envLoaded) {
-    try {
-      await dotenv.load();
-      envLoaded = true;
-      debugPrint('✅ تم تحميل .env من المجلد الافتراضي');
-    } catch (e) {
-      debugPrint('⚠️ ملف .env غير موجود - سيتم استخدام القيم الافتراضية المُضمنة');
-    }
+  if (!dotenv.isInitialized) {
+    // بلا ملف: مفاتيح فارغة (لا قيم مضمّنة) — dotenv.env تبقى قابلة للقراءة بلا خطأ
+    dotenv.testLoad(fileInput: '');
   }
 
   // تهيئة محرك قاعدة البيانات حسب المنصة:

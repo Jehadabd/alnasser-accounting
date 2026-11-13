@@ -86,7 +86,8 @@ flutter:
     - assets/fonts/Cairo-Regular.ttf
     - assets/fonts/ALGER.TTF
     - assets/fonts/PTBLDHAD.TTF
-    - .env
+    # 🔐 .env لم يعد من ملفات التطبيق: كل ما فيها يُقرأ من نسخة التثبيت (مفاتيح Telegram وGemini…).
+    #    يُقرأ فقط من ملف تضعه بيدك بجانب البرنامج على أجهزتك (انظر main.dart).
     - assets/fonts/andlso.ttf
     - assets/fonts/Old Antic Outline Shaded.ttf
     - assets/icon/AL_NASSER_logo_transparent_medium.png

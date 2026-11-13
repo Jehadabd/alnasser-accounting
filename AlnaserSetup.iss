@@ -43,8 +43,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Visual C++ Redistributable - يتم تثبيته تلقائياً إذا لم يكن موجوداً
 Source: "installer\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
-; ملف الإعدادات البيئية (.env) - مهم لإعدادات Telegram
-Source: ".env"; DestDir: "{app}"; Flags: ignoreversion
+; 🔐 ملف .env لا يُوزَّع مع البرنامج: فيه مفاتيح سرية (بوت Telegram، Gemini) يقرؤها كل من يثبّته.
+;    كل محل يُدخل بوته من «إعدادات تيليجرام»؛ وعلى أجهزتك تضع .env بيدك بجانب البرنامج.
 
 ; ملفات التطبيق
 Source: "build\windows\x64\runner\Release\debt_book.exe"; DestDir: "{app}"; Flags: ignoreversion

@@ -486,7 +486,11 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           child: Column(children: [
             if (_error != null) _banner(_error!, _cLow, Icons.error_outline_rounded),
             if (noKeys)
-              _banner('لا يوجد مفتاح Gemini في ملف ‎.env — أضف GEMINI_API_KEY ثم أعد تشغيل البرنامج', _cLow, Icons.key_off_rounded),
+              _banner(
+                  'لا يوجد مفتاح Gemini على هذا الجهاز — ضع ملف ‎.env فيه GEMINI_API_KEY بجانب البرنامج '
+                  '(debt_book.exe) ثم أعد تشغيله. المفاتيح لا تُوزَّع مع البرنامج.',
+                  _cLow,
+                  Icons.key_off_rounded),
             const SizedBox(height: 8),
             InkWell(
               borderRadius: BorderRadius.circular(24),
