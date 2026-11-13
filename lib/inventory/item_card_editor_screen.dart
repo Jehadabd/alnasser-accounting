@@ -1506,6 +1506,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
           if (stats.isNotEmpty) ...[const SizedBox(height: 12), Wrap(spacing: 8, runSpacing: 8, children: stats)],
         ],
         const SizedBox(height: 12),
+        if (_itemType != 'service') ...[_traitsRow(), const SizedBox(height: 10)],
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(
             child: chips.isEmpty
@@ -1578,6 +1579,47 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         stat('قيمة المخزون', _nf.format(stock * (p.costPrice ?? 0)), _C.navy, sub: 'بالكلفة'),
       stat('مبيعات 30 يوماً', _nf.format(_sales30[0]), _C.green, sub: '${_nf.format(_sales30[1])} د.ع'),
     ];
+  }
+
+  /// ❓ «هل للمادة: وزن؟ ضمان؟ صلاحية؟» ظاهرة دائماً: المفعّل يُظهر قيمته، وغير المفعّل سؤال.
+  /// الضغط يفتح «المزيد» على «الصلاحية والضمان والتتبع».
+  Widget _traitsRow() {
+    final w = _p(_weight) ?? 0;
+    final spec = _hasWarranty ? WarrantySpec.parse(_warrantySpecValue()) : null;
+    Widget trait(IconData icon, String ask, String? value, Color c) {
+      final on = value != null;
+      return Tooltip(
+        message: on ? 'اضغط للتعديل' : 'اضغط إن كانت للمادة هذه الصفة',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => _openMore(5),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: on ? c.withValues(alpha: 0.10) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: on ? c.withValues(alpha: 0.45) : _C.border),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(on ? icon : Icons.help_outline_rounded, size: 16, color: on ? c : _C.muted),
+              const SizedBox(width: 6),
+              Text(on ? value : ask,
+                  style: TextStyle(
+                      fontSize: 12.5, fontWeight: on ? FontWeight.w800 : FontWeight.w600, color: on ? c : _C.muted)),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+      const Text('هل للمادة:', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _C.text)),
+      trait(Icons.scale_rounded, 'وزن؟', w > 0 ? 'الوزن ${_fmt(w)} كغم' : null, _C.navy),
+      trait(Icons.verified_user_rounded, 'ضمان؟', spec == null || spec.isNone ? null : 'ضمان ${spec.label}', _C.green),
+      trait(Icons.event_available_rounded, 'صلاحية؟',
+          _hasExpiry ? (_expiryDate == null ? 'لها صلاحية' : 'صلاحية ${_df.format(_expiryDate!)}') : null, _C.orange),
+    ]);
   }
 
   /// شارات الإعدادات الإضافية المفعّلة (تفتح «المزيد» على قسمها).

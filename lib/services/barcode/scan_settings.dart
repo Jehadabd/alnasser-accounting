@@ -17,6 +17,35 @@ enum CameraScanMode {
   final String help;
 }
 
+/// 📷 حجم مربع الكاميرا في شاشات البيع.
+enum CameraBoxSize {
+  small('صغير', 300, 120),
+  medium('متوسط', 460, 170),
+  large('كبير', 640, 260);
+
+  const CameraBoxSize(this.label, this.maxWidth, this.previewHeight);
+  final String label;
+  final double maxWidth;
+  final double previewHeight;
+}
+
+/// 📍 مكان مربع الكاميرا على الشاشة.
+enum CameraBoxPosition {
+  topRight('أعلى اليمين', 1, -1),
+  topCenter('أعلى الوسط', 0, -1),
+  topLeft('أعلى اليسار', -1, -1),
+  bottomRight('أسفل اليمين', 1, 1),
+  bottomCenter('أسفل الوسط', 0, 1),
+  bottomLeft('أسفل اليسار', -1, 1);
+
+  const CameraBoxPosition(this.label, this.x, this.y);
+  final String label;
+
+  /// موضعه في الشاشة (Alignment مطلق): x من ‎-1 (يسار) إلى 1 (يمين)، y من ‎-1 (أعلى) إلى 1 (أسفل).
+  final double x;
+  final double y;
+}
+
 class ScanSettings {
   const ScanSettings({
     this.keyboardScanner = true,
@@ -25,6 +54,10 @@ class ScanSettings {
     this.repeatAddsQty = true,
     this.cameraMode = CameraScanMode.toggle,
     this.sound = true,
+    this.cameraAutoOpen = false,
+    this.cameraBoxSize = CameraBoxSize.medium,
+    this.cameraBoxPosition = CameraBoxPosition.topCenter,
+    this.cameraHidePreview = false,
   });
 
   static const int defaultGapMs = 40;
@@ -49,12 +82,25 @@ class ScanSettings {
   /// صوت عند النجاح والفشل.
   final bool sound;
 
+  // 📷 مربع الكاميرا في شاشات البيع (الكاشير والفاتورة) — أندرويد/آيفون
+  /// يُفتح المربع تلقائياً عند دخول شاشة البيع ويبقى يقرأ (يُغلق من زره).
+  final bool cameraAutoOpen;
+  final CameraBoxSize cameraBoxSize;
+  final CameraBoxPosition cameraBoxPosition;
+
+  /// «تمرير فقط»: الكاميرا تقرأ دون عرض صورتها (شريط صغير يبيّن أنها تعمل وما أُضيف).
+  final bool cameraHidePreview;
+
   static const _kWedge = 'scan_keyboard_wedge_v1';
   static const _kGap = 'scan_max_gap_ms_v1';
   static const _kMin = 'scan_min_length_v1';
   static const _kRepeat = 'scan_repeat_adds_qty_v1';
   static const _kCam = 'scan_camera_mode_v1';
   static const _kSound = 'scan_sound_v1';
+  static const _kCamAuto = 'scan_camera_auto_open_v1';
+  static const _kCamSize = 'scan_camera_box_size_v1';
+  static const _kCamPos = 'scan_camera_box_pos_v1';
+  static const _kCamHide = 'scan_camera_hide_preview_v1';
 
   /// الإعداد المحمّل (يُقرأ مرة ويُحدَّث عند الحفظ).
   static ScanSettings current = const ScanSettings();
@@ -74,6 +120,12 @@ class ScanSettings {
         repeatAddsQty: p.getBool(_kRepeat) ?? true,
         cameraMode: CameraScanMode.values.firstWhere((m) => m.name == cam, orElse: () => CameraScanMode.toggle),
         sound: p.getBool(_kSound) ?? true,
+        cameraAutoOpen: p.getBool(_kCamAuto) ?? false,
+        cameraBoxSize: CameraBoxSize.values
+            .firstWhere((v) => v.name == p.getString(_kCamSize), orElse: () => CameraBoxSize.medium),
+        cameraBoxPosition: CameraBoxPosition.values
+            .firstWhere((v) => v.name == p.getString(_kCamPos), orElse: () => CameraBoxPosition.topCenter),
+        cameraHidePreview: p.getBool(_kCamHide) ?? false,
       );
     } catch (_) {}
     _loaded = true;
@@ -96,6 +148,10 @@ class ScanSettings {
     await p.setBool(_kRepeat, v.repeatAddsQty);
     await p.setString(_kCam, v.cameraMode.name);
     await p.setBool(_kSound, v.sound);
+    await p.setBool(_kCamAuto, v.cameraAutoOpen);
+    await p.setString(_kCamSize, v.cameraBoxSize.name);
+    await p.setString(_kCamPos, v.cameraBoxPosition.name);
+    await p.setBool(_kCamHide, v.cameraHidePreview);
   }
 
   ScanSettings copyWith({
@@ -105,6 +161,10 @@ class ScanSettings {
     bool? repeatAddsQty,
     CameraScanMode? cameraMode,
     bool? sound,
+    bool? cameraAutoOpen,
+    CameraBoxSize? cameraBoxSize,
+    CameraBoxPosition? cameraBoxPosition,
+    bool? cameraHidePreview,
   }) =>
       ScanSettings(
         keyboardScanner: keyboardScanner ?? this.keyboardScanner,
@@ -113,5 +173,9 @@ class ScanSettings {
         repeatAddsQty: repeatAddsQty ?? this.repeatAddsQty,
         cameraMode: cameraMode ?? this.cameraMode,
         sound: sound ?? this.sound,
+        cameraAutoOpen: cameraAutoOpen ?? this.cameraAutoOpen,
+        cameraBoxSize: cameraBoxSize ?? this.cameraBoxSize,
+        cameraBoxPosition: cameraBoxPosition ?? this.cameraBoxPosition,
+        cameraHidePreview: cameraHidePreview ?? this.cameraHidePreview,
       );
 }

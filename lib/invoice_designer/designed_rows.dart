@@ -16,6 +16,12 @@ class DesignedRows {
   static String _id5(int? id) => id == null ? '' : id.toString().padLeft(5, '0');
 
   /// تاريخ انتهاء المادة (سنة/شهر) — فارغ إن لم يُسجَّل لها تاريخ.
+  /// 📅 صلاحية القطعة المبيعة كما ثُبِّتت على السطر (من دفعتها).
+  static String? _lineExpiry(InvoiceItem item) {
+    final d = DateTime.tryParse(item.batchExpiry ?? '');
+    return d == null ? null : InvoiceItem.expiryText(d);
+  }
+
   static String _expiry(Product? p) {
     final d = p?.expiryDate;
     if (d == null) return '';
@@ -62,7 +68,7 @@ class DesignedRows {
       'weight': _weight(product, baseQty),
       InvoicePrintData.weightKey: _weightKg(product, baseQty),
       InvoicePrintData.termsKey: item.hasWarranty ? (item.warrantyTerms ?? '') : '', // 🛡️ شروط الضمان
-      'expiry': _expiry(product),
+      'expiry': _lineExpiry(item) ?? _expiry(product),
       // 🛡️ الضمان المثبَّت على السطر عند البيع
       for (final k in ItemWarranty.printColumns)
         k: ItemWarranty.cellText(k, spec: item.warrantySpec, start: item.warrantyStart, end: item.warrantyEnd) ?? '',

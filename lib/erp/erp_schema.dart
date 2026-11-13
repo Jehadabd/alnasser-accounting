@@ -645,6 +645,8 @@ class ErpSchema {
     ['purchase_invoice_items', 'expiry_date', 'TEXT'],
     ['purchase_invoice_items', 'warranty_spec', 'TEXT'],
     ['purchase_invoice_items', 'warranty_terms', 'TEXT'],
+    // 📅 صلاحية القطعة المبيعة (من دفعتها) مثبَّتة على سطر البيع — تُطبع وتظهر في الشاشة
+    ['invoice_items', 'batch_expiry', 'TEXT'],
   ];
 
   /// حسابات يحتاجها النظام الجديد: [المفتاح، الاسم، رمز مفضّل، رمز الأب، النوع، مراقبة؟]

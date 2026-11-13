@@ -3,7 +3,10 @@
 // 📦 «الصلاحية والضمان» لسطر في فاتورة الشراء: تاريخ صلاحية هذه الدفعة، ومدة ضمانها
 // وبدايته وشروطه. تُحفظ على سطر الشراء، وعند «تأكيد واستلام» تنتقل إلى حركة الشراء
 // (ProductBatches) فتعرف كل الأجهزة صلاحية الدفعة وضمانها، ويأخذ البيع ضمان الدفعة
-// التي يخرج منها (الأقدم أولاً).
+// التي يخرج منها (بحسب إعداد «الصلاحية والدفعات»).
+//
+// يُفتح تلقائياً عند إضافة سطر: لمادة جديدة يسأل «هل لها وزن؟ ضمان؟ صلاحية؟»، ولمادة لها
+// ضمان أو صلاحية يقترح إعداداتها ويطلب صلاحية هذه الدفعة. الوزن صفة للمادة لا للدفعة.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,24 +27,46 @@ class _T {
   static const red = Color(0xFFB42318);
 }
 
+/// ما يعيده الحوار: السطر بتفاصيل دفعته، ووزن الوحدة الأساسية إن أُدخل (يُحفظ على المادة).
+typedef BatchDetailsResult = ({PurchaseInvoiceItem item, double? weightKg});
+
 class BatchDetailsDialog extends StatefulWidget {
-  const BatchDetailsDialog({super.key, required this.item, this.product, required this.purchaseDate});
+  const BatchDetailsDialog({
+    super.key,
+    required this.item,
+    this.product,
+    required this.purchaseDate,
+    this.isNewProduct = false,
+  });
 
   final PurchaseInvoiceItem item;
   final Product? product;
   final DateTime purchaseDate;
 
-  /// يعيد السطر بتفاصيل دفعته الجديدة، أو null إن أُلغي.
-  static Future<PurchaseInvoiceItem?> edit(
+  /// مادة عُرّفت الآن من فاتورة الشراء: يسأل عن الوزن أيضاً.
+  final bool isNewProduct;
+
+  /// null إن أُلغي.
+  static Future<BatchDetailsResult?> edit(
     BuildContext context, {
     required PurchaseInvoiceItem item,
     Product? product,
     required DateTime purchaseDate,
+    bool isNewProduct = false,
   }) =>
-      showDialog<PurchaseInvoiceItem>(
+      showDialog<BatchDetailsResult>(
         context: context,
-        builder: (_) => BatchDetailsDialog(item: item, product: product, purchaseDate: purchaseDate),
+        builder: (_) => BatchDetailsDialog(
+            item: item, product: product, purchaseDate: purchaseDate, isNewProduct: isNewProduct),
       );
+
+  /// هل يُفتح تلقائياً عند إضافة السطر؟ مادة جديدة، أو مادة لها ضمان أو صلاحية.
+  static bool shouldAsk(Product? p, {required bool isNew}) {
+    if (isNew) return true;
+    if (p == null) return false;
+    final w = WarrantySpec.parse(p.warrantySpec);
+    return p.hasExpiry || (w != null && !w.isNone);
+  }
 
   /// سطر قصير تحت اسم المادة: «صلاحية 2027/03 • ضمان سنة».
   static String summary(PurchaseInvoiceItem item) {
@@ -65,6 +90,10 @@ class _BatchDetailsDialogState extends State<BatchDetailsDialog> {
   WarrantyUnit _unit = WarrantyUnit.year;
   WarrantyBasis _basis = WarrantyBasis.purchase;
   final _terms = TextEditingController();
+  late bool _hasWeight;
+  final _weight = TextEditingController();
+
+  bool get _askWeight => widget.isNewProduct || (widget.product?.baseWeight ?? 0) <= 0;
 
   @override
   void initState() {
@@ -84,12 +113,23 @@ class _BatchDetailsDialogState extends State<BatchDetailsDialog> {
       _qty.text = '1';
     }
     _terms.text = it.warrantyTerms ?? (it.hasBatchDetails ? '' : (p?.warrantyTerms ?? ''));
+    final w0 = p?.baseWeight ?? 0;
+    _hasWeight = w0 > 0;
+    _weight.text = w0 > 0 ? _num(w0) : '';
+  }
+
+  static String _num(double v) => v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+  double? get _weightKg {
+    final v = double.tryParse(_weight.text.trim().replaceAll(',', '.'));
+    return (v != null && v > 0) ? v : null;
   }
 
   @override
   void dispose() {
     _qty.dispose();
     _terms.dispose();
+    _weight.dispose();
     super.dispose();
   }
 
@@ -108,7 +148,8 @@ class _BatchDetailsDialogState extends State<BatchDetailsDialog> {
         : 'بيعت اليوم ⇒ الضمان ${s.label} حتى $end';
   }
 
-  bool get _valid => (!_hasExpiry || _expiry != null) && (!_hasWarranty || _spec != null);
+  bool get _valid =>
+      (!_hasExpiry || _expiry != null) && (!_hasWarranty || _spec != null) && (!_hasWeight || _weightKg != null);
 
   Future<void> _pickExpiry() async {
     final now = DateTime.now();
@@ -125,14 +166,15 @@ class _BatchDetailsDialogState extends State<BatchDetailsDialog> {
   void _save() {
     final s = _hasWarranty ? _spec : null;
     final t = _terms.text.trim();
-    Navigator.pop(
-      context,
-      widget.item.copyWith(
+    final BatchDetailsResult r = (
+      item: widget.item.copyWith(
         expiryDate: _hasExpiry && _expiry != null ? ItemWarranty.iso(_expiry!) : null,
         warrantySpec: s?.encode(),
         warrantyTerms: s != null && t.isNotEmpty ? t : null,
       ),
+      weightKg: _askWeight && _hasWeight ? _weightKg : null,
     );
+    Navigator.pop(context, r);
   }
 
   @override
@@ -149,6 +191,38 @@ class _BatchDetailsDialogState extends State<BatchDetailsDialog> {
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                if (widget.isNewProduct) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Row(children: [
+                      Icon(Icons.auto_awesome_rounded, color: _T.navy, size: 20),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'مادة جديدة: هل لها وزن؟ ضمان؟ تاريخ صلاحية؟ فعّل ما يخصها فقط، والباقي يبقى فارغاً.',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _T.navy, height: 1.5),
+                        ),
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_askWeight) ...[
+                  _section(
+                    icon: Icons.scale_rounded,
+                    color: _T.navy,
+                    title: 'الوزن',
+                    subtitle: 'وزن ${_baseLabel()} الواحدة — يُطبع في عمود «الوزن» و«وزن الفاتورة». يُحفظ على المادة.',
+                    on: _hasWeight,
+                    onToggle: (v) => setState(() => _hasWeight = v),
+                    child: _weightEditor(),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 _section(
                   icon: Icons.event_available_rounded,
                   color: _T.amber,
@@ -242,6 +316,33 @@ class _BatchDetailsDialogState extends State<BatchDetailsDialog> {
     );
   }
 
+  String _baseLabel() {
+    final u = widget.product?.unit ?? 'piece';
+    return u == 'piece' ? 'القطعة' : (u == 'meter' ? 'المتر' : u);
+  }
+
+  Widget _weightEditor() {
+    final w = _weightKg;
+    final f = widget.item.conversionFactor;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SizedBox(
+        width: 200,
+        child: TextField(
+          controller: _weight,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
+          decoration: _dec('وزن ${_baseLabel()}', hint: '1').copyWith(suffixText: 'كغم'),
+          onChanged: (_) => setState(() {}),
+        ),
+      ),
+      if (w != null && f > 1) ...[
+        const SizedBox(height: 8),
+        Text('«${widget.item.unitName}» فيها ${_num(f)} ⇒ وزنها ${_num(double.parse((w * f).toStringAsFixed(3)))} كغم',
+            style: const TextStyle(fontSize: 12.5, color: _T.navy, fontWeight: FontWeight.w700)),
+      ],
+    ]);
+  }
+
   Widget _expiryPicker() => InkWell(
         onTap: _pickExpiry,
         borderRadius: BorderRadius.circular(12),
@@ -330,8 +431,10 @@ class _BatchDetailsDialogState extends State<BatchDetailsDialog> {
         child: Row(children: [
           if (widget.item.hasBatchDetails)
             TextButton.icon(
-              onPressed: () => Navigator.pop(
-                  context, widget.item.copyWith(expiryDate: null, warrantySpec: null, warrantyTerms: null)),
+              onPressed: () => Navigator.pop<BatchDetailsResult>(context, (
+                item: widget.item.copyWith(expiryDate: null, warrantySpec: null, warrantyTerms: null),
+                weightKg: null,
+              )),
               icon: const Icon(Icons.delete_sweep_outlined, color: _T.red),
               label: const Text('مسح التفاصيل', style: TextStyle(color: _T.red)),
             ),

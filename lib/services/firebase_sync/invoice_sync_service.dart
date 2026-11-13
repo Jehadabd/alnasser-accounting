@@ -85,6 +85,7 @@ class InvoiceSyncService {
     'product_sync_uuid', // 🔄 ربط ذري بالمنتج عبر sync_uuid (لخصم المخزون)
     'price_before_discount', 'discount_type', 'discount_value', // 🏷️ خصم السطر
     'warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms', // 🛡️ ضمان السطر المثبَّت عند البيع
+    'batch_expiry', // 📅 صلاحية القطعة المبيعة (من دفعتها)
   };
 
   /// 🚀 بدء مزامنة الفواتير: رفع المعلّق، ثم الاستماع الدائم للوارد.

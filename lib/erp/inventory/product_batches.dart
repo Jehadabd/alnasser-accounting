@@ -5,9 +5,9 @@
 //   • الدفعة = حركة شراء في دفتر المخزون (stock_movements، kind = 'purchase')، ومعها
 //     batch_date (تاريخ فاتورة الشراء) و expiry_date و warranty_spec و warranty_terms.
 //     الحركة تصل لكل الأجهزة، فالدفعات واحدة على كل الأجهزة.
-//   • لا حالة جديدة للمخزون: الباقي من كل دفعة يُشتق من رصيد المادة نفسه بقاعدة «الأقدم
-//     يخرج أولاً» (FIFO): الرصيد الحالي يُنسب للدفعات من الأحدث إلى الأقدم، فما يبقى
-//     هو أحدث ما اشتُري، وأول ما يخرج في البيع التالي هو أقدم دفعة لها باقٍ.
+//   • لا حالة جديدة للمخزون: الباقي من كل دفعة يُشتق من رصيد المادة نفسه بترتيب الخروج
+//     المختار في الإعدادات (BatchSalePolicy): الأقرب انتهاءً أولاً (الافتراضي)، أو الأقدم
+//     شراءً أولاً، أو الأحدث شراءً أولاً. الرصيد يُنسب أولاً للدفعة التي تخرج آخراً.
 //     الرصيد الذي لا تغطيه دفعات (افتتاحي، جرد، دفعات بلا تفاصيل) = «بلا دفعة»، وهو الأقدم.
 //   • البيع: ضمان السطر من الدفعة التي تخرج منها أول قطعة فيه (ItemWarranty).
 //   • الصلاحية: تاريخ صلاحية المادة = أقرب صلاحية بين دفعاتها التي بقي منها شيء
@@ -15,6 +15,7 @@
 //
 // قراءة واشتقاق فقط: لا مال ولا قيود، ولا تغيير في كمية أي مادة.
 
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart' show DatabaseExecutor;
 
 import '../../models/purchase_invoice_item.dart';
@@ -48,18 +49,53 @@ class StockBatch {
   bool get hasDetails => expiry != null || (warranty != null && !warranty!.isNone) || (terms ?? '').isNotEmpty;
 }
 
-/// دفعات مادة الآن: الأقدم أولاً، و[unbatched] = رصيد لا تغطيه دفعة (يخرج قبلها، فهو الأقدم).
+/// 🔀 أي دفعة تخرج أولاً عند البيع — إعداد المتجر (الإعدادات العامة ← الصلاحية والدفعات).
+enum BatchSalePolicy {
+  fefo('الأقرب انتهاءً أولاً', 'تخرج الدفعة التي تنتهي صلاحيتها أولاً (الأنسب للأغذية والأدوية).'),
+  fifo('الأقدم شراءً أولاً', 'تخرج أقدم دفعة اشتريتها أولاً.'),
+  lifo('الأحدث شراءً أولاً', 'تخرج آخر دفعة اشتريتها أولاً، والقديمة تبقى في المخزن.');
+
+  const BatchSalePolicy(this.label, this.help);
+  final String label;
+  final String help;
+
+  static const _k = 'batch_sale_policy_v1';
+  static BatchSalePolicy current = BatchSalePolicy.fefo;
+  static bool _loaded = false;
+
+  static Future<BatchSalePolicy> load() async {
+    if (_loaded) return current;
+    try {
+      final v = (await SharedPreferences.getInstance()).getString(_k);
+      current = BatchSalePolicy.values.firstWhere((p) => p.name == v, orElse: () => BatchSalePolicy.fefo);
+    } catch (_) {}
+    _loaded = true;
+    return current;
+  }
+
+  static Future<void> save(BatchSalePolicy p) async {
+    current = p;
+    _loaded = true;
+    try {
+      await (await SharedPreferences.getInstance()).setString(_k, p.name);
+    } catch (_) {}
+  }
+}
+
+/// دفعات مادة الآن بترتيب خروجها عند البيع (حسب [BatchSalePolicy])، و[unbatched] = رصيد
+/// لا تغطيه دفعة (افتتاحي/جرد): يخرج قبل الدفعات، إلا في «الأحدث أولاً» فيخرج بعدها.
 class BatchSet {
-  const BatchSet(this.batches, this.unbatched);
+  const BatchSet(this.batches, this.unbatched, {this.unbatchedFirst = true});
   static const empty = BatchSet([], 0);
 
   final List<StockBatch> batches;
   final double unbatched;
+  final bool unbatchedFirst;
 
-  /// الدفعة التي تخرج منها القطعة رقم [offset] + 1 في البيع التالي (FIFO).
+  /// الدفعة التي تخرج منها القطعة رقم [offset] + 1 في البيع التالي.
   /// null إن خرجت من الرصيد «بلا دفعة»، أو تجاوزت الرصيد كله (بيع بالسالب).
   StockBatch? at(double offset) {
-    var pos = offset - unbatched;
+    var pos = unbatchedFirst ? offset - unbatched : offset;
     if (pos < -1e-9) return null;
     for (final b in batches) {
       if (b.remaining <= 1e-9) continue;
@@ -109,9 +145,11 @@ class ProductBatches {
     return _ready;
   }
 
-  /// كل دفعات المادة من الأقدم إلى الأحدث، ومعها الباقي من كل منها الآن.
-  /// [stock]: رصيد مفترض بدل رصيد المادة الحالي (للاختبار وللحساب داخل حفظ فاتورة).
-  static Future<BatchSet> of(DatabaseExecutor d, String productSyncUuid, {double? stock}) async {
+  /// كل دفعات المادة بترتيب خروجها، ومعها الباقي من كل منها الآن.
+  /// [stock]: رصيد مفترض بدل رصيد المادة الحالي. [policy]: بدل إعداد المتجر (للاختبار).
+  static Future<BatchSet> of(DatabaseExecutor d, String productSyncUuid,
+      {double? stock, BatchSalePolicy? policy}) async {
+    final pol = policy ?? await BatchSalePolicy.load();
     if (productSyncUuid.isEmpty || !await ready(d)) return BatchSet.empty;
     final rows = await d.rawQuery('''
       SELECT movement_uuid, delta, created_at, ${columns.join(', ')} FROM stock_movements
@@ -128,11 +166,24 @@ class ProductBatches {
     }
     DateTime dateOf(Map<String, Object?> r) =>
         DateTime.tryParse('${r['batch_date'] ?? ''}') ?? DateTime.tryParse('${r['created_at'] ?? ''}') ?? DateTime(2000);
-    // الأحدث أولاً للنسبة؛ التعادل بوقت التسجيل
-    final sorted = [...rows]..sort((a, b) {
-        final c = dateOf(b).compareTo(dateOf(a));
-        return c != 0 ? c : '${b['created_at']}'.compareTo('${a['created_at']}');
-      });
+    // الرصيد الحالي يُنسب أولاً للدفعة التي تخرج آخراً:
+    //   الأقدم أولاً ⇒ يبقى الأحدث؛ الأحدث أولاً ⇒ يبقى الأقدم؛ الأقرب انتهاءً ⇒ يبقى الأبعد انتهاءً
+    //   (الدفعة بلا صلاحية تُعدّ أبعدها). التعادل بتاريخ الشراء ثم وقت التسجيل.
+    final far = DateTime(9999);
+    DateTime expOf(Map<String, Object?> r) => DateTime.tryParse('${r['expiry_date'] ?? ''}') ?? far;
+    int byDate(Map<String, Object?> a, Map<String, Object?> b) {
+      final c = dateOf(a).compareTo(dateOf(b));
+      return c != 0 ? c : '${a['created_at']}'.compareTo('${b['created_at']}');
+    }
+
+    final sorted = [...rows]..sort((a, b) => switch (pol) {
+          BatchSalePolicy.fifo => byDate(b, a),
+          BatchSalePolicy.lifo => byDate(a, b),
+          BatchSalePolicy.fefo => () {
+              final c = expOf(b).compareTo(expOf(a));
+              return c != 0 ? c : byDate(b, a);
+            }(),
+        });
     final out = <StockBatch>[];
     for (final r in sorted) {
       final q = (r['delta'] as num).toDouble();
@@ -149,7 +200,8 @@ class ProductBatches {
         terms: t.isEmpty ? null : t,
       ));
     }
-    return BatchSet(out.reversed.toList(), left! > 0 ? left : 0.0); // الأقدم أولاً
+    // بترتيب الخروج
+    return BatchSet(out.reversed.toList(), left! > 0 ? left : 0.0, unbatchedFirst: pol != BatchSalePolicy.lifo);
   }
 
   /// يجعل تاريخ صلاحية المادة أقرب صلاحية بين دفعاتها التي بقي منها شيء.

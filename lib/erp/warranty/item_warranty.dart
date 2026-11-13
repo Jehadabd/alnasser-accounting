@@ -145,7 +145,8 @@ class ItemWarranty {
     try {
       final items = (await d.rawQuery('PRAGMA table_info(invoice_items)')).map((r) => r['name']).toSet();
       final products = (await d.rawQuery('PRAGMA table_info(products)')).map((r) => r['name']).toSet();
-      _colsReady = items.containsAll(const ['warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms']) &&
+      _colsReady = items.containsAll(
+              const ['warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms', 'batch_expiry']) &&
           products.containsAll(const ['warranty_spec', 'warranty_terms']);
     } catch (_) {
       _colsReady = false;
@@ -157,7 +158,15 @@ class ItemWarranty {
   static Future<List<Map<String, Object?>>> previousLines(DatabaseExecutor d, int invoiceId) async {
     if (!await _ready(d)) return const [];
     return d.query('invoice_items',
-        columns: ['unique_id', 'product_name', 'warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms'],
+        columns: [
+          'unique_id',
+          'product_name',
+          'warranty_spec',
+          'warranty_start',
+          'warranty_end',
+          'warranty_terms',
+          'batch_expiry',
+        ],
         where: 'invoice_id = ?',
         whereArgs: [invoiceId],
         orderBy: 'id');
@@ -216,6 +225,7 @@ class ItemWarranty {
         line['warranty_start'] = prev['warranty_start'];
         line['warranty_end'] = prev['warranty_end'];
         line['warranty_terms'] = prev['warranty_terms'];
+        line['batch_expiry'] = prev['batch_expiry'];
         continue;
       }
       final pid = (line['product_id'] as num?)?.toInt();
@@ -237,6 +247,9 @@ class ItemWarranty {
         spec = batch.warranty;
         terms = batch.terms ?? terms;
       }
+      // 📅 صلاحية القطعة المبيعة: صلاحية دفعتها؛ وبلا دفعة: صلاحية المادة (إن وُجدت)
+      final exp = batch?.expiry ?? (pid != null ? await _productExpiry(d, pid) : null);
+      line['batch_expiry'] = exp == null ? null : iso(exp);
 
       if (spec == null || spec.isNone) {
         line['warranty_spec'] = null;
@@ -268,6 +281,13 @@ class ItemWarranty {
       return large * (per > 0 ? per : 1);
     }
     return (line['quantity_individual'] as num?)?.toDouble() ?? 0;
+  }
+
+  static Future<DateTime?> _productExpiry(DatabaseExecutor d, int productId) async {
+    final r = await d.query('products',
+        columns: ['has_expiry', 'expiry_date'], where: 'id = ?', whereArgs: [productId], limit: 1);
+    if (r.isEmpty || (r.first['has_expiry'] as num?)?.toInt() != 1) return null;
+    return DateTime.tryParse('${r.first['expiry_date'] ?? ''}');
   }
 
   static Future<BatchSet> _batchesOf(DatabaseExecutor d, int productId) async {

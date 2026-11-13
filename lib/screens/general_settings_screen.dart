@@ -1,6 +1,7 @@
 import '../widgets/popup_screens.dart'; // 🪟
 import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
 import '../widgets/scan_settings_tile.dart'; // 🔫
+import '../widgets/batch_policy_tile.dart'; // 📅 أي دفعة تخرج أولاً
 import 'dart:io';
 import 'invoice_entry_layout_screen.dart'; // 🧩
 import 'package:flutter/material.dart';
@@ -2287,6 +2288,13 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             iconColor: const Color(0xFF4F46E5),
             title: 'قراءة الباركود (القارئ والكاميرا)',
             child: const ScanSettingsTile(),
+          ),
+          // 📅 الصلاحية والدفعات: أي دفعة تخرج أولاً عند البيع
+          _buildSettingsCard(
+            icon: Icons.event_repeat_rounded,
+            iconColor: const Color(0xFFB45309),
+            title: 'الصلاحية والدفعات عند البيع',
+            child: const BatchPolicyTile(),
           ),
           // 📦 واجهة إدخال البضاعة
           _buildSettingsCard(

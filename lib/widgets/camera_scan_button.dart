@@ -4,7 +4,9 @@
 // طريقة العمل من الإعدادات (ScanSettings.cameraMode):
 //   • ضغطة تشغيل وإيقاف: الكاميرا تبقى تقرأ كل ما يمر أمامها حتى يُضغط الزر مرة ثانية.
 //   • اضغط مع الاستمرار: تقرأ ما دام الإصبع على الزر.
-// الكاميرا في لوحة صغيرة أعلى الشاشة — الفاتورة تبقى ظاهرة، وكل مادة تُقرأ تظهر نتيجتها.
+// الكاميرا في مربع فوق الشاشة — الفاتورة تبقى ظاهرة، وكل مادة تُقرأ تظهر نتيجتها.
+// من الإعدادات (قراءة الباركود): حجم المربع ومكانه، وفتحه تلقائياً عند دخول شاشة البيع،
+// و«تمرير فقط» (تقرأ دون عرض صورتها). المربع يُسحب من شريطه العلوي إلى أي مكان.
 // الرمز نفسه لا يُقرأ مرتين خلال ثانية ونصف (وهو ما زال أمام الكاميرا).
 
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
@@ -32,6 +34,10 @@ class CameraScanButton extends StatefulWidget {
 class _CameraScanButtonState extends State<CameraScanButton> {
   OverlayEntry? _entry;
   CameraScanMode _mode = ScanSettings.current.cameraMode;
+  ScanSettings _s = ScanSettings.current;
+
+  /// إزاحة السحب (تبقى ما دامت الشاشة مفتوحة)
+  Offset _drag = Offset.zero;
 
   bool get _on => _entry != null;
 
@@ -39,7 +45,17 @@ class _CameraScanButtonState extends State<CameraScanButton> {
   void initState() {
     super.initState();
     ScanSettings.ensureLoaded().then((s) {
-      if (mounted) setState(() => _mode = s.cameraMode);
+      if (!mounted) return;
+      setState(() {
+        _s = s;
+        _mode = s.cameraMode;
+      });
+      // 📷 فتح المربع تلقائياً عند دخول شاشة البيع (وضع التشغيل والإيقاف فقط)
+      if (s.cameraAutoOpen && CameraScanButton.available && s.cameraMode == CameraScanMode.toggle) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _start();
+        });
+      }
     });
   }
 
@@ -54,16 +70,33 @@ class _CameraScanButtonState extends State<CameraScanButton> {
     if (_on) return;
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return;
-    final top = MediaQuery.paddingOf(context).top + kToolbarHeight + 6;
+    final pad = MediaQuery.paddingOf(context);
+    final size = _s.cameraBoxSize;
+    final pos = _s.cameraBoxPosition;
     _entry = OverlayEntry(
-      builder: (_) => Positioned(
-        top: top,
-        left: 12,
-        right: 12,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 460),
-            child: _CameraPanel(onCode: widget.onCode, hold: _mode == CameraScanMode.hold, onClose: _stop),
+      builder: (_) => Positioned.fill(
+        child: Padding(
+          // بعيداً عن شريط العنوان أعلى الشاشة وعن أزرار الحفظ أسفلها
+          padding: EdgeInsets.fromLTRB(12, pad.top + kToolbarHeight + 6, 12, pad.bottom + 72),
+          child: Align(
+            alignment: Alignment(pos.x, pos.y),
+            child: Transform.translate(
+              offset: _drag,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: size.maxWidth),
+                child: _CameraPanel(
+                  onCode: widget.onCode,
+                  hold: _mode == CameraScanMode.hold,
+                  onClose: _stop,
+                  previewHeight: size.previewHeight,
+                  hidePreview: _s.cameraHidePreview,
+                  onDrag: (d) {
+                    _drag += d;
+                    _entry?.markNeedsBuild();
+                  },
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -118,10 +151,20 @@ class _CameraScanButtonState extends State<CameraScanButton> {
 }
 
 class _CameraPanel extends StatefulWidget {
-  const _CameraPanel({required this.onCode, required this.hold, required this.onClose});
+  const _CameraPanel({
+    required this.onCode,
+    required this.hold,
+    required this.onClose,
+    this.previewHeight = 170,
+    this.hidePreview = false,
+    this.onDrag,
+  });
   final ScanHandler onCode;
   final bool hold;
   final VoidCallback onClose;
+  final double previewHeight;
+  final bool hidePreview;
+  final ValueChanged<Offset>? onDrag;
 
   @override
   State<_CameraPanel> createState() => _CameraPanelState();
@@ -135,6 +178,7 @@ class _CameraPanelState extends State<_CameraPanel> {
   int _ok = 0;
   String? _last;
   bool _lastOk = true;
+  late bool _hidden = widget.hidePreview; // «تمرير فقط»: تقرأ دون عرض الصورة
 
   @override
   void dispose() {
@@ -198,9 +242,17 @@ class _CameraPanelState extends State<_CameraPanel> {
       child: Directionality(
         textDirection: TextDirection.rtl,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Padding(
+          GestureDetector(
+            // ✋ اسحب المربع من شريطه إلى أي مكان
+            onPanUpdate: widget.onDrag == null ? null : (d) => widget.onDrag!(d.delta),
+            child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 4, 2),
             child: Row(children: [
+              if (widget.onDrag != null)
+                const Padding(
+                  padding: EdgeInsetsDirectional.only(end: 4),
+                  child: Icon(Icons.drag_indicator_rounded, color: Colors.white38, size: 18),
+                ),
               const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF818CF8), size: 20),
               const SizedBox(width: 8),
               Expanded(
@@ -210,6 +262,13 @@ class _CameraPanelState extends State<_CameraPanel> {
                       : (_ok == 0 ? 'وجّه الكاميرا نحو الباركود' : 'أُضيف $_ok — يستمر حتى تُوقفه'),
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13.5),
                 ),
+              ),
+              IconButton(
+                tooltip: _hidden ? 'إظهار صورة الكاميرا' : 'تمرير فقط (إخفاء الصورة)',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(_hidden ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                    color: Colors.white60, size: 20),
+                onPressed: () => setState(() => _hidden = !_hidden),
               ),
               IconButton(
                 tooltip: 'الفلاش',
@@ -230,8 +289,11 @@ class _CameraPanelState extends State<_CameraPanel> {
                 ),
             ]),
           ),
-          SizedBox(
-            height: 170,
+          ),
+          // «تمرير فقط»: الكاميرا تبقى تعمل بمعاينة بارتفاع 2 بكسل (لا تُرى) وتقرأ ما يمر أمامها
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            height: _hidden ? 2 : widget.previewHeight,
             child: Stack(fit: StackFit.expand, children: [
               MobileScanner(
                 controller: _controller,
@@ -244,11 +306,12 @@ class _CameraPanelState extends State<_CameraPanel> {
                   ),
                 ),
               ),
+              if (!_hidden)
               IgnorePointer(
                 child: Center(
                   child: Container(
-                    width: 230,
-                    height: 110,
+                    width: widget.previewHeight * 1.35,
+                    height: widget.previewHeight * 0.65,
                     decoration: BoxDecoration(
                       border: Border.all(color: const Color(0xFF34D399), width: 2.5),
                       borderRadius: BorderRadius.circular(12),

@@ -87,6 +87,57 @@ class _ScanSettingsTileState extends State<ScanSettingsTile> {
     await ScanSettings.save(s);
   }
 
+  /// 📍 ستة مواضع على شكل شاشة مصغّرة: اضغط المكان.
+  Widget _positionPicker() {
+    Widget cell(CameraBoxPosition p) {
+      final on = _s.cameraBoxPosition == p;
+      return Expanded(
+        child: Tooltip(
+          message: p.label,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _save(_s.copyWith(cameraBoxPosition: p)),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              height: 34,
+              margin: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: on ? const Color(0xFF4F46E5) : const Color(0xFFEEF2FF),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.photo_camera_rounded, size: 16, color: on ? Colors.white : const Color(0xFF94A3B8)),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 300),
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFCBD5E1), width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Directionality(
+        textDirection: TextDirection.ltr, // الخلايا بمواضعها الحقيقية على الشاشة
+        child: Column(children: [
+          Row(children: [
+            cell(CameraBoxPosition.topLeft),
+            cell(CameraBoxPosition.topCenter),
+            cell(CameraBoxPosition.topRight),
+          ]),
+          const SizedBox(height: 26),
+          Row(children: [
+            cell(CameraBoxPosition.bottomLeft),
+            cell(CameraBoxPosition.bottomCenter),
+            cell(CameraBoxPosition.bottomRight),
+          ]),
+        ]),
+      ),
+    );
+  }
+
   static const _bold = TextStyle(fontWeight: FontWeight.bold, fontSize: 14);
   static const _small = TextStyle(fontSize: 12, height: 1.45);
 
@@ -137,6 +188,40 @@ class _ScanSettingsTileState extends State<ScanSettingsTile> {
             ),
         ]),
       ),
+      // 📷 مربع الكاميرا في شاشات البيع
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('فتح مربع الكاميرا تلقائياً في الكاشير والفاتورة', style: _bold),
+        subtitle: const Text(
+            'يظهر المربع عند دخول شاشة البيع ويبقى يقرأ كل ما يمر أمامه ويضيفه إلى الفاتورة، '
+            'حتى تغلقه من زره. يعمل مع «ضغطة تشغيل وإيقاف».',
+            style: _small),
+        value: _s.cameraAutoOpen,
+        onChanged: _s.cameraMode == CameraScanMode.toggle ? (v) => _save(_s.copyWith(cameraAutoOpen: v)) : null,
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('تمرير فقط (إخفاء صورة الكاميرا)', style: _bold),
+        subtitle: const Text(
+            'الكاميرا تقرأ دون عرض ما تراه: شريط صغير يبيّن أنها تعمل وما أُضيف. '
+            'يُبدَّل من زر العين في المربع نفسه.',
+            style: _small),
+        value: _s.cameraHidePreview,
+        onChanged: (v) => _save(_s.copyWith(cameraHidePreview: v)),
+      ),
+      const SizedBox(height: 6),
+      const Text('حجم المربع', style: TextStyle(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      SegmentedButton<CameraBoxSize>(
+        segments: [for (final v in CameraBoxSize.values) ButtonSegment(value: v, label: Text(v.label))],
+        selected: {_s.cameraBoxSize},
+        showSelectedIcon: false,
+        onSelectionChanged: (v) => _save(_s.copyWith(cameraBoxSize: v.first)),
+      ),
+      const SizedBox(height: 10),
+      const Text('مكان المربع (ويُسحب من شريطه إلى أي مكان أثناء العمل)', style: TextStyle(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      _positionPicker(),
       const Divider(height: 22),
       const Text('تجربة القارئ', style: _bold),
       const SizedBox(height: 6),

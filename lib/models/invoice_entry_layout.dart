@@ -30,7 +30,7 @@ class InvoiceEntryLayout {
   /// ترتيب الأعمدة كما تظهر (من اليمين)
   static const List<String> keys = [
     'index', 'code', 'itemCode', 'barcode', 'details', 'qty', 'saleType', 'price', 'listPrice', 'discount', 'units', 'total',
-    'warranty', 'stock', 'cost', 'profit',
+    'warranty', 'expiry', 'stock', 'cost', 'profit',
   ];
 
   static const Map<String, String> labels = {
@@ -47,6 +47,7 @@ class InvoiceEntryLayout {
     'units': 'عدد القطع في الوحدة',
     'total': 'الإجمالي',
     'warranty': 'الضمان حتى (يُثبَّت عند الحفظ)',
+    'expiry': 'تاريخ الصلاحية (من دفعة القطعة)',
     'stock': 'الرصيد في المخزن',
     'cost': 'الكلفة',
     'profit': 'الربح',
@@ -66,6 +67,7 @@ class InvoiceEntryLayout {
     'units': 'قطع',
     'total': 'الإجمالي',
     'warranty': 'الضمان حتى',
+    'expiry': 'الصلاحية',
     'stock': 'الرصيد',
     'cost': 'الكلفة',
     'profit': 'الربح',
@@ -86,16 +88,17 @@ class InvoiceEntryLayout {
     'units': 56,
     'total': 120,
     'warranty': 104,
+    'expiry': 92,
     'stock': 80,
     'cost': 96,
     'profit': 96,
   };
 
   /// المخفية افتراضياً (يظهرها المستخدم من الإعدادات)
-  static const Set<String> defaultHidden = {'code', 'itemCode', 'barcode', 'listPrice', 'stock', 'cost', 'profit'};
+  static const Set<String> defaultHidden = {'code', 'itemCode', 'barcode', 'listPrice', 'expiry', 'stock', 'cost', 'profit'};
 
   /// أعمدة أُضيفت بعد أن حفظ المستخدمون تخطيطهم: تبقى مخفية عندهم حتى يُظهروها
-  static const Set<String> addedLater = {'itemCode', 'barcode'};
+  static const Set<String> addedLater = {'itemCode', 'barcode', 'expiry'};
 
   /// أعمدة ضرورية لإدخال السطر (لا تُخفى)
   static const Set<String> required = {'details', 'qty', 'saleType', 'price', 'total'};

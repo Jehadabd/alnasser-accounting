@@ -6766,6 +6766,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         warrantyStart: null,
         warrantyEnd: null,
         warrantyTerms: null,
+        batchExpiry: null,
       );
       // مزامنة خانة التفاصيل والسعر فوراً
       _detailsController?.text = prod.name;
@@ -7247,6 +7248,29 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                   message: 'ضمان ${spec.label} ${spec.basisLabel} — يُثبَّت عند حفظ الفاتورة',
                   child: Text(preview,
                       style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey.shade700)),
+                );
+              }),
+            )),
+            // 📅 الصلاحية: المثبَّتة على السطر المحفوظ (من دفعته)، أو أقرب صلاحية للمادة قبل الحفظ
+            _cell('expiry', Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: gridBorderColor, width: gridW)),
+              ),
+              child: Builder(builder: (context) {
+                final it = widget.isViewOnly ? widget.item : _currentItem;
+                final saved = DateTime.tryParse(it.batchExpiry ?? '');
+                final d = saved ?? (_rowProduct?.hasExpiry == true ? _rowProduct?.expiryDate : null);
+                if (d == null) return const SizedBox.shrink();
+                final soon = d.difference(DateTime.now()).inDays <= 30;
+                return Tooltip(
+                  message: saved != null ? 'صلاحية القطعة المبيعة (مثبَّتة على الفاتورة)' : 'أقرب صلاحية في المخزن',
+                  child: Text(InvoiceItem.expiryText(d),
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          fontStyle: saved != null ? FontStyle.normal : FontStyle.italic,
+                          color: soon ? Colors.red.shade700 : Colors.blueGrey.shade800)),
                 );
               }),
             )),

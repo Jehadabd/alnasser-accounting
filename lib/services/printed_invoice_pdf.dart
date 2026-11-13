@@ -315,7 +315,9 @@ class PrintedInvoicePdf {
         }
         return _dataCell('', font);
       case 'expiry':
-        // 📅 تاريخ الانتهاء نفسه (كان يطبع «له»)
+        // 📅 صلاحية القطعة المبيعة (من دفعتها، مثبَّتة على السطر)؛ وإلا صلاحية المادة
+        final lineExp = DateTime.tryParse(item.batchExpiry ?? '');
+        if (lineExp != null) return _dataCell(InvoiceItem.expiryText(lineExp), font);
         if (product?.hasExpiry == true) {
           final t = InvoiceItem.expiryText(product?.expiryDate);
           return _dataCell(t.isEmpty ? 'له' : t, font);

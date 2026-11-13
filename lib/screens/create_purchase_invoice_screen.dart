@@ -1024,122 +1024,46 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     for (final p in _products) {
       if (p.id == item.productId) product = p;
     }
-    final updated = await BatchDetailsDialog.edit(context, item: item, product: product, purchaseDate: _invoiceDate);
-    if (updated == null || !mounted || index >= _items.length) return;
-    setState(() => _items[index] = updated);
+    await _askBatch(index, product, isNew: false, force: true);
   }
 
-  Future<void> _defineNewProduct(PurchaseInvoiceItem item, int index) async {
-    // Open the Quick Dialog
-    showDialog(
-      context: context,
-      builder: (context) => QuickProductCreationDialog(
-        existingProducts: _products,
-        // Pre-fill parameters
-        initialName: item.productName,
-        initialCost: item.unitPrice, 
-        initialUnit: item.unitName,
-        initialQty: item.quantity,
-        onProductSelected: (product, quantity, price, unit) {
-           // This callback is called when user clicks "Add" in the dialog
-           setState(() {
-              // 1. Add to products list if new (handled by dialog internally mostly, but we need to refresh _products)
-              
-              bool exists = _products.any((p) => p.id == product.id);
-              if (!exists) {
-                // If ID is created by dialog, adding it here allows Dropdowns to work
-                _products.add(product);
-              }
-              
-              // 2. Update the invoice item
-              //    🛡️ معامل التحويل من هرم وحدات المادة (كان ثابتاً 1.0 ⇒ شراء
-              //    «كرتون» يُدخل للمخزون قطعة واحدة بكلفة الكرتون كاملة)
-              // 🧠 مادة جديدة من فاتورة مورد مقروءة بالذكاء الاصطناعي: نتعلّم اسمها الأصلي
-              final aiOriginal = widget.aiPrefill?.originalNames[item.productName ?? ''];
-              final newId = product.id;
-              if (aiOriginal != null && newId != null && newId > 0) {
-                AiAliasStore.learn(
-                  supplierId: _selectedSupplier?.id,
-                  alias: aiOriginal,
-                  productId: newId,
-                  productName: product.name,
-                ).catchError((_) {});
-              }
-              if (index < _items.length) {
-                _items[index] = PurchaseInvoiceItem(
-                  productId: product.id ?? -1,
-                  productName: product.name,
-                  quantity: quantity,
-                  unitPrice: price,
-                  totalPrice: quantity * price,
-                  unitName: unit,
-                  conversionFactor: _conversionFactorFor(product, unit),
-                );
-              }
-              _syncCashPaid();
-           });
-           ScaffoldMessenger.of(this.context).showSnackBar(
-             const SnackBar(content: Text('تم تعريف المنتج بنجاح')),
-           );
-        },
-      ),
-    );
-  }
-
-  void _showAddProductDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => QuickProductCreationDialog(
-        existingProducts: _products,
-        onProductSelected: (product, quantity, price, unit) async {
-          // Calculate Conversion Factor from Unit Hierarchy
-          final double factor = _conversionFactorFor(product, unit);
-
-          // Handle New Product Creation
-          if (product.id == null || product.id == -1) {
-             final dbService = DatabaseService();
-             try {
-               final newId = await dbService.insertProduct(product);
-               product = product.copyWith(id: newId);
-               if (!mounted) return;
-               setState(() {
-                 _products.add(product);
-               });
-             } catch (e) {
-               if (!mounted) return;
-               ScaffoldMessenger.of(this.context).showSnackBar(
-                 SnackBar(content: Text('فشل إنشاء المنتج الجديد: $e')),
-               );
-               return;
-             }
-          }
-          if (!mounted) return;
-          
-          setState(() {
-            // DEBUG: Print conversion factor and base values
-            debugPrint('📦 PURCHASE_DEBUG: Adding item ${product.name}');
-            debugPrint('📦 PURCHASE_DEBUG: Unit selected: $unit');
-            debugPrint('📦 PURCHASE_DEBUG: Quantity: $quantity');
-            debugPrint('📦 PURCHASE_DEBUG: Unit Price: $price');
-            debugPrint('📦 PURCHASE_DEBUG: Conversion Factor: $factor');
-            debugPrint('📦 PURCHASE_DEBUG: Base Quantity: ${quantity * factor}');
-            debugPrint('📦 PURCHASE_DEBUG: Base Unit Cost: ${price / factor}');
-            
-            _items.add(PurchaseInvoiceItem(
-              productId: product.id!,
-              productName: product.name,
-              quantity: quantity,
-              unitPrice: price,
-              totalPrice: quantity * price,
-              unitName: unit,
-              // baseUnitCost: price / factor, // (implicit via getter)
-              conversionFactor: factor,
-            ));
-            _syncCashPaid();
-          });
-        },
-      ),
-    );
+  /// 📦 بعد إضافة سطر: لمادة جديدة يسأل عن الوزن والضمان والصلاحية، ولمادة لها ضمان أو
+  /// صلاحية يقترح إعداداتها ويطلب صلاحية هذه الدفعة. [force]: من زر السطر.
+  Future<void> _askBatch(int index, Product? product, {required bool isNew, bool force = false}) async {
+    if (!mounted || index < 0 || index >= _items.length) return;
+    if (!force && !BatchDetailsDialog.shouldAsk(product, isNew: isNew)) return;
+    final r = await BatchDetailsDialog.edit(context,
+        item: _items[index], product: product, purchaseDate: _invoiceDate, isNewProduct: isNew);
+    if (r == null || !mounted || index >= _items.length) return;
+    setState(() => _items[index] = r.item);
+    // ⚖️ الوزن صفة للمادة؛ وأول ضمان/صلاحية تُدخل لمادة تصير إعدادها الافتراضي (فتقترحها
+    //    فواتير الشراء التالية ويسأل عنها). الدفعات السابقة لا تتغير.
+    final kg = r.weightKg;
+    final newSpec = r.item.warrantySpec;
+    final pid = product?.id;
+    if (pid == null || pid <= 0) return;
+    final setWeight = kg != null && (product!.baseWeight ?? 0) != kg;
+    final setWarranty = newSpec != null && (product!.warrantySpec ?? '').trim().isEmpty;
+    final setExpiryFlag = r.item.expiryDate != null && !product!.hasExpiry;
+    if (!setWeight && !setWarranty && !setExpiryFlag) return;
+    try {
+      final cur = await DatabaseService().getProductById(pid);
+      if (cur == null) return;
+      final upd = cur.copyWith(
+        baseWeight: setWeight ? kg : null,
+        warrantySpec: setWarranty ? newSpec : null,
+        warrantyTerms: setWarranty ? (r.item.warrantyTerms ?? '') : null,
+        hasExpiry: setExpiryFlag ? true : null,
+        lastModifiedAt: DateTime.now(),
+      );
+      await DatabaseService().updateProduct(upd);
+      final i = _products.indexWhere((p) => p.id == upd.id);
+      if (i >= 0 && mounted) setState(() => _products[i] = upd);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذّر حفظ صفات المادة: $e')));
+      }
+    }
   }
 
   /// كم وحدة أساسية في الوحدة المشتراة (كرتون = 24 قطعة مثلاً) من هرم وحدات المادة.

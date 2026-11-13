@@ -72,6 +72,7 @@ class InvoiceItem {
   String? warrantyStart;
   String? warrantyEnd;
   String? warrantyTerms; // شروط الضمان كما كانت يوم البيع
+  String? batchExpiry; // 📅 صلاحية القطعة المبيعة «yyyy-MM-dd» (من دفعتها) — مثبَّتة عند البيع
 
   bool get hasWarranty => (warrantyEnd ?? '').isNotEmpty;
 
@@ -152,6 +153,7 @@ class InvoiceItem {
     this.warrantyStart,
     this.warrantyEnd,
     this.warrantyTerms,
+    this.batchExpiry,
   })  : unitPriceCents = unitPriceCents ?? (unitPrice * 100).round(),
         // 💵 السطر لأقرب دينار (النصف للأعلى)، ثم السعر صحيحاً إن طابقه
         appliedPriceCents = _iqdPriceCents(
@@ -222,6 +224,7 @@ class InvoiceItem {
       if (warrantyEnd != null) 'warranty_start': warrantyStart,
       if (warrantyEnd != null) 'warranty_end': warrantyEnd,
       if (warrantyEnd != null) 'warranty_terms': warrantyTerms,
+      if (batchExpiry != null) 'batch_expiry': batchExpiry,
     };
   }
 
@@ -298,6 +301,7 @@ class InvoiceItem {
       warrantyStart: map['warranty_start'] as String?,
       warrantyEnd: map['warranty_end'] as String?,
       warrantyTerms: map['warranty_terms'] as String?,
+      batchExpiry: map['batch_expiry'] as String?,
     );
   }
 
@@ -330,6 +334,7 @@ class InvoiceItem {
     Object? warrantyStart = _sentinel,
     Object? warrantyEnd = _sentinel,
     Object? warrantyTerms = _sentinel,
+    Object? batchExpiry = _sentinel,
   }) {
     return InvoiceItem(
       id: id ?? this.id,
@@ -361,6 +366,7 @@ class InvoiceItem {
       warrantyStart: warrantyStart == _sentinel ? this.warrantyStart : warrantyStart as String?,
       warrantyEnd: warrantyEnd == _sentinel ? this.warrantyEnd : warrantyEnd as String?,
       warrantyTerms: warrantyTerms == _sentinel ? this.warrantyTerms : warrantyTerms as String?,
+      batchExpiry: batchExpiry == _sentinel ? this.batchExpiry : batchExpiry as String?,
     );
   }
 }

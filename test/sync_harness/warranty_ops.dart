@@ -392,6 +392,17 @@ Future<Map<String, Object?>> warrantyBatchScenario(Database db, String prod) asy
 
   eq('صلاحية المادة = أقرب دفعة باقية', await productExpiry(), iso(e1));
 
+  // 🔀 ترتيب الخروج حسب الإعداد (الرصيد 5: الأولى 3 والثانية 2)
+  for (final (pol, want) in [
+    (BatchSalePolicy.fefo, iso(e1)), // الأقرب انتهاءً: الأولى
+    (BatchSalePolicy.fifo, iso(e1)), // الأقدم شراءً: الأولى
+    (BatchSalePolicy.lifo, iso(e2)), // الأحدث شراءً: الثانية
+  ]) {
+    final first = (await ProductBatches.of(db, prod, policy: pol)).at(0);
+    eq('أول ما يخرج (${pol.label})', first?.expiry == null ? null : iso(first!.expiry!), want);
+  }
+  await BatchSalePolicy.save(BatchSalePolicy.fefo);
+
   // ── البيع بالكاشير: الأقدم يخرج أولاً ──
   Future<List<Map<String, Object?>>> sell(double qty) async {
     final id = await DatabaseService().createPosInvoice(
@@ -413,13 +424,14 @@ Future<Map<String, Object?>> warrantyBatchScenario(Database db, String prod) asy
       paidAmount: qty * 1000,
     );
     return db.query('invoice_items',
-        columns: ['warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms'],
+        columns: ['warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms', 'batch_expiry'],
         where: 'invoice_id = ?',
         whereArgs: [id],
         orderBy: 'id');
   }
 
-  void lineIs(String label, List<Map<String, Object?>> ls, WarrantySpec? s, DateTime start, String? terms) {
+  void lineIs(String label, List<Map<String, Object?>> ls, WarrantySpec? s, DateTime start, String? terms,
+      {DateTime? expiry}) {
     if (ls.length != 1) {
       fails.add('$label: ${ls.length} سطر');
       return;
@@ -429,15 +441,16 @@ Future<Map<String, Object?>> warrantyBatchScenario(Database db, String prod) asy
     eq('$label: البداية', l['warranty_start'], s == null ? null : iso(start));
     eq('$label: النهاية', l['warranty_end'], s == null ? null : iso(s.endFrom(start)));
     eq('$label: الشروط', l['warranty_terms'], terms);
+    if (expiry != null) eq('$label: الصلاحية', l['batch_expiry'], iso(expiry));
   }
 
-  lineIs('بيع 2 (من الدفعة الأولى)', await sell(2), y1p, d1, t1);
-  lineIs('بيع 1 (آخر قطعة من الأولى)', await sell(1), y1p, d1, t1);
+  lineIs('بيع 2 (من الدفعة الأولى)', await sell(2), y1p, d1, t1, expiry: e1);
+  lineIs('بيع 1 (آخر قطعة من الأولى)', await sell(1), y1p, d1, t1, expiry: e1);
   eq('صلاحية المادة بعد نفاد الأولى', await (() async {
     await ProductBatches.refreshExpiry(db, productSyncUuid: prod);
     return productExpiry();
   })(), iso(e2));
-  lineIs('بيع 1 (من الدفعة الثانية، ضمانها من البيع)', await sell(1), m6, t0, t2);
+  lineIs('بيع 1 (من الدفعة الثانية، ضمانها من البيع)', await sell(1), m6, t0, t2, expiry: e2);
 
   // ── سطران في فاتورة واحدة: الأول يأخذ آخر قطعة من الثانية، والثاني «بلا دفعة» ⇒ ضمان المادة (لا شيء) ──
   final two = <Map<String, dynamic>>[
