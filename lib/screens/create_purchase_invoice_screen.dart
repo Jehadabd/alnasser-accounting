@@ -1040,11 +1040,12 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     //    فواتير الشراء التالية ويسأل عنها). الدفعات السابقة لا تتغير.
     final kg = r.weightKg;
     final newSpec = r.item.warrantySpec;
-    final pid = product?.id;
-    if (pid == null || pid <= 0) return;
-    final setWeight = kg != null && (product!.baseWeight ?? 0) != kg;
-    final setWarranty = newSpec != null && (product!.warrantySpec ?? '').trim().isEmpty;
-    final setExpiryFlag = r.item.expiryDate != null && !product!.hasExpiry;
+    final p = product;
+    final pid = p?.id;
+    if (p == null || pid == null || pid <= 0) return;
+    final setWeight = kg != null && (p.baseWeight ?? 0) != kg;
+    final setWarranty = newSpec != null && (p.warrantySpec ?? '').trim().isEmpty;
+    final setExpiryFlag = r.item.expiryDate != null && !p.hasExpiry;
     if (!setWeight && !setWarranty && !setExpiryFlag) return;
     try {
       final cur = await DatabaseService().getProductById(pid);
@@ -1057,13 +1058,134 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         lastModifiedAt: DateTime.now(),
       );
       await DatabaseService().updateProduct(upd);
-      final i = _products.indexWhere((p) => p.id == upd.id);
+      final i = _products.indexWhere((x) => x.id == upd.id);
       if (i >= 0 && mounted) setState(() => _products[i] = upd);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذّر حفظ صفات المادة: $e')));
       }
     }
+  }
+
+  Future<void> _defineNewProduct(PurchaseInvoiceItem item, int index) async {
+    // Open the Quick Dialog
+    showDialog(
+      context: context,
+      builder: (context) => QuickProductCreationDialog(
+        existingProducts: _products,
+        // Pre-fill parameters
+        initialName: item.productName,
+        initialCost: item.unitPrice, 
+        initialUnit: item.unitName,
+        initialQty: item.quantity,
+        onProductSelected: (product, quantity, price, unit) {
+           // This callback is called when user clicks "Add" in the dialog
+           final wasKnown = _products.any((p) => p.id == product.id && (p.id ?? -1) > 0);
+           setState(() {
+              // 1. Add to products list if new (handled by dialog internally mostly, but we need to refresh _products)
+              
+              bool exists = _products.any((p) => p.id == product.id);
+              if (!exists) {
+                // If ID is created by dialog, adding it here allows Dropdowns to work
+                _products.add(product);
+              }
+              
+              // 2. Update the invoice item
+              //    🛡️ معامل التحويل من هرم وحدات المادة (كان ثابتاً 1.0 ⇒ شراء
+              //    «كرتون» يُدخل للمخزون قطعة واحدة بكلفة الكرتون كاملة)
+              // 🧠 مادة جديدة من فاتورة مورد مقروءة بالذكاء الاصطناعي: نتعلّم اسمها الأصلي
+              final aiOriginal = widget.aiPrefill?.originalNames[item.productName ?? ''];
+              final newId = product.id;
+              if (aiOriginal != null && newId != null && newId > 0) {
+                AiAliasStore.learn(
+                  supplierId: _selectedSupplier?.id,
+                  alias: aiOriginal,
+                  productId: newId,
+                  productName: product.name,
+                ).catchError((_) {});
+              }
+              if (index < _items.length) {
+                _items[index] = PurchaseInvoiceItem(
+                  productId: product.id ?? -1,
+                  productName: product.name,
+                  quantity: quantity,
+                  unitPrice: price,
+                  totalPrice: quantity * price,
+                  unitName: unit,
+                  conversionFactor: _conversionFactorFor(product, unit),
+                );
+              }
+              _syncCashPaid();
+           });
+           // 📦 مادة عُرّفت الآن: هل لها وزن أو ضمان أو صلاحية؟
+           WidgetsBinding.instance.addPostFrameCallback((_) => _askBatch(index, product, isNew: !wasKnown));
+           ScaffoldMessenger.of(this.context).showSnackBar(
+             const SnackBar(content: Text('تم تعريف المنتج بنجاح')),
+           );
+        },
+      ),
+    );
+  }
+
+  void _showAddProductDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => QuickProductCreationDialog(
+        existingProducts: _products,
+        onProductSelected: (product, quantity, price, unit) async {
+          // Calculate Conversion Factor from Unit Hierarchy
+          final double factor = _conversionFactorFor(product, unit);
+
+          // Handle New Product Creation
+          final isNewProduct = product.id == null || product.id == -1;
+          if (isNewProduct) {
+             final dbService = DatabaseService();
+             try {
+               final newId = await dbService.insertProduct(product);
+               product = product.copyWith(id: newId);
+               if (!mounted) return;
+               setState(() {
+                 _products.add(product);
+               });
+             } catch (e) {
+               if (!mounted) return;
+               ScaffoldMessenger.of(this.context).showSnackBar(
+                 SnackBar(content: Text('فشل إنشاء المنتج الجديد: $e')),
+               );
+               return;
+             }
+          }
+          if (!mounted) return;
+          
+          setState(() {
+            // DEBUG: Print conversion factor and base values
+            debugPrint('📦 PURCHASE_DEBUG: Adding item ${product.name}');
+            debugPrint('📦 PURCHASE_DEBUG: Unit selected: $unit');
+            debugPrint('📦 PURCHASE_DEBUG: Quantity: $quantity');
+            debugPrint('📦 PURCHASE_DEBUG: Unit Price: $price');
+            debugPrint('📦 PURCHASE_DEBUG: Conversion Factor: $factor');
+            debugPrint('📦 PURCHASE_DEBUG: Base Quantity: ${quantity * factor}');
+            debugPrint('📦 PURCHASE_DEBUG: Base Unit Cost: ${price / factor}');
+            
+            _items.add(PurchaseInvoiceItem(
+              productId: product.id!,
+              productName: product.name,
+              quantity: quantity,
+              unitPrice: price,
+              totalPrice: quantity * price,
+              unitName: unit,
+              // baseUnitCost: price / factor, // (implicit via getter)
+              conversionFactor: factor,
+            ));
+            _syncCashPaid();
+          });
+          // 📦 مادة جديدة ⇒ يسأل عن الوزن والضمان والصلاحية؛ مادة لها ضمان/صلاحية ⇒ صلاحية هذه الدفعة
+          final added = _items.length - 1;
+          final addedProduct = product;
+          WidgetsBinding.instance.addPostFrameCallback((_) => _askBatch(added, addedProduct, isNew: isNewProduct));
+        },
+      ),
+    );
   }
 
   /// كم وحدة أساسية في الوحدة المشتراة (كرتون = 24 قطعة مثلاً) من هرم وحدات المادة.

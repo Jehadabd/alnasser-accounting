@@ -293,7 +293,7 @@ class ItemWarranty {
   static Future<BatchSet> _batchesOf(DatabaseExecutor d, int productId) async {
     final r = await d.query('products', columns: ['sync_uuid'], where: 'id = ?', whereArgs: [productId], limit: 1);
     final u = r.isEmpty ? '' : '${r.first['sync_uuid'] ?? ''}';
-    return u.isEmpty ? BatchSet.empty : ProductBatches.of(d, u);
+    return u.isEmpty ? BatchSet.empty : await ProductBatches.of(d, u);
   }
 
   /// مدة ضمان المادة وشروطه (الشروط null إن كانت فارغة).
