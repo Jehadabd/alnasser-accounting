@@ -490,6 +490,7 @@ class POSProvider extends ChangeNotifier {
               warrantySpec: w?.warrantySpec,
               warrantyStart: w?.warrantyStart,
               warrantyEnd: w?.warrantyEnd,
+              warrantyTerms: w?.warrantyTerms,
             );
           }).toList();
           

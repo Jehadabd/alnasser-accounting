@@ -20,6 +20,7 @@ import 'pdf_header.dart';
 import 'product_codes.dart';
 import '../models/invoice_design_settings.dart' show InvoiceColumnConfig; // 🛡️ أعمدة الضمان
 import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر
+import 'invoice_extras_pdf.dart'; // ⚖️🛡️ وزن الفاتورة وشروط الضمان
 
 String _pid5(int? id) {
   if (id == null) return '-----';
@@ -308,14 +309,16 @@ class PrintedInvoicePdf {
       case 'weight':
         final weight = product?.baseWeight;
         if (weight != null && weight > 0) {
-          final totalWeight = weight * quantity;
+          // ⚖️ بالوحدة الأساسية: الكرتون × عدد قطعه (كان يضرب في عدد الكراتين)
+          final totalWeight = weight * item.baseQuantity;
           return _dataCell('${formatNumber(totalWeight, forceDecimal: true)} كغ', font);
         }
         return _dataCell('', font);
       case 'expiry':
-        // عرض "له صلاحية" بدلاً من علامة لتجنب مشكلة الخط
+        // 📅 تاريخ الانتهاء نفسه (كان يطبع «له»)
         if (product?.hasExpiry == true) {
-          return _dataCell('له', font);
+          final t = InvoiceItem.expiryText(product?.expiryDate);
+          return _dataCell(t.isEmpty ? 'له' : t, font);
         }
         return _dataCell('', font);
       case ItemWarranty.colPeriod:
@@ -380,14 +383,16 @@ class PrintedInvoicePdf {
       case 'weight':
         final weight = product?.baseWeight;
         if (weight != null && weight > 0) {
-          final totalWeight = weight * qty;
+          final per = a.unitsInLargeUnit ?? 0;
+          final totalWeight = weight * (per > 0 ? qty * per : qty); // ⚖️ بالوحدة الأساسية
           return _dataCell('${formatNumber(totalWeight, forceDecimal: true)} كغ', font);
         }
         return _dataCell('', font);
       case 'expiry':
-        // عرض "له" بدلاً من علامة لتجنب مشكلة الخط
+        // 📅 تاريخ الانتهاء نفسه (كان يطبع «له»)
         if (product?.hasExpiry == true) {
-          return _dataCell('له', font);
+          final t = InvoiceItem.expiryText(product?.expiryDate);
+          return _dataCell(t.isEmpty ? 'له' : t, font);
         }
         return _dataCell('', font);
       default:
@@ -477,6 +482,8 @@ class PrintedInvoicePdf {
                           appSettings: appSettings,
                         ),
                         pw.Divider(height: 4, thickness: 0.4),
+                        // ⚖️🛡️ وزن الفاتورة وشروط الضمان تحت آخر بند (الصفحة الأخيرة)
+                        if (isLast) ...InvoiceExtrasPdf.block(itemsForPdf, allProducts, font),
                         if (isLast && !deferSummary) ...[
                           if (invoiceToManage != null &&
                               invoiceToManage.id != null &&

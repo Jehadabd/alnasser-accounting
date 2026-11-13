@@ -638,6 +638,9 @@ class ErpSchema {
     ['invoice_items', 'warranty_spec', 'TEXT'],
     ['invoice_items', 'warranty_start', 'TEXT'],
     ['invoice_items', 'warranty_end', 'TEXT'],
+    // 🛡️ شروط الضمان («لا يشمل الكسر والماء»): على المادة، ومثبَّتة على السطر مع ضمانه
+    ['products', 'warranty_terms', 'TEXT'],
+    ['invoice_items', 'warranty_terms', 'TEXT'],
   ];
 
   /// حسابات يحتاجها النظام الجديد: [المفتاح، الاسم، رمز مفضّل، رمز الأب، النوع، مراقبة؟]

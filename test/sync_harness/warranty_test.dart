@@ -56,7 +56,7 @@ void main() {
       final exp = ((r['expA'] as List?) ?? const []).cast<Map>();
       if (invA != null && exp.length == 2) {
         final rows = (await h.d('D2').call('sqlRaw', {
-          'sql': 'SELECT it.warranty_spec AS s, it.warranty_end AS e FROM invoice_items it '
+          'sql': 'SELECT it.warranty_spec AS s, it.warranty_end AS e, it.warranty_terms AS t FROM invoice_items it '
               "JOIN invoices i ON i.id = it.invoice_id WHERE i.invoice_uuid = '$invA' ORDER BY it.id"
         })) as List;
         if (rows.length != 2) {
@@ -65,9 +65,10 @@ void main() {
           var same = true;
           for (var i = 0; i < 2; i++) {
             final got = rows[i] as Map;
-            if (got['s'] != exp[i]['spec'] || got['e'] != exp[i]['end']) {
+            if (got['s'] != exp[i]['spec'] || got['e'] != exp[i]['end'] || got['t'] != exp[i]['terms']) {
               same = false;
-              bad('D2 السطر ${i + 1}: ${got['s']} حتى ${got['e']} والمتوقع ${exp[i]['spec']} حتى ${exp[i]['end']}');
+              bad('D2 السطر ${i + 1}: ${got['s']} حتى ${got['e']} «${got['t']}» '
+                  'والمتوقع ${exp[i]['spec']} حتى ${exp[i]['end']} «${exp[i]['terms']}»');
             }
           }
           if (same) ok('D2 استلم الفاتورة بضمان سطريها كما ثُبِّت على D1 (${exp[0]['end']} و${exp[1]['end']})');

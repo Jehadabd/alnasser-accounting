@@ -98,6 +98,12 @@ class RollInvoicePdf {
                 style: st(8)),
           pw.SizedBox(height: 2),
         ],
+        // 🛡️ شروط الضمان كما ثُبِّتت على السطور
+        if (ItemWarranty.termsNote([for (final i in items) if (i.hasWarranty) (i.productName, i.warrantyTerms)])
+            .isNotEmpty)
+          pw.Text(
+              'شروط الضمان:\n${ItemWarranty.termsNote([for (final i in items) if (i.hasWarranty) (i.productName, i.warrantyTerms)])}',
+              style: st(7.5)),
         pw.Divider(thickness: .6),
         kv('المجموع', fmtMoney(gross)),
         if (loadingFee > 0) kv('أجور التحميل', fmtMoney(loadingFee)),

@@ -71,6 +71,7 @@ class InvoiceItem {
   String? warrantySpec;
   String? warrantyStart;
   String? warrantyEnd;
+  String? warrantyTerms; // شروط الضمان كما كانت يوم البيع
 
   bool get hasWarranty => (warrantyEnd ?? '').isNotEmpty;
 
@@ -84,6 +85,16 @@ class InvoiceItem {
   /// الكمية المباعة (بوحدة البيع)
   double get soldQuantity =>
       (quantityLargeUnit ?? 0) > 0 ? quantityLargeUnit! : (quantityIndividual ?? 0);
+
+  /// ⚖️ الكمية بالوحدة الأساسية: 4 كراتين × 10 قطع = 40 (للوزن المطبوع).
+  double get baseQuantity {
+    final large = quantityLargeUnit ?? 0, per = unitsInLargeUnit ?? 0;
+    return (large > 0 && per > 0) ? large * per : (quantityIndividual ?? quantityLargeUnit ?? 0);
+  }
+
+  /// 📅 تاريخ انتهاء صلاحية للطباعة «2027/03» (فارغ بلا تاريخ).
+  static String expiryText(DateTime? d) =>
+      d == null ? '' : '${d.year}/${d.month.toString().padLeft(2, '0')}';
 
   /// مجموع خصم السطر (خصم الوحدة × الكمية)
   double get lineDiscountTotal {
@@ -140,6 +151,7 @@ class InvoiceItem {
     this.warrantySpec,
     this.warrantyStart,
     this.warrantyEnd,
+    this.warrantyTerms,
   })  : unitPriceCents = unitPriceCents ?? (unitPrice * 100).round(),
         // 💵 السطر لأقرب دينار (النصف للأعلى)، ثم السعر صحيحاً إن طابقه
         appliedPriceCents = _iqdPriceCents(
@@ -209,6 +221,7 @@ class InvoiceItem {
       if (warrantyEnd != null) 'warranty_spec': warrantySpec,
       if (warrantyEnd != null) 'warranty_start': warrantyStart,
       if (warrantyEnd != null) 'warranty_end': warrantyEnd,
+      if (warrantyEnd != null) 'warranty_terms': warrantyTerms,
     };
   }
 
@@ -284,6 +297,7 @@ class InvoiceItem {
       warrantySpec: map['warranty_spec'] as String?,
       warrantyStart: map['warranty_start'] as String?,
       warrantyEnd: map['warranty_end'] as String?,
+      warrantyTerms: map['warranty_terms'] as String?,
     );
   }
 
@@ -315,6 +329,7 @@ class InvoiceItem {
     Object? warrantySpec = _sentinel,
     Object? warrantyStart = _sentinel,
     Object? warrantyEnd = _sentinel,
+    Object? warrantyTerms = _sentinel,
   }) {
     return InvoiceItem(
       id: id ?? this.id,
@@ -345,6 +360,7 @@ class InvoiceItem {
       warrantySpec: warrantySpec == _sentinel ? this.warrantySpec : warrantySpec as String?,
       warrantyStart: warrantyStart == _sentinel ? this.warrantyStart : warrantyStart as String?,
       warrantyEnd: warrantyEnd == _sentinel ? this.warrantyEnd : warrantyEnd as String?,
+      warrantyTerms: warrantyTerms == _sentinel ? this.warrantyTerms : warrantyTerms as String?,
     );
   }
 }

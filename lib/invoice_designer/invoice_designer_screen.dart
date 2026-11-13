@@ -2159,20 +2159,33 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
         if (!c.paper.isRoll) ...[
           Text('يتسع لـ $cap صفاً في الصفحة؛ الزائد ينتقل لصفحة جديدة.',
               style: const TextStyle(fontSize: 11.5, color: _C.muted)),
-          SwitchRow(
-            title: 'ملء الجدول بأسطر فارغة',
-            subtitle: 'يظهر الجدول بارتفاعه كاملاً كالدفاتر المطبوعة',
-            value: e.b('fillRows', false),
-            onChanged: (v) => set('fillRows', v),
+          // 📌 مكان الملخص: خيار واحد واضح بدل مفتاحين يُخفي أحدهما الآخر
+          const SizedBox(height: 6),
+          const Text('مكان الملخص (المجاميع وما تحت الجدول)',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _C.text)),
+          const SizedBox(height: 6),
+          ChoiceRow<String>(
+            options: const [
+              ChoiceOption('flow', 'تحت آخر بند', Icons.vertical_align_top_rounded),
+              ChoiceOption('bottom', 'أسفل الورقة', Icons.vertical_align_bottom_rounded),
+              ChoiceOption('fill', 'أسفلها بأسطر فارغة', Icons.table_rows_outlined),
+            ],
+            value: e.b('fillRows', false) ? 'fill' : (e.b('flowTotals', true) ? 'flow' : 'bottom'),
+            onChanged: (v) {
+              set('fillRows', v == 'fill');
+              set('flowTotals', v == 'flow');
+            },
           ),
-          if (!e.b('fillRows', false))
-            SwitchRow(
-              title: 'الملخص تحت آخر بند مباشرة',
-              subtitle: 'في الصفحة الأخيرة يقصر الجدول بقدر المواد ويصعد ما تحته (المجاميع والتنويه والتواقيع)، '
-                  'فلا يبقى فراغ تُضاف فيه بنود باليد. رقم الصفحة وما عُلّم «كل صفحة» يبقيان مكانهما. يظهر في المعاينة',
-              value: e.b('flowTotals', true),
-              onChanged: (v) => set('flowTotals', v),
-            ),
+          const SizedBox(height: 6),
+          Text(
+            e.b('fillRows', false)
+                ? 'الجدول بارتفاعه كاملاً مملوءاً بأسطر فارغة كالدفاتر، والملخص في مكانه المصمَّم أسفل الورقة.'
+                : e.b('flowTotals', true)
+                    ? 'في الصفحة الأخيرة يقصر الجدول بقدر المواد ويصعد الملخص (والتنويه والتواقيع) ليلي آخر بند مباشرة. '
+                        'الورقة هنا تعرض المكان المصمَّم؛ الصعود يظهر في المعاينة والطباعة.'
+                    : 'الملخص يبقى في مكانه المصمَّم أسفل الورقة مهما قلّت المواد.',
+            style: const TextStyle(fontSize: 11.5, color: _C.muted, height: 1.5),
+          ),
         ],
       ]),
     ];

@@ -387,7 +387,8 @@ class _WarrantyClaimEditorState extends State<WarrantyClaimEditor> {
           _saveMonths = false;
         }
         _hint = 'من آخر فاتورة بيعت فيها لهذا العميل: رقم ${s.invoiceId} بتاريخ ${_day(s.date)}'
-            '${w == null || s.warrantyEnd == null ? '' : ' — ضمانها المسجَّل فيها: ${w.label} حتى ${ItemWarranty.show(ItemWarranty.iso(s.warrantyEnd!))}'}';
+            '${w == null || s.warrantyEnd == null ? '' : ' — ضمانها المسجَّل فيها: ${w.label} حتى ${ItemWarranty.show(ItemWarranty.iso(s.warrantyEnd!))}'}'
+            '${s.warrantyTerms == null ? '' : '\nشروط الضمان: ${s.warrantyTerms}'}';
       } else {
         _invoiceId = null;
         _invoiceEnd = null;

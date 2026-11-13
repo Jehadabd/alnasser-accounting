@@ -203,13 +203,14 @@ class WarrantyEvent {
 
 /// آخر بيع لهذه المادة لهذا العميل (لاقتراح تاريخ البيع ورقم الفاتورة).
 class LastSale {
-  LastSale(this.invoiceId, this.date, {this.warrantySpec, this.warrantyEnd});
+  LastSale(this.invoiceId, this.date, {this.warrantySpec, this.warrantyEnd, this.warrantyTerms});
   final int invoiceId;
   final DateTime date;
 
   /// 🛡️ الضمان المثبَّت على سطر الفاتورة عند البيع (null = لم يُسجَّل لها ضمان).
   final WarrantySpec? warrantySpec;
   final DateTime? warrantyEnd;
+  final String? warrantyTerms; // شروط الضمان كما ثُبِّتت على السطر
 }
 
 class ProductClaimStat {
@@ -309,16 +310,23 @@ class WarrantyService {
       // 🛡️ ضمان السطر كما ثُبِّت عند البيع (قاعدة قديمة بلا الأعمدة ⇒ بلا ضمان مسجَّل)
       WarrantySpec? spec;
       DateTime? end;
+      String? terms;
       try {
         final w = await d.query('invoice_items',
-            columns: ['warranty_spec', 'warranty_end'], where: 'id = ?', whereArgs: [r.first['item_id']], limit: 1);
+            columns: ['warranty_spec', 'warranty_end', 'warranty_terms'],
+            where: 'id = ?',
+            whereArgs: [r.first['item_id']],
+            limit: 1);
         if (w.isNotEmpty) {
           spec = WarrantySpec.parse(w.first['warranty_spec']);
           end = DateTime.tryParse('${w.first['warranty_end'] ?? ''}');
+          final t = '${w.first['warranty_terms'] ?? ''}'.trim();
+          terms = t.isEmpty ? null : t;
         }
       } catch (_) {}
+      final has = spec != null && end != null;
       return LastSale((r.first['id'] as num).toInt(), dt,
-          warrantySpec: end == null ? null : spec, warrantyEnd: spec == null ? null : end);
+          warrantySpec: has ? spec : null, warrantyEnd: has ? end : null, warrantyTerms: has ? terms : null);
     } catch (_) {
       return null;
     }

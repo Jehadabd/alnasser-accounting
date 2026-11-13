@@ -53,18 +53,22 @@ class LayoutPdfRenderer {
     final rowH = table.d('rowHeight', 8).clamp(3.0, 60.0).toDouble();
     final headH = table.d('headerHeight', rowH).clamp(3.0, 60.0).toDouble();
     final tBottom = table.y + table.h;
+    // 🛡️ «شروط الضمان» تحت آخر بند: تشغل صفوفاً من الجدول في الصفحة الأخيرة
+    final note = table.b('warrantyNote', true) ? data.warrantyNote : '';
+    final noteRows = _noteRows(note, table, rowH);
     bool below(LayoutElement e) =>
         e.type != ElType.watermark && e.type != ElType.pageNo && e.y >= tBottom - 0.5;
 
     if (layout.paper.isRoll) {
       // 🧾 الإيصال: ورقة واحدة بطول المحتوى
-      final need = headH + rows.length * rowH;
+      final need = headH + (rows.length + noteRows) * rowH;
       final shift = need - table.h;
       final height = math.max(layout.heightMm + shift, table.y + need + 3);
       doc.addPage(_page(w, height, [
         for (final e in layout.elements)
           if (e.type == ElType.table)
-            _at(e, 0, e.w, need, _table(e, cols, rows, 0, rows.length, rowH, headH, 0))
+            _at(e, 0, e.w, need,
+                _table(e, cols, rows, 0, rows.length, rowH, headH, 0, note: note, noteH: noteRows * rowH))
           else
             _place(e, data, below(e) ? shift : 0),
       ]));
@@ -73,20 +77,26 @@ class LayoutPdfRenderer {
 
     // 📄 A4: صفحات بقدر ما يتسع الجدول
     final cap = math.max(1, ((table.h - headH) / rowH).floor());
-    final pages = math.max(1, (rows.length / cap).ceil());
+    final nRows = math.min(noteRows, cap); // الشروط لا تتجاوز صفحة
+    // الشروط تُحسب صفوفاً بعد آخر بند: إن لم تتسع في الصفحة الأخيرة تنتقل لصفحة بعدها
+    final pages = math.max(1, ((rows.length + nRows) / cap).ceil());
     final fill = table.b('fillRows', false);
     final flow = flowsTotals(table);
     for (var p = 0; p < pages; p++) {
       final last = p == pages - 1;
-      final start = p * cap;
-      final end = math.min(rows.length, start + cap);
+      final start = math.min(rows.length, p * cap);
+      final end = math.min(rows.length, p * cap + cap);
+      final noteHere = last ? nRows : 0;
       // 📌 الصفحة الأخيرة: الجدول بقدر صفوفه، وما تحته يصعد ليلي آخر بند مباشرة
-      final shrink = (last && flow) ? math.max(0.0, table.h - (headH + (end - start) * rowH)) : 0.0;
+      final shrink =
+          (last && flow) ? math.max(0.0, table.h - (headH + (end - start + noteHere) * rowH)) : 0.0;
       doc.addPage(_page(w, layout.heightMm, [
         for (final e in layout.elements)
           if (e.type == ElType.table)
             _at(e, 0, e.w, e.h - shrink,
-                _table(e, cols, rows, start, end, rowH, headH, fill ? cap - (end - start) : 0))
+                _table(e, cols, rows, start, end, rowH, headH,
+                    fill ? math.max(0, cap - (end - start) - noteHere) : 0,
+                    note: noteHere > 0 ? note : '', noteH: noteHere * rowH))
           else if (!below(e) || last || e.b('everyPage', false))
             _place(e, data, below(e) && !e.b('everyPage', false) ? -shrink : 0, page: p + 1, pages: pages),
       ]));
@@ -99,6 +109,19 @@ class LayoutPdfRenderer {
   /// رقم الصفحة، العلامة المائية، وما عُلّم «كل صفحة». مفعَّل ما لم يُطفأ، ولا يعمل مع
   /// «ملء الجدول بأسطر فارغة» (هي تملأ الفراغ بأسطر).
   static bool flowsTotals(LayoutElement table) => !table.b('fillRows', false) && table.b('flowTotals', true);
+
+  /// 🛡️ كم صفاً من الجدول تشغلها «شروط الضمان» (تقدير بعرض الجدول وحجم الخط).
+  static int _noteRows(String note, LayoutElement table, double rowH) {
+    if (note.trim().isEmpty) return 0;
+    final fs = table.d('fontSize', 10) * 0.9;
+    final perLine = math.max(12, ((table.w * mm - 8) / (fs * 0.5)).floor()); // حرف عربي ≈ نصف حجم الخط
+    var lines = 1; // العنوان
+    for (final l in note.split('\n')) {
+      lines += math.max(1, (l.length / perLine).ceil());
+    }
+    final hMm = (lines * lineHeight(fs) + 6) / mm;
+    return math.max(1, (hMm / rowH).ceil());
+  }
 
   /// أعمدة الجدول الظاهرة: «الخصم» و«السعر قبل الخصم» يختفيان إن لم يكن في
   /// الفاتورة صنف مخصوم (إلا إن أُطفئ «إخفاء إن كان فارغاً» للعمود).
@@ -301,7 +324,8 @@ class LayoutPdfRenderer {
   // ─────────────────────────── جدول المواد ───────────────────────────
 
   static pw.Widget _table(LayoutElement t, List<Map<String, dynamic>> cols, List<Map<String, String>> rows,
-      int start, int end, double rowH, double headH, int emptyRows) {
+      int start, int end, double rowH, double headH, int emptyRows,
+      {String note = '', double noteH = 0}) {
     if (cols.isEmpty) return pw.SizedBox();
     final fs = t.d('fontSize', 10);
     final mode = LayoutRules.tableBorders(t);
@@ -364,6 +388,23 @@ class LayoutPdfRenderer {
         row([for (final c in cols) '${c['label'] ?? ''}'], header: true),
         for (var r = start; r < end; r++)
           row([for (final c in cols) rows[r]['${c['id']}'] ?? ''], header: false, index: r),
+        // 🛡️ شروط الضمان تحت آخر بند، بعرض الجدول كله
+        if (note.isNotEmpty && noteH > 0)
+          pw.Container(
+            height: noteH * mm,
+            width: double.infinity,
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2 * PdfPageFormat.mm, vertical: 1 * PdfPageFormat.mm),
+            decoration: pw.BoxDecoration(border: pw.Border(top: side)),
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+              pw.Text('شروط الضمان',
+                  style: _style(fs * 0.9, bold: true, color: textColor), textDirection: pw.TextDirection.rtl),
+              pw.Text(note,
+                  style: _style(fs * 0.9, color: textColor),
+                  textDirection: pw.TextDirection.rtl,
+                  textAlign: pw.TextAlign.right,
+                  overflow: pw.TextOverflow.clip),
+            ]),
+          ),
         for (var r = 0; r < emptyRows; r++)
           row(List<String>.filled(cols.length, ''), header: false, index: end + r),
       ],

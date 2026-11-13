@@ -706,13 +706,17 @@ class InvoicePdfService {
       case 'weight':
         final weight = product?.baseWeight;
         if (weight != null && weight > 0) {
-          final totalWeight = weight * quantity;
+          // ⚖️ بالوحدة الأساسية: الكرتون × عدد قطعه (كان يضرب في عدد الكراتين)
+          final totalWeight = weight * item.baseQuantity;
           return dataCell(ArabicShaper.shape('${formatNumber(totalWeight, forceDecimal: true)} كغ'), font, fontSettings: appSettings.fontSettings.quantity);
         }
         return dataCell('', font);
       case 'expiry':
         if (product?.hasExpiry == true) {
-          return dataCell(ArabicShaper.shape('له'), font, fontSettings: appSettings.fontSettings.quantity);
+          // 📅 تاريخ الانتهاء نفسه (كان يطبع «له»)
+          final t = InvoiceItem.expiryText(product?.expiryDate);
+          return dataCell(t.isEmpty ? ArabicShaper.shape('له') : t, font,
+              fontSettings: appSettings.fontSettings.quantity);
         }
         return dataCell('', font);
       case ItemWarranty.colPeriod:

@@ -16,6 +16,7 @@
 import 'package:alnaser/controllers/invoice_controller.dart';
 import 'package:alnaser/erp/warranty/item_warranty.dart';
 import 'package:alnaser/erp/warranty/warranty_service.dart';
+import 'package:alnaser/invoice_designer/invoice_print_data.dart';
 import 'package:alnaser/models/invoice.dart';
 import 'package:alnaser/models/invoice_design_settings.dart';
 import 'package:alnaser/models/invoice_input_data.dart';
@@ -95,12 +96,18 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
   final pid = pr.first['id'] as int;
   final pname = pr.first['name'] as String;
 
-  Future<void> setSpec(String s) async {
+  Future<void> setSpec(String s, {String terms = ''}) async {
     final cur = (await DatabaseService().getProductById(pid))!;
     // كما تحفظها بطاقة المادة: Product.fromMap({...الحالي, ...المتغيّر})
-    await DatabaseService().updateProduct(Product.fromMap(
-        {...cur.toMap(), 'warranty_spec': s, 'last_modified_at': DateTime.now().toIso8601String()}));
-    eq('مدة ضمان المادة بعد حفظها', (await DatabaseService().getProductById(pid))!.warrantySpec, s);
+    await DatabaseService().updateProduct(Product.fromMap({
+      ...cur.toMap(),
+      'warranty_spec': s,
+      'warranty_terms': terms,
+      'last_modified_at': DateTime.now().toIso8601String(),
+    }));
+    final after = (await DatabaseService().getProductById(pid))!;
+    eq('مدة ضمان المادة بعد حفظها', after.warrantySpec, s);
+    eq('شروط ضمان المادة بعد حفظها', after.warrantyTerms, terms);
   }
 
   Future<int> invId(String uuid) async =>
@@ -108,12 +115,16 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
           as int;
 
   Future<List<Map<String, Object?>>> lines(int id) => db.query('invoice_items',
-      columns: ['warranty_spec', 'warranty_start', 'warranty_end'], where: 'invoice_id = ?', whereArgs: [id], orderBy: 'id');
+      columns: ['warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms'],
+      where: 'invoice_id = ?',
+      whereArgs: [id],
+      orderBy: 'id');
 
-  void lineIs(String label, Map<String, Object?> l, WarrantySpec? s, DateTime start) {
+  void lineIs(String label, Map<String, Object?> l, WarrantySpec? s, DateTime start, {String? terms}) {
     eq('$label: المدة', l['warranty_spec'], s?.encode());
     eq('$label: البداية', l['warranty_start'], s == null ? null : iso(start));
     eq('$label: النهاية', l['warranty_end'], s == null ? null : iso(s.endFrom(start)));
+    eq('$label: الشروط', l['warranty_terms'], terms);
   }
 
   Future<String> save(String name, double qty, {String? inv}) async {
@@ -146,15 +157,17 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
       );
 
   // ── 3) فاتورة جديدة من شاشة الفاتورة: ضمان سنة ──
-  await setSpec('1y');
+  const termsA = 'لا يشمل الكسر والماء';
+  const termsB = 'يشمل القطع فقط دون أجور التصليح';
+  await setSpec('1y', terms: termsA);
   final invA = await save('زبون الضمان', 1);
   final idA = await invId(invA);
   var ls = await lines(idA);
   eq('الفاتورة الجديدة: عدد السطور', ls.length, 1);
-  if (ls.length == 1) lineIs('الفاتورة الجديدة', ls[0], y1, t0);
+  if (ls.length == 1) lineIs('الفاتورة الجديدة', ls[0], y1, t0, terms: termsA);
 
-  // ── 4) المدة صارت 6 أشهر؛ التعديل كما تفعله الشاشة (السطور المحمّلة + سطر جديد) ──
-  await setSpec('6m');
+  // ── 4) المدة صارت 6 أشهر بشروط أخرى؛ التعديل كما تفعله الشاشة (المحمّلة + سطر جديد) ──
+  await setSpec('6m', terms: termsB);
   final head = Invoice.fromMap((await db.query('invoices', where: 'id = ?', whereArgs: [idA], limit: 1)).first);
   final loaded = await DatabaseService().getInvoiceItems(idA);
   final items = [...loaded, newLine(2)];
@@ -175,8 +188,8 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
   ls = await lines(idA);
   eq('بعد التعديل: عدد السطور', ls.length, 2);
   if (ls.length == 2) {
-    lineIs('السطر القديم بعد تغيير مدة المادة', ls[0], y1, t0);
-    lineIs('السطر المضاف', ls[1], m6, t0);
+    lineIs('السطر القديم بعد تغيير مدة المادة', ls[0], y1, t0, terms: termsA);
+    lineIs('السطر المضاف', ls[1], m6, t0, terms: termsB);
   }
 
   // سطور بلا معرّفها القديم (تُبنى من جديد): تُطابق بالمادة فيبقى الضمان القديم
@@ -184,7 +197,7 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
   await setSpec('10d');
   await save('زبون بلا معرّفات', 3, inv: invB);
   ls = await lines(await invId(invB));
-  if (ls.length == 1) lineIs('سطر أُعيد بناؤه بلا معرّفه', ls[0], m6, t0);
+  if (ls.length == 1) lineIs('سطر أُعيد بناؤه بلا معرّفه', ls[0], m6, t0, terms: termsB);
 
   // ── 5) مادة «بلا ضمان» ──
   await setSpec('0');
@@ -251,6 +264,39 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
   await ItemWarranty.stampLines(db, [probe], early);
   lineIs('من تاريخ الشراء ولا شراء قبل البيع', probe, y1p, early);
 
+  // ── 9) الطباعة: الوزن بالوحدة الأساسية، ووزن الفاتورة، وشروط الضمان تحت المواد ──
+  final carton = InvoiceItem(
+    invoiceId: 0,
+    productName: 'دجاج',
+    unit: 'piece',
+    unitPrice: 1000,
+    appliedPrice: 10000,
+    itemTotal: 40000,
+    quantityLargeUnit: 4,
+    unitsInLargeUnit: 10,
+    saleType: 'كرتون',
+  );
+  eq('4 كراتين × 10 دجاجات بالوحدة الأساسية', carton.baseQuantity, 40.0);
+  eq('شروط الضمان: مادتان بشرط واحد تُجمعان',
+      ItemWarranty.termsNote([('شاحن', termsA), ('سماعة', termsA), ('مروحة', termsB), ('كيبل', null)]),
+      '• شاحن، سماعة: $termsA\n• مروحة: $termsB');
+  try {
+    final pd = InvoicePrintData(
+      company: const PrintCompany(name: 'الاختبار'),
+      fields: const {},
+      rows: [
+        {'details': 'دجاج', InvoicePrintData.weightKey: '40', InvoicePrintData.termsKey: ''},
+        {'details': 'شاحن', InvoicePrintData.weightKey: '0.25', InvoicePrintData.termsKey: termsA},
+        {'details': 'كيبل', InvoicePrintData.weightKey: '', InvoicePrintData.termsKey: ''},
+      ],
+      totals: const {'net': 1000},
+    );
+    eq('وزن الفاتورة في المجاميع', pd.totalText('totalWeight'), '40.25 كغم');
+    eq('شروط الضمان في بيانات الطباعة', pd.warrantyNote, '• شاحن: $termsA');
+  } catch (e) {
+    fails.add('بيانات الطباعة رمت: $e');
+  }
+
   notes.add('سنة من اليوم حتى ${ItemWarranty.show(iso(y1.endFrom(t0)))}؛ التعديل بعد تغيير المدة أبقى السطر القديم '
       'على سنة والمضاف 6 أشهر؛ المعلّقة 10 أيام عند حفظها؛ الكاشير سنة؛ من الشراء قبل 10 أيام');
   return {
@@ -258,8 +304,8 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
     'notes': notes,
     'invA': invA,
     'expA': [
-      {'spec': y1.encode(), 'end': iso(y1.endFrom(t0))},
-      {'spec': m6.encode(), 'end': iso(m6.endFrom(t0))},
+      {'spec': y1.encode(), 'end': iso(y1.endFrom(t0)), 'terms': termsA},
+      {'spec': m6.encode(), 'end': iso(m6.endFrom(t0)), 'terms': termsB},
     ],
     'spec': '1y:p',
   };

@@ -161,7 +161,11 @@ class AlertService {
   Future<List<Product>> _getExpiringProducts(int monthsThreshold) async {
     final db = await _databaseService.database;
     final now = DateTime.now();
-    final thresholdDate = DateTime(now.year, now.month + monthsThreshold, now.day);
+    // 📅 شهر تقويمي مضبوط بنهاية الشهر (30 تشرين الثاني + 3 أشهر = 28 شباط لا 2 آذار)
+    final idx = now.month - 1 + monthsThreshold;
+    final ty = now.year + idx ~/ 12, tm = idx % 12 + 1;
+    final lastDay = DateTime(ty, tm + 1, 0).day;
+    final thresholdDate = DateTime(ty, tm, now.day > lastDay ? lastDay : now.day);
     
     final nowStr = DateFormat('yyyy-MM-dd').format(now);
     final thresholdStr = DateFormat('yyyy-MM-dd').format(thresholdDate);

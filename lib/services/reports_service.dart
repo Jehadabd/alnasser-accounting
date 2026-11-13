@@ -1703,19 +1703,23 @@ class ReportsService {
   Future<int> getExpiringProductsCount(int monthsThreshold) async {
     final db = await _db.database;
     final now = DateTime.now();
-    final thresholdDate = now.add(Duration(days: monthsThreshold * 30)); // تقريب الشهر لـ 30 يوم
-    
-    // تنسيق التواريخ ISO8601 للمقارنة النصية في SQLite
-    final nowStr = now.toIso8601String();
-    final thresholdStr = thresholdDate.toIso8601String();
-    
+    // 📅 بالأيام لا بالوقت، وبالأشهر التقويمية — كشاشة التنبيه (AlertService) تماماً.
+    //    كان يقارن نصاً مع الوقت الحالي فلا يعدّ ما ينتهي اليوم، ويقرّب الشهر إلى 30 يوماً.
+    final idx = now.month - 1 + monthsThreshold;
+    final ty = now.year + idx ~/ 12, tm = idx % 12 + 1;
+    final lastDay = DateTime(ty, tm + 1, 0).day;
+    final thresholdDate = DateTime(ty, tm, now.day > lastDay ? lastDay : now.day);
+    String day(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    final nowStr = day(now);
+    final thresholdStr = day(thresholdDate);
+
     final result = await db.rawQuery('''
       SELECT COUNT(*) as count 
       FROM products 
       WHERE has_expiry = 1 
       AND expiry_date IS NOT NULL 
-      AND expiry_date >= ? 
-      AND expiry_date <= ?
+      AND date(expiry_date) >= date(?) 
+      AND date(expiry_date) <= date(?)
     ''', [nowStr, thresholdStr]);
     
     return Sqflite.firstIntValue(result) ?? 0;

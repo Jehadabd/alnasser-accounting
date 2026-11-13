@@ -39,6 +39,8 @@ InvoicePrintData designedReceiptData(ReceiptData r, PrintCompany company) {
             k: ItemWarranty.cellText(k, spec: r.items[i].warrantySpec, end: r.items[i].warrantyEnd,
                     start: r.items[i].warrantyStart) ??
                 '',
+          InvoicePrintData.termsKey:
+              (r.items[i].warrantyEnd ?? '').isEmpty ? '' : (r.items[i].warrantyTerms ?? ''),
         },
     ],
     totals: {
@@ -64,6 +66,7 @@ class ReceiptItem {
   final String? warrantySpec;
   final String? warrantyStart;
   final String? warrantyEnd;
+  final String? warrantyTerms;
 
   ReceiptItem({
     required this.name,
@@ -73,6 +76,7 @@ class ReceiptItem {
     this.warrantySpec,
     this.warrantyStart,
     this.warrantyEnd,
+    this.warrantyTerms,
   });
 
   double get total => price * quantity;
@@ -399,6 +403,19 @@ class ThermalReceiptService {
                   style: baseStyle.copyWith(fontSize: (baseStyle.fontSize ?? 10) * 0.85),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl)),
+              // 🛡️ شروط الضمان كما ثُبِّتت على سطور الفاتورة
+              if (ItemWarranty.termsNote([
+                for (final item in receipt.items)
+                  if ((item.warrantyEnd ?? '').isNotEmpty) (item.name, item.warrantyTerms)
+              ]).isNotEmpty)
+                pw.Text(
+                    'شروط الضمان:\n${ItemWarranty.termsNote([
+                          for (final item in receipt.items)
+                            if ((item.warrantyEnd ?? '').isNotEmpty) (item.name, item.warrantyTerms)
+                        ])}',
+                    style: baseStyle.copyWith(fontSize: (baseStyle.fontSize ?? 10) * 0.8),
+                    textAlign: pw.TextAlign.right,
+                    textDirection: pw.TextDirection.rtl),
               
               pw.Divider(thickness: 1),
               pw.SizedBox(height: 2 * k),

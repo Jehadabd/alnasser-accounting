@@ -5,6 +5,8 @@
 //   • المادة: products.warranty_spec — مدة ضمانها وبدايته، نصاً مضغوطاً:
 //       «1y» سنة من تاريخ البيع، «6m:p» ستة أشهر من تاريخ شراء المحل لها،
 //       «10d» عشرة أيام، «0» بلا ضمان صراحةً. فارغ = لم يُضبط (= بلا ضمان).
+//   • شروط الضمان: products.warranty_terms (نص حر) — تُثبَّت على السطر مع ضمانه
+//     (invoice_items.warranty_terms) وتُطبع تحت جدول المواد.
 //   • سطر الفاتورة: invoice_items.warranty_spec/warranty_start/warranty_end —
 //     تُثبَّت لحظة الحفظ ولا تتغير بعدها ولو تغيّرت مدة ضمان المادة:
 //       - الفاتورة الجديدة (أو المعلّقة حين تُحفظ): كل سطورها تُحسب الآن.
@@ -139,8 +141,8 @@ class ItemWarranty {
     try {
       final items = (await d.rawQuery('PRAGMA table_info(invoice_items)')).map((r) => r['name']).toSet();
       final products = (await d.rawQuery('PRAGMA table_info(products)')).map((r) => r['name']).toSet();
-      _colsReady = items.containsAll(const ['warranty_spec', 'warranty_start', 'warranty_end']) &&
-          products.contains('warranty_spec');
+      _colsReady = items.containsAll(const ['warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms']) &&
+          products.containsAll(const ['warranty_spec', 'warranty_terms']);
     } catch (_) {
       _colsReady = false;
     }
@@ -151,7 +153,7 @@ class ItemWarranty {
   static Future<List<Map<String, Object?>>> previousLines(DatabaseExecutor d, int invoiceId) async {
     if (!await _ready(d)) return const [];
     return d.query('invoice_items',
-        columns: ['unique_id', 'product_name', 'warranty_spec', 'warranty_start', 'warranty_end'],
+        columns: ['unique_id', 'product_name', 'warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms'],
         where: 'invoice_id = ?',
         whereArgs: [invoiceId],
         orderBy: 'id');
@@ -199,7 +201,7 @@ class ItemWarranty {
       return i < 0 ? null : unmatched.removeAt(i);
     }
 
-    final specCache = <String, WarrantySpec?>{};
+    final specCache = <String, (WarrantySpec?, String?)>{};
     final purchaseCache = <int, DateTime?>{};
     for (final line in lines) {
       final prev = fresh ? null : takePrevious(line);
@@ -207,16 +209,19 @@ class ItemWarranty {
         line['warranty_spec'] = prev['warranty_spec'];
         line['warranty_start'] = prev['warranty_start'];
         line['warranty_end'] = prev['warranty_end'];
+        line['warranty_terms'] = prev['warranty_terms'];
         continue;
       }
       final pid = (line['product_id'] as num?)?.toInt();
       final name = '${line['product_name'] ?? ''}'.trim();
       final key = pid != null ? '#$pid' : name;
-      final spec = specCache.containsKey(key) ? specCache[key] : (specCache[key] = await _productSpec(d, pid, name));
+      final (spec, terms) =
+          specCache.containsKey(key) ? specCache[key]! : (specCache[key] = await _productSpec(d, pid, name));
       if (spec == null || spec.isNone) {
         line['warranty_spec'] = null;
         line['warranty_start'] = null;
         line['warranty_end'] = null;
+        line['warranty_terms'] = null;
         continue;
       }
       var start = DateTime(saleDate.year, saleDate.month, saleDate.day);
@@ -229,18 +234,36 @@ class ItemWarranty {
       line['warranty_spec'] = spec.encode();
       line['warranty_start'] = iso(start);
       line['warranty_end'] = iso(spec.endFrom(start));
+      line['warranty_terms'] = terms;
     }
   }
 
-  static Future<WarrantySpec?> _productSpec(DatabaseExecutor d, int? productId, String name) async {
+  /// مدة ضمان المادة وشروطه (الشروط null إن كانت فارغة).
+  static Future<(WarrantySpec?, String?)> _productSpec(DatabaseExecutor d, int? productId, String name) async {
+    const cols = ['warranty_spec', 'warranty_terms'];
     final r = productId != null
-        ? await d.query('products', columns: ['warranty_spec'], where: 'id = ?', whereArgs: [productId], limit: 1)
+        ? await d.query('products', columns: cols, where: 'id = ?', whereArgs: [productId], limit: 1)
         : await d.query('products',
-            columns: ['warranty_spec'],
-            where: 'name = ? AND COALESCE(is_deleted, 0) = 0',
-            whereArgs: [name],
-            limit: 1);
-    return r.isEmpty ? null : WarrantySpec.parse(r.first['warranty_spec']);
+            columns: cols, where: 'name = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [name], limit: 1);
+    if (r.isEmpty) return (null, null);
+    final t = '${r.first['warranty_terms'] ?? ''}'.trim();
+    return (WarrantySpec.parse(r.first['warranty_spec']), t.isEmpty ? null : t);
+  }
+
+  /// 🛡️ «شروط الضمان» تحت جدول المواد: سطر لكل شرط، ومعه المواد التي يخصّها.
+  /// [lines]: (اسم المادة، شروطها كما ثُبِّتت على السطر). فارغ إن لم تكن شروط.
+  static String termsNote(Iterable<(String, String?)> lines) {
+    final byTerms = <String, List<String>>{};
+    for (final (name, terms) in lines) {
+      final t = (terms ?? '').trim();
+      if (t.isEmpty) continue;
+      final names = byTerms.putIfAbsent(t, () => []);
+      if (!names.contains(name.trim())) names.add(name.trim());
+    }
+    if (byTerms.isEmpty) return '';
+    return [
+      for (final e in byTerms.entries) '• ${e.value.join('، ')}: ${e.key.replaceAll('\n', ' ')}',
+    ].join('\n');
   }
 
   /// تاريخ آخر شراء مؤكد للمادة في يوم [onOrBefore] أو قبله.

@@ -27,6 +27,12 @@ class DesignedRows {
     return (w != null && w > 0) ? '${fmtMoney(w * baseQty)} كغ' : '';
   }
 
+  /// ⚖️ وزن السطر رقماً (لـ«وزن الفاتورة»)؛ فارغ إن لم يكن للمادة وزن.
+  static String _weightKg(Product? p, double baseQty) {
+    final w = p?.baseWeight;
+    return (w != null && w > 0) ? '${w * baseQty}' : '';
+  }
+
   static Map<String, String> item(int index, InvoiceItem item, Product? product) {
     final qty = item.quantityIndividual ?? item.quantityLargeUnit ?? 0.0;
     final unit = item.saleType ?? '';
@@ -54,6 +60,8 @@ class DesignedRows {
       'price': fmtMoney(item.appliedPrice),
       'amount': fmtMoney(item.itemTotal),
       'weight': _weight(product, baseQty),
+      InvoicePrintData.weightKey: _weightKg(product, baseQty),
+      InvoicePrintData.termsKey: item.hasWarranty ? (item.warrantyTerms ?? '') : '', // 🛡️ شروط الضمان
       'expiry': _expiry(product),
       // 🛡️ الضمان المثبَّت على السطر عند البيع
       for (final k in ItemWarranty.printColumns)

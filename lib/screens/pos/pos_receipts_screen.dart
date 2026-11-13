@@ -693,6 +693,7 @@ class _ReceiptDetailState extends State<_ReceiptDetail> {
             warrantySpec: it.warrantySpec, // 🛡️
             warrantyStart: it.warrantyStart,
             warrantyEnd: it.warrantyEnd,
+            warrantyTerms: it.warrantyTerms,
           ),
       ],
       subtotal: subtotal,

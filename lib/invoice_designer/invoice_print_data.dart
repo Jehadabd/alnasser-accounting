@@ -66,9 +66,10 @@ class InvoicePrintData {
     required this.company,
     required Map<String, String> fields,
     required this.rows,
-    required this.totals,
+    required Map<String, double> totals,
     this.paymentType = 'نقد',
-  }) : fields = {
+  })  : totals = _withWeight(totals, rows),
+        fields = {
           // 🖨️ لحظة الطباعة ومن يطبع (المحاسب = من سجّل، يمرّره المستدعي)
           'printedAt': _nowText(),
           'printedBy': AuthService().currentUser?.shownName ?? '',
@@ -76,8 +77,31 @@ class InvoicePrintData {
           'branch': company.branch,
           'itemsCount': '${rows.length}',
           if (totals['net'] != null) 'amountWords': ArabicWords.money(totals['net']!),
+          if (_weightOf(rows) > 0) 'totalWeight': '${fmtMoney(_weightOf(rows))} كغم',
+          'warrantyTerms': _termsOf(rows),
           ...fields,
         };
+
+  /// 🛡️ مفتاح مخفي في صف المادة: شروط ضمانها كما ثُبِّتت على السطر.
+  static const String termsKey = '_warrantyTerms';
+
+  static String _termsOf(List<Map<String, String>> rows) =>
+      ItemWarranty.termsNote([for (final r in rows) (r['details'] ?? '', r[termsKey])]);
+
+  /// «شروط الضمان» تُطبع تحت جدول المواد (فارغ إن لم تكن).
+  String get warrantyNote => field('warrantyTerms');
+
+  /// ⚖️ مفتاح مخفي في صف المادة: وزنها بالكيلو (الوحدة الأساسية × عددها) — DesignedRows.
+  static const String weightKey = '_weightKg';
+
+  /// وزن الفاتورة = مجموع أوزان المواد التي لها وزن.
+  static double _weightOf(List<Map<String, String>> rows) =>
+      rows.fold<double>(0, (s, r) => s + (double.tryParse(r[weightKey] ?? '') ?? 0));
+
+  static Map<String, double> _withWeight(Map<String, double> t, List<Map<String, String>> rows) {
+    final w = _weightOf(rows);
+    return (w <= 0 || t.containsKey('totalWeight')) ? t : {...t, 'totalWeight': w};
+  }
 
   final PrintCompany company;
   final Map<String, String> fields;
@@ -112,6 +136,10 @@ class InvoicePrintData {
   String totalText(String key) {
     if (key == 'paymentType') return paymentType;
     if (key == 'itemsCount') return '${rows.length}';
+    if (key == 'totalWeight') {
+      final w = totals['totalWeight'];
+      return (w == null || w <= 0) ? '' : '${fmtMoney(w)} كغم';
+    }
     final v = totals[key];
     return v == null ? '' : fmtMoney(v);
   }
@@ -245,6 +273,8 @@ class InvoicePrintData {
         'price': fmtMoney(price),
         'amount': fmtMoney(amount),
         'weight': '${fmtMoney(qty * (0.25 + i * 0.5))} كغ',
+        weightKey: '${qty * (0.25 + i * 0.5)}', // ⚖️ لوزن الفاتورة في المعاينة
+        termsKey: i.isEven ? 'لا يشمل الكسر والماء وسوء الاستعمال' : '', // 🛡️ مثال الشروط
         'expiry': '${now.year + 1 + i % 2}/${((i * 3) % 12 + 1).toString().padLeft(2, '0')}',
         // 🛡️ مثال: المواد الزوجية بضمان سنة من اليوم
         'warrantyPeriod': i.isEven ? 'سنة' : '',

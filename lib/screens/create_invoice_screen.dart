@@ -6765,6 +6765,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         warrantySpec: null,
         warrantyStart: null,
         warrantyEnd: null,
+        warrantyTerms: null,
       );
       // مزامنة خانة التفاصيل والسعر فوراً
       _detailsController?.text = prod.name;

@@ -100,6 +100,8 @@ class LayoutCatalog {
     'accountant': 'المحاسب',
     'branch': 'الفرع',
     'itemsCount': 'عدد المواد',
+    'totalWeight': 'وزن الفاتورة',
+    'warrantyTerms': 'شروط الضمان',
     'amountWords': 'المبلغ كتابةً',
     'footer': 'عبارة أسفل الفاتورة',
     'copy': 'نسخة',
@@ -151,6 +153,7 @@ class LayoutCatalog {
     'previousDebt': 'الدين السابق',
     'currentDebt': 'المطلوب الحالي',
     'itemsCount': 'عدد المواد',
+    'totalWeight': 'وزن الفاتورة',
     'paymentType': 'طريقة الدفع',
     // 🧾 إشعار مدين / دائن
     'voucherAmount': 'مبلغ السند',

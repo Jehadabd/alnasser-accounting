@@ -174,6 +174,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   WarrantyUnit _warrantyUnit = WarrantyUnit.year;
   WarrantyBasis _warrantyBasis = WarrantyBasis.sale;
   bool _warrantyWasSet = false; // للمادة ضمان محفوظ (ولو «بلا ضمان») ⇒ الإطفاء يُحفظ «0»
+  final _warrantyTerms = TextEditingController(); // شروط الضمان (تُطبع تحت المواد)
+  bool _termsWasSet = false;
 
   // ── تفاصيل البطاقة (product_details) ──
   static const _detailText = [
@@ -238,7 +240,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   void dispose() {
     _codeKeyboard.dispose();
     _codeFocus.dispose();
-    for (final c in [_name, _code, _barcode, _baseUnit, _cost, _costUsd, _openQty, _weight, _alertQty, _warrantyQty, ..._price, ..._markup]) {
+    for (final c in [_name, _code, _barcode, _baseUnit, _cost, _costUsd, _openQty, _weight, _alertQty, _warrantyQty, _warrantyTerms, ..._price, ..._markup]) {
       c.dispose();
     }
     for (final c in _dc.values) {
@@ -324,6 +326,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _warrantyUnit = WarrantyUnit.year;
     _warrantyBasis = WarrantyBasis.sale;
     _warrantyWasSet = false;
+    _warrantyTerms.text = '';
+    _termsWasSet = false;
     _trackSerial = false;
     _scale = false;
     _active = true;
@@ -379,6 +383,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _warrantyQty.text = _hasWarranty ? '${w!.value}' : '';
     _warrantyUnit = _hasWarranty ? w!.unit : WarrantyUnit.year;
     _warrantyBasis = _hasWarranty ? w!.basis : WarrantyBasis.sale;
+    _warrantyTerms.text = p.warrantyTerms ?? '';
+    _termsWasSet = p.warrantyTerms != null;
     _alertQty.text = _fmt(p.alertQuantity);
     final names = levels.map((l) => l['unit_name'] as String).toList();
     _alertUnit = (p.alertUnit != null && names.contains(p.alertUnit)) ? p.alertUnit : null;
@@ -542,10 +548,14 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       'barcode': _nz(_barcode.text),
       'category_id': _categoryId,
       'is_weighable': _weighable ? 1 : 0,
-      'base_weight': _weighable ? _p(_weight) : null,
+      // ⚖️ وزن الوحدة الأساسية مستقل عن «تباع بالوزن»: الدجاجة 1 كغم تُباع بالقطعة والكرتون
+      'base_weight': (_p(_weight) ?? 0) > 0 ? _p(_weight) : null,
       'has_expiry': _hasExpiry ? 1 : 0,
       'expiry_date': _hasExpiry ? _expiryDate?.toIso8601String() : null,
       'warranty_spec': _warrantySpecValue(),
+      'warranty_terms': _warrantyTerms.text.trim().isNotEmpty
+          ? _warrantyTerms.text.trim()
+          : (_termsWasSet ? '' : null),
       'alert_quantity': _alertQ,
       'alert_unit': _alertUnitKey,
       'unit_hierarchy': levels.isEmpty ? null : jsonEncode(levels),
@@ -898,7 +908,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       barcode: v['barcode'] as String?,
       categoryId: _categoryId,
       isWeighable: _weighable,
-      baseWeight: _weighable ? v['base_weight'] as double? : null,
+      baseWeight: v['base_weight'] as double?,
       weightUnit: _weighable ? 'kg' : null,
       hasExpiry: _hasExpiry,
       expiryDate: _hasExpiry ? _expiryDate : null,
@@ -919,6 +929,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       createdAt: now,
       lastModifiedAt: now,
       warrantySpec: v['warranty_spec'] as String?,
+      warrantyTerms: v['warranty_terms'] as String?,
     );
     final id = await _dbs.insertProduct(product);
     final notes = <String>[];
@@ -2426,6 +2437,55 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         ]),
       );
 
+  /// ⚖️ وزن الوحدة الأساسية، ووزن كل وحدة أكبر منه (الكرتون = 10 قطع × 1 كغم = 10 كغم).
+  /// يُطبع في عمود «الوزن» وفي «وزن الفاتورة»؛ لا علاقة له بإدخال الكمية بالكيلو.
+  Widget _weightBlock(void Function(VoidCallback) upd) {
+    final w = _p(_weight) ?? 0;
+    final levels = _levels();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('الوزن', style: TextStyle(fontWeight: FontWeight.w800, color: _C.text)),
+        const SizedBox(height: 2),
+        const Text('يُطبع في عمود «الوزن» وفي «وزن الفاتورة». اتركه فارغاً إن لم يكن للمادة وزن.',
+            style: TextStyle(fontSize: 12, color: _C.muted)),
+        const SizedBox(height: 10),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: SizedBox(
+            width: 260,
+            child: _field('وزن ${_baseName.isEmpty ? 'الوحدة الأساسية' : '«$_baseName» الواحدة'}', _weight,
+                number: true, hint: '0', suffixText: 'كغم', onChanged: (_) => upd(() {})),
+          ),
+        ),
+        if (w > 0 && levels.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final l in levels)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _C.units.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${l['unit_name']} (${_fmt(_factorOf(l['unit_name'] as String))} $_baseName) = '
+                  '${_fmt(w * _factorOf(l['unit_name'] as String))} كغم',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _C.text),
+                ),
+              ),
+          ]),
+        ],
+      ]),
+    );
+  }
+
   /// 🛡️ المدة والوحدة وبداية الضمان، ومثال حيّ لتاريخ النهاية.
   Widget _warrantyEditor(void Function(VoidCallback) upd) {
     final v = int.tryParse(_warrantyQty.text.trim()) ?? 0;
@@ -2473,8 +2533,11 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
                     'شراء اليوم ⇒ حتى ${ItemWarranty.show(ItemWarranty.iso(spec.endFrom(today)))}',
         style: TextStyle(fontSize: 12, color: spec == null ? _C.red : _C.muted),
       ),
-      const SizedBox(height: 2),
-      const Text('الفواتير المحفوظة تبقى بضمانها؛ التغيير يسري على المبيعات الجديدة فقط.',
+      const SizedBox(height: 10),
+      _field('شروط الضمان (تُطبع تحت المواد في الفاتورة)', _warrantyTerms,
+          hint: 'مثال: لا يشمل الكسر والماء وسوء الاستعمال', maxLines: 3),
+      const SizedBox(height: 4),
+      const Text('الفواتير المحفوظة تبقى بضمانها وشروطه؛ التغيير يسري على المبيعات الجديدة فقط.',
           style: TextStyle(fontSize: 11.5, color: _C.muted)),
     ]);
   }
@@ -2609,11 +2672,8 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
               extra: _warrantyEditor(upd)),
           _switchTile('تتبع الرقم التسلسلي', 'موبايلات وأجهزة — يُسجَّل لكل قطعة رقمها', _trackSerial,
               (v) => upd(() => _trackSerial = v)),
-          _switchTile('تباع بالوزن', 'تُدخل الكمية بالكيلو في الفاتورة', _weighable, (v) => upd(() => _weighable = v),
-              extra: SizedBox(
-                width: 260,
-                child: _field('وزن الوحدة الأساسية', _weight, number: true, hint: '0', suffixText: 'كغم'),
-              )),
+          _weightBlock(upd),
+          _switchTile('تباع بالوزن', 'تُدخل الكمية بالكيلو في الفاتورة', _weighable, (v) => upd(() => _weighable = v)),
           _switchTile('مادة ميزان (الوزن داخل الباركود)',
               'باركود الميزان: 2 + رمز المادة (5 أرقام) + الوزن بالغرام', _scale, (v) => upd(() => _scale = v),
               extra: SizedBox(width: 260, child: _field('رمز المادة في الميزان', _dc['scale_code']!, hint: '5 أرقام'))),
