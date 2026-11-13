@@ -10,6 +10,7 @@ import 'package:alnaser/accounting/accounting_reports.dart';
 import 'package:alnaser/accounting/orphan_debts_service.dart';
 import 'package:alnaser/accounting/posting_engine.dart';
 import 'package:alnaser/accounting/vouchers_service.dart';
+import 'package:alnaser/erp/control/fixed_assets_service.dart';
 import 'package:alnaser/erp/debts/customer_money.dart';
 import 'package:alnaser/erp/debts/receipts_service.dart';
 import 'package:alnaser/erp/device_defaults.dart';
@@ -110,6 +111,8 @@ Future<Object?> _gapOp(String op, Map<String, Object?> a) async {
       return (await _orphans(db, a['gone'] as String, a['hidden'] as String)).out;
     case 'linkOldCash':
       return (await _linkOldCash(db, a['inv'] as String, a['cust'] as String)).out;
+    case 'assets':
+      return (await _assets(db)).out;
     case 'regularStamp':
       return (await _regularStamp(db, a['prod'] as String)).out;
     case 'legacyInvoiceTx':
@@ -804,5 +807,38 @@ Future<_R> _regularStamp(Database db, String prod) async {
   } finally {
     await DeviceDefaults.set();
   }
+  return r;
+}
+
+// ═══════════════════════ 15) إلغاء دورة إهلاك وحذف الأصل ═══════════════════════
+
+/// الأصول الثابتة: أصل عليه إهلاك مرحّل لا يُحذف؛ إلغاء دورة الإهلاك يرفع المانع، ثم يُحذف.
+/// (كان هذا يمر به اختبار التعذيب عشوائياً فقط — هنا بأرقام ثابتة كل مرة.)
+Future<_R> _assets(Database db) async {
+  final r = _R();
+  final now = DateTime.now();
+  final prev = DateTime(now.year, now.month - 1, 1);
+  final period = '${prev.year}-${prev.month.toString().padLeft(2, '0')}';
+  final id = await FixedAssetsService.create(
+    name: 'أصل الاختبار ${now.microsecondsSinceEpoch}',
+    acquiredOn: now.subtract(const Duration(days: 100)), // الشهر السابق داخل عمر الأصل
+    cost: 1200000,
+    salvage: 0,
+    lifeMonths: 12,
+    funding: AssetFunding.opening,
+  );
+  final run = await FixedAssetsService.runPeriod(period);
+  r.isTrue('دورة الإهلاك لم تُرحِّل الأصل', await FixedAssetsService.hasDepreciation(db, id));
+  await r.throws('حذف أصل عليه إهلاك مرحّل', () => FixedAssetsService.delete(id));
+  r.eq('الأصل بعد رفض حذفه', (await db.query('fixed_assets', where: 'id = ?', whereArgs: [id])).length, 1);
+
+  await FixedAssetsService.voidRun(run);
+  final st = (await db.query('depreciation_runs', columns: ['status'], where: 'id = ?', whereArgs: [run])).first['status'];
+  r.isTrue('حالة الدورة بعد الإلغاء «$st»', st == 'void');
+  r.isTrue('الإهلاك ما زال محسوباً بعد إلغاء دورته', !await FixedAssetsService.hasDepreciation(db, id));
+  await FixedAssetsService.voidRun(run); // إلغاء ثانٍ: لا شيء
+  await FixedAssetsService.delete(id);
+  r.eq('الأصل بعد حذفه', (await db.query('fixed_assets', where: 'id = ?', whereArgs: [id])).length, 0);
+  r.notes.add('إهلاك $period: الحذف مرفوض ← إلغاء الدورة ← الحذف تم');
   return r;
 }
