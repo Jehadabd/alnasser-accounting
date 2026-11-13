@@ -25,6 +25,7 @@ import '../services/invoice_edit_log.dart'; // ✏️ إضافة/مرتجع عن
 import '../services/invoice_edit_events.dart'; // ✏️ التعديل عملية بتاريخ يومه
 import '../services/settings_manager.dart';
 import '../accounting/posting_engine.dart' show PostingEngine;
+import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر يُثبَّت عند الحفظ
 
 
 class InvoiceValidationResult {
@@ -733,6 +734,16 @@ class InvoiceController {
         if (!data.isNewInvoice && itemsToInsert.isEmpty) {
           throw Exception('لا يمكن حفظ الفاتورة بدون أصناف مكتملة. تأكد من إدخال اسم المنتج والكمية والسعر ونوع البيع.');
         }
+
+        // 🛡️ الضمان يُثبَّت على السطر الآن: الفاتورة الجديدة والمعلّقة حين تُحفظ تُحسب
+        //    كل سطورها؛ وفي التعديل يبقى السطر القديم بضمانه ويُحسب الجديد فقط.
+        await ItemWarranty.stampLines(
+          txn,
+          itemsToInsert,
+          data.selectedDate,
+          previous: data.isNewInvoice ? const [] : await ItemWarranty.previousLines(txn, invoiceId),
+          fresh: data.isNewInvoice || data.invoiceToManage?.status == 'معلقة',
+        );
 
         // 📦 المخزون: حذف البنود القديمة وإدراج الجديدة يعيد حساب الكمية
         //    تلقائياً (دفتر المخزون — مشغّلات SQLite). كان هنا «إرجاع القديم ثم

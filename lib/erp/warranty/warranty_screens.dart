@@ -16,6 +16,7 @@ import '../pickers.dart';
 import '../report_export.dart';
 import '../sales/doc_pdf.dart';
 import '../sales/sales_return_screen.dart';
+import 'item_warranty.dart';
 import 'warranty_service.dart';
 
 String _day(DateTime? d) => d == null ? '—' : fmtDate(d);
@@ -280,6 +281,10 @@ class _WarrantyClaimEditorState extends State<WarrantyClaimEditor> {
   String? _hint; // «من آخر فاتورة…»
   int _previous = 0;
 
+  /// 🛡️ نهاية الضمان المثبَّتة على سطر فاتورة البيع — تتقدّم على الحساب بالأشهر
+  /// ما لم يغيّر المستخدم تاريخ البيع أو المدة يدوياً.
+  DateTime? _invoiceEnd;
+
   bool get _isEdit => widget.claim != null;
 
   @override
@@ -320,7 +325,14 @@ class _WarrantyClaimEditorState extends State<WarrantyClaimEditor> {
     return (v == null || v <= 0) ? null : v.round();
   }
 
-  bool? get _within => WarrantyService.within(_saleDate, _monthsValue, _claimDate);
+  DateTime? get _end => _invoiceEnd ?? WarrantyService.endOf(_saleDate, _monthsValue);
+
+  bool? get _within {
+    final end = _end;
+    if (end == null) return null;
+    final c = DateTime(_claimDate.year, _claimDate.month, _claimDate.day);
+    return !c.isAfter(end);
+  }
 
   Future<void> _pickCustomer() async {
     final p = await Pickers.customer(context);
@@ -368,9 +380,17 @@ class _WarrantyClaimEditorState extends State<WarrantyClaimEditor> {
       if (s != null) {
         _invoiceId = s.invoiceId;
         _saleDate = s.date;
-        _hint = 'من آخر فاتورة بيعت فيها لهذا العميل: رقم ${s.invoiceId} بتاريخ ${_day(s.date)}';
+        _invoiceEnd = s.warrantyEnd;
+        final w = s.warrantySpec;
+        if (w != null && w.unit != WarrantyUnit.day) {
+          _months.text = '${w.unit == WarrantyUnit.year ? w.value * 12 : w.value}';
+          _saveMonths = false;
+        }
+        _hint = 'من آخر فاتورة بيعت فيها لهذا العميل: رقم ${s.invoiceId} بتاريخ ${_day(s.date)}'
+            '${w == null || s.warrantyEnd == null ? '' : ' — ضمانها المسجَّل فيها: ${w.label} حتى ${ItemWarranty.show(ItemWarranty.iso(s.warrantyEnd!))}'}';
       } else {
         _invoiceId = null;
+        _invoiceEnd = null;
         _hint = 'لم تُوجد فاتورة لهذه المادة باسم هذا العميل — أدخل تاريخ البيع يدوياً إن عرفته';
       }
     });
@@ -428,7 +448,7 @@ class _WarrantyClaimEditorState extends State<WarrantyClaimEditor> {
   @override
   Widget build(BuildContext context) {
     final within = _within;
-    final end = WarrantyService.endOf(_saleDate, _monthsValue);
+    final end = _end;
     final wc = within == null ? ErpColors.muted : (within ? ErpColors.green : ErpColors.red);
     return ErpPage(
       title: _isEdit ? 'تعديل طلب #${widget.claim!.claimNo}' : 'استلام قطعة للضمان أو الصيانة',
@@ -525,12 +545,16 @@ class _WarrantyClaimEditorState extends State<WarrantyClaimEditor> {
                       onChanged: (d) => setState(() {
                         _saleDate = d;
                         _invoiceId = null;
+                        _invoiceEnd = null;
                         _hint = null;
                       }),
                     ),
                     SizedBox(
                       width: 170,
-                      child: TextBox(controller: _months, label: 'مدة الضمان (أشهر)', onChanged: (_) => setState(() {})),
+                      child: TextBox(
+                          controller: _months,
+                          label: 'مدة الضمان (أشهر)',
+                          onChanged: (_) => setState(() => _invoiceEnd = null)),
                     ),
                     DateButton(label: 'تاريخ الاستلام', value: _claimDate, onChanged: (d) => setState(() => _claimDate = d)),
                   ]),

@@ -12,6 +12,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../activity/activity_log.dart';
 import '../erp_common.dart';
+import 'item_warranty.dart';
 import 'warranty_schema.dart';
 
 /// حالات الطلب بالترتيب.
@@ -202,9 +203,13 @@ class WarrantyEvent {
 
 /// آخر بيع لهذه المادة لهذا العميل (لاقتراح تاريخ البيع ورقم الفاتورة).
 class LastSale {
-  LastSale(this.invoiceId, this.date);
+  LastSale(this.invoiceId, this.date, {this.warrantySpec, this.warrantyEnd});
   final int invoiceId;
   final DateTime date;
+
+  /// 🛡️ الضمان المثبَّت على سطر الفاتورة عند البيع (null = لم يُسجَّل لها ضمان).
+  final WarrantySpec? warrantySpec;
+  final DateTime? warrantyEnd;
 }
 
 class ProductClaimStat {
@@ -240,10 +245,11 @@ class WarrantyService {
     return d;
   }
 
-  /// نهاية الضمان = تاريخ البيع + الأشهر.
+  /// آخر يوم في الضمان = تاريخ البيع + الأشهر − يوم (سنة من 2026/11/13 ⇒ 2027/11/12).
+  /// كانت «اليوم نفسه بعد الأشهر» بلا ضبط لنهاية الشهر: 31 كانون الثاني + شهر = 3 آذار.
   static DateTime? endOf(DateTime? sale, int? months) {
     if (sale == null || months == null || months <= 0) return null;
-    return DateTime(sale.year, sale.month + months, sale.day);
+    return WarrantySpec(months, WarrantyUnit.month).endFrom(sale);
   }
 
   /// داخل الضمان؟ (null = لا يُعرف)
@@ -258,6 +264,14 @@ class WarrantyService {
 
   static Future<int?> productMonths(int productId) async {
     final d = await db();
+    // 🛡️ مدة الضمان المضبوطة في بطاقة المادة أولاً (الأيام لا تُعبَّر بالأشهر)
+    try {
+      final p = await d.query('products', columns: ['warranty_spec'], where: 'id = ?', whereArgs: [productId], limit: 1);
+      final s = p.isEmpty ? null : WarrantySpec.parse(p.first['warranty_spec']);
+      if (s != null && !s.isNone && s.unit != WarrantyUnit.day) {
+        return s.unit == WarrantyUnit.year ? s.value * 12 : s.value;
+      }
+    } catch (_) {}
     final r = await d.query('product_warranty', where: 'product_id = ?', whereArgs: [productId], limit: 1);
     final m = r.isEmpty ? null : (r.first['months'] as num?)?.toInt();
     return (m == null || m <= 0) ? null : m;
@@ -285,13 +299,26 @@ class WarrantyService {
     ];
     try {
       final r = await d.rawQuery('''
-        SELECT i.id, i.invoice_date FROM invoices i
+        SELECT i.id, i.invoice_date, it.id AS item_id FROM invoices i
         JOIN invoice_items it ON it.invoice_id = i.id
         WHERE $who AND $what
         ORDER BY i.invoice_date DESC, i.id DESC LIMIT 1''', args);
       if (r.isEmpty) return null;
       final dt = DateTime.tryParse('${r.first['invoice_date']}');
-      return dt == null ? null : LastSale((r.first['id'] as num).toInt(), dt);
+      if (dt == null) return null;
+      // 🛡️ ضمان السطر كما ثُبِّت عند البيع (قاعدة قديمة بلا الأعمدة ⇒ بلا ضمان مسجَّل)
+      WarrantySpec? spec;
+      DateTime? end;
+      try {
+        final w = await d.query('invoice_items',
+            columns: ['warranty_spec', 'warranty_end'], where: 'id = ?', whereArgs: [r.first['item_id']], limit: 1);
+        if (w.isNotEmpty) {
+          spec = WarrantySpec.parse(w.first['warranty_spec']);
+          end = DateTime.tryParse('${w.first['warranty_end'] ?? ''}');
+        }
+      } catch (_) {}
+      return LastSale((r.first['id'] as num).toInt(), dt,
+          warrantySpec: end == null ? null : spec, warrantyEnd: spec == null ? null : end);
     } catch (_) {
       return null;
     }

@@ -42,6 +42,7 @@ import '../widgets/formatters.dart';
 import 'item_card_screen.dart' show ItemCardService, ItemCardScreen, ErpStockReserved, itemTypeLabels;
 import '../services/keyboard_layout/english_code_focus.dart'; // ⌨️ رمز المادة بالإنجليزية
 import '../utils/iqd.dart'; // 💵
+import '../erp/warranty/item_warranty.dart'; // 🛡️ مدة ضمان المادة
 
 // ─────────────────────────── ألوان الواجهة ───────────────────────────
 class _C {
@@ -167,6 +168,13 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   bool _weighable = false, _hasExpiry = false;
   int? _categoryId;
 
+  // 🛡️ الضمان: المدة (يوم/شهر/سنة) وبدايته (البيع أو شراء المحل لها)
+  bool _hasWarranty = false;
+  final _warrantyQty = TextEditingController();
+  WarrantyUnit _warrantyUnit = WarrantyUnit.year;
+  WarrantyBasis _warrantyBasis = WarrantyBasis.sale;
+  bool _warrantyWasSet = false; // للمادة ضمان محفوظ (ولو «بلا ضمان») ⇒ الإطفاء يُحفظ «0»
+
   // ── تفاصيل البطاقة (product_details) ──
   static const _detailText = [
     'second_name', 'brand', 'origin', 'shelf_location', 'notes', 'registration_no',
@@ -230,7 +238,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   void dispose() {
     _codeKeyboard.dispose();
     _codeFocus.dispose();
-    for (final c in [_name, _code, _barcode, _baseUnit, _cost, _costUsd, _openQty, _weight, _alertQty, ..._price, ..._markup]) {
+    for (final c in [_name, _code, _barcode, _baseUnit, _cost, _costUsd, _openQty, _weight, _alertQty, _warrantyQty, ..._price, ..._markup]) {
       c.dispose();
     }
     for (final c in _dc.values) {
@@ -311,6 +319,11 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _weighable = false;
     _hasExpiry = false;
     _categoryId = null;
+    _hasWarranty = false;
+    _warrantyQty.text = '';
+    _warrantyUnit = WarrantyUnit.year;
+    _warrantyBasis = WarrantyBasis.sale;
+    _warrantyWasSet = false;
     _trackSerial = false;
     _scale = false;
     _active = true;
@@ -360,6 +373,12 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _weight.text = _fmt(p.baseWeight);
     _hasExpiry = p.hasExpiry || (d['track_expiry'] as int? ?? 0) == 1;
     _expiryDate = p.expiryDate;
+    final w = WarrantySpec.parse(p.warrantySpec);
+    _warrantyWasSet = (p.warrantySpec ?? '').trim().isNotEmpty;
+    _hasWarranty = w != null && !w.isNone;
+    _warrantyQty.text = _hasWarranty ? '${w!.value}' : '';
+    _warrantyUnit = _hasWarranty ? w!.unit : WarrantyUnit.year;
+    _warrantyBasis = _hasWarranty ? w!.basis : WarrantyBasis.sale;
     _alertQty.text = _fmt(p.alertQuantity);
     final names = levels.map((l) => l['unit_name'] as String).toList();
     _alertUnit = (p.alertUnit != null && names.contains(p.alertUnit)) ? p.alertUnit : null;
@@ -526,6 +545,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       'base_weight': _weighable ? _p(_weight) : null,
       'has_expiry': _hasExpiry ? 1 : 0,
       'expiry_date': _hasExpiry ? _expiryDate?.toIso8601String() : null,
+      'warranty_spec': _warrantySpecValue(),
       'alert_quantity': _alertQ,
       'alert_unit': _alertUnitKey,
       'unit_hierarchy': levels.isEmpty ? null : jsonEncode(levels),
@@ -534,6 +554,15 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       for (var i = 0; i < 6; i++) 'price${i + 1}': Iqd.up(_p(_price[i]) ?? 0.0),
       for (final e in _detailsValues().entries) 'd.${e.key}': e.value,
     };
+  }
+
+  /// 🛡️ قيمة الضمان كما تُحفظ: المدة، أو «0» لإلغاء ضمان كان محفوظاً، أو لا شيء.
+  String? _warrantySpecValue() {
+    final v = int.tryParse(_warrantyQty.text.trim()) ?? 0;
+    if (_hasWarranty && v > 0 && v <= 999) {
+      return WarrantySpec(v, _warrantyUnit, basis: _warrantyBasis).encode();
+    }
+    return _warrantyWasSet ? '0' : null;
   }
 
   bool get _hasChanges =>
@@ -889,6 +918,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       productType: service ? 'service' : 'storable',
       createdAt: now,
       lastModifiedAt: now,
+      warrantySpec: v['warranty_spec'] as String?,
     );
     final id = await _dbs.insertProduct(product);
     final notes = <String>[];
@@ -1581,6 +1611,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     if (_trackSerial) n++;
     if (_scale) n++;
     if (_hasExpiry) n++;
+    if (_hasWarranty) n++;
     if (_weighable) n++;
     if (!_active) n++;
     if (_hideFromStaff) n++;
@@ -2170,7 +2201,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _MoreSection('الخصم والهدايا', Icons.card_giftcard, _C.green),
     _MoreSection('الكلفة', Icons.calculate_outlined, _C.orange),
     _MoreSection('المخزن والطلب', Icons.inventory_outlined, _C.stock),
-    _MoreSection('الصلاحية والتتبع', Icons.track_changes, _C.units),
+    _MoreSection('الصلاحية والضمان والتتبع', Icons.track_changes, _C.units),
     _MoreSection('باركودات إضافية', Icons.qr_code_2, _C.navy),
     _MoreSection('الحالة', Icons.toggle_on_outlined, _C.red),
   ];
@@ -2194,7 +2225,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             (_supplierId != null ? 1 : 0) +
             (_warehouseId != null ? 1 : 0);
       case 5:
-        return (_hasExpiry ? 1 : 0) + (_trackSerial ? 1 : 0) + (_weighable ? 1 : 0) + (_scale ? 1 : 0);
+        return (_hasExpiry ? 1 : 0) + (_hasWarranty ? 1 : 0) + (_trackSerial ? 1 : 0) + (_weighable ? 1 : 0) + (_scale ? 1 : 0);
       case 6:
         return _barcodesList.length + _pendingBarcodes.where((b) => b.code.text.trim().isNotEmpty).length;
       default:
@@ -2395,6 +2426,59 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         ]),
       );
 
+  /// 🛡️ المدة والوحدة وبداية الضمان، ومثال حيّ لتاريخ النهاية.
+  Widget _warrantyEditor(void Function(VoidCallback) upd) {
+    final v = int.tryParse(_warrantyQty.text.trim()) ?? 0;
+    final ok = v > 0 && v <= 999;
+    final spec = ok ? WarrantySpec(v, _warrantyUnit, basis: _warrantyBasis) : null;
+    final today = DateTime.now();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Wrap(spacing: 12, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.end, children: [
+        SizedBox(
+            width: 110,
+            child: _field('المدة', _warrantyQty, number: true, hint: '1', onChanged: (_) => upd(() {}))),
+        SizedBox(
+          width: 140,
+          child: _drop<WarrantyUnit>(
+            'الوحدة',
+            _warrantyUnit,
+            const [
+              DropdownMenuItem(value: WarrantyUnit.day, child: Text('يوم')),
+              DropdownMenuItem(value: WarrantyUnit.month, child: Text('شهر')),
+              DropdownMenuItem(value: WarrantyUnit.year, child: Text('سنة')),
+            ],
+            (u) => upd(() => _warrantyUnit = u ?? WarrantyUnit.year),
+          ),
+        ),
+        SizedBox(
+          width: 220,
+          child: _drop<WarrantyBasis>(
+            'يبدأ الضمان',
+            _warrantyBasis,
+            const [
+              DropdownMenuItem(value: WarrantyBasis.sale, child: Text('من تاريخ البيع')),
+              DropdownMenuItem(value: WarrantyBasis.purchase, child: Text('من تاريخ شرائها من المورد')),
+            ],
+            (b) => upd(() => _warrantyBasis = b ?? WarrantyBasis.sale),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      Text(
+        spec == null
+            ? 'اكتب مدة من 1 إلى 999.'
+            : _warrantyBasis == WarrantyBasis.sale
+                ? 'مثال: بيعت اليوم ⇒ الضمان ${spec.label} حتى ${ItemWarranty.show(ItemWarranty.iso(spec.endFrom(today)))}'
+                : 'يبدأ من تاريخ آخر فاتورة شراء مؤكدة لها قبل البيع (أو من تاريخ البيع إن لم توجد). '
+                    'شراء اليوم ⇒ حتى ${ItemWarranty.show(ItemWarranty.iso(spec.endFrom(today)))}',
+        style: TextStyle(fontSize: 12, color: spec == null ? _C.red : _C.muted),
+      ),
+      const SizedBox(height: 2),
+      const Text('الفواتير المحفوظة تبقى بضمانها؛ التغيير يسري على المبيعات الجديدة فقط.',
+          style: TextStyle(fontSize: 11.5, color: _C.muted)),
+    ]);
+  }
+
   Widget _moreSection(int s, void Function(VoidCallback) upd) {
     switch (s) {
       case 0:
@@ -2497,7 +2581,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         ]);
       case 5:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          _sectionTitle('الصلاحية والتتبع', 'للأدوية والأغذية والأجهزة والمواد الموزونة.'),
+          _sectionTitle('الصلاحية والضمان والتتبع', 'للأدوية والأغذية والأجهزة والمواد الموزونة.'),
           _switchTile('لها تاريخ صلاحية', 'يظهر تنبيه قبل انتهائها', _hasExpiry, (v) => upd(() => _hasExpiry = v),
               extra: Row(children: [
                 OutlinedButton.icon(
@@ -2517,6 +2601,12 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
                 if (_expiryDate != null)
                   TextButton(onPressed: () => upd(() => _expiryDate = null), child: const Text('مسح')),
               ])),
+          _switchTile('لها ضمان', 'يُطبع تاريخ الضمان على الفاتورة عند بيعها', _hasWarranty,
+              (v) => upd(() {
+                    _hasWarranty = v;
+                    if (v && _warrantyQty.text.trim().isEmpty) _warrantyQty.text = '1';
+                  }),
+              extra: _warrantyEditor(upd)),
           _switchTile('تتبع الرقم التسلسلي', 'موبايلات وأجهزة — يُسجَّل لكل قطعة رقمها', _trackSerial,
               (v) => upd(() => _trackSerial = v)),
           _switchTile('تباع بالوزن', 'تُدخل الكمية بالكيلو في الفاتورة', _weighable, (v) => upd(() => _weighable = v),

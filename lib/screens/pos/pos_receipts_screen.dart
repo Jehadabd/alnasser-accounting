@@ -685,7 +685,15 @@ class _ReceiptDetailState extends State<_ReceiptDetail> {
       dateTime: inv.invoiceDate,
       items: [
         for (final it in _items)
-          ReceiptItem(name: it.productName, quantity: _soldQty(it), price: it.appliedPrice, unit: it.saleType),
+          ReceiptItem(
+            name: it.productName,
+            quantity: _soldQty(it),
+            price: it.appliedPrice,
+            unit: it.saleType,
+            warrantySpec: it.warrantySpec, // 🛡️
+            warrantyStart: it.warrantyStart,
+            warrantyEnd: it.warrantyEnd,
+          ),
       ],
       subtotal: subtotal,
       discount: inv.discount,

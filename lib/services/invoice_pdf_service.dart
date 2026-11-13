@@ -15,6 +15,8 @@ import 'package:alnaser/services/font_manager.dart';
 import 'package:alnaser/services/pdf_header.dart';
 import 'package:alnaser/utils/arabic_shaper.dart';
 import 'product_codes.dart'; // 🏷️ رمز المادة
+import '../models/invoice_design_settings.dart' show InvoiceColumnConfig; // 🛡️ أعمدة الضمان
+import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر
 
 class InvoicePdfService {
   static Future<pw.Document> generateInvoicePdf({
@@ -136,6 +138,7 @@ class InvoicePdfService {
                   _buildDynamicInvoiceTable(
                     pageItems: pageItems,
                     anyLineDiscount: invoiceItems.any((it) => it.hasLineDiscount), // 🏷️
+                    anyWarranty: invoiceItems.any((it) => it.hasWarranty), // 🛡️
                     pageIndex: pageIndex,
                     itemsPerPage: itemsPerPage,
                     allProducts: allProducts,
@@ -562,6 +565,7 @@ class InvoicePdfService {
   static pw.Widget _buildDynamicInvoiceTable({
     required List<InvoiceItem> pageItems,
     bool anyLineDiscount = false,
+    bool anyWarranty = false,
     required int pageIndex,
     required int itemsPerPage,
     required List<Product> allProducts,
@@ -570,8 +574,10 @@ class InvoicePdfService {
   }) {
     // الحصول على الأعمدة المرئية مرتبة
     // 🏷️ عمودا «السعر قبل الخصم» و«الخصم» يظهران فقط إن كان في الفاتورة سطر مخصوم أو هدية
+    // 🛡️ وأعمدة الضمان فقط إن كان فيها سطر له ضمان
     final visibleColumns = appSettings.invoiceDesign.visibleColumns
         .where((c) => anyLineDiscount || (c.id != 'discount' && c.id != 'priceBeforeDiscount'))
+        .where((c) => anyWarranty || !InvoiceColumnConfig.isWarranty(c.id))
         .toList();
     
     // إذا لم تُحدد أعمدة، استخدم الافتراضية
@@ -709,6 +715,15 @@ class InvoicePdfService {
           return dataCell(ArabicShaper.shape('له'), font, fontSettings: appSettings.fontSettings.quantity);
         }
         return dataCell('', font);
+      case ItemWarranty.colPeriod:
+      case ItemWarranty.colStart:
+      case ItemWarranty.colEnd:
+        // 🛡️ الضمان المثبَّت على السطر عند البيع (المدة نص عربي، والتاريخان أرقام)
+        final w = ItemWarranty.cellText(columnId,
+                spec: item.warrantySpec, start: item.warrantyStart, end: item.warrantyEnd) ??
+            '';
+        return dataCell(columnId == ItemWarranty.colPeriod ? ArabicShaper.shape(w) : w, font,
+            fontSettings: appSettings.fontSettings.quantity);
       default:
         return dataCell('', font);
     }

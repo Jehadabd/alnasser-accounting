@@ -106,7 +106,9 @@ class LayoutPdfRenderer {
     return t.columns.where((c) {
       final id = '${c['id']}';
       final auto =
-          c['hideIfEmpty'] is bool ? c['hideIfEmpty'] as bool : (id == 'discount' || id == 'priceBeforeDiscount');
+          c['hideIfEmpty'] is bool
+              ? c['hideIfEmpty'] as bool
+              : (id == 'discount' || id == 'priceBeforeDiscount' || id.startsWith('warranty'));
       if (!auto) return true;
       return rows.any((r) => (r[id] ?? '').trim().isNotEmpty);
     }).toList();

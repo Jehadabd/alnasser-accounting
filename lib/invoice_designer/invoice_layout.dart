@@ -133,6 +133,9 @@ class LayoutCatalog {
     'amount': 'المبلغ',
     'weight': 'الوزن',
     'expiry': 'تاريخ الانتهاء',
+    'warrantyPeriod': 'مدة الضمان',
+    'warrantyStart': 'بداية الضمان',
+    'warrantyEnd': 'الضمان حتى',
     'blank': 'ملاحظات',
   };
 

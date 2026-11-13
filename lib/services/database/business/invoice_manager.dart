@@ -15,6 +15,7 @@ import 'invoice_numbering.dart';
 import 'tx_author.dart';
 import 'financial_integrity_guard.dart';
 import '../../invoice_safety/iqd_normalize.dart'; // 💵
+import '../../../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر يُثبَّت عند البيع
 
 class InvoiceManager {
   final Future<Database> Function() getDatabase;
@@ -175,6 +176,9 @@ class InvoiceManager {
                }
              }
           }
+
+          // 🛡️ فاتورة جديدة: ضمان السطر يُحسب ويُثبَّت الآن
+          await ItemWarranty.stampLines(txn, [itemMap], invoice.invoiceDate);
 
           await txn.insert('invoice_items', itemMap);
 

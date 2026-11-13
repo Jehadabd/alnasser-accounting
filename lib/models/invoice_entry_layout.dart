@@ -30,7 +30,7 @@ class InvoiceEntryLayout {
   /// ترتيب الأعمدة كما تظهر (من اليمين)
   static const List<String> keys = [
     'index', 'code', 'itemCode', 'barcode', 'details', 'qty', 'saleType', 'price', 'listPrice', 'discount', 'units', 'total',
-    'stock', 'cost', 'profit',
+    'warranty', 'stock', 'cost', 'profit',
   ];
 
   static const Map<String, String> labels = {
@@ -46,6 +46,7 @@ class InvoiceEntryLayout {
     'discount': 'الخصم / الهدية',
     'units': 'عدد القطع في الوحدة',
     'total': 'الإجمالي',
+    'warranty': 'الضمان حتى (يُثبَّت عند الحفظ)',
     'stock': 'الرصيد في المخزن',
     'cost': 'الكلفة',
     'profit': 'الربح',
@@ -64,6 +65,7 @@ class InvoiceEntryLayout {
     'discount': 'الخصم',
     'units': 'قطع',
     'total': 'الإجمالي',
+    'warranty': 'الضمان حتى',
     'stock': 'الرصيد',
     'cost': 'الكلفة',
     'profit': 'الربح',
@@ -83,6 +85,7 @@ class InvoiceEntryLayout {
     'discount': 80,
     'units': 56,
     'total': 120,
+    'warranty': 104,
     'stock': 80,
     'cost': 96,
     'profit': 96,

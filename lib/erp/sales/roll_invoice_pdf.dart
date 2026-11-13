@@ -14,6 +14,7 @@ import '../../services/settings_manager.dart';
 import '../arabic_words.dart';
 import '../erp_common.dart';
 import '../report_export.dart';
+import '../warranty/item_warranty.dart'; // 🛡️
 import '../../services/receipt_paper.dart';
 
 /// إعداد نوع طباعة فاتورة البيع: a4 (الافتراضي) أو 80mm.
@@ -89,6 +90,12 @@ class RollInvoicePdf {
         for (final i in items) ...[
           pw.Text(i.productName, style: st(9, bold: true)),
           kv('${fmtQty(_qty(i))} ${i.saleType ?? ''} × ${fmtMoney(i.appliedPrice)}', fmtMoney(i.itemTotal)),
+          // 🛡️ الضمان المثبَّت على السطر عند البيع
+          if (i.hasWarranty)
+            pw.Text(
+                'الضمان ${ItemWarranty.cellText(ItemWarranty.colPeriod, spec: i.warrantySpec, start: i.warrantyStart, end: i.warrantyEnd)}'
+                ' حتى ${ItemWarranty.show(i.warrantyEnd)}',
+                style: st(8)),
           pw.SizedBox(height: 2),
         ],
         pw.Divider(thickness: .6),

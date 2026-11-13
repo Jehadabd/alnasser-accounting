@@ -18,6 +18,8 @@ import '../models/product.dart';
 import 'invoice_pdf_service.dart';
 import 'pdf_header.dart';
 import 'product_codes.dart';
+import '../models/invoice_design_settings.dart' show InvoiceColumnConfig; // 🛡️ أعمدة الضمان
+import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر
 
 String _pid5(int? id) {
   if (id == null) return '-----';
@@ -153,6 +155,7 @@ class PrintedInvoicePdf {
   static pw.Widget _buildDynamicTableForPdf({
     required List<Map<String, dynamic>> pageRows,
     bool anyLineDiscount = false,
+    bool anyWarranty = false,
     required int pageIndex,
     required int itemsPerPage,
     required List<Product> allProducts,
@@ -161,8 +164,10 @@ class PrintedInvoicePdf {
   }) {
     // الحصول على الأعمدة المرئية مرتبة
     // 🏷️ «السعر قبل الخصم» و«الخصم» فقط إن كان في الفاتورة صنف مخصوم أو هدية
+    // 🛡️ وأعمدة الضمان فقط إن كان فيها سطر له ضمان
     final visibleColumns = appSettings.invoiceDesign.visibleColumns
         .where((c) => anyLineDiscount || (c.id != 'discount' && c.id != 'priceBeforeDiscount'))
+        .where((c) => anyWarranty || !InvoiceColumnConfig.isWarranty(c.id))
         .toList();
     
     // إذا لم تُحدد أعمدة، استخدم الافتراضية
@@ -313,6 +318,15 @@ class PrintedInvoicePdf {
           return _dataCell('له', font);
         }
         return _dataCell('', font);
+      case ItemWarranty.colPeriod:
+      case ItemWarranty.colStart:
+      case ItemWarranty.colEnd:
+        // 🛡️ الضمان المثبَّت على السطر عند البيع
+        return _dataCell(
+            ItemWarranty.cellText(columnId,
+                    spec: item.warrantySpec, start: item.warrantyStart, end: item.warrantyEnd) ??
+                '',
+            font);
       default:
         return _dataCell('', font);
     }
@@ -455,6 +469,7 @@ class PrintedInvoicePdf {
                         _buildDynamicTableForPdf(
                           pageRows: pageRows,
                           anyLineDiscount: itemsForPdf.any((it) => it.hasLineDiscount), // 🏷️
+                          anyWarranty: itemsForPdf.any((it) => it.hasWarranty), // 🛡️
                           pageIndex: pageIndex,
                           itemsPerPage: itemsPerPage,
                           allProducts: allProducts,

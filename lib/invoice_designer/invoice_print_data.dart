@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 
 import '../erp/arabic_words.dart';
+import '../erp/warranty/item_warranty.dart';
 import '../models/app_settings.dart';
 import '../services/auth_service.dart';
 import '../services/logo_service.dart';
@@ -202,6 +203,10 @@ class InvoicePrintData {
     );
   }
   static String dateText(DateTime d) => '${two(d.day)}-${two(d.month)}-${d.year}';
+
+  /// 🛡️ مثال المعاينة: نهاية ضمان سنة يبدأ اليوم (بقاعدة الحساب نفسها)
+  static String _sampleWarrantyEnd(DateTime now) =>
+      ItemWarranty.show(ItemWarranty.iso(const WarrantySpec(1, WarrantyUnit.year).endFrom(now)));
   static String timeText(DateTime d) => '${two(d.hour)}:${two(d.minute)}';
 
   /// بيانات تجريبية للمعاينة في المصمم
@@ -241,6 +246,10 @@ class InvoicePrintData {
         'amount': fmtMoney(amount),
         'weight': '${fmtMoney(qty * (0.25 + i * 0.5))} كغ',
         'expiry': '${now.year + 1 + i % 2}/${((i * 3) % 12 + 1).toString().padLeft(2, '0')}',
+        // 🛡️ مثال: المواد الزوجية بضمان سنة من اليوم
+        'warrantyPeriod': i.isEven ? 'سنة' : '',
+        'warrantyStart': i.isEven ? '${now.year}/${now.month.toString().padLeft(2, '0')}/${now.day.toString().padLeft(2, '0')}' : '',
+        'warrantyEnd': i.isEven ? _sampleWarrantyEnd(now) : '',
         'blank': '',
       });
     }

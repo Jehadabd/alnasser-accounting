@@ -66,8 +66,15 @@ class InvoiceColumnConfig {
       const InvoiceColumnConfig(id: 'amount', label: 'المبلغ', visible: true, widthFlex: 1.4, order: 10),
       const InvoiceColumnConfig(id: 'weight', label: 'الوزن', visible: false, widthFlex: 1.0, order: 11),
       const InvoiceColumnConfig(id: 'expiry', label: 'تاريخ الانتهاء', visible: false, widthFlex: 1.2, order: 12),
+      // 🛡️ الضمان المثبَّت على السطر — تظهر فقط إن كان في الفاتورة سطر له ضمان
+      const InvoiceColumnConfig(id: 'warrantyPeriod', label: 'مدة الضمان', visible: false, widthFlex: 1.1, order: 13),
+      const InvoiceColumnConfig(id: 'warrantyStart', label: 'بداية الضمان', visible: false, widthFlex: 1.4, order: 14),
+      const InvoiceColumnConfig(id: 'warrantyEnd', label: 'الضمان حتى', visible: true, widthFlex: 1.4, order: 15),
     ];
   }
+
+  /// أعمدة الضمان (تُضاف في آخر الجدول للتصاميم المحفوظة قبلها)
+  static bool isWarranty(String id) => id == 'warrantyPeriod' || id == 'warrantyStart' || id == 'warrantyEnd';
 }
 
 /// إعدادات تصميم الفاتورة الكاملة
@@ -168,6 +175,13 @@ class InvoiceDesignSettings {
       final priceIdx = cols.indexWhere((c) => c.id == 'price');
       final priceOrder = priceIdx >= 0 ? cols[priceIdx].order : cols.last.order;
       var insertAt = priceIdx >= 0 ? priceIdx : cols.length;
+      // 🛡️ أعمدة الضمان: في آخر الجدول (بعد أكبر ترتيب محفوظ)
+      var lastOrder = cols.fold<int>(0, (m, c) => c.order > m ? c.order : m);
+      for (final d in InvoiceColumnConfig.defaultColumns()) {
+        if (have.contains(d.id) || !InvoiceColumnConfig.isWarranty(d.id)) continue;
+        cols.add(d.copyWith(order: ++lastOrder));
+        have.add(d.id);
+      }
       for (final d in InvoiceColumnConfig.defaultColumns()) {
         if (have.contains(d.id)) continue;
         // نفس ترتيب «السعر» وقبله في القائمة ⇒ يظهران قبله (الترتيب مستقر)

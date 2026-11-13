@@ -512,6 +512,7 @@ class _InvoiceEntryLayoutScreenState extends State<InvoiceEntryLayoutScreen> {
             'discount': '10%',
             'units': '',
             'total': '90,000',
+            'warranty': '2027/11/12',
             'stock': '140',
             'cost': '7,500',
             'profit': '15,000',

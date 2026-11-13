@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:intl/intl.dart';
 import 'receipt_paper.dart';
+import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر
 
 /// 🎨 بيانات الإيصال لتصميم من «مصمم الفاتورة»
 InvoicePrintData designedReceiptData(ReceiptData r, PrintCompany company) {
@@ -31,7 +32,14 @@ InvoicePrintData designedReceiptData(ReceiptData r, PrintCompany company) {
     },
     rows: [
       for (var i = 0; i < r.items.length; i++)
-        DesignedRows.simple(i, r.items[i].name, r.items[i].quantity, r.items[i].unit, r.items[i].price),
+        {
+          ...DesignedRows.simple(i, r.items[i].name, r.items[i].quantity, r.items[i].unit, r.items[i].price),
+          // 🛡️ الضمان المثبَّت على السطر عند البيع
+          for (final k in ItemWarranty.printColumns)
+            k: ItemWarranty.cellText(k, spec: r.items[i].warrantySpec, end: r.items[i].warrantyEnd,
+                    start: r.items[i].warrantyStart) ??
+                '',
+        },
     ],
     totals: {
       'beforeDiscount': r.subtotal,
@@ -52,11 +60,19 @@ class ReceiptItem {
   final double price;
   final String? unit;
 
+  /// 🛡️ الضمان المثبَّت على سطر الفاتورة المحفوظة (null = بلا ضمان)
+  final String? warrantySpec;
+  final String? warrantyStart;
+  final String? warrantyEnd;
+
   ReceiptItem({
     required this.name,
     required this.quantity,
     required this.price,
     this.unit,
+    this.warrantySpec,
+    this.warrantyStart,
+    this.warrantyEnd,
   });
 
   double get total => price * quantity;
@@ -373,6 +389,16 @@ class ThermalReceiptService {
                   ],
                 ),
               )),
+              // 🛡️ أسطر الضمان: تحت الأصناف مرة واحدة لكل مادة لها ضمان
+              ...{
+                for (final item in receipt.items)
+                  if ((item.warrantyEnd ?? '').isNotEmpty)
+                    '${item.name}: ضمان ${ItemWarranty.cellText(ItemWarranty.colPeriod, spec: item.warrantySpec, end: item.warrantyEnd)} '
+                        'حتى ${ItemWarranty.show(item.warrantyEnd)}',
+              }.map((t) => pw.Text(t,
+                  style: baseStyle.copyWith(fontSize: (baseStyle.fontSize ?? 10) * 0.85),
+                  textAlign: pw.TextAlign.right,
+                  textDirection: pw.TextDirection.rtl)),
               
               pw.Divider(thickness: 1),
               pw.SizedBox(height: 2 * k),

@@ -66,6 +66,14 @@ class InvoiceItem {
   String? discountType; // 'percent' | 'amount' | 'gift'
   double? discountValue; // النسبة % أو مبلغ الخصم من سعر الوحدة
 
+  // 🛡️ الضمان المثبَّت عند البيع (lib/erp/warranty/item_warranty.dart):
+  //    المدة كنص مضغوط («1y»، «6m:p»)، والبداية والنهاية «yyyy-MM-dd». null = بلا ضمان.
+  String? warrantySpec;
+  String? warrantyStart;
+  String? warrantyEnd;
+
+  bool get hasWarranty => (warrantyEnd ?? '').isNotEmpty;
+
   /// 🎁 هدية مجانية: تخرج من المخزون بسعر صفر (كلفتها تُحسب)
   bool get isGift => discountType == 'gift' && appliedPriceCents == 0;
 
@@ -129,6 +137,9 @@ class InvoiceItem {
     this.priceBeforeDiscount,
     this.discountType,
     this.discountValue,
+    this.warrantySpec,
+    this.warrantyStart,
+    this.warrantyEnd,
   })  : unitPriceCents = unitPriceCents ?? (unitPrice * 100).round(),
         // 💵 السطر لأقرب دينار (النصف للأعلى)، ثم السعر صحيحاً إن طابقه
         appliedPriceCents = _iqdPriceCents(
@@ -194,6 +205,10 @@ class InvoiceItem {
       if (discountType != null) 'price_before_discount': priceBeforeDiscount,
       if (discountType != null) 'discount_type': discountType,
       if (discountType != null) 'discount_value': discountValue,
+      // 🛡️ الضمان (أعمدة تضيفها ErpSchema؛ تُرسل فقط إن وُجد)
+      if (warrantyEnd != null) 'warranty_spec': warrantySpec,
+      if (warrantyEnd != null) 'warranty_start': warrantyStart,
+      if (warrantyEnd != null) 'warranty_end': warrantyEnd,
     };
   }
 
@@ -266,6 +281,9 @@ class InvoiceItem {
       priceBeforeDiscount: (map['price_before_discount'] as num?)?.toDouble(),
       discountType: map['discount_type'] as String?,
       discountValue: (map['discount_value'] as num?)?.toDouble(),
+      warrantySpec: map['warranty_spec'] as String?,
+      warrantyStart: map['warranty_start'] as String?,
+      warrantyEnd: map['warranty_end'] as String?,
     );
   }
 
@@ -294,6 +312,9 @@ class InvoiceItem {
     Object? priceBeforeDiscount = _sentinel,
     Object? discountType = _sentinel,
     Object? discountValue = _sentinel,
+    Object? warrantySpec = _sentinel,
+    Object? warrantyStart = _sentinel,
+    Object? warrantyEnd = _sentinel,
   }) {
     return InvoiceItem(
       id: id ?? this.id,
@@ -321,6 +342,9 @@ class InvoiceItem {
           priceBeforeDiscount == _sentinel ? this.priceBeforeDiscount : priceBeforeDiscount as double?,
       discountType: discountType == _sentinel ? this.discountType : discountType as String?,
       discountValue: discountValue == _sentinel ? this.discountValue : discountValue as double?,
+      warrantySpec: warrantySpec == _sentinel ? this.warrantySpec : warrantySpec as String?,
+      warrantyStart: warrantyStart == _sentinel ? this.warrantyStart : warrantyStart as String?,
+      warrantyEnd: warrantyEnd == _sentinel ? this.warrantyEnd : warrantyEnd as String?,
     );
   }
 }

@@ -66,6 +66,7 @@ import '../services/barcode/scan_settings.dart';
 import '../services/barcode/scan_feedback.dart';
 import '../widgets/camera_scan_button.dart'; // 📷 الكاميرا (أندرويد/آيفون)
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
+import '../erp/warranty/item_warranty.dart'; // 🛡️ عمود الضمان في جدول الإدخال
 
 // Helper: format product ID - show raw value without zero-padding
 String formatProductId5(int? id) {
@@ -5408,6 +5409,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                             rowRegistry: _rowStates,
                             item: item,
                             index: index,
+                            invoiceDate: selectedDate,
                             getCurrentInvoiceProductNames: () {
                               return invoiceItems
                                   .where((it) => it.productName.trim().isNotEmpty && it.uniqueId != item.uniqueId)
@@ -5589,6 +5591,9 @@ class EditableInvoiceItemRow extends StatefulWidget {
   /// 🔫 السطر يسجّل حالته هنا (رقم السطر ← الحالة) لتضيف الشاشة إليه المادة الممسوحة.
   final Map<String, Object>? rowRegistry;
 
+  /// 🛡️ تاريخ الفاتورة: لمعاينة نهاية ضمان السطر قبل الحفظ
+  final DateTime? invoiceDate;
+
   const EditableInvoiceItemRow({
     Key? key,
     required this.item,
@@ -5614,6 +5619,7 @@ class EditableInvoiceItemRow extends StatefulWidget {
     this.costDates,
     this.paymentType = 'نقد',
     this.rowRegistry,
+    this.invoiceDate,
   }) : super(key: key);
 
   @override
@@ -6755,6 +6761,10 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
         priceBeforeDiscount: null,
         discountType: null,
         discountValue: null,
+        // 🛡️ مادة السطر تغيّرت ⇒ ضمانه يُحسب من جديد عند الحفظ
+        warrantySpec: null,
+        warrantyStart: null,
+        warrantyEnd: null,
       );
       // مزامنة خانة التفاصيل والسعر فوراً
       _detailsController?.text = prod.name;
@@ -7209,6 +7219,36 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                             color: Theme.of(context).colorScheme.primary),
                       ),
               )),
+            // 🛡️ الضمان: المثبَّت على السطر المحفوظ، أو معاينة من مدة ضمان المادة
+            _cell('warranty', Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: gridBorderColor, width: gridW)),
+              ),
+              child: Builder(builder: (context) {
+                final it = widget.isViewOnly ? widget.item : _currentItem;
+                if (it.hasWarranty) {
+                  return Tooltip(
+                    message: 'ضمان ${WarrantySpec.parse(it.warrantySpec)?.label ?? ''} '
+                        'من ${ItemWarranty.show(it.warrantyStart)} — مثبَّت على الفاتورة',
+                    child: Text(ItemWarranty.show(it.warrantyEnd),
+                        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.teal.shade800)),
+                  );
+                }
+                if (widget.isViewOnly) return const SizedBox.shrink();
+                final spec = WarrantySpec.parse(_rowProduct?.warrantySpec);
+                if (spec == null || spec.isNone) return const SizedBox.shrink();
+                final day = widget.invoiceDate ?? DateTime.now();
+                final preview = spec.basis == WarrantyBasis.sale
+                    ? ItemWarranty.show(ItemWarranty.iso(spec.endFrom(day)))
+                    : '${spec.label} من الشراء';
+                return Tooltip(
+                  message: 'ضمان ${spec.label} ${spec.basisLabel} — يُثبَّت عند حفظ الفاتورة',
+                  child: Text(preview,
+                      style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey.shade700)),
+                );
+              }),
+            )),
             // 📦 الرصيد في المخزن (بالوحدة الأساسية)
             _cell('stock', Container(
               alignment: Alignment.center,

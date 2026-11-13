@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/product.dart';
+import '../models/invoice_item.dart'; // 🛡️ ضمان السطر في الإيصال
 import '../models/category.dart';
 import '../models/customer.dart';
 import '../services/database_service.dart';
@@ -472,12 +473,25 @@ class POSProvider extends ChangeNotifier {
         
         // 🖨️ طباعة إيصال حراري تلقائياً
         try {
-          final receiptItems = _cartItems.map((item) => ReceiptItem(
-            name: item.product.name,
-            quantity: item.quantity,
-            price: item.price,
-            unit: item.selectedUnit,
-          )).toList();
+          // 🛡️ الضمان كما ثُبِّت على سطور الفاتورة المحفوظة (بالمادة)
+          final saved = <String, InvoiceItem>{};
+          try {
+            for (final it in await DatabaseService().getInvoiceItems(invoiceId)) {
+              if (it.hasWarranty) saved[it.productName] = it;
+            }
+          } catch (_) {}
+          final receiptItems = _cartItems.map((item) {
+            final w = saved[item.product.name];
+            return ReceiptItem(
+              name: item.product.name,
+              quantity: item.quantity,
+              price: item.price,
+              unit: item.selectedUnit,
+              warrantySpec: w?.warrantySpec,
+              warrantyStart: w?.warrantyStart,
+              warrantyEnd: w?.warrantyEnd,
+            );
+          }).toList();
           
           final receipt = ReceiptData(
             invoiceId: invoiceDisplayNumber, // الرقم المركّب كـ String للعرض

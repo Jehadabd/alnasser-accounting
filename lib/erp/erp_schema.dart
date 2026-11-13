@@ -632,6 +632,12 @@ class ErpSchema {
     //    — وصل بقي in_progress انقطع في منتصفه (انطفاء/إغلاق) فيُعرض للمستخدم ليقرر.
     ['customer_receipts', 'status', "TEXT NOT NULL DEFAULT 'complete'"],
     ['customer_receipts', 'plan_json', 'TEXT'], // الأسطر المخططة ومعرّفات معاملاتها المحجوزة
+    // 🛡️ الضمان (lib/erp/warranty/item_warranty.dart): مدته على المادة (تُزامَن معها)،
+    //    ومثبَّت على سطر الفاتورة لحظة البيع (يُزامَن داخل حزمة الفاتورة)
+    ['products', 'warranty_spec', 'TEXT'],
+    ['invoice_items', 'warranty_spec', 'TEXT'],
+    ['invoice_items', 'warranty_start', 'TEXT'],
+    ['invoice_items', 'warranty_end', 'TEXT'],
   ];
 
   /// حسابات يحتاجها النظام الجديد: [المفتاح، الاسم، رمز مفضّل، رمز الأب، النوع، مراقبة؟]

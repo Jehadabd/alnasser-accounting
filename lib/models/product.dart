@@ -47,6 +47,10 @@ class Product {
   final DateTime? lastSyncedAt; // آخر مزامنة ناجحة
   final bool isDeleted; // حذف ناعم (يُزامَن بدل الحذف الفعلي)
 
+  /// 🛡️ مدة الضمان وبدايته («1y»، «6m:p»، «0» = بلا ضمان) — WarrantySpec.
+  /// null = لم يُضبط، فلا يُكتب في toMap (لا يمسح ضمان مادة عند تحديثها من شاشة لا تعرفه).
+  final String? warrantySpec;
+
   String get translatedUnit => unit == 'piece' ? 'قطعة' : (unit == 'meter' ? 'متر' : unit);
 
   Product({
@@ -85,6 +89,7 @@ class Product {
     this.lastModifiedByDeviceId,
     this.lastSyncedAt,
     this.isDeleted = false,
+    this.warrantySpec,
   });
 
   Map<String, dynamic> toMap() {
@@ -125,6 +130,7 @@ class Product {
       'last_modified_by_device_id': lastModifiedByDeviceId,
       'last_synced_at': lastSyncedAt?.toIso8601String(),
       'is_deleted': isDeleted ? 1 : 0,
+      if (warrantySpec != null) 'warranty_spec': warrantySpec,
     };
   }
 
@@ -167,6 +173,7 @@ class Product {
           ? DateTime.parse(map['last_synced_at'] as String)
           : null,
       isDeleted: ((map['is_deleted'] as int?) ?? 0) == 1,
+      warrantySpec: map['warranty_spec'] as String?,
     );
   }
 
@@ -206,6 +213,7 @@ class Product {
     String? lastModifiedByDeviceId,
     DateTime? lastSyncedAt,
     bool? isDeleted,
+    String? warrantySpec,
   }) {
     return Product(
       id: id ?? this.id,
@@ -243,6 +251,7 @@ class Product {
       lastModifiedByDeviceId: lastModifiedByDeviceId ?? this.lastModifiedByDeviceId,
       lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
       isDeleted: isDeleted ?? this.isDeleted,
+      warrantySpec: warrantySpec ?? this.warrantySpec,
     );
   }
 
@@ -363,4 +372,4 @@ class ProductUnit {
       isBaseUnit: map['is_base_unit'] == 1,
     );
   }
-}
+}

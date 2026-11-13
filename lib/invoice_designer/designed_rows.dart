@@ -7,6 +7,7 @@ import '../models/invoice_item.dart';
 import '../models/product.dart';
 import '../services/invoice_pdf_service.dart';
 import '../services/product_codes.dart';
+import '../erp/warranty/item_warranty.dart';
 import 'invoice_print_data.dart';
 
 class DesignedRows {
@@ -54,6 +55,9 @@ class DesignedRows {
       'amount': fmtMoney(item.itemTotal),
       'weight': _weight(product, baseQty),
       'expiry': _expiry(product),
+      // 🛡️ الضمان المثبَّت على السطر عند البيع
+      for (final k in ItemWarranty.printColumns)
+        k: ItemWarranty.cellText(k, spec: item.warrantySpec, start: item.warrantyStart, end: item.warrantyEnd) ?? '',
       'blank': '',
     };
   }
