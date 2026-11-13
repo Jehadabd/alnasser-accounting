@@ -18,6 +18,7 @@ import 'database/supplier_compat.dart';
 import 'name_search.dart'; // 🔤 الأسماء بلا مسافات
 import '../utils/iqd.dart'; // 💵
 import 'invoice_safety/iqd_normalize.dart'; // 💵
+import '../erp/inventory/product_batches.dart'; // 📦 دفعات الشراء (صلاحية وضمان)
 
 /// خدمة المشتريات والموردين (Odoo-Style)
 class PurchaseService with ChangeNotifier {
@@ -374,7 +375,8 @@ class PurchaseService with ChangeNotifier {
       // 5. Apply New Effects (if new invoice is confirmed)
       if (newInvoice.status == 'confirmed') {
         for (var item in newItems) {
-          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId, currency: newInvoice.currency);
+          await _updateProductStockAndCost(txn, item, costingMethod,
+              warehouseId: warehouseId, currency: newInvoice.currency, batchDate: newInvoice.date);
         }
       }
 
@@ -459,7 +461,8 @@ class PurchaseService with ChangeNotifier {
       // 3. If Confirmed, Update Stock and Cost
       if (nowConfirmed) {
         for (var item in items) {
-          await _updateProductStockAndCost(txn, item, costingMethod, warehouseId: warehouseId, currency: invoice.currency);
+          await _updateProductStockAndCost(txn, item, costingMethod,
+              warehouseId: warehouseId, currency: invoice.currency, batchDate: invoice.date);
         }
       }
 
@@ -480,7 +483,7 @@ class PurchaseService with ChangeNotifier {
   /// (UsdCostService). كانت فاتورة الدولار تكتب السعر الدولاري كما هو (5$ ← كلفة
   /// 5 دنانير) فيتضخم الربح في التقارير. وقبل تغيير الكلفة تُثبَّت كلفة ما بيع سابقاً.
   Future<void> _updateProductStockAndCost(Transaction txn, PurchaseInvoiceItem item, String costingMethod,
-      {int? warehouseId, String currency = 'IQD'}) async {
+      {int? warehouseId, String currency = 'IQD', DateTime? batchDate}) async {
     debugPrint('💾 DB_UPDATE: Starting stock/cost update for product ID: ${item.productId}');
     debugPrint('💾 DB_UPDATE: Item baseQuantity: ${item.baseQuantity}, baseUnitCost: ${item.baseUnitCost}');
     debugPrint('💾 DB_UPDATE: Costing method: $costingMethod');
@@ -602,8 +605,14 @@ class PurchaseService with ChangeNotifier {
     final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
     if (productUuid != null) {
       final mv = await StockLedger.addMovement(txn,
-          productSyncUuid: productUuid, delta: newQty, kind: 'purchase', note: 'فاتورة شراء');
+          productSyncUuid: productUuid,
+          delta: newQty,
+          kind: 'purchase',
+          note: 'فاتورة شراء',
+          batch: await ProductBatches.ready(txn) ? ProductBatches.batchFields(item, batchDate) : const {});
       await PurchaseExt.stampWarehouse(txn, mv, warehouseId);
+      // 📦 صلاحية المادة = أقرب صلاحية بين دفعاتها الباقية
+      if (item.hasBatchDetails) await ProductBatches.refreshExpiry(txn, productSyncUuid: productUuid);
     }
 
     debugPrint('💾 DB_UPDATE: ✅ Product updated successfully!');

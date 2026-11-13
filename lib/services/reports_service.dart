@@ -17,6 +17,7 @@ import 'reports/cash_flow.dart';
 import 'reports/currency_impact.dart';
 import 'reports/sales_facts.dart';
 import 'debt_return_service.dart';
+import '../erp/inventory/product_batches.dart'; // 📦 صلاحية الدفعات
 export 'reports/cash_flow.dart' show CashFlow, DebtGroup;
 export 'reports/currency_impact.dart' show CurrencyImpact, UsdProductImpact, UsdSupplierDebt;
 export 'reports/sales_facts.dart' show SalesFacts, SalesTotals, ProductAgg, CustomerAgg, CategoryAgg, SalesInvoiceFact, SalesReturnFact, SalesItemFact, SalesItemKind, ReportSource, ReportCategory;
@@ -1702,6 +1703,9 @@ class ReportsService {
   /// 🚨 جلب عدد المنتجات التي ستنتهي صلاحيتها قريباً
   Future<int> getExpiringProductsCount(int monthsThreshold) async {
     final db = await _db.database;
+    try {
+      await ProductBatches.refreshExpiry(db); // 📦 صلاحية المادة من دفعاتها الباقية
+    } catch (_) {}
     final now = DateTime.now();
     // 📅 بالأيام لا بالوقت، وبالأشهر التقويمية — كشاشة التنبيه (AlertService) تماماً.
     //    كان يقارن نصاً مع الوقت الحالي فلا يعدّ ما ينتهي اليوم، ويقرّب الشهر إلى 30 يوماً.

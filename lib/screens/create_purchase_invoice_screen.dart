@@ -27,6 +27,7 @@ import '../erp/purchases/purchase_price_history.dart'; // 🏷️ سجل أسع�
 import '../erp/inventory/margin_alert.dart'; // 📉 مواد نزل ربحها
 import '../erp/inventory/margin_review.dart';
 import '../org/warehouse_scope.dart'; // 🔐 نطاق الموظف
+import '../erp/inventory/batch_details_dialog.dart'; // 📦 صلاحية الدفعة وضمانها
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
@@ -813,13 +814,38 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    item.productName ?? 'منتج غير معروف',
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                    overflow: TextOverflow.ellipsis,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        item.productName ?? 'منتج غير معروف',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      // 📦 صلاحية الدفعة وضمانها
+                      if (item.hasBatchDetails)
+                        Text(
+                          BatchDetailsDialog.summary(item),
+                          style: const TextStyle(fontSize: 11.5, color: Color(0xFF0F766E), fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
                   ),
                 ),
                 if (!isNew && item.productId > 0) ...[
+                  IconButton(
+                    tooltip: item.hasBatchDetails
+                        ? 'الصلاحية والضمان: ${BatchDetailsDialog.summary(item)}'
+                        : 'الصلاحية والضمان لهذه الدفعة',
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      item.hasBatchDetails ? Icons.verified_user_rounded : Icons.verified_user_outlined,
+                      size: 18,
+                      color: item.hasBatchDetails ? const Color(0xFF0F766E) : _pMuted,
+                    ),
+                    onPressed: () => _editBatch(item, index),
+                  ),
                   _priceRiseBadge(item),
                   IconButton(
                     tooltip: 'أسعار الشراء السابقة لهذه المادة',
@@ -990,6 +1016,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         ],
       ),
     );
+  }
+
+  /// 📦 صلاحية هذه الدفعة وضمانها وشروطه (تنتقل إلى المخزون عند «تأكيد واستلام»).
+  Future<void> _editBatch(PurchaseInvoiceItem item, int index) async {
+    Product? product;
+    for (final p in _products) {
+      if (p.id == item.productId) product = p;
+    }
+    final updated = await BatchDetailsDialog.edit(context, item: item, product: product, purchaseDate: _invoiceDate);
+    if (updated == null || !mounted || index >= _items.length) return;
+    setState(() => _items[index] = updated);
   }
 
   Future<void> _defineNewProduct(PurchaseInvoiceItem item, int index) async {

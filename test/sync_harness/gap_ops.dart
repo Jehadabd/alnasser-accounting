@@ -36,7 +36,7 @@ import 'package:alnaser/services/purchase_service.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'scenario_ops.dart' show scenOp;
-import 'warranty_ops.dart' show warrantyScenario;
+import 'warranty_ops.dart' show warrantyScenario, warrantyBatchScenario;
 
 double _d(Object? v) => (v as num?)?.toDouble() ?? 0.0;
 
@@ -118,6 +118,8 @@ Future<Object?> _gapOp(String op, Map<String, Object?> a) async {
       return (await _regularStamp(db, a['prod'] as String)).out;
     case 'warranty':
       return await warrantyScenario(db, a['prod'] as String);
+    case 'warrantyBatches':
+      return await warrantyBatchScenario(db, a['prod'] as String);
     case 'legacyInvoiceTx':
       // صف دين فاتورة وصل منفصلاً بمعرّفه (إصدارات قديمة رفعت معاملات الفواتير وحدها)
       final cid = await _id(db, 'customers', 'sync_uuid', a['cust'] as String);

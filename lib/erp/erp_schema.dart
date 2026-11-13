@@ -641,6 +641,10 @@ class ErpSchema {
     // 🛡️ شروط الضمان («لا يشمل الكسر والماء»): على المادة، ومثبَّتة على السطر مع ضمانه
     ['products', 'warranty_terms', 'TEXT'],
     ['invoice_items', 'warranty_terms', 'TEXT'],
+    // 📦 سطر فاتورة الشراء: صلاحية الدفعة وضمانها (تُنقل إلى حركة الشراء عند التأكيد)
+    ['purchase_invoice_items', 'expiry_date', 'TEXT'],
+    ['purchase_invoice_items', 'warranty_spec', 'TEXT'],
+    ['purchase_invoice_items', 'warranty_terms', 'TEXT'],
   ];
 
   /// حسابات يحتاجها النظام الجديد: [المفتاح، الاسم، رمز مفضّل، رمز الأب، النوع، مراقبة؟]

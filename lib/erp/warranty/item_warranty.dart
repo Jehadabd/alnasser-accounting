@@ -15,13 +15,17 @@
 //   • النهاية شاملة: سنة من 2026/11/13 تنتهي 2027/11/12 (آخر يوم يعمل فيه
 //     الضمان). وإن لم يوجد اليوم المقابل في الشهر الأخير (31 كانون الثاني + شهر)
 //     تنتهي بآخر يوم من ذلك الشهر (28/29 شباط).
-//   • «من تاريخ الشراء»: آخر فاتورة شراء مؤكدة للمادة في يوم البيع أو قبله؛
-//     إن لم توجد يُحسب من تاريخ البيع.
+//   • دفعات الشراء (ProductBatches): إن كان للدفعة التي تخرج منها أول قطعة في السطر
+//     ضمانٌ (أُدخل في فاتورة الشراء) فهو ضمان السطر وشروطه، وإلا ضمان المادة.
+//   • «من تاريخ الشراء»: تاريخ فاتورة شراء تلك الدفعة؛ وبلا دفعة: آخر فاتورة شراء
+//     مؤكدة للمادة في يوم البيع أو قبله؛ وإن لم توجد يُحسب من تاريخ البيع.
 //
 // سجل عرض وطباعة فقط: لا مال ولا مخزون ولا قيود.
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart' show DatabaseExecutor;
+
+import '../inventory/product_batches.dart';
 
 enum WarrantyUnit { day, month, year }
 
@@ -203,6 +207,8 @@ class ItemWarranty {
 
     final specCache = <String, (WarrantySpec?, String?)>{};
     final purchaseCache = <int, DateTime?>{};
+    final batchCache = <int, BatchSet>{};
+    final taken = <int, double>{}; // ما أُخذ من كل مادة في هذه الفاتورة قبل السطر (FIFO)
     for (final line in lines) {
       final prev = fresh ? null : takePrevious(line);
       if (prev != null) {
@@ -215,8 +221,23 @@ class ItemWarranty {
       final pid = (line['product_id'] as num?)?.toInt();
       final name = '${line['product_name'] ?? ''}'.trim();
       final key = pid != null ? '#$pid' : name;
-      final (spec, terms) =
+      var (spec, terms) =
           specCache.containsKey(key) ? specCache[key]! : (specCache[key] = await _productSpec(d, pid, name));
+      var start = DateTime(saleDate.year, saleDate.month, saleDate.day);
+
+      // 📦 الدفعة التي تخرج منها أول قطعة في السطر: ضمانها وشروطها يتقدّمان على المادة
+      StockBatch? batch;
+      if (pid != null) {
+        final bs = batchCache[pid] ??= await _batchesOf(d, pid);
+        final offset = taken[pid] ?? 0;
+        batch = bs.at(offset);
+        taken[pid] = offset + _baseQty(line);
+      }
+      if (batch?.warranty != null && !batch!.warranty!.isNone) {
+        spec = batch.warranty;
+        terms = batch.terms ?? terms;
+      }
+
       if (spec == null || spec.isNone) {
         line['warranty_spec'] = null;
         line['warranty_start'] = null;
@@ -224,18 +245,35 @@ class ItemWarranty {
         line['warranty_terms'] = null;
         continue;
       }
-      var start = DateTime(saleDate.year, saleDate.month, saleDate.day);
       if (spec.basis == WarrantyBasis.purchase && pid != null) {
-        final bought = purchaseCache.containsKey(pid)
-            ? purchaseCache[pid]
-            : (purchaseCache[pid] = await _lastPurchase(d, pid, start));
-        if (bought != null) start = bought;
+        // من تاريخ شراء الدفعة نفسها؛ وبلا دفعة: آخر فاتورة شراء مؤكدة قبل البيع
+        final bought = batch?.date ??
+            (purchaseCache.containsKey(pid)
+                ? purchaseCache[pid]
+                : (purchaseCache[pid] = await _lastPurchase(d, pid, start)));
+        if (bought != null) start = DateTime(bought.year, bought.month, bought.day);
       }
       line['warranty_spec'] = spec.encode();
       line['warranty_start'] = iso(start);
       line['warranty_end'] = iso(spec.endFrom(start));
       line['warranty_terms'] = terms;
     }
+  }
+
+  /// كمية السطر بالوحدة الأساسية — كدفتر المخزون (StockLedger._itemBaseQty).
+  static double _baseQty(Map<String, dynamic> line) {
+    final large = (line['quantity_large_unit'] as num?)?.toDouble() ?? 0;
+    if (large > 0) {
+      final per = (line['units_in_large_unit'] as num?)?.toDouble() ?? 0;
+      return large * (per > 0 ? per : 1);
+    }
+    return (line['quantity_individual'] as num?)?.toDouble() ?? 0;
+  }
+
+  static Future<BatchSet> _batchesOf(DatabaseExecutor d, int productId) async {
+    final r = await d.query('products', columns: ['sync_uuid'], where: 'id = ?', whereArgs: [productId], limit: 1);
+    final u = r.isEmpty ? '' : '${r.first['sync_uuid'] ?? ''}';
+    return u.isEmpty ? BatchSet.empty : ProductBatches.of(d, u);
   }
 
   /// مدة ضمان المادة وشروطه (الشروط null إن كانت فارغة).

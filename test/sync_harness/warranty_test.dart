@@ -33,6 +33,7 @@ void main() {
       }
 
       final prod = (await h.addProduct('D1', 'مادة الضمان', 100))!;
+      final prod2 = (await h.addProduct('D1', 'مادة الدفعات', 0))!; // 📦 رصيدها كله من دفعات الشراء
       final e0 = await h.settle();
       if (e0.isNotEmpty) throw StateError('البداية: ${e0.join('\n')}');
 
@@ -46,6 +47,18 @@ void main() {
       }
       if (fails.isEmpty) ok('D1 — ${(r['notes'] as List).join('؛ ')}');
       await invariants('D1', 'بعد السيناريو');
+
+      // 📦 دفعات الشراء: صلاحية وضمان لكل دفعة، والبيع من الأقدم
+      final rb = (await h.d('D1').call('gap', {
+        'op': 'warrantyBatches',
+        'args': {'prod': prod2}
+      }, const Duration(minutes: 3))) as Map;
+      final fb = (rb['fails'] as List).cast<String>();
+      for (final f in fb) {
+        bad('D1 الدفعات: $f');
+      }
+      if (fb.isEmpty) ok('D1 الدفعات — ${(rb['notes'] as List).join('؛ ')}');
+      await invariants('D1', 'بعد الدفعات');
 
       final e1 = await h.settle();
       for (final e in e1) {
@@ -83,6 +96,19 @@ void main() {
         bad('D2: مدة ضمان المادة «$got» والمتوقع «${r['spec']}»');
       } else {
         ok('D2 استلم مدة ضمان المادة «$got»');
+      }
+
+      // 📦 الدفعات تصل الجهاز الآخر مع حركات الشراء
+      final mv = (await h.d('D2').call('sqlRaw', {
+        'sql': "SELECT expiry_date AS e, warranty_spec AS w FROM stock_movements "
+            "WHERE product_sync_uuid = '$prod2' AND kind = 'purchase' ORDER BY batch_date"
+      })) as List;
+      if (mv.length != 2) {
+        bad('D2: وصلت ${mv.length} من دفعتي الشراء');
+      } else if ((mv[0] as Map)['w'] != rb['spec1'] || (mv[1] as Map)['e'] != rb['expiry2']) {
+        bad('D2: تفاصيل الدفعات لم تصل كما هي: $mv');
+      } else {
+        ok('D2 استلم دفعتي الشراء بصلاحيتهما وضمانهما');
       }
 
       await invariants('D1', 'النهاية');

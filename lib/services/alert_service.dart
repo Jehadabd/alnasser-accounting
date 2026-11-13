@@ -5,6 +5,7 @@ import '../models/app_settings.dart';
 import 'database_service.dart';
 import 'settings_manager.dart';
 import '../screens/alerts_display_dialog.dart';
+import '../erp/inventory/product_batches.dart'; // 📦 صلاحية الدفعات
 
 class AlertService {
   final DatabaseService _databaseService = DatabaseService();
@@ -160,6 +161,10 @@ class AlertService {
   /// جلب المنتجات التي قارب تاريخ صلاحيتها على الانتهاء
   Future<List<Product>> _getExpiringProducts(int monthsThreshold) async {
     final db = await _databaseService.database;
+    // 📦 صلاحية المادة من دفعاتها الباقية (فاتورة الشراء) قبل الفحص
+    try {
+      await ProductBatches.refreshExpiry(db);
+    } catch (_) {}
     final now = DateTime.now();
     // 📅 شهر تقويمي مضبوط بنهاية الشهر (30 تشرين الثاني + 3 أشهر = 28 شباط لا 2 آذار)
     final idx = now.month - 1 + monthsThreshold;

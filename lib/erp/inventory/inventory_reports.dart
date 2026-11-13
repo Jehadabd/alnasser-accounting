@@ -14,6 +14,7 @@ import '../../services/invoice_edit_events.dart';
 import '../currency_service.dart';
 import '../erp_common.dart';
 import '../stock_helpers.dart';
+import 'product_batches.dart'; // 📦 صلاحية الدفعات
 
 /// كمية بند الفاتورة بالوحدة الأساسية (نفس تعريف دفتر المخزون).
 const String kItemBaseQty = '''
@@ -302,6 +303,9 @@ class InventoryReports {
   /// المواد التي تنتهي صلاحيتها خلال [days] يوماً (أو انتهت).
   Future<List<Map<String, Object?>>> expiring(int days) async {
     final db = await erpDb();
+    try {
+      await ProductBatches.refreshExpiry(db); // 📦 صلاحية المادة من دفعاتها الباقية
+    } catch (_) {}
     try {
       return await db.rawQuery('''
         SELECT id, name, unit, stock_quantity, expiry_date FROM products

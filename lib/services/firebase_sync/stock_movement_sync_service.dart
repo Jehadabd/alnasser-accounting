@@ -23,6 +23,7 @@ import 'firebase_sync_config.dart';
 import 'firebase_sync_service.dart';
 import 'sync_health.dart';
 import 'safe_transaction.dart'; // 🛡️ معاملات آمنة على ويندوز
+import '../../erp/inventory/product_batches.dart'; // 📦 تفاصيل دفعة الشراء مع الحركة
 
 class StockMovementSyncService {
   static final StockMovementSyncService _instance = StockMovementSyncService._internal();
@@ -96,6 +97,9 @@ class StockMovementSyncService {
         'note': r['note'],
         'createdAt': r['created_at'],
         'originDeviceId': (r['origin_device_id'] as String?) ?? me,
+        // 📦 تفاصيل دفعة الشراء (تُرسل فقط إن وُجدت؛ الإصدارات القديمة تتجاهلها)
+        for (final k in ProductBatches.columns)
+          if (r[k] != null) ProductBatches.docKey(k): r[k],
         'uploadedAt': FieldValue.serverTimestamp(),
       };
 
@@ -314,9 +318,17 @@ class StockMovementSyncService {
         'created_at': data['createdAt'] ?? DateTime.now().toIso8601String(),
         'origin_device_id': data['originDeviceId'],
         'is_uploaded': 1,
+        if (await ProductBatches.ready(db))
+          for (final k in ProductBatches.columns)
+            if (data[ProductBatches.docKey(k)] is String) k: data[ProductBatches.docKey(k)],
       },
       conflictAlgorithm: ConflictAlgorithm.ignore,
     );
+    if (n > 0 && kind == 'purchase' && data[ProductBatches.docKey('expiry_date')] is String) {
+      try {
+        await ProductBatches.refreshExpiry(db, productSyncUuid: product);
+      } catch (_) {}
+    }
     return n > 0;
   }
 

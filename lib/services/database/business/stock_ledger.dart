@@ -316,6 +316,7 @@ class StockLedger {
     required String kind,
     String? note,
     String? originDeviceId,
+    Map<String, Object?> batch = const {},
   }) async {
     if (productSyncUuid.isEmpty || delta.abs() < 1e-9) return null;
     // منتج بلا رصيد افتتاحي بعد (وصل من جهاز آخر ولم يصل رصيد منشئه): رصيد
@@ -332,6 +333,8 @@ class StockLedger {
       'created_at': DateTime.now().toIso8601String(),
       'origin_device_id': originDeviceId,
       'is_uploaded': 0,
+      // 📦 تفاصيل دفعة الشراء (batch_date/expiry_date/warranty_spec/warranty_terms) — ProductBatches
+      ...batch,
     });
     onMovementAdded?.call();
     return uuid;

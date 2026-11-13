@@ -12,6 +12,14 @@ class PurchaseInvoiceItem {
   final double totalPrice;
   final double receivedQuantity; // الكمية المستلمة فعلياً (للاستلام الجزئي)
 
+  // 📦 تفاصيل الدفعة (ProductBatches): صلاحيتها «yyyy-MM-dd» وضمانها («1y»، «6m:p») وشروطه.
+  final String? expiryDate;
+  final String? warrantySpec;
+  final String? warrantyTerms;
+
+  bool get hasBatchDetails =>
+      (expiryDate ?? '').isNotEmpty || (warrantySpec ?? '').isNotEmpty || (warrantyTerms ?? '').isNotEmpty;
+
   PurchaseInvoiceItem({
     this.id,
     this.invoiceId,
@@ -23,6 +31,9 @@ class PurchaseInvoiceItem {
     this.conversionFactor = 1.0,
     required this.totalPrice,
     this.receivedQuantity = 0.0,
+    this.expiryDate,
+    this.warrantySpec,
+    this.warrantyTerms,
   });
 
   /// الكمية بالوحدة الأساسية (القطع)
@@ -45,6 +56,9 @@ class PurchaseInvoiceItem {
       'conversion_factor': conversionFactor,
       'total_price': totalPrice,
       'received_quantity': receivedQuantity,
+      if (expiryDate != null) 'expiry_date': expiryDate,
+      if (warrantySpec != null) 'warranty_spec': warrantySpec,
+      if (warrantyTerms != null) 'warranty_terms': warrantyTerms,
     };
   }
 
@@ -60,6 +74,9 @@ class PurchaseInvoiceItem {
       conversionFactor: (map['conversion_factor'] as num?)?.toDouble() ?? 1.0,
       totalPrice: (map['total_price'] as num).toDouble(),
       receivedQuantity: (map['received_quantity'] as num?)?.toDouble() ?? 0.0,
+      expiryDate: map['expiry_date'] as String?,
+      warrantySpec: map['warranty_spec'] as String?,
+      warrantyTerms: map['warranty_terms'] as String?,
     );
   }
 
@@ -74,6 +91,9 @@ class PurchaseInvoiceItem {
     double? conversionFactor,
     double? totalPrice,
     double? receivedQuantity,
+    Object? expiryDate = _keep,
+    Object? warrantySpec = _keep,
+    Object? warrantyTerms = _keep,
   }) {
     return PurchaseInvoiceItem(
       id: id ?? this.id,
@@ -86,6 +106,11 @@ class PurchaseInvoiceItem {
       conversionFactor: conversionFactor ?? this.conversionFactor,
       totalPrice: totalPrice ?? this.totalPrice,
       receivedQuantity: receivedQuantity ?? this.receivedQuantity,
+      expiryDate: identical(expiryDate, _keep) ? this.expiryDate : expiryDate as String?,
+      warrantySpec: identical(warrantySpec, _keep) ? this.warrantySpec : warrantySpec as String?,
+      warrantyTerms: identical(warrantyTerms, _keep) ? this.warrantyTerms : warrantyTerms as String?,
     );
   }
+
+  static const Object _keep = Object();
 }

@@ -198,6 +198,11 @@ class AccountingSchema {
     ['users', 'is_active', 'INTEGER DEFAULT 1'],
     ['users', 'role_template', 'TEXT'],
     ['stock_movements', 'warehouse_id', 'INTEGER'],
+    // 📦 دفعة الشراء (ProductBatches): تاريخها وصلاحيتها وضمانها — تُزامَن مع الحركة
+    ['stock_movements', 'batch_date', 'TEXT'],
+    ['stock_movements', 'expiry_date', 'TEXT'],
+    ['stock_movements', 'warranty_spec', 'TEXT'],
+    ['stock_movements', 'warranty_terms', 'TEXT'],
     ['invoices', 'warehouse_id', 'INTEGER'],
     ['invoices', 'branch_id', 'INTEGER'],
     ['invoices', 'cash_box_id', 'INTEGER'],

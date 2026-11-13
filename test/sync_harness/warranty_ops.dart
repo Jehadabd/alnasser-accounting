@@ -14,6 +14,7 @@
 // ignore_for_file: avoid_print
 
 import 'package:alnaser/controllers/invoice_controller.dart';
+import 'package:alnaser/erp/inventory/product_batches.dart';
 import 'package:alnaser/erp/warranty/item_warranty.dart';
 import 'package:alnaser/erp/warranty/warranty_service.dart';
 import 'package:alnaser/invoice_designer/invoice_print_data.dart';
@@ -309,4 +310,145 @@ Future<Map<String, Object?>> warrantyScenario(Database db, String prod) async {
     ],
     'spec': '1y:p',
   };
+}
+
+// ═══════════════════════ 📦 دفعات الشراء: صلاحية وضمان لكل دفعة ═══════════════════════
+//
+// مادة رصيدها صفر تُشترى دفعتين: الأولى (قبل 30 يوماً) 3 قطع بضمان سنة من تاريخ الشراء
+// وشرط T1 وصلاحية بعد 20 يوماً، والثانية (قبل 5 أيام) قطعتان بضمان 6 أشهر من البيع وشرط T2
+// وصلاحية بعد 200 يوم. البيع يأخذ ضمان الدفعة التي تخرج منها أول قطعة (الأقدم أولاً)،
+// وصلاحية المادة = أقرب صلاحية بين الدفعات الباقية.
+Future<Map<String, Object?>> warrantyBatchScenario(Database db, String prod) async {
+  final fails = <String>[];
+  final notes = <String>[];
+  void eq(String label, Object? actual, Object? expected) {
+    if (actual != expected) fails.add('$label: المتوقع «$expected» والفعلي «$actual»');
+  }
+
+  String iso(DateTime d) => ItemWarranty.iso(d);
+  final now = DateTime.now();
+  final t0 = DateTime(now.year, now.month, now.day);
+  final pr = await db.query('products', columns: ['id', 'name'], where: 'sync_uuid = ?', whereArgs: [prod], limit: 1);
+  if (pr.isEmpty) return {'fails': ['لا مادة بالمعرّف $prod'], 'notes': notes};
+  final pid = pr.first['id'] as int;
+  final pname = pr.first['name'] as String;
+  const t1 = 'T1 لا يشمل الكسر';
+  const t2 = 'T2 القطع فقط';
+  const y1p = WarrantySpec(1, WarrantyUnit.year, basis: WarrantyBasis.purchase);
+  const m6 = WarrantySpec(6, WarrantyUnit.month);
+  final d1 = t0.subtract(const Duration(days: 30));
+  final d2 = t0.subtract(const Duration(days: 5));
+  final e1 = t0.add(const Duration(days: 20));
+  final e2 = t0.add(const Duration(days: 200));
+
+  // ── الشراء: دفعتان بتفاصيلهما (كما يحفظها حوار «الصلاحية والضمان») ──
+  final ps = PurchaseService();
+  final sid =
+      await ps.addSupplier(Supplier(name: 'مورد الدفعات ${now.microsecondsSinceEpoch}', createdAt: now, updatedAt: now));
+  Future<void> buy(String no, DateTime date, double qty, WarrantySpec w, String terms, DateTime expiry) =>
+      ps.savePurchaseInvoice(
+        PurchaseInvoice(invoiceNumber: no, supplierId: sid, totalAmount: qty * 1000, status: 'confirmed', date: date),
+        [
+          PurchaseInvoiceItem(
+            productId: pid,
+            unitName: 'قطعة',
+            quantity: qty,
+            unitPrice: 1000,
+            totalPrice: qty * 1000,
+            expiryDate: iso(expiry),
+            warrantySpec: w.encode(),
+            warrantyTerms: terms,
+          )
+        ],
+      );
+  await buy('B-1', d1, 3, y1p, t1, e1);
+  await buy('B-2', d2, 2, m6, t2, e2);
+
+  final mv = await db.query('stock_movements',
+      columns: ['batch_date', 'expiry_date', 'warranty_spec', 'warranty_terms'],
+      where: "product_sync_uuid = ? AND kind = 'purchase'",
+      whereArgs: [prod],
+      orderBy: 'id');
+  eq('حركتا الشراء', mv.length, 2);
+  if (mv.length == 2) {
+    eq('الدفعة 1: تاريخها', mv[0]['batch_date'], iso(d1));
+    eq('الدفعة 1: صلاحيتها', mv[0]['expiry_date'], iso(e1));
+    eq('الدفعة 1: ضمانها', mv[0]['warranty_spec'], y1p.encode());
+    eq('الدفعة 2: شروطها', mv[1]['warranty_terms'], t2);
+  }
+  var bs = await ProductBatches.of(db, prod);
+  eq('عدد الدفعات', bs.batches.length, 2);
+  if (bs.batches.length == 2) {
+    eq('باقي الدفعة الأقدم', bs.batches[0].remaining, 3.0);
+    eq('باقي الدفعة الأحدث', bs.batches[1].remaining, 2.0);
+  }
+  eq('رصيد بلا دفعة', bs.unbatched, 0.0);
+
+  Future<String?> productExpiry() async {
+    final r = await db.query('products', columns: ['expiry_date'], where: 'id = ?', whereArgs: [pid], limit: 1);
+    final d = DateTime.tryParse('${r.first['expiry_date'] ?? ''}');
+    return d == null ? null : iso(d);
+  }
+
+  eq('صلاحية المادة = أقرب دفعة باقية', await productExpiry(), iso(e1));
+
+  // ── البيع بالكاشير: الأقدم يخرج أولاً ──
+  Future<List<Map<String, Object?>>> sell(double qty) async {
+    final id = await DatabaseService().createPosInvoice(
+      items: [
+        {
+          'product_id': pid,
+          'product_name': pname,
+          'quantity': qty,
+          'price': 1000.0,
+          'unit': 'قطعة',
+          'cost_price': 0.5,
+          'sale_type': 'قطعة',
+          'units_in_large_unit': 1.0,
+        }
+      ],
+      totalAmount: qty * 1000,
+      paymentType: 'نقد',
+      discount: 0,
+      paidAmount: qty * 1000,
+    );
+    return db.query('invoice_items',
+        columns: ['warranty_spec', 'warranty_start', 'warranty_end', 'warranty_terms'],
+        where: 'invoice_id = ?',
+        whereArgs: [id],
+        orderBy: 'id');
+  }
+
+  void lineIs(String label, List<Map<String, Object?>> ls, WarrantySpec? s, DateTime start, String? terms) {
+    if (ls.length != 1) {
+      fails.add('$label: ${ls.length} سطر');
+      return;
+    }
+    final l = ls.first;
+    eq('$label: المدة', l['warranty_spec'], s?.encode());
+    eq('$label: البداية', l['warranty_start'], s == null ? null : iso(start));
+    eq('$label: النهاية', l['warranty_end'], s == null ? null : iso(s.endFrom(start)));
+    eq('$label: الشروط', l['warranty_terms'], terms);
+  }
+
+  lineIs('بيع 2 (من الدفعة الأولى)', await sell(2), y1p, d1, t1);
+  lineIs('بيع 1 (آخر قطعة من الأولى)', await sell(1), y1p, d1, t1);
+  eq('صلاحية المادة بعد نفاد الأولى', await (() async {
+    await ProductBatches.refreshExpiry(db, productSyncUuid: prod);
+    return productExpiry();
+  })(), iso(e2));
+  lineIs('بيع 1 (من الدفعة الثانية، ضمانها من البيع)', await sell(1), m6, t0, t2);
+
+  // ── سطران في فاتورة واحدة: الأول يأخذ آخر قطعة من الثانية، والثاني «بلا دفعة» ⇒ ضمان المادة (لا شيء) ──
+  final two = <Map<String, dynamic>>[
+    {'product_id': pid, 'product_name': pname, 'unique_id': 'b1', 'quantity_individual': 1.0},
+    {'product_id': pid, 'product_name': pname, 'unique_id': 'b2', 'quantity_individual': 1.0},
+  ];
+  await ItemWarranty.stampLines(db, two, t0);
+  eq('سطران: الأول من الدفعة الثانية', two[0]['warranty_spec'], m6.encode());
+  eq('سطران: الثاني بعد نفاد الدفعات بلا ضمان', two[1]['warranty_spec'], null);
+
+  notes.add('دفعتان: بيع 2 ثم 1 من الأولى (سنة من ${ItemWarranty.show(iso(d1))})، ثم 1 من الثانية '
+      '(6 أشهر من البيع)؛ صلاحية المادة انتقلت من ${ItemWarranty.show(iso(e1))} إلى ${ItemWarranty.show(iso(e2))}');
+  return {'fails': fails, 'notes': notes, 'expiry2': iso(e2), 'spec1': y1p.encode()};
 }
