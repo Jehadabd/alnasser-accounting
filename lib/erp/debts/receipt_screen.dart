@@ -498,6 +498,7 @@ class _ReceiptsListScreenState extends State<ReceiptsListScreen> {
                               tooltip: 'مشاركة',
                               icon: const Icon(Icons.share_outlined),
                               onPressed: () => _print(r, share: true)),
+                          if (WaDocSender.available) // ⭐ ميزة اشتراك المزامنة
                           IconButton(
                               tooltip: 'إرسال لصاحبه عبر واتساب (الخادم)',
                               icon: const Icon(Icons.send_to_mobile_rounded, color: Color(0xFF047857)),

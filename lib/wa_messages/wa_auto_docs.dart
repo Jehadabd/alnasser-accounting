@@ -29,6 +29,7 @@ import '../services/customer_balance_guard.dart';
 import '../services/database_service.dart';
 import '../services/printed_vouchers.dart';
 import '../services/saved_invoice_print_pdf.dart';
+import '../services/sync_perks.dart';
 import '../services/voucher_print.dart';
 import 'wa_doc_sender.dart';
 import 'wa_message_log.dart';
@@ -303,6 +304,7 @@ class WaAutoDocs {
 
   /// بالترتيب، واحداً بعد واحد، في الخلفية — خطأ واحد لا يوقف ما بعده.
   static void _enqueue(Future<void> Function() job) {
+    if (!SyncPerks.enabled) return; // ⭐ ميزة اشتراك المزامنة: بلا اشتراك لا إرسال تلقائي
     _chain = _chain.then((_) async {
       try {
         await job();

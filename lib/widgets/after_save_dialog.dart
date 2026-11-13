@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../services/sync_perks.dart';
 import 'settings_kit.dart';
 
 class AfterSaveAction {
@@ -34,8 +35,13 @@ Future<String?> showAfterSaveDialog(
       barrierLabel: 'إغلاق',
       barrierColor: const Color(0x660F172A),
       transitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (_, __, ___) =>
-          _AfterSaveDialog(title: title, subtitle: subtitle, amount: amount, actions: actions, question: question),
+      pageBuilder: (_, __, ___) => _AfterSaveDialog(
+          title: title,
+          subtitle: subtitle,
+          amount: amount,
+          // ⭐ «واتساب» (إرسال عبر الخادم) من ميزات اشتراك المزامنة
+          actions: [for (final a in actions) if (a.value != 'wa' || SyncPerks.enabled) a],
+          question: question),
       transitionBuilder: (_, a, __, child) => FadeTransition(
         opacity: a,
         child: ScaleTransition(scale: Tween(begin: 0.94, end: 1.0).animate(CurvedAnimation(parent: a, curve: Curves.easeOutBack)), child: child),

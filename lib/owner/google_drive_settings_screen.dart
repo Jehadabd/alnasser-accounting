@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../services/backup_space_planner.dart';
+import '../services/sync_perks.dart';
 import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart';
 import 'google_drive_service.dart';
@@ -583,6 +584,7 @@ class _GoogleDriveSettingsScreenState extends State<GoogleDriveSettingsScreen> {
 /// ☁️ عند فتح البرنامج: يجدّد ربط Google Drive بصمت، وإن ألغته Google يعرض رسالة
 /// بزر «إعادة الربط» (لا يفتح المتصفح وحده أبداً).
 Future<void> checkGoogleDriveOnStart(BuildContext context) async {
+  if (!SyncPerks.enabled) return; // ⭐ ميزة اشتراك المزامنة: بلا اشتراك لا تجديد ولا تنبيه
   final drive = GoogleDriveService.instance;
   final health = await drive.keepAlive();
   if (health != DriveHealth.expired || !context.mounted) return;

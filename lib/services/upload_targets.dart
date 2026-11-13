@@ -5,9 +5,10 @@
 //   • دروب بوكس: نسخة احتياطية كاملة.
 //   • ديسكورد: يستلم نسخة من كل ما يُرسل لتيليغرام؛ إن أُوقف تيليغرام تُرسل
 //     له قاعدة البيانات مضغوطة مباشرة.
-//   • Google Drive (لكل المستخدمين): قاعدة البيانات مضغوطة + سجل الديون PDF.
+//   • Google Drive (لمشتركي المزامنة وحساب المالك فقط): قاعدة البيانات مضغوطة + سجل الديون PDF.
 
 import '../models/app_settings.dart';
+import 'sync_perks.dart';
 
 class UploadTargets {
   UploadTargets._();
@@ -33,12 +34,19 @@ class UploadTargets {
     gdrive: 'قاعدة البيانات مضغوطة + سجل الديون PDF',
   };
 
-  /// الترتيب المحفوظ مكمّلاً بأي وجهة ناقصة.
+  /// ⭐ الوجهات المتاحة لهذا الترخيص: Google Drive من ميزات اشتراك المزامنة.
+  static List<String> get available => [
+        for (final t in all)
+          if (t != gdrive || SyncPerks.enabled) t,
+      ];
+
+  /// الترتيب المحفوظ مكمّلاً بأي وجهة ناقصة (المتاحة فقط).
   static List<String> ordered(List<String> saved) {
+    final ok = available;
     final out = <String>[
       for (final t in saved)
-        if (all.contains(t)) t,
-      for (final t in all)
+        if (ok.contains(t)) t,
+      for (final t in ok)
         if (!saved.contains(t)) t,
     ];
     return out;

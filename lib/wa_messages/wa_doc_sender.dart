@@ -18,6 +18,7 @@ import '../owner/wa_auto/wa_server_client.dart';
 import '../owner/wa_auto/wa_usage_mark.dart';
 import '../services/database_service.dart';
 import '../services/customer_balance_guard.dart';
+import '../services/sync_perks.dart';
 import 'wa_message_log.dart';
 import 'wa_phone_book.dart';
 import 'wa_send_notice.dart';
@@ -74,8 +75,12 @@ class WaDocSender {
     return null;
   }
 
+  /// ⭐ ميزة اشتراك المزامنة (أو حساب المالك): بدونها تختفي أزرار «إرسال لصاحبه عبر واتساب».
+  static bool get available => SyncPerks.enabled;
+
   /// بلا مانع ⇒ null. وإلا السبب.
   static Future<String?> blockReason() async {
+    if (!available) return 'إرسال واتساب عبر الخادم من ميزات اشتراك المزامنة';
     final s = await WaAutoReminder.load();
     if (!s.enabled || !s.riskAccepted) {
       return 'إرسال واتساب الآلي مطفأ — يفعّله المدير من الإعدادات ← رسائل واتساب للزبائن ← طريقة الإرسال والأمان';
@@ -315,7 +320,9 @@ class WaSendDocButton extends StatelessWidget {
   final String source;
 
   @override
-  Widget build(BuildContext context) => IconButton(
+  Widget build(BuildContext context) => !WaDocSender.available
+      ? const SizedBox.shrink()
+      : IconButton(
         tooltip: 'إرسال لصاحبه عبر واتساب (الخادم)',
         visualDensity: VisualDensity.compact,
         icon: Icon(Icons.send_to_mobile_rounded, color: color ?? const Color(0xFF047857)),

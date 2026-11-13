@@ -53,6 +53,7 @@ import '../widgets/profit_discount_dialog.dart'; // ٪
 import '../services/debt_reminders.dart'; // 📅
 import '../widgets/debt_reminder_editor.dart';
 import '../owner/owner_access.dart';
+import '../wa_messages/wa_doc_sender.dart' show WaDocSender; // ⭐ زر واتساب لمشتركي المزامنة
 import '../services/held_invoices.dart'; // ⏸️
 import '../owner/cost_stamp.dart';
 import '../owner/founder_service.dart';
@@ -953,7 +954,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         const PopupMenuDivider(),
         item('picking', Icons.print_disabled, 'طباعة تجهيز (بدون أسعار)', enabled: hasItems),
         item('share', Icons.share, 'مشاركة الفاتورة PDF', enabled: hasItems),
-        item('wa_send', Icons.send_to_mobile_rounded, 'إرسال لصاحبها عبر واتساب (الخادم)', enabled: hasItems),
+        if (WaDocSender.available) // ⭐ ميزة اشتراك المزامنة
+          item('wa_send', Icons.send_to_mobile_rounded, 'إرسال لصاحبها عبر واتساب (الخادم)', enabled: hasItems),
         if (invoiceToManage?.id != null) item('history', Icons.history, 'سجل التعديلات'),
       ],
       onSelected: (v) {

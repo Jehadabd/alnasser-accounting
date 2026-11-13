@@ -9,11 +9,14 @@
 
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
+import '../services/sync_perks.dart';
 
 class WaAccess {
   WaAccess._();
 
   static bool can(String key) {
+    // ⭐ ميزة اشتراك المزامنة (أو حساب المالك) — بدونها لا يصل إليها أحد ولا المدير
+    if (!SyncPerks.enabled) return false;
     try {
       final a = AuthService();
       if (a.isAdmin) return true;

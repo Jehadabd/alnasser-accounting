@@ -292,7 +292,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
               icon: const Icon(Icons.share_rounded),
               label: Text('مشاركة (نسخة ${prints.length + 1})'),
             ),
-          if (state != VoucherState.deleted)
+          if (state != VoucherState.deleted && WaDocSender.available) // ⭐ ميزة اشتراك المزامنة
             OutlinedButton.icon(
               onPressed: () => Navigator.pop(ctx, 'wa'),
               icon: const Icon(Icons.send_to_mobile_rounded, color: Color(0xFF047857)),
@@ -333,6 +333,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
               onPressed: () => Navigator.pop(ctx, 'share'),
               icon: const Icon(Icons.share_rounded),
               label: const Text('مشاركة')),
+          if (WaDocSender.available) // ⭐ ميزة اشتراك المزامنة
           OutlinedButton.icon(
               onPressed: () => Navigator.pop(ctx, 'wa'),
               icon: const Icon(Icons.send_to_mobile_rounded, color: Color(0xFF047857)),

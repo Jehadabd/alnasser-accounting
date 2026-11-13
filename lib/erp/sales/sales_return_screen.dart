@@ -474,6 +474,7 @@ class _SalesReturnsListScreenState extends State<SalesReturnsListScreen> {
         actions: [
           TextButton.icon(
               onPressed: () => printSalesReturn(ctx, r['id'] as int), icon: const Icon(Icons.print), label: const Text('طباعة')),
+          if (WaDocSender.available) // ⭐ ميزة اشتراك المزامنة
           TextButton.icon(
               onPressed: () => printSalesReturn(ctx, r['id'] as int, wa: true),
               icon: const Icon(Icons.send_to_mobile_rounded),

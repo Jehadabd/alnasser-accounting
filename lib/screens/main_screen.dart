@@ -12,6 +12,7 @@ import '../services/telegram_invoice_export_service.dart';
 import '../services/dropbox_backup_service.dart'; // ☁️ Dropbox
 import '../services/discord_backup_service.dart';
 import '../services/upload_targets.dart';
+import '../services/sync_perks.dart'; // ⭐ ميزات اشتراك المزامنة
 import '../owner/google_drive_service.dart';
 import '../widgets/upload_progress_dialog.dart'; // ☁️ نافذة الرفع
 import '../services/alert_service.dart'; // 🔔 تنبيهات المخزون
@@ -540,7 +541,7 @@ class _MainScreenState extends State<MainScreen> {
             }
           } else if (target == UploadTargets.gdrive) {
             final drive = GoogleDriveService.instance;
-            if (!drive.isSupported) {
+            if (!drive.isSupported || !SyncPerks.enabled) { // ⭐ Drive لمشتركي المزامنة
               skipped = true;
               continue;
             }

@@ -8,6 +8,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:printing/printing.dart';
 
 import '../../owner/wa_auto/wa_auto_reminder.dart';
+import '../../wa_messages/wa_access.dart'; // ⭐ رسائل واتساب الآلية: لمشتركي المزامنة
 import '../../wa_messages/wa_rules.dart' show WaMessageOptions;
 import '../../wa_messages/wa_widgets.dart';
 import '../../widgets/settings_kit.dart';
@@ -147,12 +148,14 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
                   onChanged: (v) => setState(() => _q = v.trim()),
                 ),
               ),
+              if (WaAccess.sendNow) ...[
               const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: () => _message([for (final r in shown) if (r.member.active) r]),
                 icon: const Icon(Icons.chat_rounded),
                 label: const Text('رسالة للأعضاء'),
               ),
+              ],
             ]),
           const SizedBox(height: 8),
           if (rows == null)
@@ -204,7 +207,7 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
           itemBuilder: (_) => [
             PopupMenuItem(value: 'redeem', enabled: b.rewardsAvailable > 0, child: const Text('صرف مكافأة')),
             const PopupMenuItem(value: 'card', child: Text('البطاقة (PDF)')),
-            const PopupMenuItem(value: 'msg', child: Text('رسالة واتساب')),
+            if (WaAccess.sendNow) const PopupMenuItem(value: 'msg', child: Text('رسالة واتساب')),
             PopupMenuItem(value: 'toggle', child: Text(r.member.active ? 'إيقاف العضوية' : 'إعادة تفعيل')),
           ],
         ),

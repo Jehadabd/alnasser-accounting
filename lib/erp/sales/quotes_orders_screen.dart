@@ -359,6 +359,7 @@ class _QuotationEditorScreenState extends State<QuotationEditorScreen> {
       icon: Icons.request_quote_outlined,
       actions: [
         IconButton(tooltip: 'طباعة', icon: const Icon(Icons.print), onPressed: _print),
+        if (WaDocSender.available) // ⭐ ميزة اشتراك المزامنة
         IconButton(
             tooltip: 'إرسال لصاحبه عبر واتساب (الخادم)',
             icon: const Icon(Icons.send_to_mobile_rounded),
@@ -816,7 +817,7 @@ class _OrderEditorScreenState extends State<OrderEditorScreen> {
               notes: _notes.text),
         ),
         // 📨 طلب المبيعات فقط: طلب الشراء لمورد وليس لعميل
-        if (_sales)
+        if (_sales && WaDocSender.available) // ⭐ ميزة اشتراك المزامنة
           IconButton(
             tooltip: 'إرسال لصاحبه عبر واتساب (الخادم)',
             icon: const Icon(Icons.send_to_mobile_rounded),

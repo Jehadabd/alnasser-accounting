@@ -45,6 +45,12 @@ void main() {
     expect(results, ['print']);
   });
 
+  testWidgets('⭐ بلا اشتراك مزامنة (ولا حساب مالك) لا يظهر زر «واتساب»', (tester) async {
+    await _open(tester);
+    expect(find.text('طباعة'), findsOneWidget);
+    expect(find.text('واتساب'), findsNothing);
+  });
+
   testWidgets('«لا، شكراً» يغلق بلا طباعة', (tester) async {
     final results = await _open(tester);
     await tester.tap(find.text('لا، شكراً'));

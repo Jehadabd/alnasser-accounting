@@ -18,6 +18,7 @@ import '../owner/wa_auto/wa_server_client.dart';
 import '../owner/wa_auto/wa_usage_mark.dart';
 import '../services/customer_balance_guard.dart'; // 🛡️ الرصيد = مجموع المعاملات
 import '../services/database_service.dart';
+import '../services/sync_perks.dart';
 import 'wa_compose.dart';
 import 'wa_message_log.dart';
 import 'wa_rules.dart';
@@ -80,6 +81,7 @@ class WaOutbox {
 
   /// يضيف رسائل (بلا تكرار لنفس العميل بنفس القاعدة) ويبدأ إن لم يكن يعمل. يعيد عدد المضاف.
   static int enqueue(List<WaJob> jobs) {
+    if (!SyncPerks.enabled) return 0; // ⭐ ميزة اشتراك المزامنة
     final keys = {for (final j in _queue) j.key};
     var added = 0;
     for (final j in jobs) {
