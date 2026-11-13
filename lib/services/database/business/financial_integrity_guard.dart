@@ -7,7 +7,6 @@ import 'package:sqflite/sqflite.dart';
 import '../../../models/invoice.dart';
 import '../../../models/invoice_item.dart';
 import '../../../models/invoice_input_data.dart';
-import '../../../models/invoice_adjustment.dart';
 import '../../../utils/money_calculator.dart';
 import '../../../services/auth_service.dart';
 import '../dao/invoice_dao.dart';
@@ -1203,36 +1202,6 @@ class FinancialIntegrityGuard {
     }
 
     return report;
-  }
-
-  /// يتم استدعاؤها قبل إدراج تسوية
-  Future<GuardResult> guardPreAdjustment({
-    required InvoiceAdjustment adjustment,
-  }) async {
-    // 1. التحقق من وجود الفاتورة
-    final invoice = await invoiceDao.getInvoiceById(adjustment.invoiceId);
-    if (invoice == null) {
-      return GuardResult.fail('ADJ01', 'الفاتورة رقم ${adjustment.invoiceId} غير موجودة');
-    }
-
-    // 2. التحقق من أن amountDelta ليس 0
-    if (adjustment.amountDelta == 0) {
-      return GuardResult.fail('ADJ02', 'قيمة التسوية صفر');
-    }
-
-    // 3. للـ credit: التحقق من أن المبلغ لا يتجاوز المتبقي
-    if (adjustment.type == 'credit') {
-      final afterDiscount = invoice.totalAmount;
-      final paidSoFar = invoice.amountPaidOnInvoice;
-      final remaining = afterDiscount - paidSoFar;
-      if (adjustment.amountDelta.abs() > remaining + 0.01) {
-        return GuardResult.fail(
-          'ADJ03', 'التسوية الراجعة (${adjustment.amountDelta.abs()}) تتجاوز المبلغ المتبقي ($remaining)',
-        );
-      }
-    }
-
-    return GuardResult.success;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

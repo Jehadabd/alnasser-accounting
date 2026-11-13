@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 import '../erp/erp_common.dart' show PeriodLock;
+import '../erp/device_defaults.dart'; // 🖥️ صندوق الحاسبة ومخزنها على فاتورتها
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:intl/intl.dart';
@@ -444,6 +445,14 @@ class InvoiceController {
         } catch (_) {}
       }
 
+      // 🖥️ صندوق هذه الحاسبة ومخزنها: يُختم بهما كل فاتورة جديدة منها (كفاتورة الكاشير)،
+      // فيُرحَّل مقبوضها إلى صندوق الحاسبة لا الرئيسي، وتُخصم كميتها من مخزنها.
+      // والفاتورة المعلّقة تُختم حين تُحفظ (يُقبض مالها حينها). التعديل لا يغيّر ختماً
+      // موجوداً (مال الفاتورة قُبض يوم إنشائها في صندوقها).
+      final deviceStamp = (data.isNewInvoice || data.invoiceToManage?.status == 'معلقة')
+          ? await DeviceDefaults.current()
+          : null;
+
       // 🏁 Start Transaction
       await (await _db.database).transaction((txn) async {
         Customer? customer;
@@ -664,11 +673,13 @@ class InvoiceController {
           // سبقنا جهاز آخر بالرقم نفسه في اللحظة نفسها؟ يُعاد الترقيم تلقائياً
           invoiceId = await InvoiceNumbering.insertNew(txn, invoiceMap);
           invoice = Invoice.fromMap(invoiceMap).copyWith(id: invoiceId);
+          if (deviceStamp != null) await DeviceDefaults.stampInvoiceIn(txn, invoiceId, deviceStamp);
         } else {
           invoiceId = data.invoiceToManage!.id!;
           await txn.update('invoices', invoiceMap,
               where: 'id = ?', whereArgs: [invoiceId]);
           invoice = Invoice.fromMap(invoiceMap).copyWith(id: invoiceId);
+          if (deviceStamp != null) await DeviceDefaults.stampInvoiceIn(txn, invoiceId, deviceStamp);
         }
 
         // ═══════════════════════════════════════════════════════════════════════════

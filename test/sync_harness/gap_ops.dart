@@ -16,7 +16,9 @@ import 'package:alnaser/erp/device_defaults.dart';
 import 'package:alnaser/erp/erp_common.dart' show PeriodLock;
 import 'package:alnaser/erp/inventory/usd_cost_service.dart';
 import 'package:alnaser/erp/sales/invoice_extras.dart';
+import 'package:alnaser/erp/stock_helpers.dart' show ErpStock;
 import 'package:alnaser/models/customer.dart';
+import 'package:alnaser/models/invoice_item.dart';
 import 'package:alnaser/models/purchase_invoice.dart';
 import 'package:alnaser/models/purchase_invoice_item.dart';
 import 'package:alnaser/models/supplier.dart';
@@ -28,8 +30,11 @@ import 'package:alnaser/services/database/business/customer_name_rule.dart';
 import 'package:alnaser/services/database/business/deep_check_repair.dart';
 import 'package:alnaser/services/database/business/supplier_debt_reconciler.dart';
 import 'package:alnaser/services/database_service.dart';
+import 'package:alnaser/services/held_invoices.dart';
 import 'package:alnaser/services/purchase_service.dart';
 import 'package:sqflite/sqflite.dart';
+
+import 'scenario_ops.dart' show scenOp;
 
 double _d(Object? v) => (v as num?)?.toDouble() ?? 0.0;
 
@@ -105,6 +110,8 @@ Future<Object?> _gapOp(String op, Map<String, Object?> a) async {
       return (await _orphans(db, a['gone'] as String, a['hidden'] as String)).out;
     case 'linkOldCash':
       return (await _linkOldCash(db, a['inv'] as String, a['cust'] as String)).out;
+    case 'regularStamp':
+      return (await _regularStamp(db, a['prod'] as String)).out;
     case 'legacyInvoiceTx':
       // صف دين فاتورة وصل منفصلاً بمعرّفه (إصدارات قديمة رفعت معاملات الفواتير وحدها)
       final cid = await _id(db, 'customers', 'sync_uuid', a['cust'] as String);
@@ -543,13 +550,36 @@ Future<_R> _freezeCosts(Database db, String invUuid) async {
   return r;
 }
 
-// ═══════════════════════ 9) قيد فاتورة آجلة بلا كلفة ولا مقبوض ═══════════════════════
+// ═══════════════════════ 9) قيد فاتورة بلا كلفة ولا مقبوض ═══════════════════════
 
-/// PostingEngine: فاتورة آجلة غير مسددة سطرها هدية (لا كلفة ولا مقبوض) ⇒ قيد صفري بلا أسطر
-/// يثبّت بصمتها (لا يُعاد إنشاؤه كل مرة، ولا يغيّر الميزان)، ودينها يُرحَّل من دين العميل.
-Future<_R> _zeroEntry(Database db, String invUuid) async {
+/// PostingEngine: فاتورة آجلة بقيمة صفر بلا بنود (يحفظها إصدار قديم أو استيراد — التطبيق
+/// الحالي يرفض فاتورة إجماليها صفر) ⇒ لا كلفة ولا مقبوض ⇒ قيد صفري بلا أسطر يثبّت بصمتها:
+/// لا يُعاد إنشاؤه كل مرة، ولا يغيّر الميزان.
+Future<_R> _zeroEntry(Database db, String baseUuid) async {
   final r = _R();
-  final id = await _id(db, 'invoices', 'invoice_uuid', invUuid);
+  final base = (await db.query('invoices', where: 'invoice_uuid = ?', whereArgs: [baseUuid], limit: 1)).first;
+  final cols = (await db.rawQuery('PRAGMA table_info(invoices)')).map((c) => '${c['name']}').toSet();
+  final stamp = DateTime.now().microsecondsSinceEpoch;
+  final legacy = <String, Object?>{
+    ...base,
+    'payment_type': 'دين',
+    'total_amount': 0.0,
+    'amount_paid_on_invoice': 0.0,
+    'discount': 0.0,
+    'loading_fee': 0.0,
+    'return_amount': 0.0,
+    'invoice_uuid': 'legacy-zero-$stamp',
+    'invoice_number': 'Q-$stamp',
+    'monthly_sequence_number': 900000 + stamp % 90000,
+    if (cols.contains('total_amount_cents')) 'total_amount_cents': 0,
+    if (cols.contains('amount_paid_cents')) 'amount_paid_cents': 0,
+    if (cols.contains('discount_cents')) 'discount_cents': 0,
+    if (cols.contains('final_total')) 'final_total': 0.0,
+    if (cols.contains('cash_box_id')) 'cash_box_id': null,
+  }
+    ..remove('id')
+    ..remove('serial_number');
+  final id = await db.insert('invoices', legacy);
   Future<List<Map<String, Object?>>> entries() =>
       db.query('journal_entries', where: "source_type = 'invoice' AND source_id = ?", whereArgs: [id]);
   Future<double> lines() async => _d((await db.rawQuery(
@@ -672,5 +702,107 @@ Future<_R> _linkOldCash(Database db, String invUuid, String custUuid) async {
   r.eq('الفاتورة رُبطت بعميلها', _d(row['customer_id']), cid);
   r.eq('دين العميل لم يتغير', await _custDebt(db, cid), debt0);
   r.notes.add('فاتورة نقدية بلا عميل رُبطت بـ «$name» ودينه كما هو');
+  return r;
+}
+
+// ═══════════════════════ 14) الفاتورة العادية تُختم بصندوق الحاسبة ومخزنها ═══════════════════════
+
+/// شاشة «إنشاء فاتورة» (InvoiceController) كفاتورة الكاشير: الفاتورة الجديدة، والمعلّقة حين
+/// تُحفظ، تُختمان بصندوق الحاسبة ومخزنها داخل معاملة الحفظ ⇒ المقبوض في حساب صندوقها،
+/// والكمية من مخزنها. تعديلها لاحقاً لا يغيّر ختمها ولو تغيّر صندوق الحاسبة.
+Future<_R> _regularStamp(Database db, String prod) async {
+  final r = _R();
+  final pid = await _id(db, 'products', 'sync_uuid', prod);
+  final stamp = DateTime.now().microsecondsSinceEpoch;
+  final box = await VouchersService().createCashBox('درج الحاسبة $stamp');
+  final box2 = await VouchersService().createCashBox('درج آخر $stamp');
+  final wh = await OrgService().saveWarehouse(name: 'مخزن الحاسبة $stamp');
+  Future<Object?> acc(int b) async =>
+      (await db.query('cash_boxes', columns: ['account_id'], where: 'id = ?', whereArgs: [b])).first['account_id'];
+  Future<Map<String, Object?>> head(int id) async =>
+      (await db.query('invoices', columns: ['cash_box_id', 'warehouse_id'], where: 'id = ?', whereArgs: [id])).first;
+  // مقبوض الفاتورة في صندوق: قيدها + قيود تعديلاتها (تُرحَّل بتاريخها إلى صندوق الفاتورة)
+  Future<double> cashIn(int id, int b) async => _d((await db.rawQuery(
+          'SELECT COALESCE(SUM(l.debit), 0) - COALESCE(SUM(l.credit), 0) AS d FROM journal_lines l '
+          'JOIN journal_entries e ON e.id = l.entry_id '
+          "WHERE ((e.source_type = 'invoice' AND e.source_id = ?) OR (e.source_type = 'invoice_edit' AND "
+          'e.source_id IN (SELECT ev.id FROM invoice_edit_events ev WHERE ev.invoice_id = ?))) AND l.account_id = ?',
+          [id, id, await acc(b)]))
+      .first['d']);
+  Future<String> save(String name, double qty, double paid, {String? inv}) async {
+    final res = (await scenOp('invSave', {
+      'inv': inv,
+      'name': name,
+      'items': [
+        {'prodId': pid, 'qty': qty, 'price': 3000}
+      ],
+      'discount': 0,
+      'fee': 0,
+      'paid': paid,
+      'ptype': 'نقد',
+    })) as Map;
+    if (res['ok'] != true) throw StateError('حفظ الفاتورة رُفض: ${res['stage']} ${res['err']}');
+    return res['uuid'] as String;
+  }
+
+  try {
+    await DeviceDefaults.set(cashBoxId: box, warehouseId: wh);
+    final whBefore = await ErpStock.available(db, pid, warehouseId: wh);
+
+    // أ) فاتورة جديدة من الشاشة العادية
+    final inv = await save('زبون الحاسبة', 2, 6000);
+    final id = await _id(db, 'invoices', 'invoice_uuid', inv);
+    var h = await head(id);
+    r.eq('صندوق الفاتورة العادية', _d(h['cash_box_id']), box);
+    r.eq('مخزن الفاتورة العادية', _d(h['warehouse_id']), wh);
+    await PostingEngine().syncAll();
+    r.eq('مقبوض الفاتورة في صندوق الحاسبة', await cashIn(id, box), 6000);
+    r.eq('كمية مخزن الحاسبة بعد بيع 2', await ErpStock.available(db, pid, warehouseId: wh), whBefore - 2);
+
+    // ب) تغيّر صندوق الحاسبة ثم عُدّلت الفاتورة: ختمها لا يتغير
+    await DeviceDefaults.set(cashBoxId: box2, warehouseId: wh);
+    await save('زبون الحاسبة', 3, 9000, inv: inv);
+    h = await head(id);
+    r.eq('صندوق الفاتورة بعد تعديلها', _d(h['cash_box_id']), box);
+    await PostingEngine().syncAll();
+    r.eq('مقبوض الفاتورة بعد تعديلها (في صندوقها الأول)', await cashIn(id, box), 9000);
+    r.eq('لا شيء منها في الصندوق الجديد', await cashIn(id, box2), 0);
+
+    // ج) فاتورة معلّقة تُختم حين تُحفظ
+    final p = (await db.query('products', where: 'id = ?', whereArgs: [pid], limit: 1)).first;
+    final held = await HeldInvoices.hold(
+      existing: null,
+      items: [
+        InvoiceItem(
+          invoiceId: 0,
+          productId: pid,
+          productName: p['name'] as String,
+          unit: 'piece',
+          unitPrice: 3000,
+          costPrice: 0.5,
+          quantityIndividual: 1,
+          appliedPrice: 3000,
+          itemTotal: 3000,
+          saleType: 'قطعة',
+        )
+      ],
+      customerName: 'زبون المعلّقة',
+      invoiceDate: DateTime.now(),
+      paymentType: 'نقد',
+      discount: 0,
+      loadingFee: 0,
+      paid: 3000,
+    );
+    final heldId = held.id!;
+    h = await head(heldId);
+    r.isTrue('المعلّقة خُتمت قبل حفظها', h['cash_box_id'] == null);
+    await save('زبون المعلّقة', 1, 3000, inv: held.invoiceUuid);
+    h = await head(heldId);
+    r.eq('صندوق المعلّقة بعد حفظها', _d(h['cash_box_id']), box2);
+    r.notes.add('فاتورة عادية 6,000 في درج الحاسبة ومخزنها؛ تعديلها إلى 9,000 بقي في درجها الأول؛ '
+        'المعلّقة خُتمت عند حفظها');
+  } finally {
+    await DeviceDefaults.set();
+  }
   return r;
 }

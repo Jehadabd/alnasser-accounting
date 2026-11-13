@@ -146,9 +146,6 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
           appliedPrice: price,
           itemTotal: qty * price,
           saleType: 'قطعة',
-          // 🎁 سطر هدية (سعره صفر) — كما تحفظه الشاشة
-          discountType: raw['gift'] == true ? 'gift' : null,
-          priceBeforeDiscount: raw['gift'] == true ? _d(raw['listPrice']) : null,
         ));
       }
       final data = InvoiceInputData(

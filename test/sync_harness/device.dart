@@ -652,7 +652,8 @@ Future<Object?> _exec(DeviceCommand c, FakeConnectivity connectivity, List<Strin
       return {'invoices': invs, 'txs': txs};
 
     case 'suspendInvoice':
-      // InvoiceSuspendService.suspendInvoice (بلا التحقق من نموذج الواجهة)
+      // فاتورة معلّقة كما حفظتها إصدارات سابقة (InvoiceSuspendService المحذوفة في p161:
+      // صف الفاتورة ثم أسطرها واحداً واحداً). التطبيق الآن يعلّق بـ HeldInvoices.hold.
       final dbs = DatabaseService();
       final db = await dbs.database;
       final cr = await db.query('customers',

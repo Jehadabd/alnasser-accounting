@@ -885,6 +885,7 @@ class ArmoredReconciliationService {
       final active = await txn.query('transactions',
           where: 'customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
           whereArgs: [customerId]);
+      final requeuedInvoices = <String>{}; // نسخة جديدة مرة واحدة لكل فاتورة
       for (final r in active) {
         final tu = (r['transaction_uuid'] as String?)?.isNotEmpty == true
             ? r['transaction_uuid'] as String
@@ -896,13 +897,19 @@ class ArmoredReconciliationService {
           preservedLocal.add(Map<String, dynamic>.from(r));
           final invUuid = r['invoice_sync_uuid'] as String?;
           if (invUuid != null && invUuid.isNotEmpty) {
-            // 🛡️ صف فاتورة لا يُرفع وحده أبداً — يسافر داخل حزمة فاتورته.
-            // تأشيره «غير مرفوع» كان يبقى عالقاً للأبد؛ نعيد الحزمة للطابور
-            // (نفس الإصدار: من يملكها يتجاهلها، ومن ينقصه الصف يُدرجه).
+            // 🛡️ صف فاتورة لا يُرفع وحده أبداً — يسافر داخل حزمة فاتورته. المصدر
+            // لم يعرفه ⇒ نسخته من الحزمة أقدم: نعيدها للطابور **بنسخة جديدة**. كانت
+            // تُرفع بالنسخة نفسها فيتجاهلها كل من عنده تلك النسخة (الاستقبال لا
+            // يطبّق نسخة مساوية) — فلا يصل الصف أبداً (armored_gaps_test). صف ما زال
+            // من نسخة احتياطية مستعادة: بلا زيادة (قاعدة InvoiceDebtReconciler).
             // فاتورة جهاز آخر لا نرفعها أبداً (المالك وحده يكتب حزمته).
-            await txn.update('invoices', {'is_synced': 0},
-                where: 'invoice_uuid = ? AND COALESCE(is_created_by_me, 1) = 1',
-                whereArgs: [invUuid]);
+            if (requeuedInvoices.add(invUuid)) {
+              await txn.rawUpdate(
+                  'UPDATE invoices SET is_synced = 0, version = CASE WHEN COALESCE(restored_mark, 0) = 1 '
+                  'THEN version ELSE COALESCE(version, 1) + 1 END '
+                  'WHERE invoice_uuid = ? AND COALESCE(is_created_by_me, 1) = 1',
+                  [invUuid]);
+            }
           } else {
             await txn.update('transactions', {'is_uploaded': 0},
                 where: 'id = ?', whereArgs: [r['id']]);

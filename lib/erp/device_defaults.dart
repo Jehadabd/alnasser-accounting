@@ -12,6 +12,7 @@
 // تماماً)، و«بلا» لشاشة غير الأولى تُحفظ صفراً صريحاً = الصندوق الافتراضي.
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart' show DatabaseExecutor;
 
 import '../services/seat_service.dart';
 import 'erp_common.dart';
@@ -91,26 +92,36 @@ class DeviceDefaults {
     await write(_kWarehouse, warehouseId);
   }
 
-  /// يختم فاتورة محفوظة بصندوق ومخزن هذا الجهاز. لا يغيّر فاتورة مختومة
-  /// مسبقاً، ولا يرمي أي خطأ (الحفظ الأصلي تمّ وهو الأهم).
+  /// صندوق هذه الشاشة ومخزنها الآن (يُقرأ قبل معاملة الحفظ). الإعداد قد يُضبط لهذه
+  /// الشاشة من شاشة أخرى على الحاسبة نفسها، فيُعاد تحميل الملف أولاً.
+  static Future<({int? box, int? warehouse})> current() async {
+    try {
+      await (await SharedPreferences.getInstance()).reload();
+    } catch (_) {}
+    return (box: await cashBoxId(), warehouse: await warehouseId());
+  }
+
+  /// يختم فاتورة بصندوق ومخزن [d] داخل معاملة حفظها [db] — فلا تبقى فاتورة محفوظة بلا
+  /// ختم إن انقطعت الكهرباء بين الحفظ والختم. لا يغيّر ختماً موجوداً. قاعدة قديمة لم
+  /// يُضَف إليها العمودان بعد ⇒ لا ختم (لا تفشل الفاتورة بسببه).
+  static Future<void> stampInvoiceIn(DatabaseExecutor db, int invoiceId, ({int? box, int? warehouse}) d) async {
+    if (d.box == null && d.warehouse == null) return;
+    final cols = (await db.rawQuery('PRAGMA table_info(invoices)')).map((c) => c['name']).toSet();
+    if (d.box != null && cols.contains('cash_box_id')) {
+      await db.rawUpdate(
+          'UPDATE invoices SET cash_box_id = ? WHERE id = ? AND cash_box_id IS NULL', [d.box, invoiceId]);
+    }
+    if (d.warehouse != null && cols.contains('warehouse_id')) {
+      await db.rawUpdate(
+          'UPDATE invoices SET warehouse_id = ? WHERE id = ? AND warehouse_id IS NULL', [d.warehouse, invoiceId]);
+    }
+  }
+
+  /// يختم فاتورة محفوظة بصندوق ومخزن هذا الجهاز (بعد حفظها — الكاشير). لا يغيّر فاتورة
+  /// مختومة مسبقاً، ولا يرمي أي خطأ (الحفظ الأصلي تمّ وهو الأهم).
   static Future<void> stampInvoice(int invoiceId) async {
     try {
-      // الإعداد قد يُضبط لهذه الشاشة من شاشة أخرى على الحاسبة نفسها
-      try {
-        await (await SharedPreferences.getInstance()).reload();
-      } catch (_) {}
-      final box = await cashBoxId();
-      final wh = await warehouseId();
-      if (box == null && wh == null) return;
-      final db = await erpDb();
-      if (box != null) {
-        await db.rawUpdate(
-            'UPDATE invoices SET cash_box_id = ? WHERE id = ? AND cash_box_id IS NULL', [box, invoiceId]);
-      }
-      if (wh != null) {
-        await db.rawUpdate(
-            'UPDATE invoices SET warehouse_id = ? WHERE id = ? AND warehouse_id IS NULL', [wh, invoiceId]);
-      }
+      await stampInvoiceIn(await erpDb(), invoiceId, await current());
     } catch (_) {}
   }
 }

@@ -14,7 +14,6 @@ import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:flutter/services.dart';
 import '../models/transaction.dart';
-import '../models/customer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:alnaser/models/printer_device.dart';
 import 'package:alnaser/services/printing_service.dart';
@@ -30,8 +29,6 @@ import '../services/invoice_pdf_service.dart';
 import '../services/smart_pricing_service.dart';
 import '../widgets/formatters.dart';
 import 'dart:async';
-import 'package:provider/provider.dart';
-import 'package:alnaser/providers/app_provider.dart';
 import 'package:alnaser/services/printing_service_factory.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
@@ -2686,11 +2683,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           }
           
           _autoSave();
-          if (invoiceToManage != null &&
-              invoiceToManage!.status == 'معلقة' &&
-              (invoiceToManage?.isLocked ?? false)) {
-            autoSaveSuspendedInvoice();
-          }
           // --- معالجة الصفوف الفارغة ---
           // احذف جميع الصفوف الفارغة (غير المكتملة) مع عقد تركيزها، لتبقى القائمتان
           // متوازيتين (التنقل بـ Enter يعتمد على رقم السطر)
@@ -2784,11 +2776,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         _recalculateTotals();
         _calculateProfit(); // Update profit on item removal
         _autoSave();
-        if (invoiceToManage != null &&
-            invoiceToManage!.status == 'معلقة' &&
-            (invoiceToManage?.isLocked ?? false)) {
-          autoSaveSuspendedInvoice();
-        }
       });
       _scheduleLiveDebtSync();
     } catch (e) {
@@ -3340,79 +3327,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     }
   }
 
-
-  // دالة الحفظ التلقائي للفواتير المعلقة
-  Future<void> autoSaveSuspendedInvoice() async {
-    // المزوّد يؤخذ قبل أي انتظار: إغلاق الشاشة أثناء الحفظ لا يقطع تحديث الفاتورة
-    final appProvider = context.read<AppProvider>();
-    try {
-      if (invoiceToManage == null ||
-          invoiceToManage!.status != 'معلقة' ||
-          (invoiceToManage?.isLocked ?? false)) {
-        return;
-      }
-      // 🛡️ فاتورة من نسخة احتياطية مستعادة والجهاز لم يلحق بالبقية: لا حفظ
-      // تلقائي (كان سيغيّر أصنافها ثم يُرفض تحديث الفاتورة نفسها — حفظ ناقص)
-      if (await db.isRestoredRecordLocked('invoices', invoiceToManage!.id!)) return;
-      Customer? customer;
-      if (customerNameController.text.trim().isNotEmpty) {
-        final customers = await db.getAllCustomers();
-        try {
-          // 🛡️ الاسم (بتجاهل المسافات) يحدد الحساب — الهاتف لا يفرّق بين حسابين
-          final key = customerNameController.text.replaceAll(' ', '');
-          customer = customers.firstWhere((c) => c.name.replaceAll(' ', '') == key);
-        } catch (e) {
-          customer = null;
-        }
-        // لا تنشئ عميل جديد هنا، فقط استخدم الموجود إن وجد
-      }
-      double currentTotalAmount =
-          invoiceItems.fold(0.0, (sum, item) => sum + item.itemTotal);
-      // تضمين أجور التحميل في الإجمالي الفعلي عند الحفظ/التعديل
-      final double loadingFee =
-          double.tryParse(loadingFeeController.text.replaceAll(',', '')) ??
-              0.0;
-      double paid =
-          double.tryParse(paidAmountController.text.replaceAll(',', '')) ??
-              0.0;
-      double totalAmount = (currentTotalAmount + loadingFee) - discount;
-      Invoice invoice = invoiceToManage!.copyWith(
-        customerName: customerNameController.text,
-        customerPhone: customerPhoneController.text,
-        customerAddress: customerAddressController.text,
-        installerName: installerNameController.text.isEmpty
-            ? null
-            : installerNameController.text,
-        invoiceDate: selectedDate,
-        paymentType: paymentType,
-        totalAmount: totalAmount,
-        discount: discount,
-        amountPaidOnInvoice: paid,
-        loadingFee: loadingFee,
-        lastModifiedAt: DateTime.now(),
-        customerId: customer?.id,
-        // status: 'معلقة',
-        isLocked: false,
-      );
-      int invoiceId = invoiceToManage!.id!;
-      // حذف جميع أصناف الفاتورة القديمة وإضافة الجديدة
-      final oldItems = await db.getInvoiceItems(invoiceId);
-      for (var oldItem in oldItems) {
-        await db.deleteInvoiceItem(oldItem.id!);
-      }
-      for (var item in invoiceItems) {
-        item.invoiceId = invoiceId;
-        await db.insertInvoiceItem(item);
-      }
-      await appProvider.updateInvoice(invoice);
-      if (!mounted) return;
-      setState(() {
-        invoiceToManage = invoice;
-      });
-    } catch (e) {
-      debugPrint('Auto-save suspended invoice error: $e');
-    }
-  }
 
   // 🔒 التحقق من المخزون عند الكتابة اليدوية في شريط الإدخال
   void _validateEntryStockByManualName(String name) {
@@ -5092,11 +5006,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                                 });
                               }
                               _onFieldChanged();
-                              if (invoiceToManage != null &&
-                                  invoiceToManage!.status == 'معلقة' &&
-                                  (invoiceToManage?.isLocked ?? false)) {
-                                autoSaveSuspendedInvoice();
-                              }
                             },
                           );
                         },

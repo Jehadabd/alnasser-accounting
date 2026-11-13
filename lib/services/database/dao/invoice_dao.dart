@@ -177,26 +177,6 @@ class InvoiceDao {
     });
   }
 
-  // 6️⃣ حذف فاتورة
-  // ⚠️ تنبيه: الحذف المالي المعقد يتم في DatabaseService للربط مع Transactions
-  // هذه الدالة تحذف الـ Row فقط
-  Future<int> deleteInvoice(int id) async {
-    final db = await getDatabase();
-    
-    // 🛡️ حماية على مستوى قاعدة البيانات: منع حذف فواتير مزامنة من أجهزة أخرى
-    final check = await db.query('invoices', columns: ['is_created_by_me'], where: 'id = ?', whereArgs: [id], limit: 1);
-    if (check.isNotEmpty && check.first['is_created_by_me'] == 0) {
-      throw Exception('لا يمكن حذف هذه الفاتورة لأنها مستوردة من جهاز آخر.');
-    }
-    
-    return await db.transaction((txn) async {
-      // حذف العناصر أولاً
-      await txn.delete('invoice_items', where: 'invoice_id = ?', whereArgs: [id]);
-      // حذف الفاتورة
-      return await txn.delete('invoices', where: 'id = ?', whereArgs: [id]);
-    });
-  }
-
   // 📦 التعامل مع عناصر الفاتورة (Invoice Items)
   Future<int> insertInvoiceItem(InvoiceItem item) async {
     final db = await getDatabase();

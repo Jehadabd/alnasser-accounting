@@ -2709,12 +2709,6 @@ class DatabaseService {
     return _transactionDao.getInvoiceDebtTransaction(invoiceId);
   }
   
-  Future<void> deleteInvoiceItem(int itemId) async {
-    await database;
-    final db = await database;
-    await db.delete('invoice_items', where: 'id = ?', whereArgs: [itemId]);
-  }
-  
   /// ⚠️ لم تعد لها وظيفة. مساهمة الفاتورة في الدين صارت من مسؤولية
   /// [InvoiceDebtReconciler] وحده، ويُستدعى عند الحفظ وعند التسوية وعند
   /// عرض سجل الديون. تُركت هنا للتوافق مع النداءات القديمة فقط.

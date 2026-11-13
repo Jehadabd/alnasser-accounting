@@ -12,10 +12,11 @@
 //   7. معاملة رُفضت بعد كتابة وصفها: لا وصف يتيم.
 //   8. «أبقِ ما سُجّل» لوصل قبض انقطع داخل سطر (بعد التسديد وقبل الخصم).
 //   9. تثبيت كلفة بنود قديمة بلا كلفة قبل تغيّر كلفة المادة.
-//  10. قيد صفري لفاتورة آجلة بلا كلفة ولا مقبوض (لا يتكرر، والميزان متوازن).
+//  10. قيد صفري لفاتورة صفرية قديمة بلا كلفة ولا مقبوض (لا يتكرر، والميزان متوازن).
 //  11. البائع وعمولته (نسبة، يدوية، سالبة مرفوضة، فترة مثبّتة).
 //  12. عملاء ليسوا في سجل الديون: الكشف والاستعادة بلا تغيير معاملة.
 //  13. ربط فاتورة نقدية قديمة بعميلها بالاسم.
+//  14. فاتورة الشاشة العادية والمعلّقة حين تُحفظ تُختمان بصندوق الحاسبة ومخزنها، والتعديل لا يغيّر الختم.
 //
 // التشغيل: claude_test_gaps.bat
 // ignore_for_file: avoid_print
@@ -62,23 +63,17 @@ void main() {
       }
 
       Future<String> invSave(String name, double qty, double price, double paid, String ptype,
-          {String? inv, String? installer, double rate = 0, int? product, double fee = 0, double? giftListPrice}) async {
+          {String? inv, String? installer, double rate = 0}) async {
         final r = (await d.call('scen', {
           'op': 'invSave',
           'args': {
             'inv': inv,
             'name': name,
             'items': [
-              {
-                'prodId': product ?? pid,
-                'qty': qty,
-                'price': price,
-                if (giftListPrice != null) 'gift': true,
-                if (giftListPrice != null) 'listPrice': giftListPrice,
-              }
+              {'prodId': pid, 'qty': qty, 'price': price}
             ],
             'discount': 0,
-            'fee': fee,
+            'fee': 0,
             'paid': paid,
             'ptype': ptype,
             'installer': installer,
@@ -185,12 +180,7 @@ void main() {
       final invF = await invSave('زبون الكلفة', 3, 2000, 6000, 'نقد');
       await gap('9 تثبيت كلفة ما بيع قبل تغيّر كلفة المادة', 'freezeCosts', {'inv': invF});
 
-      final giftProd = (await h.addProduct(dev, 'مادة هدية', 100))!;
-      await d.call('sqlRaw', {'sql': "UPDATE products SET cost_price = 0 WHERE sync_uuid = '$giftProd'"});
-      final gid = ((((await d.call('scen', {'op': 'prodIds', 'args': const {}})) as Map)['rows'] as List)
-              .firstWhere((r) => (r as Map)['uuid'] == giftProd) as Map)['id'] as num;
-      final invG = await invSave('زبون الهدية', 1, 0, 0, 'دين', product: gid.toInt(), fee: 5000, giftListPrice: 1000);
-      await gap('10 قيد فاتورة آجلة بلا كلفة ولا مقبوض', 'zeroEntry', {'inv': invG});
+      await gap('10 قيد فاتورة بلا كلفة ولا مقبوض (فاتورة صفرية قديمة)', 'zeroEntry', {'inv': inv3}); // نسخة صفرية من فاتورة آجلة
 
       final invE = await invSave('زبون العمولة', 10, 10000, 100000, 'نقد');
       await gap('11 البائع وعمولته على الفاتورة', 'extras', {'inv': invE});
@@ -204,6 +194,7 @@ void main() {
       final lc = (await h.addCustomer(dev, 'زبون نقدي قديم'))!;
       final invL = await invSave('زبون نقدي قديم', 1, 1000, 1000, 'نقد');
       await gap('13 ربط فاتورة نقدية قديمة بعميلها', 'linkOldCash', {'inv': invL, 'cust': lc});
+      await gap('14 الفاتورة العادية تُختم بصندوق الحاسبة ومخزنها', 'regularStamp', {'prod': prod});
 
       problems.addAll(await h.deviceErrors());
       print('\n${problems.isEmpty ? '✅ نجح: الدفعتان 1 و2 من مسارات المال' : '❌ هنا وقع خطأ: ${problems.length} مشكلة'}');
