@@ -3,9 +3,11 @@
 // 🖥️ «صندوق ومخزن هذا الجهاز» (المبيعات ← أدوات البيع):
 //   • صندوق ومخزن كل شاشة على هذه الحاسبة (تعدد الشاشات) — وتعديلها.
 //   • كل الصناديق: رصيدها في الحسابات، ومبيعات اليوم المختار التي سُجّلت عليها
-//     (عدد الفواتير، المبيعات، المقبوض على الفواتير) ومن يستعملها من الشاشات.
+//     (فواتير اليوم كما بيعت، وتعديلات اليوم على فواتير سابقة، والصافي، والمقبوض)
+//     ومن يستعملها من الشاشات. أرقام الصندوق المشترك تظهر مرة واحدة هنا لا تحت كل شاشة.
 //
-// القراءة فقط إلا زر «تعديل» (يكتب إعداد الشاشة على هذا الجهاز، لا يمسّ أي مبلغ).
+// القراءة فقط إلا زر «تعديل» (يكتب إعداد الشاشة على هذا الجهاز، لا يمسّ أي مبلغ)،
+// وزر «إنشاء صندوق خاص» (بعد موافقة: صندوق جديد وحسابه برصيد صفر، يُربط بالشاشة).
 // الأرقام من محرك وقائع المبيعات نفسه (SalesFacts) فتطابق «مبيعات اليوم» في المركز.
 // الفاتورة تُنسب إلى صندوقها (cash_box_id)، والفاتورة بلا صندوق تُنسب إلى الصندوق
 // الافتراضي — كما يرحّلها محرك الترحيل.
@@ -22,10 +24,21 @@ import '../device_defaults.dart';
 import '../erp_common.dart' show erpDb;
 import '../pickers.dart' show CashBoxDropdown, WarehouseDropdown;
 
+/// أرقام صندوق واحد في اليوم المختار، مفصولة كي لا يُقرأ الصافي كمبيعات:
+///   • [count]/[sales]/[paid]: فواتير هذا اليوم كما بيعت في يومها (تعديلها في يوم لاحق
+///     لا يغيّر يومها — واقعة ‎−1 من SalesFacts).
+///   • [editSales]/[editPaid]: تعديلات بالقلم في هذا اليوم على فواتير أيام سابقة
+///     (الإرجاع سالب، والإضافة موجبة) — واقعة ‎+1.
 class _BoxDay {
   int count = 0;
   double sales = 0;
   double paid = 0;
+  final Set<int> editedInvoices = {};
+  double editSales = 0;
+  double editPaid = 0;
+
+  double get net => sales + editSales;
+  double get netPaid => paid + editPaid;
 }
 
 class DeviceCashScreen extends StatefulWidget {
@@ -113,8 +126,16 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
       }
       for (final e in facts.edits) {
         final d = byBox.putIfAbsent(key(e.invoiceId), _BoxDay.new);
-        d.sales += e.dTotal;
-        d.paid += e.dPaid;
+        if (e.sign > 0) {
+          // تعديل في هذا اليوم على فاتورة يوم سابق
+          d.editedInvoices.add(e.invoiceId);
+          d.editSales += e.dTotal;
+          d.editPaid += e.dPaid;
+        } else {
+          // فاتورة هذا اليوم عُدّلت لاحقاً: يُعاد يومها إلى ما بيعت به
+          d.sales += e.dTotal;
+          d.paid += e.dPaid;
+        }
       }
 
       if (!mounted || seq != _loadSeq) return;
@@ -143,7 +164,8 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
       return d.isEmpty ? 'الصندوق الافتراضي' : '${d.first.name} (الافتراضي)';
     }
     final b = _boxes.where((x) => x.id == id).toList();
-    return b.isEmpty ? 'صندوق محذوف (#$id)' : b.first.name;
+    if (b.isEmpty) return 'صندوق محذوف (#$id)';
+    return id == _defaultBoxId ? '${b.first.name} (الافتراضي)' : b.first.name;
   }
 
   String _whName(int? id) => id == null ? 'المخزن الافتراضي' : (_warehouses[id] ?? 'مخزن محذوف (#$id)');
@@ -151,10 +173,74 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
   /// الصندوق الذي تذهب إليه فعلاً مبيعات الشاشة.
   int? _effectiveBox(SeatDefaults s) => s.cashBoxId ?? _defaultBoxId;
 
+  /// الشاشات الأخرى على هذه الحاسبة التي تذهب مبيعاتها إلى صندوق الشاشة [s] نفسه.
+  List<int> _sharers(SeatDefaults s) => [
+        for (final o in _seats)
+          if (o.seat != s.seat && _effectiveBox(o) == _effectiveBox(s)) o.seat,
+      ];
+
+  /// على الصندوق الافتراضي؟ (لا صندوق، أو اختير الافتراضي نفسه صراحة) — وفيه أيضاً
+  /// كل فاتورة بلا صندوق (القديمة والواصلة بالمزامنة)، فلا تُنسب مبيعاته لشاشة.
+  bool _onDefault(SeatDefaults s) => _effectiveBox(s) == _defaultBoxId;
+
+  /// حالة صندوق الشاشة كما تُعرض: (النص، مضبوط فعلاً؟).
+  (String, bool) _boxState(SeatDefaults s) {
+    if (s.inherited) return ('غير مضبوطة — تأخذ إعداد الشاشة الأولى', false);
+    if (_onDefault(s)) return ('على الصندوق الافتراضي — لا صندوق خاص', false);
+    final sh = _sharers(s);
+    if (sh.isNotEmpty) return ('صندوق مشترك مع الشاشة ${sh.join(' و ')}', false);
+    return ('صندوق خاص مضبوط', true);
+  }
+
+  /// اسم لصندوق جديد لا يتكرر بين الصناديق الموجودة.
+  String _newBoxName(SeatDefaults s) {
+    final base = _seatCount > 1 ? 'درج الشاشة ${s.seat}' : 'درج هذا الجهاز';
+    final names = {for (final b in _boxes) b.name.trim()};
+    if (!names.contains(base)) return base;
+    for (var i = 2;; i++) {
+      final n = '$base ($i)';
+      if (!names.contains(n)) return n;
+    }
+  }
+
+  /// ينشئ صندوقاً جديداً (وحسابه برصيد صفر) ويربطه بالشاشة — بعد موافقة صريحة.
+  /// لا يُنقل أي مبلغ ولا تُمسّ الفواتير المحفوظة.
+  Future<void> _createOwnBox(SeatDefaults s, int? warehouseId) async {
+    final name = _newBoxName(s);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('صندوق خاص جديد'),
+        content: Text(
+          'سيُنشأ صندوق «$name» وحسابه في دليل الحسابات (تحت النقدية) برصيد صفر، '
+          'ويُربط ${_seatCount > 1 ? 'بالشاشة ${s.seat}' : 'بهذا الجهاز'}.\n\n'
+          'لا يُنقل أي مبلغ، والفواتير المحفوظة تبقى على صندوقها. '
+          'الفواتير الجديدة فقط تُسجَّل على الصندوق الجديد.',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('إنشاء وربط')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final id = await VouchersService().createCashBox(name);
+      await DeviceDefaults.set(seat: s.seat, cashBoxId: id, warehouseId: warehouseId);
+      if (!mounted) return;
+      setToast(context, 'أُنشئ «$name» ورُبط ${_seatCount > 1 ? 'بالشاشة ${s.seat}' : 'بهذا الجهاز'}');
+      _load();
+    } catch (e) {
+      if (mounted) setToast(context, 'تعذّر إنشاء الصندوق: $e', error: true);
+    }
+  }
+
   Future<void> _edit(SeatDefaults s) async {
     int? box = s.cashBoxId;
     int? wh = s.warehouseId;
     final multi = _seatCount > 1;
+    final hasOwn = _boxState(s).$2;
     final res = await showDialog<String>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -172,9 +258,20 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
               CashBoxDropdown(value: box, width: 420, onChanged: (b) => set(() => box = b?.id)),
               const SizedBox(height: 10),
               WarehouseDropdown(value: wh, width: 420, onChanged: (w) => set(() => wh = w?.id)),
-              if (multi) ...[
+              if (!hasOwn) ...[
                 const SizedBox(height: 12),
-                const SetBanner('اجعل لكل شاشة صندوقاً خاصاً بها لتُعرف مبيعات كل شاشة ويُعدّ درج كل كاشير وحده.'),
+                SetBanner(multi
+                    ? 'اجعل لكل شاشة صندوقاً خاصاً بها لتُعرف مبيعات كل شاشة ويُعدّ درج كل كاشير وحده.'
+                    : 'هذا الجهاز على الصندوق الافتراضي؛ صندوق خاص يفصل درجه عن بقية الأجهزة.'),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(ctx, 'new'),
+                    icon: const Icon(Icons.add_card_rounded, size: 18),
+                    label: Text(multi ? 'إنشاء صندوق خاص لهذه الشاشة' : 'إنشاء صندوق خاص لهذا الجهاز'),
+                  ),
+                ),
               ],
             ]),
           ),
@@ -187,6 +284,10 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
       ),
     );
     if (res == null) return;
+    if (res == 'new') {
+      await _createOwnBox(s, wh);
+      return;
+    }
     try {
       if (res == 'none') {
         await DeviceDefaults.set(seat: s.seat);
@@ -209,7 +310,7 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
     return SettingsScaffold(
       title: 'صندوق ومخزن هذا الجهاز',
       icon: Icons.point_of_sale_rounded,
-      subtitle: multi ? 'لكل شاشة صندوقها — ومبيعات كل صندوق' : 'صندوق الكاشير ومخزنه — ومبيعات كل صندوق',
+      subtitle: multi ? 'لكل شاشة صندوقها — ومبيعات كل صندوق' : 'صندوق فواتير هذا الجهاز ومخزنها — ومبيعات كل صندوق',
       maxWidth: 1040,
       actions: [IconButton(tooltip: 'تحديث', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
       loading: _loading && _boxes.isEmpty,
@@ -222,7 +323,9 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
         const SetBanner(
           'الفاتورة تُنسب إلى الصندوق الذي سُجّلت عليه، لا إلى الشاشة. لذلك تظهر مبيعات كل شاشة منفصلة فقط '
           'إن كان لها صندوق خاص بها؛ والأيام التي كانت فيها الشاشات على صندوق واحد لا يمكن فصلها. '
-          'الطرفيات على الشبكة لكل منها إعدادها على جهازها، وتظهر مبيعاتها هنا تحت صندوقها.',
+          'الطرفيات على الشبكة لكل منها إعدادها على جهازها، وتظهر مبيعاتها هنا تحت صندوقها.\n'
+          'صافي اليوم = فواتير اليوم كما بيعت + تعديلات اليوم بالقلم على فواتير أيام سابقة '
+          '(الإرجاع منها يُنقصه وقد يجعله سالباً، والتعديل يبقى على صندوق فاتورته الأصلي).',
         ),
       ],
     );
@@ -241,12 +344,7 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
           : 'تُسجَّل مبيعاتها على «${_boxName(s.cashBoxId)}» وتُخصم من «${_whName(s.warehouseId)}».',
       status: s == null
           ? null
-          : SetStatusPill(
-              s.cashBoxId == null
-                  ? 'بلا صندوق خاص — تذهب إلى الافتراضي'
-                  : (s.inherited ? 'مأخوذ من إعداد الشاشة الأولى' : 'صندوق خاص مضبوط'),
-              ok: s.cashBoxId != null && !s.inherited,
-            ),
+          : SetStatusPill(_boxState(s).$1, ok: _boxState(s).$2),
     );
   }
 
@@ -321,7 +419,7 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
   Widget _seatTile(SeatDefaults s, bool multi) {
     final mine = s.seat == SeatService.seat;
     final open = _openSeats.contains(s.seat);
-    final day = _byBox[_effectiveBox(s) ?? -1];
+    final (state, own) = _boxState(s);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -364,19 +462,43 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
         _kv(Icons.account_balance_wallet_rounded, _boxName(s.cashBoxId)),
         const SizedBox(height: 6),
         _kv(Icons.warehouse_rounded, _whName(s.warehouseId)),
-        if (s.inherited) ...[
-          const SizedBox(height: 6),
-          const Text('غير مضبوطة — تأخذ إعداد الشاشة الأولى',
-              style: TextStyle(fontSize: 11.5, color: kSetOrange, fontWeight: FontWeight.w700)),
-        ],
-        const Divider(height: 22, color: Color(0xFFEEF2F7)),
+        const SizedBox(height: 8),
         Row(children: [
-          Expanded(child: _mini('فواتير الصندوق', '${day?.count ?? 0}')),
-          Expanded(child: _mini('مبيعاته', fmtMoney(day?.sales ?? 0))),
+          Icon(own ? Icons.check_circle_rounded : Icons.info_rounded, size: 15, color: own ? kSetGreen : kSetOrange),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(state,
+                style: TextStyle(fontSize: 11.5, color: own ? kSetGreen : kSetOrange, fontWeight: FontWeight.w700)),
+          ),
         ]),
+        const Divider(height: 22, color: Color(0xFFEEF2F7)),
+        _seatSales(s, own),
       ]),
     );
   }
+
+  /// مبيعات الشاشة تُعرض أرقاماً فقط إن كان صندوقها لها وحدها؛ وإلا فالأرقام أرقام
+  /// صندوق مشترك (تظهر مرة واحدة في «كل الصناديق») لا أرقام الشاشة.
+  Widget _seatSales(SeatDefaults s, bool own) {
+    if (!own) {
+      final sh = _sharers(s);
+      final why = _onDefault(s)
+          ? 'مبيعاتها ضمن الصندوق الافتراضي مع الفواتير بلا صندوق — لا تنفصل عنها.'
+          : (sh.isEmpty
+              ? 'اضبط لها صندوقاً لتظهر مبيعاتها وحدها.'
+              : 'مبيعاتها مجتمعة مع الشاشة ${sh.join(' و ')} في صندوق واحد — لا تنفصل.');
+      return Text('$why انظر «كل الصناديق».', style: const TextStyle(fontSize: 12, color: kSetMuted, height: 1.5));
+    }
+    final d = _byBox[_effectiveBox(s) ?? -1];
+    final net = d?.net ?? 0;
+    return Row(children: [
+      Expanded(child: _mini('فواتير اليوم', '${d?.count ?? 0}')),
+      Expanded(child: _mini('صافي اليوم', fmtMoney(net), color: net < 0 ? kSetRed : kSetText)),
+    ]);
+  }
+
+  /// مبلغ بإشارته الصريحة (+ للإضافة) — للتعديلات فقط.
+  String _signed(double v) => v > 0.004 ? '+${fmtMoney(v)}' : fmtMoney(v);
 
   Widget _kv(IconData i, String v) => Row(children: [
         Icon(i, size: 17, color: kSetMuted),
@@ -408,14 +530,17 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
       if (_byBox.containsKey(-1)) (-1, null),
     ];
     final totalSales = _byBox.values.fold<double>(0, (s, d) => s + d.sales);
-    final totalPaid = _byBox.values.fold<double>(0, (s, d) => s + d.paid);
+    final totalEdits = _byBox.values.fold<double>(0, (s, d) => s + d.editSales);
+    final totalEdited = _byBox.values.fold<int>(0, (s, d) => s + d.editedInvoices.length);
+    final totalNet = totalSales + totalEdits;
+    final totalPaid = _byBox.values.fold<double>(0, (s, d) => s + d.netPaid);
     final totalCount = _byBox.values.fold<int>(0, (s, d) => s + d.count);
     return SetCard(
       title: 'كل الصناديق',
       subtitle: 'الرصيد في الحسابات، ومبيعات اليوم المختار المسجّلة على كل صندوق',
       icon: Icons.account_balance_rounded,
       color: kSetGreen,
-      trailing: SetStatusPill('$totalCount فاتورة • ${fmtMoney(totalSales)}', ok: true),
+      trailing: SetStatusPill('$totalCount فاتورة • صافي ${fmtMoney(totalNet)}', ok: totalNet >= 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const SizedBox(height: 8),
         if (rows.isEmpty)
@@ -437,9 +562,14 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
             decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(12)),
             child: Row(children: [
               const Expanded(child: Text('المجموع', style: TextStyle(fontWeight: FontWeight.w900))),
-              Expanded(child: _mini('الفواتير', '$totalCount')),
-              Expanded(child: _mini('المبيعات', fmtMoney(totalSales))),
-              Expanded(child: _mini('المقبوض عليها', fmtMoney(totalPaid), color: kSetGreen)),
+              Expanded(child: _mini('فواتير اليوم', '$totalCount')),
+              Expanded(child: _mini('مبيعاتها', fmtMoney(totalSales))),
+              if (totalEdited > 0)
+                Expanded(
+                    child: _mini('تعديل $totalEdited فاتورة سابقة', _signed(totalEdits),
+                        color: totalEdits < 0 ? kSetRed : kSetText)),
+              Expanded(child: _mini('صافي اليوم', fmtMoney(totalNet), color: totalNet < 0 ? kSetRed : kSetText)),
+              Expanded(child: _mini('صافي المقبوض', fmtMoney(totalPaid), color: totalPaid < 0 ? kSetRed : kSetGreen)),
             ]),
           ),
         ],
@@ -492,9 +622,21 @@ class _DeviceCashScreenState extends State<DeviceCashScreen> {
           const SizedBox(height: 10),
         ],
         Row(children: [
-          Expanded(child: _mini('فواتير', '${d?.count ?? 0}')),
-          Expanded(child: _mini('المبيعات', fmtMoney(d?.sales ?? 0))),
-          Expanded(child: _mini('المقبوض', fmtMoney(d?.paid ?? 0), color: kSetGreen)),
+          Expanded(child: _mini('فواتير اليوم', '${d?.count ?? 0}')),
+          Expanded(child: _mini('مبيعاتها', fmtMoney(d?.sales ?? 0))),
+        ]),
+        if ((d?.editedInvoices.length ?? 0) > 0) ...[
+          const SizedBox(height: 8),
+          _mini('تعديل ${d!.editedInvoices.length} فاتورة من أيام سابقة', _signed(d.editSales),
+              color: d.editSales < 0 ? kSetRed : kSetText),
+        ],
+        const Divider(height: 20, color: Color(0xFFEEF2F7)),
+        Row(children: [
+          Expanded(
+              child: _mini('صافي اليوم', fmtMoney(d?.net ?? 0), color: (d?.net ?? 0) < 0 ? kSetRed : kSetText)),
+          Expanded(
+              child: _mini('صافي المقبوض', fmtMoney(d?.netPaid ?? 0),
+                  color: (d?.netPaid ?? 0) < 0 ? kSetRed : kSetGreen)),
         ]),
         if (users.isNotEmpty && _seatCount > 1) ...[
           const SizedBox(height: 10),
