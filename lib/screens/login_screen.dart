@@ -20,13 +20,16 @@ import 'dart:io' show Platform, exit;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../lan/lan_bootstrap.dart';
 import '../lan/lan_settings.dart';
 import '../lan/network_settings_screen.dart';
 import '../services/auth_service.dart';
+import '../services/database_service.dart';
 import '../services/demo_mode.dart';
 import '../services/firebase_sync/firebase_custom_config.dart';
 import '../services/firebase_sync/users_sync_service.dart';
 import '../services/license_service.dart';
+import 'license_screen.dart' show LicenseScreen, openSupportWhatsApp;
 
 enum _Mode { loading, demo, setupAdmin, login, waitUsers }
 
@@ -93,18 +96,124 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _mode = _Mode.login);
     } else {
       _usernameController.text = '';
-      // 👥 جهاز إضافي في نسخة المزامنة: حسابات المستخدمين تأتي من الجهاز الرئيسي
+      // 👥 ⭐ جهاز إضافي: لا يُنشئ مديراً أبداً. حسابات المستخدمين تأتي من الجهاز
+      // الرئيسي: عبر حاسبة السيرفر في شبكة المحل (يبحث عنها وحده باستمرار)، أو عبر
+      // المزامنة. الخروج الوحيد: «تفعيل بحساب آخر» = جهاز مستقل لشخص آخر.
       final lic = _license.getStoredLicense();
-      final waitForMain = lic != null && !lic.isMainDevice && lic.isSyncAllowed &&
-          await FirebaseCustomConfig.isCustomConfigured();
+      final extra = lic != null && !lic.isMainDevice;
+      final viaSync = extra && lic.isSyncAllowed && await FirebaseCustomConfig.isCustomConfigured();
       if (!mounted) return;
-      if (waitForMain) {
+      if (extra) {
         setState(() => _mode = _Mode.waitUsers);
-        _startWaitingForUsers();
+        if (viaSync) _startWaitingForUsers();
+        _startSearchingLan(syncAllowed: lic.isSyncAllowed, viaSync: viaSync);
       } else {
         setState(() => _mode = _Mode.setupAdmin);
       }
     }
+  }
+
+  // ───────────────── ⭐ جهاز إضافي: اتصال تلقائي بالجهاز الرئيسي ─────────────────
+
+  Timer? _lanTimer;
+  bool _joining = false;
+  int _lanTries = 0;
+  String _lanStatus = 'أبحث عن حاسبة السيرفر على شبكة المحل...';
+
+  void _startSearchingLan({required bool syncAllowed, required bool viaSync}) {
+    if (kIsWeb) return;
+    Future<void> attempt() async {
+      if (_joining || _mode != _Mode.waitUsers) return;
+      _joining = true;
+      LanSettings? joined;
+      try {
+        joined = await LanRuntime.autoJoin();
+      } catch (_) {}
+      // حساب مزامنة وصل إعداده الآن (أرسله الجهاز الرئيسي) ⇒ إعادة تشغيل ليتصل
+      var syncArrived = false;
+      if (joined == null && syncAllowed && !viaSync) {
+        try {
+          syncArrived = await FirebaseCustomConfig.isCustomConfigured();
+        } catch (_) {}
+      }
+      _joining = false;
+      if (!mounted || _mode != _Mode.waitUsers) return;
+      if (joined == null && !syncArrived) {
+        setState(() {
+          _lanTries++;
+          _lanStatus = 'لم أجد حاسبة السيرفر بعد — أعيد البحث تلقائياً كل بضع ثوانٍ.';
+        });
+        return;
+      }
+      _stopWaiting();
+      final win = Platform.isWindows;
+      final j = joined;
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: Text(j != null ? '✅ اتصل هذا الجهاز بحاسبة المحل' : '✅ وصل إعداد المزامنة'),
+          content: Text(
+            '${j != null ? 'ارتبط بحاسبة السيرفر «${j.serverName}» (${j.host}).\n' : 'وصل ربط المزامنة من الجهاز الرئيسي.\n'}'
+            '${win ? 'سيُعاد تشغيل البرنامج الآن' : 'سيُغلق البرنامج الآن، افتحه من جديد'}، '
+            'ثم ادخل باسمك وكلمة سرك كما أنشأها المدير.',
+            style: const TextStyle(height: 1.6),
+          ),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+        ),
+      );
+      await LanRuntime.relaunch();
+    }
+
+    unawaited(attempt());
+    _lanTimer = Timer.periodic(const Duration(seconds: 15), (_) => unawaited(attempt()));
+  }
+
+  /// ⭐ «تفعيل بحساب آخر»: الجهاز يصير مستقلاً لشخص آخر. من جهاز إضافي يُرفض إن
+  /// وصل إليه شيء من بيانات المحل (لا تُنقل بيانات محل إلى ترخيص شخص آخر ولا تُحذف).
+  Future<void> _activateOtherAccount() async {
+    final lic = _license.getStoredLicense();
+    final extra = lic != null && !lic.isMainDevice;
+    if (extra) {
+      var rows = 0;
+      try {
+        final db = await DatabaseService().database;
+        final r = await db.rawQuery(
+            'SELECT (SELECT COUNT(*) FROM customers) + (SELECT COUNT(*) FROM invoices) AS n');
+        rows = (r.first['n'] as num?)?.toInt() ?? 0;
+      } catch (_) {}
+      if (!mounted) return;
+      if (rows > 0) {
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('لا يمكن فصل هذا الجهاز هنا'),
+            content: Text(
+              'وصلت إلى هذا الجهاز بيانات من المحل الحالي ($rows سجل بين عملاء وفواتير). '
+              'تفعيله بحساب شخص آخر يكشف له هذه البيانات، ولن أحذفها دون علمك.\n\n'
+              'تواصل مع الدعم لفصله بأمان.',
+              style: const TextStyle(height: 1.6),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
+              FilledButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  openSupportWhatsApp();
+                },
+                icon: const Icon(Icons.support_agent),
+                label: const Text('الدعم'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+    }
+    _stopWaiting();
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LicenseScreen(accountOnly: true)));
+    await _resumeWaiting();
   }
 
   void _startWaitingForUsers() {
@@ -127,6 +236,8 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _stopWaiting() {
+    _lanTimer?.cancel();
+    _lanTimer = null;
     _waitTimer?.cancel();
     _waitTimer = null;
     _waitSub?.cancel();
@@ -560,7 +671,10 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  /// ⭐ جهاز إضافي ينتظر الجهاز الرئيسي: لا «إنشاء مدير». يبحث عن حاسبة السيرفر
+  /// وحده، وبعد عدة محاولات فاشلة فقط يظهر سبب محتمل وإدخال العنوان يدوياً.
   Widget _waitUsersPanel() {
+    final stuck = _lanTries >= 3;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -568,42 +682,104 @@ class _LoginScreenState extends State<LoginScreen> {
         const Text('جهاز إضافي', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _navy)),
         const SizedBox(height: 8),
         Text(
-          'جارٍ جلب بيانات المحل وحسابات الموظفين من الجهاز الرئيسي عبر المزامنة...\n'
-          'يستغرق عادة أقل من دقيقة (أطول إن كانت البيانات كثيرة). بعدها ادخل باسمك الذي أنشأه لك المدير.',
+          'هذا الجهاز مضاف إلى ترخيص المحل. حسابات الموظفين تأتي من الجهاز الرئيسي تلقائياً، '
+          'ثم تدخل باسمك وكلمة سرك كما أنشأها المدير. لا تحتاج أن تفعل شيئاً.',
           style: TextStyle(color: Colors.grey[700], height: 1.6),
         ),
-        const SizedBox(height: 28),
-        const Center(child: CircularProgressIndicator()),
-        const SizedBox(height: 28),
-        OutlinedButton.icon(
-          onPressed: () {
-            _stopWaiting();
-            setState(() => _mode = _Mode.setupAdmin);
-          },
-          icon: const Icon(Icons.person_add_alt),
-          label: const Text('إنشاء مدير لهذا الجهاز بدلاً من الانتظار'),
+        const SizedBox(height: 20),
+        Semantics(
+          liveRegion: true,
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _navy.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _navy.withValues(alpha: 0.12)),
+            ),
+            child: Row(children: [
+              const SizedBox(
+                  width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: _accent)),
+              const SizedBox(width: 14),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  child: Text(
+                    _lanStatus,
+                    key: ValueKey(_lanStatus),
+                    style: const TextStyle(color: _navy, fontWeight: FontWeight.w600, height: 1.5),
+                  ),
+                ),
+              ),
+            ]),
+          ),
         ),
-        const SizedBox(height: 8),
-        TextButton.icon(
-          onPressed: () {
-            _stopWaiting();
-            Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NetworkSettingsScreen()));
-          },
-          icon: const Icon(Icons.lan_outlined),
-          label: const Text('بل هذا الجهاز طرفية على شبكة المحل — اربطه بحاسبة السيرفر'),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          child: !stuck
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.amber.shade200),
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('تأكد من ثلاثة أشياء:',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber.shade900)),
+                      const SizedBox(height: 6),
+                      Text(
+                        '• البرنامج مفتوح على حاسبة السيرفر.\n'
+                        '• هذا الجهاز على شبكة الواي فاي نفسها (لا شبكة الضيوف).\n'
+                        '• جدار الحماية في الحاسبة يسمح بالبرنامج (يضبطه المثبّت تلقائياً).',
+                        style: TextStyle(color: Colors.amber.shade900, height: 1.6),
+                      ),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: TextButton.icon(
+                          onPressed: _openManualLan,
+                          icon: const Icon(Icons.lan_outlined, size: 18),
+                          label: const Text('أدخل عنوان الحاسبة يدوياً'),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+        ),
+        const SizedBox(height: 22),
+        OutlinedButton.icon(
+          onPressed: _activateOtherAccount,
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
+          icon: const Icon(Icons.swap_horiz_rounded),
+          label: const Text('تفعيل بحساب آخر (جهاز مستقل لشخص آخر)'),
         ),
       ],
     );
   }
 
-  /// جهاز إضافي في الترخيص، أو هاتف/تابلت: غالباً طرفية تعمل على قاعدة حاسبة السيرفر
-  bool get _likelyTerminal {
+  Future<void> _openManualLan() async {
+    _stopWaiting();
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NetworkSettingsScreen()));
+    await _resumeWaiting();
+  }
+
+  /// رجع المستخدم من شاشة أخرى بلا نتيجة ⇒ يكمل الانتظار والبحث كما كان.
+  Future<void> _resumeWaiting() async {
+    if (!mounted || _mode != _Mode.waitUsers || _lanTimer != null) return;
+    final l = _license.getStoredLicense();
+    var viaSync = false;
     try {
-      final lic = _license.getStoredLicense();
-      if (lic != null && !lic.isMainDevice) return true;
-      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) return true;
+      viaSync = l != null && l.isSyncAllowed && await FirebaseCustomConfig.isCustomConfigured();
     } catch (_) {}
-    return false;
+    if (!mounted || _mode != _Mode.waitUsers) return;
+    if (viaSync) _startWaitingForUsers();
+    _startSearchingLan(syncAllowed: l?.isSyncAllowed ?? false, viaSync: viaSync);
   }
 
   Widget _credentialsForm() {
@@ -763,19 +939,13 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(height: 12),
           // 🔐 الخروج يخرج من حساب المستخدم فقط؛ الترخيص لا يُغيَّر من هنا بعد
           //    إنشاء المدير — تصفيره ونقله من الإعدادات ← الحسابات والموظفين فقط.
+          // ⭐ الترخيص من هنا: «تفعيل بحساب آخر» فقط (جهاز مستقل لشخص آخر).
+          //    إضافة جهاز برمز تتم من شاشة التفعيل الأولى، والربط بحاسبة السيرفر تلقائي.
           if (setup)
-          TextButton.icon(
-            onPressed: () => Navigator.of(context).pushNamed('/license'),
-            icon: const Icon(Icons.verified_user_outlined, color: _navy),
-            label: const Text('الترخيص: تفعيل بحساب آخر، أو إضافة هذا الجهاز برمز', style: TextStyle(color: _navy)),
-          ),
-          if (setup || AppNetworkMode.isClient || _likelyTerminal)
             TextButton.icon(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const NetworkSettingsScreen()),
-              ),
-              icon: const Icon(Icons.lan_outlined, color: _navy),
-              label: const Text('هذا الجهاز طرفية؟ اربطه بحاسبة السيرفر', style: TextStyle(color: _navy)),
+              onPressed: _activateOtherAccount,
+              icon: const Icon(Icons.swap_horiz_rounded, color: _navy),
+              label: const Text('تفعيل بحساب آخر', style: TextStyle(color: _navy)),
             ),
           // 🧪 زر «تجربة البرنامج ببيانات وهمية» أُزيل بطلب المالك. لوحة الوضع
           //    التجريبي (_demoPanel) باقية فقط ليخرج منها من دخله سابقاً.

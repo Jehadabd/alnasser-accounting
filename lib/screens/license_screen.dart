@@ -15,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../lan/lan_bootstrap.dart';
 import '../lan/lan_settings.dart';
+import '../services/firebase_sync/firebase_custom_config.dart';
 import '../services/license_service.dart';
 import '../services/seat_service.dart';
 import '../owner/wa_auto/wa_usage_banner.dart';
@@ -26,7 +27,11 @@ Future<void> openSupportWhatsApp() async {
 }
 
 class LicenseScreen extends StatefulWidget {
-  const LicenseScreen({super.key});
+  const LicenseScreen({super.key, this.accountOnly = false});
+
+  /// ⭐ «تفعيل بحساب آخر» من شاشة الدخول: حساب ترخيص فقط (لا رمز جهاز إضافي).
+  /// يصير هذا الجهاز مستقلاً: يُفصل عن مزامنة المحل السابق وشبكته.
+  final bool accountOnly;
 
   @override
   State<LicenseScreen> createState() => _LicenseScreenState();
@@ -51,7 +56,9 @@ class _LicenseScreenState extends State<LicenseScreen> {
   void initState() {
     super.initState();
     final p = _licenseService.payload;
-    if (p != null) {
+    if (widget.accountOnly) {
+      _mode = 0; // حساب جديد منفصل: الاسم يُكتب من جديد
+    } else if (p != null) {
       _usernameController.text = p.account;
       if (!p.isMain) _mode = 1;
     } else {
@@ -120,6 +127,12 @@ class _LicenseScreenState extends State<LicenseScreen> {
       _isLoading = true;
       _errorMessage = null;
     });
+    String? oldProject;
+    if (widget.accountOnly) {
+      try {
+        oldProject = await FirebaseCustomConfig.getProjectId();
+      } catch (_) {}
+    }
     final result = _mode == 0
         ? await _licenseService.activateLicense(_usernameController.text, _passwordController.text, move: move)
         : await _licenseService.redeemPairCode(_codeController.text);
@@ -127,6 +140,9 @@ class _LicenseScreenState extends State<LicenseScreen> {
     setState(() => _isLoading = false);
 
     if (result.success) {
+      // ⭐ تفعيل بحساب آخر: فصل الجهاز عن المحل السابق قبل أي شيء
+      if (widget.accountOnly && await _separateFromOldShop(oldProject)) return;
+      if (!mounted) return;
       final sync = _licenseService.payload?.syncAllowed == true;
       // 1) جهاز إضافي على شبكة حاسبة السيرفر ⇒ يرتبط بها وحده فوراً (طرفية على
       //    قاعدتها مباشرة) — بلا أي سؤال. هذا يسبق المزامنة: نفس المحل = نفس القاعدة.
@@ -149,6 +165,45 @@ class _LicenseScreenState extends State<LicenseScreen> {
       return;
     }
     setState(() => _errorMessage = result.message ?? 'حدث خطأ غير معروف');
+  }
+
+  /// ⭐ «تفعيل بحساب آخر»: الجهاز صار لشخص آخر ⇒ يُفصل عن مزامنة المحل السابق
+  /// (إن لم يجلب الحساب الجديد ربطاً خاصاً به) وعن حاسبة سيرفره. لا تُحذف أي بيانات.
+  /// يُرجع true إن أعاد تشغيل البرنامج (المزامنة والشبكة تُقرآن عند الإقلاع فقط).
+  Future<bool> _separateFromOldShop(String? oldProject) async {
+    var restart = false;
+    try {
+      final now = await FirebaseCustomConfig.getProjectId();
+      if (!LicenseService.syncLinkApplied && oldProject != null && oldProject.isNotEmpty && now == oldProject) {
+        await FirebaseCustomConfig.clearCustomConfig();
+        restart = true;
+      }
+    } catch (_) {}
+    try {
+      final lan = await LanSettings.load();
+      if (lan.mode == LanMode.client) {
+        await lan.copyWith(mode: LanMode.standalone, host: '', secret: '').save();
+        restart = true;
+      }
+    } catch (_) {}
+    if (!restart || !mounted) return false;
+    final win = !kIsWeb && Platform.isWindows;
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('✅ صار هذا الجهاز مستقلاً'),
+        content: Text(
+          'فُصل عن مزامنة المحل السابق وعن حاسبة سيرفره.\n'
+          '${win ? 'سيُعاد تشغيل البرنامج الآن' : 'سيُغلق البرنامج الآن، افتحه من جديد'}، ثم أنشئ حساب المدير. '
+          'إن طُلبت كلمة سر حساب الترخيص فاكتب كلمة سر الحساب الجديد.',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+      ),
+    );
+    await LanRuntime.relaunch();
+    return true;
   }
 
   /// 🖧 جهاز إضافي: يرتبط وحده بحاسبة السيرفر في شبكة المحل (بترخيصه، بلا رمز ربط)،
@@ -373,12 +428,17 @@ class _LicenseScreenState extends State<LicenseScreen> {
                                 border: Border.all(color: Colors.blue.shade200),
                               ),
                               child: Text(
-                                'هذا الجهاز مفعّل الآن بحساب «${_licenseService.payload?.account ?? ''}». '
-                                'التفعيل هنا بحساب آخر، أو بإضافته برمز من جهاز رئيسي، يستبدل ترخيصه الحالي. '
-                                'بيانات البرنامج والموظفين لا تتغير.',
+                                widget.accountOnly
+                                    ? 'هذا الجهاز مفعّل الآن بحساب «${_licenseService.payload?.account ?? ''}». '
+                                        'التفعيل بحساب آخر يجعله جهازاً مستقلاً لشخص آخر: يُفصل عن حاسبة '
+                                        'المحل الحالي ومزامنته، ولا يرى بياناته.'
+                                    : 'هذا الجهاز مفعّل الآن بحساب «${_licenseService.payload?.account ?? ''}». '
+                                        'التفعيل هنا بحساب آخر، أو بإضافته برمز من جهاز رئيسي، يستبدل ترخيصه الحالي. '
+                                        'بيانات البرنامج والموظفين لا تتغير.',
                                 style: TextStyle(color: Colors.blue.shade900, height: 1.5),
                               ),
                             ),
+                          if (!widget.accountOnly)
                           SegmentedButton<int>(
                             segments: const [
                               ButtonSegment(value: 0, icon: Icon(Icons.vpn_key), label: Text('الجهاز الرئيسي')),

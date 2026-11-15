@@ -325,3 +325,52 @@ Future<List<Map<String, Object?>>> discoverLanServers({
   }
   return found.values.toList();
 }
+
+/// 🔎 بحث احتياطي حين لا يصل البث (بعض الهواتف والراوترات تمنعه): يجرّب منفذ
+/// السيرفر على كل عناوين الشبكة المحلية (/24) لهذا الجهاز. اتصال TCP يُغلق فوراً
+/// بلا إرسال أي بيانات؛ التحقق الحقيقي (الترخيص) يتم بعده في [LanClientConnection].
+/// يستغرق نحو 3 ثوانٍ لكل شبكة.
+Future<List<Map<String, Object?>>> scanLanSubnet({
+  int port = lanDefaultPort,
+  Duration timeout = const Duration(milliseconds: 700),
+}) async {
+  final mine = <String>{};
+  final prefixes = <String>{};
+  try {
+    for (final ni in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+      for (final a in ni.addresses) {
+        final ip = a.address;
+        if (!_isPrivateIpv4(ip)) continue;
+        mine.add(ip);
+        prefixes.add(ip.substring(0, ip.lastIndexOf('.')));
+      }
+    }
+  } catch (_) {
+    return const [];
+  }
+  final hits = <String>[];
+  for (final pre in prefixes.take(3)) {
+    final targets = [
+      for (var i = 1; i < 255; i++)
+        if (!mine.contains('$pre.$i')) '$pre.$i',
+    ];
+    for (var s = 0; s < targets.length; s += 64) {
+      final end = s + 64 < targets.length ? s + 64 : targets.length;
+      await Future.wait(targets.sublist(s, end).map((h) async {
+        try {
+          final sock = await Socket.connect(h, port, timeout: timeout);
+          sock.destroy();
+          hits.add(h);
+        } catch (_) {}
+      }));
+    }
+  }
+  return [
+    for (final h in hits) {'name': h, 'host': h, 'port': port},
+  ];
+}
+
+bool _isPrivateIpv4(String ip) =>
+    ip.startsWith('192.168.') ||
+    ip.startsWith('10.') ||
+    RegExp(r'^172\.(1[6-9]|2\d|3[01])\.').hasMatch(ip);

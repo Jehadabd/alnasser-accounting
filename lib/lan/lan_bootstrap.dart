@@ -139,7 +139,8 @@ class LanRuntime {
 
   static Future<LanClientConnection?> _findMovedServer(LanSettings s, String clientName) async {
     try {
-      final found = await discoverLanServers(wait: const Duration(seconds: 3));
+      var found = await discoverLanServers(wait: const Duration(seconds: 3));
+      if (found.isEmpty) found = await scanLanSubnet(port: s.port); // البث ممنوع
       // السيرفر الذي اخترناه سابقاً (بالاسم) أولاً، ثم البقية
       found.sort((a, b) => (b['name'] == s.serverName ? 1 : 0) - (a['name'] == s.serverName ? 1 : 0));
       for (final f in found) {
@@ -216,6 +217,8 @@ class LanRuntime {
     for (var i = 0; i < 2 && found.isEmpty; i++) {
       found = await discoverLanServers(wait: const Duration(seconds: 3));
     }
+    // البث لم يصل (هاتف/راوتر يمنعه) ⇒ نجرّب عناوين الشبكة واحداً واحداً
+    if (found.isEmpty) found = await scanLanSubnet();
     for (final f in found) {
       final host = '${f['host']}';
       final port = (f['port'] as num?)?.toInt() ?? lanDefaultPort;
