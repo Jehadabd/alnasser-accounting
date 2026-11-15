@@ -47,8 +47,10 @@ import '../widgets/invoice_range_dialog.dart';
 import '../services/backup_package.dart';
 import '../services/upload_eta.dart';
 import '../services/disk_space/disk_space_guard.dart'; // 💽 حماية امتلاء القرص
-// ملاحظة: حُذف استيراد window_manager لأنه كان يعتمد على تهيئة مخصصة في main.dart
-// تسبب تعليق التطبيق ومنع ظهور الشاشة. الإغلاق الآن عبر SystemNavigator.
+// ملاحظة: window_manager يُهيَّأ في main.dart (ensureInitialized) قبل الشاشات.
+// ⭐ إغلاق نافذة الحاسبة يمر بـ ExitBackup (نسخة احتياطية عند الخروج) — انظر onWindowClose.
+import 'package:window_manager/window_manager.dart';
+import '../services/exit_backup.dart';
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
@@ -56,7 +58,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WindowListener {
   final AuthService _authService = AuthService(); // 👤
   final Color _primaryColor = const Color(0xFF6C63FF);
 
@@ -65,6 +67,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    _attachExitBackup();
     _loadSettings();
     // تأكد من تهيئة مزود التطبيق لتفعيل دعم Google Drive
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -163,7 +166,58 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    _detachExitBackup();
     super.dispose();
+  }
+
+  // ─────────── ⭐ نسخة احتياطية عند إغلاق النافذة (الحاسبة) ───────────
+
+  bool _exitGuard = false;
+  bool _closing = false;
+
+  void _attachExitBackup() {
+    if (!ExitBackup.supported) return;
+    try {
+      windowManager.addListener(this);
+      windowManager.setPreventClose(true);
+      _exitGuard = true;
+    } catch (e) {
+      debugPrint('⚠️ ExitBackup: تعذّر اعتراض الإغلاق: $e');
+    }
+  }
+
+  void _detachExitBackup() {
+    if (!_exitGuard) return;
+    _exitGuard = false;
+    try {
+      windowManager.removeListener(this);
+      // بعد الخروج من الحساب (شاشة الدخول) يُغلق البرنامج كالمعتاد
+      windowManager.setPreventClose(false);
+    } catch (_) {}
+  }
+
+  @override
+  void onWindowClose() async {
+    if (_closing) return;
+    _closing = true;
+    var close = true;
+    try {
+      close = await ExitBackup.onExit(context);
+    } catch (e) {
+      // أي خطأ لا يحبس المستخدم داخل البرنامج
+      debugPrint('⚠️ ExitBackup: $e');
+      close = true;
+    }
+    if (!close) {
+      _closing = false;
+      return;
+    }
+    try {
+      await windowManager.setPreventClose(false);
+      await windowManager.destroy();
+    } catch (_) {
+      await SystemNavigator.pop();
+    }
   }
 
   /// رسالة تأكيد الخروج مع خيار النسخ الاحتياطي
@@ -873,7 +927,8 @@ class _MainScreenState extends State<MainScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        final shouldExit = await _showExitConfirmation();
+        // ⭐ الحاسبة: النافذة نفسها (اسألني/احفظ دائماً/لا تحفظ)؛ الهاتف: النافذة القديمة
+        final shouldExit = ExitBackup.supported ? await ExitBackup.onExit(context) : await _showExitConfirmation();
         if (shouldExit && mounted) {
           // إغلاق التطبيق فعلياً عبر كل المنصات (ويندوز/أندرويد).
           await SystemNavigator.pop();

@@ -2,6 +2,7 @@ import '../widgets/popup_screens.dart'; // 🪟
 import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
 import '../widgets/scan_settings_tile.dart'; // 🔫
 import '../widgets/batch_policy_tile.dart'; // 📅 أي دفعة تخرج أولاً
+import '../widgets/exit_backup_tile.dart'; // 💾 نسخة عند الخروج
 import 'dart:io';
 import 'invoice_entry_layout_screen.dart'; // 🧩
 import 'package:flutter/material.dart';
@@ -2167,12 +2168,19 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'النسخ الاحتياطي والمزامنة',
           Icons.cloud_sync_outlined,
           'استعادة القاعدة، تيليغرام، ديسكورد، دروب بوكس، المزامنة',
-          keywords: 'رفع البيانات وجهات ترتيب جوجل درايف google drive مسار مكان مجلد ملف قاعدة البيانات نسخ احتياطي نسخة استعادة قاعدة تيليجرام تلغرام telegram discord dropbox فايربيس firebase مزامنة ويب متصفح',
+          keywords: 'نسخة عند الخروج إغلاق البرنامج حفظ تلقائي رفع البيانات وجهات ترتيب جوجل درايف google drive مسار مكان مجلد ملف قاعدة البيانات نسخ احتياطي نسخة استعادة قاعدة تيليجرام تلغرام telegram discord dropbox فايربيس firebase مزامنة ويب متصفح',
           [
           // ☁️ زر «رفع البيانات»: إلى أين يرفع وبأي ترتيب
           _uploadTargetsCard(),
           // 📂 المسار الوحيد لقاعدة البيانات + فتح المجلد
           const DatabaseLocationCard(),
+          // 💾 نسخة احتياطية عند الخروج: اسألني / احفظ دائماً / لا تحفظ + مجلد الحفظ
+          _buildSettingsCard(
+            icon: Icons.save_alt_rounded,
+            iconColor: const Color(0xFF047857),
+            title: 'نسخة احتياطية عند الخروج من البرنامج',
+            child: const ExitBackupTile(),
+          ),
           // 📦 قسم استعادة النسخة الاحتياطية لقاعدة البيانات
           _buildSettingsCard(
             icon: Icons.settings_backup_restore_rounded,
