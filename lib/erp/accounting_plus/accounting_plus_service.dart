@@ -144,7 +144,7 @@ class CompoundVoucherService {
           },
           where: 'id = ?',
           whereArgs: [id]);
-      await Ledger.deleteBySource(txn, 'voucher', id);
+      await Ledger.deleteBySource(txn, 'voucher', id, reason: 'حذف سند قيد مركّب', userId: currentUserId());
     });
     ActivityLog.log('حذف', 'سند قيد مركّب', 'حذف سند قيد رقم ${v.first['voucher_number']}');
   }
@@ -325,7 +325,7 @@ class FiscalCloseService {
     final later = await db.query('fiscal_closings', where: 'year > ?', whereArgs: [year], limit: 1);
     if (later.isNotEmpty) throw ErpException('أعد فتح السنوات اللاحقة أولاً (${later.first['year']})');
     await db.transaction((txn) async {
-      await Ledger.deleteBySource(txn, source, year);
+      await Ledger.deleteBySource(txn, source, year, reason: 'إعادة فتح السنة المالية $year', userId: currentUserId());
       await txn.delete('fiscal_closings', where: 'year = ?', whereArgs: [year]);
     });
     ActivityLog.log('إلغاء', 'إقفال السنة', 'إعادة فتح السنة المالية $year');
@@ -447,7 +447,8 @@ class FxRevaluationService {
         where: 'source_type = ? AND source_id = ?', whereArgs: [source, sourceId], limit: 1);
     if (e.isEmpty) return;
     await PeriodLock.assertOpen(parseDate(e.first['entry_date']));
-    await db.transaction((txn) => Ledger.deleteBySource(txn, source, sourceId));
+    await db.transaction((txn) => Ledger.deleteBySource(txn, source, sourceId,
+        reason: 'حذف قيد إعادة تقييم العملات', userId: currentUserId()));
   }
 }
 

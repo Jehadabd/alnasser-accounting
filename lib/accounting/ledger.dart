@@ -4,6 +4,8 @@
 //
 // القاعدة الذهبية: لا يُكتب قيد غير متوازن أبداً (مجموع المدين = مجموع الدائن).
 
+import 'dart:convert' show jsonEncode;
+
 import 'package:intl/intl.dart' show NumberFormat;
 import 'package:sqflite/sqflite.dart';
 
@@ -326,6 +328,8 @@ class Ledger {
     int entryId;
     if (existingId != null) {
       entryId = existingId;
+      // ⭐ لا يُستبدل قيد دون أثر: يُنسخ كما كان إن تغيّر فيه أي شيء
+      await _archiveIfChanged(d, entryId, date: date, description: description, branchId: branchId, lines: norm);
       await d.delete('journal_lines', where: 'entry_id = ?', whereArgs: [entryId]);
       await d.update(
         'journal_entries',
@@ -358,16 +362,122 @@ class Ledger {
     return entryId;
   }
 
-  static Future<void> deleteBySource(
-      DatabaseExecutor d, String sourceType, int sourceId) async {
+  /// يحذف قيد المصدر من الدفتر الحي. ⭐ قبل الحذف يُنسخ حرفياً إلى [historyTable]
+  /// في المعاملة نفسها، فلا يختفي قيد دون أثر. إن فشل النسخ فشل الحذف معه.
+  static Future<void> deleteBySource(DatabaseExecutor d, String sourceType, int sourceId,
+      {String? reason, int? userId}) async {
     final ex = await d.query('journal_entries',
-        columns: ['id'],
         where: 'source_type = ? AND source_id = ?',
         whereArgs: [sourceType, sourceId]);
     for (final r in ex) {
+      await _archiveEntry(d, r, action: 'deleted', reason: reason, userId: userId);
       await d.delete('journal_lines', where: 'entry_id = ?', whereArgs: [r['id']]);
       await d.delete('journal_entries', where: 'id = ?', whereArgs: [r['id']]);
     }
+  }
+
+  // ─────────────── ⭐ سجل القيود المحذوفة والمستبدلة (journal_history) ───────────────
+  //
+  // مبدأ «لا يُمحى قيد دون أثر» (مثل GoBD الألماني: ما سُجّل لا يُحذف ولا يُغيَّر
+  // إلا بأثر يبقى معه المحتوى الأصلي معروفاً).
+  //
+  //   • كل حذف لقيد، وكل استبدال غيّر فيه شيئاً، يُنسخ القيد قبله بأسطره كاملة
+  //     إلى journal_history، داخل المعاملة نفسها: إن فشل النسخ فشلت العملية كلها.
+  //   • النسخ حرفي: صف القيد وكل أسطره بكل أعمدتها (SELECT *) بصيغة JSON. الأرقام
+  //     العشرية تُكتب بأقصر تمثيل يُعاد منه الرقم نفسه بتّةً بتّة، فلا تقريب ولا فقد.
+  //   • الدفتر الحي (journal_entries / journal_lines) لا يتغير سلوكه إطلاقاً: كل
+  //     الشاشات والتقارير والأرصدة تقرأه كما كانت. السجل جدول مستقل للمراجعة فقط.
+  //   • لا يُحذف من السجل ولا يُعدَّل أبداً (إضافة فقط).
+
+  static const String historyTable = 'journal_history';
+
+  static const String historyDdl = '''
+    CREATE TABLE IF NOT EXISTS journal_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id INTEGER NOT NULL,
+      entry_number INTEGER,
+      entry_date TEXT,
+      description TEXT,
+      source_type TEXT NOT NULL,
+      source_id INTEGER,
+      action TEXT NOT NULL,
+      reason TEXT,
+      archived_at TEXT NOT NULL,
+      archived_by_user_id INTEGER,
+      entry_json TEXT NOT NULL,
+      lines_json TEXT NOT NULL
+    )''';
+
+  static const String historyIndexDdl =
+      'CREATE INDEX IF NOT EXISTS idx_jh_source ON journal_history(source_type, source_id)';
+
+  /// ينسخ قيداً (صفّه كاملاً [entry]) وأسطره كما هي الآن إلى السجل.
+  static Future<void> _archiveEntry(DatabaseExecutor d, Map<String, Object?> entry,
+      {required String action, String? reason, int? userId}) async {
+    final entryId = entry['id'];
+    final lines = await d.query('journal_lines', where: 'entry_id = ?', whereArgs: [entryId], orderBy: 'id');
+    final row = <String, Object?>{
+      'entry_id': entryId,
+      'entry_number': entry['entry_number'],
+      'entry_date': entry['entry_date'],
+      'description': entry['description'],
+      'source_type': entry['source_type'],
+      'source_id': entry['source_id'],
+      'action': action,
+      'reason': reason,
+      'archived_at': DateTime.now().toIso8601String(),
+      'archived_by_user_id': userId,
+      'entry_json': jsonEncode(entry),
+      'lines_json': jsonEncode(lines),
+    };
+    try {
+      await d.insert(historyTable, row);
+    } catch (e) {
+      // قاعدة قديمة لم يُنشأ فيها الجدول بعد (استعادة نسخة قديمة مثلاً): يُنشأ ويُعاد مرة واحدة.
+      // أي خطأ آخر يُرمى كما هو فتفشل العملية كلها (لا حذف بلا أثر).
+      if (!'$e'.contains('no such table')) rethrow;
+      await d.execute(historyDdl);
+      await d.execute(historyIndexDdl);
+      await d.insert(historyTable, row);
+    }
+  }
+
+  /// قبل استبدال قيد قائم: يُؤرشف فقط إن تغيّر شيء (التاريخ، البيان، الفرع، أو أي سطر).
+  /// إعادة الكتابة بالقيم نفسها (ترحيل متكرر) لا تملأ السجل.
+  static Future<void> _archiveIfChanged(
+    DatabaseExecutor d,
+    int entryId, {
+    required DateTime date,
+    required String description,
+    required int branchId,
+    required List<JournalLineInput> lines,
+  }) async {
+    final cur = await d.query('journal_entries', where: 'id = ?', whereArgs: [entryId], limit: 1);
+    if (cur.isEmpty) return;
+    final e = cur.first;
+    final oldLines = await d.query('journal_lines', where: 'entry_id = ?', whereArgs: [entryId], orderBy: 'id');
+    final newLines = [for (final l in lines) l.toMap(entryId)];
+    var same = '${e['entry_date']}' == date.toIso8601String() &&
+        '${e['description'] ?? ''}' == description &&
+        ((e['branch_id'] as num?)?.toInt() ?? 1) == branchId &&
+        oldLines.length == newLines.length;
+    for (var i = 0; same && i < newLines.length; i++) {
+      final o = oldLines[i], n = newLines[i];
+      for (final k in n.keys) {
+        if (!_sameValue(o[k], n[k])) {
+          same = false;
+          break;
+        }
+      }
+    }
+    if (same) return;
+    await _archiveEntry(d, e, action: 'replaced');
+  }
+
+  /// مقارنة قيمة مخزّنة بقيمة ستُكتب: الأرقام بقيمتها (5 و5.0 متساويان)، والباقي حرفياً.
+  static bool _sameValue(Object? a, Object? b) {
+    if (a is num && b is num) return a.toDouble() == b.toDouble();
+    return a == b;
   }
 
   /// قيد يدوي — يمنع حسابات المراقبة (ذمم العملاء/الموردين).
@@ -404,7 +514,7 @@ class Ledger {
     });
   }
 
-  Future<void> deleteManualEntry(int entryId) async {
+  Future<void> deleteManualEntry(int entryId, {int? userId}) async {
     final d = await db;
     final e = await d.query('journal_entries',
         columns: ['source_type'], where: 'id = ?', whereArgs: [entryId], limit: 1);
@@ -413,6 +523,10 @@ class Ledger {
       throw LedgerException('هذا القيد مولَّد من مستند — عدّل المستند نفسه وسيتعدّل قيده');
     }
     await d.transaction((txn) async {
+      // ⭐ يُقرأ الصف كاملاً داخل المعاملة ويُنسخ إلى السجل قبل الحذف
+      final full = await txn.query('journal_entries', where: 'id = ?', whereArgs: [entryId], limit: 1);
+      if (full.isEmpty) return;
+      await _archiveEntry(txn, full.first, action: 'deleted', reason: 'حذف قيد يدوي', userId: userId);
       await txn.delete('journal_lines', where: 'entry_id = ?', whereArgs: [entryId]);
       await txn.delete('journal_entries', where: 'id = ?', whereArgs: [entryId]);
     });

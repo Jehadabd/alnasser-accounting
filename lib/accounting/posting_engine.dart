@@ -178,7 +178,7 @@ class PostingEngine {
           i, i + batch > toDelete.length ? toDelete.length : i + batch);
       await db.transaction((txn) async {
         for (final id in chunk) {
-          await Ledger.deleteBySource(txn, sourceType, id);
+          await Ledger.deleteBySource(txn, sourceType, id, reason: 'لم يعد المستند المصدر قائماً');
         }
       });
       summary.deleted += chunk.length;
@@ -271,7 +271,7 @@ class PostingEngine {
       final desc = 'فاتورة بيع #${s.id} — ${r['customer_name'] ?? ''}'.trim();
       if (lines.isEmpty) {
         // فاتورة آجلة بلا كلفة معروفة: نثبت بصمتها بقيد صفري لا يُكتب.
-        await Ledger.deleteBySource(txn, 'invoice', s.id);
+        await Ledger.deleteBySource(txn, 'invoice', s.id, reason: 'إعادة ترحيل الفاتورة');
         await txn.insert('journal_entries', {
           'entry_number': 0,
           'entry_date': _date(r['invoice_date']).toIso8601String(),
@@ -761,7 +761,7 @@ class PostingEngine {
     final stockValue = roundMoney(_d(v.first['v']));
 
     return db.transaction((txn) async {
-      await Ledger.deleteBySource(txn, 'inventory_valuation', 1);
+      await Ledger.deleteBySource(txn, 'inventory_valuation', 1, reason: 'إعادة مطابقة قيمة المخزون');
       final bal = await txn.rawQuery(
           'SELECT COALESCE(SUM(debit - credit), 0) AS b FROM journal_lines WHERE account_id = ?',
           [inventory]);

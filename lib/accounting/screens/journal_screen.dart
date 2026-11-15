@@ -106,7 +106,7 @@ class _JournalScreenState extends State<JournalScreen> {
               onPressed: () => SaveLock.run(() async {
                 if (!requirePermission(context, AppPermissions.accountingPost)) return;
                 try {
-                  await _ledger.deleteManualEntry(e['id'] as int);
+                  await _ledger.deleteManualEntry(e['id'] as int, userId: AuthService().currentUser?.id);
                   if (ctx.mounted) Navigator.pop(ctx);
                   await _load();
                 } catch (err) {

@@ -154,7 +154,7 @@ class ErpPosting {
     if (toDelete.isNotEmpty) {
       await db.transaction((txn) async {
         for (final id in toDelete) {
-          await Ledger.deleteBySource(txn, sourceType, id);
+          await Ledger.deleteBySource(txn, sourceType, id, reason: 'لم يعد المستند المصدر قائماً');
         }
       });
       summary.deleted += toDelete.length;

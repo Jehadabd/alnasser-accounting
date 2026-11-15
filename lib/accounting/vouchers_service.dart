@@ -277,7 +277,7 @@ class VouchersService {
         where: 'id = ?',
         whereArgs: [voucherId],
       );
-      await Ledger.deleteBySource(txn, 'voucher', voucherId);
+      await Ledger.deleteBySource(txn, 'voucher', voucherId, reason: 'حذف سند', userId: userId);
     });
     if (_logActivity) ActivityLog.log('حذف', 'السندات', 'حذف سند #$voucherId');
   }

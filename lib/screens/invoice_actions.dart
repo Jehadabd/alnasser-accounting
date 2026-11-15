@@ -1,7 +1,7 @@
 // lib/screens/invoice_actions.dart
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb; // 🌐
+import 'package:flutter/foundation.dart' show kIsWeb, Uint8List; // 🌐
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -138,7 +138,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
   // Methods moved to InvoiceController
 
   Future<String> saveInvoicePdf(
-      pw.Document pdf, String customerName, DateTime invoiceDate) async {
+      pw.Document pdf, String customerName, DateTime invoiceDate, {Uint8List? bytes}) async {
     try {
       final safeCustomerName =
           customerName.replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '');
@@ -156,7 +156,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
       final filePath = p.join(directory.path, fileName);
       final file = File(filePath);
-      await file.writeAsBytes(await pdf.save());
+      await file.writeAsBytes(bytes ?? await pdf.save());
       return filePath;
     } catch (e) {
       debugPrint('Error saving PDF: $e');
@@ -959,14 +959,49 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
 
       if (Platform.isWindows) {
-        final filePath = await saveInvoicePdf(
-            pdf, customerNameController.text, selectedDate);
-        await Process.start('cmd', ['/c', 'start', '/min', '', filePath]);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('تم إرسال الفاتورة للطابعة مباشرة!')),
-          );
+        // ⭐ كان هنا «start /min» يفتح ملف PDF في العارض مصغَّراً ولا يطبع شيئاً، مع
+        //    رسالة «أُرسلت للطابعة». الآن: طباعة فعلية على الطابعة المختارة في
+        //    الإعدادات (الفواتير A4، أو الكاشير للحرارية 80mm)، وإلا نافذة الطباعة.
+        final bytes = await pdf.save();
+        try {
+          // نسخة محفوظة في «المستندات\invoices» كما كانت
+          await saveInvoicePdf(pdf, customerNameController.text, selectedDate, bytes: bytes);
+        } catch (_) {}
+        final target = rollFormat
+            ? await SettingsManager.getPosThermalPrinter()
+            : await SettingsManager.getInvoicePrinter();
+        final no = invoiceToManage?.invoiceNumber ?? (invoiceToManage?.id == null ? '' : '${invoiceToManage!.id}');
+        final docName = 'فاتورة $no ${customerNameController.text}'.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (target != null && target.connectionType == PrinterConnectionType.system) {
+          final printerName = target.address.trim().isNotEmpty ? target.address : target.name;
+          var ok = false;
+          try {
+            ok = await Printing.directPrintPdf(
+              printer: Printer(url: printerName),
+              onLayout: (_) async => bytes,
+              name: docName,
+            );
+          } catch (e) {
+            debugPrint('⚠️ الطباعة المباشرة: $e');
+          }
+          if (ok) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('أُرسلت الفاتورة إلى الطابعة «${target.name}»')),
+              );
+            }
+            return;
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  backgroundColor: Colors.orange,
+                  content: Text('تعذّرت الطباعة المباشرة على «${target.name}» — اختر الطابعة من النافذة')),
+            );
+          }
         }
+        // لا طابعة محددة في الإعدادات، أو طابعة شبكة يدوية، أو فشلت المباشرة ⇒ نافذة الطباعة
+        await Printing.layoutPdf(onLayout: (_) async => bytes, name: docName);
         return;
       }
       if (Platform.isAndroid) {

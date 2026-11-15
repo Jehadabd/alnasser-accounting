@@ -11,6 +11,7 @@
 // كل التعريفات CREATE ... IF NOT EXISTS، فالاستدعاء المتكرر آمن.
 
 import 'package:sqflite/sqflite.dart';
+import 'ledger.dart' show Ledger; // ⭐ سجل القيود (journal_history)
 
 class AccountingSchema {
   AccountingSchema._();
@@ -101,6 +102,9 @@ class AccountingSchema {
     'CREATE INDEX IF NOT EXISTS idx_jl_account ON journal_lines(account_id)',
     'CREATE INDEX IF NOT EXISTS idx_jl_party ON journal_lines(party_type, party_id)',
     'CREATE INDEX IF NOT EXISTS idx_je_date ON journal_entries(entry_date)',
+    // ⭐ سجل القيود المحذوفة والمستبدلة (إضافة فقط) — انظر Ledger.historyTable
+    Ledger.historyDdl,
+    Ledger.historyIndexDdl,
     // ── الصناديق والبنوك ──
     '''
     CREATE TABLE IF NOT EXISTS cash_boxes (
