@@ -192,12 +192,51 @@ class ReportExport {
     return '$n - $d.pdf';
   }
 
+  /// ⭐ اسم بحروف إنجليزية للمشاركة من ويندوز: واتساب ديسكتوب يستلم الملف من نافذة
+  /// المشاركة باسم عربي مشوّه (UTF-8 يُقرأ لاتينياً)، بينما السحب اليدوي يحفظه — العيب
+  /// في طريق المشاركة لا في الملف (اختبار المالك 2026-11-15). نوع المستند ورقمه بالإنجليزية،
+  /// واسم الزبون العربي يبقى في نص الرسالة المرافقة.
+  /// مثال: «فاتورة 12026113 - أحمد» ← «Invoice 12026113 - 2026-11-12.pdf».
+  static String latinShareFileName(String name, {DateTime? date}) {
+    final n = shareFileName(name, date: date); // تنظيف موحّد (بلا شرطات ولا رقم نسخة)
+    final body = n.substring(0, n.length - '.pdf'.length);
+    const kinds = <String, String>{
+      'سند قبض': 'Receipt-Voucher',
+      'وصل قبض': 'Receipt',
+      'سند صرف': 'Payment-Voucher',
+      'إشعار مدين': 'Debit-Note',
+      'إشعار دائن': 'Credit-Note',
+      'كشف حساب': 'Account-Statement',
+      'كشف تجاري': 'Commercial-Statement',
+      'سجل ديون': 'Debt-Log',
+      'عرض سعر': 'Quote',
+      'مرتجع': 'Return',
+      'طلبية': 'Order',
+      'فاتورة': 'Invoice',
+    };
+    var kind = 'Document';
+    for (final k in kinds.entries) {
+      if (body.startsWith(k.key)) {
+        kind = k.value;
+        break;
+      }
+    }
+    final d = (date ?? DateTime.now()).toIso8601String().substring(0, 10);
+    // الرقم الأول بعد نوع المستند (رقم الفاتورة/السند) — إن وُجد
+    final head = body.split(' - ').first;
+    final no = RegExp(r'\d+').firstMatch(head)?.group(0);
+    return no == null ? '$kind - $d.pdf' : '$kind $no - $d.pdf';
+  }
+
   /// 📤 مشاركة PDF (واتساب، تيليجرام، بريد...) بنفس طريقة مشاركة الفاتورة: ملف مؤقت
   /// باسم واضح ثم نافذة المشاركة. على المتصفح: تنزيل/مشاركة مباشرة.
   static Future<void> sharePdf(BuildContext context, Uint8List bytes, String name,
       {String? text, DateTime? date}) async {
     try {
-      final fileName = shareFileName(name, date: date);
+      // ويندوز: اسم إنجليزي (واتساب ديسكتوب يشوّه العربي القادم من نافذة المشاركة)
+      final fileName = !kIsWeb && Platform.isWindows
+          ? latinShareFileName(name, date: date)
+          : shareFileName(name, date: date);
       if (kIsWeb) {
         await Printing.sharePdf(bytes: bytes, filename: fileName);
         return;

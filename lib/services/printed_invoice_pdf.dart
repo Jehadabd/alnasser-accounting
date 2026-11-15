@@ -21,6 +21,7 @@ import 'product_codes.dart';
 import '../models/invoice_design_settings.dart' show InvoiceColumnConfig; // 🛡️ أعمدة الضمان
 import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر
 import 'invoice_extras_pdf.dart'; // ⚖️🛡️ وزن الفاتورة وشروط الضمان
+import '../invoice_designer/summary_placement.dart'; // 📌 مكان الملخص
 
 String _pid5(int? id) {
   if (id == null) return '-----';
@@ -431,6 +432,8 @@ class PrintedInvoicePdf {
     required double currentDebtForPdf,
   }) async {
       const itemsPerPage = 19;
+      // 📌 مكان الملخص من الإعدادات: «أسفل الورقة» يدفعه لأسفل الصفحة الأخيرة
+      final summaryAtBottom = await SummaryPlacementPref.get() == SummaryPlacement.bottom;
       final totalPages =
           (combinedRows.length / itemsPerPage).ceil().clamp(1, double.infinity).toInt();
       bool printedSummaryInLastPage = false;
@@ -486,6 +489,7 @@ class PrintedInvoicePdf {
                         pw.Divider(height: 4, thickness: 0.4),
                         // ⚖️🛡️ وزن الفاتورة وشروط الضمان تحت آخر بند (الصفحة الأخيرة)
                         if (isLast) ...InvoiceExtrasPdf.block(itemsForPdf, allProducts, font),
+                        if (isLast && !deferSummary && summaryAtBottom) pw.Spacer(),
                         if (isLast && !deferSummary) ...[
                           if (invoiceToManage != null &&
                               invoiceToManage.id != null &&
@@ -538,7 +542,7 @@ class PrintedInvoicePdf {
                                       color: PdfColor.fromInt(
                                           appSettings.noticeColor)))),
                         ],
-                        pw.Spacer(),
+                        if (!(isLast && !deferSummary && summaryAtBottom)) pw.Spacer(),
                         pw.Align(
                           alignment: pw.Alignment.center,
                           child: pw.Text(

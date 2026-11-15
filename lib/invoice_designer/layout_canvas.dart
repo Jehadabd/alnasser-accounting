@@ -294,6 +294,19 @@ class ElementPreview extends StatelessWidget {
     final align = e.s('align', 'right');
     final deco = _boxDecoration(e);
     final style = _style(fs, bold: e.b('bold', false), color: e.i('color', 0xFF000000));
+    // ↔️↕️ «مطّ الكلمة»: كما في الطباعة — سطر واحد يملأ المربع عرضاً وطولاً
+    if (e.b('stretch', false) && !text.contains('\n') && text.trim().isNotEmpty) {
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: deco != null ? 1.2 * scale : 0),
+        decoration: deco,
+        child: SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.fill,
+            child: Text(text, style: style, textDirection: TextDirection.rtl, maxLines: 1),
+          ),
+        ),
+      );
+    }
     final lines = math.max(1, ((e.h * scale) / (style.fontSize! * 1.25)).floor());
     final multi = lines > 1 || text.contains('\n');
     return Container(

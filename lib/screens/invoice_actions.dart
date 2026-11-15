@@ -10,7 +10,6 @@ import 'package:path_provider/path_provider.dart' as pp;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -31,6 +30,7 @@ import '../services/invoice_safety/debt_to_cash_confirm.dart'; // 🛑 تأكي�
 import '../services/invoice_safety/iqd_normalize.dart';
 import '../services/invoice_safety/line_math_check.dart'; // 🚨 مبلغ السطر = الكمية × السعر
 // import '../services/drive_service.dart'; // Removed
+import '../erp/report_export.dart'; // 📤 المشاركة الموحّدة
 import '../services/printed_invoice_pdf.dart'; // 🖨️ التصميم الأصلي الموحّد (طباعة + تيليجرام)
 import '../erp/sales/roll_invoice_pdf.dart'; // 🧾 طباعة 80mm
 import '../invoice_designer/designed_rows.dart'; // 🎨 مصمم الفاتورة
@@ -1127,12 +1127,13 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         );
         return;
       }
-      final filePath = await saveInvoicePdfToTemp(
-          pdf, customerNameController.text, selectedDate);
-      final fileName = p.basename(filePath);
-      await Share.shareXFiles([
-        XFile(filePath, mimeType: 'application/pdf', name: fileName)
-      ], text: 'فاتورة ${customerNameController.text}');
+      // ⭐ المسار الموحّد للمشاركة: اسم منظم، وعلى ويندوز اسم إنجليزي (واتساب ديسكتوب
+      //    يشوّه الاسم العربي القادم من نافذة المشاركة)
+      final no = invoiceToManage?.invoiceNumber ?? (invoiceToManage?.id == null ? '' : '${invoiceToManage!.id}');
+      final who = customerNameController.text.trim();
+      if (!mounted) return;
+      await ReportExport.sharePdf(context, await pdf.save(), 'فاتورة $no${who.isEmpty ? '' : ' - $who'}',
+          date: selectedDate, text: 'فاتورة ${customerNameController.text}');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

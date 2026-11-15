@@ -15,6 +15,7 @@ import 'package:pdf/widgets.dart' as pw;
 
 import 'invoice_layout.dart';
 import 'invoice_print_data.dart';
+import 'summary_placement.dart';
 
 class LayoutPdfRenderer {
   LayoutPdfRenderer._();
@@ -80,8 +81,10 @@ class LayoutPdfRenderer {
     final nRows = math.min(noteRows, cap); // الشروط لا تتجاوز صفحة
     // الشروط تُحسب صفوفاً بعد آخر بند: إن لم تتسع في الصفحة الأخيرة تنتقل لصفحة بعدها
     final pages = math.max(1, ((rows.length + nRows) / cap).ceil());
-    final fill = table.b('fillRows', false);
-    final flow = flowsTotals(table);
+    // 📌 الإعداد العام في الإعدادات (إن اختير) يسبق اختيار التصميم
+    final placement = await SummaryPlacementPref.get();
+    final fill = placement == SummaryPlacement.design && table.b('fillRows', false);
+    final flow = placement == SummaryPlacement.design ? flowsTotals(table) : placement == SummaryPlacement.flow;
     for (var p = 0; p < pages; p++) {
       final last = p == pages - 1;
       final start = math.min(rows.length, p * cap);
@@ -301,6 +304,23 @@ class LayoutPdfRenderer {
     final align = e.s('align', 'right');
     final deco = _boxDecoration(e);
     final pad = deco != null ? 1.2 * mm : 0.0;
+    // ↔️↕️ «مطّ الكلمة»: سطر واحد يتمدد ليملأ المربع عرضاً وطولاً (تكبير المربع = كلمة أعرض/أطول)
+    if (e.b('stretch', false) && !text.contains('\n')) {
+      if (_blank(text)) return pw.SizedBox();
+      final style = _style(fs, bold: e.b('bold', false), color: e.i('color', 0xFF000000));
+      return pw.Container(
+        padding: pw.EdgeInsets.symmetric(horizontal: pad),
+        decoration: deco,
+        child: pw.SizedBox(
+          width: math.max(0.1, e.w * mm - 2 * pad),
+          height: e.h * mm,
+          child: pw.FittedBox(
+            fit: pw.BoxFit.fill,
+            child: pw.Text(text, style: style, textDirection: _dirOf(text), maxLines: 1),
+          ),
+        ),
+      );
+    }
     final lines = math.max(1, ((e.h * mm - pad) / lineHeight(fs)).floor());
     final style = _style(fs, bold: e.b('bold', false), color: e.i('color', 0xFF000000));
     final multi = lines > 1 || text.contains('\n');

@@ -3,6 +3,7 @@ import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
 import '../widgets/scan_settings_tile.dart'; // 🔫
 import '../widgets/batch_policy_tile.dart'; // 📅 أي دفعة تخرج أولاً
 import '../widgets/exit_backup_tile.dart'; // 💾 نسخة عند الخروج
+import '../widgets/summary_placement_tile.dart'; // 📌 مكان المجاميع
 import 'dart:io';
 import 'invoice_entry_layout_screen.dart'; // 🧩
 import 'package:flutter/material.dart';
@@ -1552,8 +1553,15 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'الفاتورة والطباعة',
           Icons.receipt_long_outlined,
           'تصميم الفاتورة، إعدادات الفاتورة، الطابعات',
-          keywords: 'سند إشعار مدين دائن إرجاع إضافة تسوية فاتورة تصميم مصمم شعار شركة هاتف طابعة طابعات إيصال حرارية كاشير A4 رقم الجهاز تمرير مخزون سالب كلفة تكلفة متوسط آخر سعر شراء مجاميع',
+          keywords: 'مكان المجاميع ملخص أسفل الورقة تحت آخر بند سند إشعار مدين دائن إرجاع إضافة تسوية فاتورة تصميم مصمم شعار شركة هاتف طابعة طابعات إيصال حرارية كاشير A4 رقم الجهاز تمرير مخزون سالب كلفة تكلفة متوسط آخر سعر شراء مجاميع',
           [
+          // 📌 مكان مربع المجاميع في كل فاتورة تُطبع (ثابت، يسري على الفواتير السابقة)
+          _buildSettingsCard(
+            icon: Icons.vertical_align_bottom_rounded,
+            iconColor: const Color(0xFF0F3460),
+            title: 'مكان مربع المجاميع في الفاتورة',
+            child: const SummaryPlacementTile(),
+          ),
           // 🧾 تصميم الفاتورة
           // 🧾 السند الذي يُطبع بعد إضافة أو إرجاع على فاتورة محفوظة
           _buildSettingsCard(

@@ -21,4 +21,13 @@ void main() {
   test('اسم فارغ', () {
     expect(ReportExport.shareFileName('  ', date: d), 'مستند - 2026-11-15.pdf');
   });
+
+  test('ويندوز: اسم إنجليزي بنوع المستند ورقمه', () {
+    expect(ReportExport.latinShareFileName('فاتورة 12026113 - ثثث', date: DateTime(2026, 11, 12)),
+        'Invoice 12026113 - 2026-11-12.pdf');
+    expect(ReportExport.latinShareFileName('سند قبض 12 - أحمد علي_نسخة_2', date: d),
+        'Receipt-Voucher 12 - 2026-11-15.pdf');
+    expect(ReportExport.latinShareFileName('كشف_حساب_أحمد', date: d), 'Account-Statement - 2026-11-15.pdf');
+    expect(ReportExport.latinShareFileName('ملف غريب', date: d), 'Document - 2026-11-15.pdf');
+  });
 }

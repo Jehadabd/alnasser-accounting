@@ -1649,7 +1649,26 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
                 onTap: () => set('bold', !e.b('bold', false)),
               ),
             ),
+            const SizedBox(width: 6),
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: IconToggle(
+                icon: Icons.open_in_full_rounded,
+                on: e.b('stretch', false),
+                tooltip: 'مطّ الكلمة لتملأ المربع',
+                onTap: () => set('stretch', !e.b('stretch', false)),
+              ),
+            ),
           ]),
+          if (e.b('stretch', false))
+            const Padding(
+              padding: EdgeInsets.only(top: 4, bottom: 2),
+              child: Text(
+                'الكلمة تتمدد لتملأ المربع: اسحب حافة المربع يميناً ويساراً لتصير أعرض، '
+                'أو أعلى وأسفل لتصير أطول. مكانها لا يتغير.',
+                style: TextStyle(fontSize: 11.5, color: _C.muted, height: 1.5),
+              ),
+            ),
           _alignRow(e.s('align', 'right'), (v) => set('align', v)),
           ColorRow(label: 'لون النص', value: e.i('color', 0xFF000000), onChanged: (v) => set('color', v)),
         ]),
