@@ -129,7 +129,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
           () async => WaDoc(
  showsDebt: true,
               bytes: bytes,
-              fileName: '$name.pdf',
+              fileName: ReportExport.shareFileName(name),
               caption: text ?? name,
               customerId: customerId,
               customerName: customerName),
@@ -164,12 +164,14 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       recordedBy: r['created_by'] as String?,
       stamp: stamp,
     );
-    await _deliver(bytes, 'وصل_قبض_${r['receipt_no']}_نسخة_${stamp.copyNo}',
+    final names = {for (final l in lines) '${l['customer_name'] ?? ''}'}.where((n) => n.isNotEmpty).join('، ');
+    // ⭐ اسم الملف المرسل: «وصل قبض 12 - اسم العميل» (رقم النسخة على الورقة فقط)
+    await _deliver(bytes, 'وصل قبض ${r['receipt_no']}${names.isEmpty ? '' : ' - $names'}_نسخة_${stamp.copyNo}',
         share: share,
         text: 'وصل قبض رقم ${r['receipt_no']}',
         wa: wa,
         customerId: WaDocSender.singleCustomer(lines),
-        customerName: {for (final l in lines) '${l['customer_name'] ?? ''}'}.where((n) => n.isNotEmpty).join('، '));
+        customerName: names);
   }
 
   Future<void> _reprintLegacy(Map<String, Object?> r, {bool share = false, bool wa = false}) async {
@@ -208,7 +210,8 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
       stamp: stamp,
     );
     final bytes = await pdf.save();
-    await _deliver(bytes, 'سند_قبض_${r['receipt_number']}_نسخة_${stamp.copyNo}',
+    final cn = '${r['customer_name'] ?? ''}'.trim();
+    await _deliver(bytes, 'سند قبض ${r['receipt_number']}${cn.isEmpty ? '' : ' - $cn'}_نسخة_${stamp.copyNo}',
         share: share,
         text: 'سند قبض رقم ${r['receipt_number']} — ${r['customer_name'] ?? ''}',
         wa: wa,

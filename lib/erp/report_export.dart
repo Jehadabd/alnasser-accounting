@@ -175,12 +175,29 @@ class ReportExport {
     }
   }
 
+  /// ⭐ اسم الملف كما يراه المستلم في واتساب: كلمات بمسافات لا شرطات، بلا رقم
+  /// النسخة الداخلي (مطبوع على الورقة)، ثم التاريخ.
+  /// مثال: «سند قبض 12 - أحمد علي - 2026-11-15.pdf».
+  static String shareFileName(String name, {DateTime? date}) {
+    var n = name
+        .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '')
+        .replaceAll(RegExp(r'[\\/:*?"<>|\r\n\t]'), ' ')
+        .replaceAll('_', ' ')
+        .replaceAll(RegExp(r'\s*نسخة\s*\d+\s*$'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (n.length > 80) n = n.substring(0, 80).trim();
+    if (n.isEmpty) n = 'مستند';
+    final d = (date ?? DateTime.now()).toIso8601String().substring(0, 10);
+    return '$n - $d.pdf';
+  }
+
   /// 📤 مشاركة PDF (واتساب، تيليجرام، بريد...) بنفس طريقة مشاركة الفاتورة: ملف مؤقت
   /// باسم واضح ثم نافذة المشاركة. على المتصفح: تنزيل/مشاركة مباشرة.
-  static Future<void> sharePdf(BuildContext context, Uint8List bytes, String name, {String? text}) async {
+  static Future<void> sharePdf(BuildContext context, Uint8List bytes, String name,
+      {String? text, DateTime? date}) async {
     try {
-      final stamp = DateTime.now().toIso8601String().substring(0, 10);
-      final fileName = '${_safeName(name)}_$stamp.pdf';
+      final fileName = shareFileName(name, date: date);
       if (kIsWeb) {
         await Printing.sharePdf(bytes: bytes, filename: fileName);
         return;

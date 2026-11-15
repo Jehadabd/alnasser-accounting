@@ -3,7 +3,7 @@
 import '../erp/sales/sales_return_screen.dart';
 import '../erp/sales/sales_return_service.dart' show SalesReturnService;
 import '../services/auth_service.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, Uint8List; // 🌐
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import '../models/invoice.dart';
 import 'create_invoice_screen.dart';
@@ -11,9 +11,7 @@ import 'package:intl/intl.dart' hide TextDirection; // NumberFormat (TextDirecti
 import '../wa_messages/wa_doc_sender.dart'; // 📨
 import '../services/database_service.dart'; // Added for DatabaseService
 import '../models/invoice_adjustment.dart'; // Added for InvoiceAdjustment model
-import 'package:share_plus/share_plus.dart';
-import 'package:printing/printing.dart'; // 🌐 مشاركة وطباعة الويب
-import 'dart:io';
+import '../erp/report_export.dart'; // ⭐ مشاركة PDF الموحدة (اسم منظم + نوع PDF)
 import '../services/saved_invoice_print_pdf.dart'; // 🖨️ نفس الطباعة من شاشة الفاتورة
 import 'package:alnaser/services/settings_manager.dart';
 import 'package:alnaser/models/app_settings.dart';
@@ -579,36 +577,25 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
   /// شاشة الفاتورة حرفياً (التصميم، الشعار، الأرقام، الهاتف، رقم الفاتورة، دين العميل).
   Future<({Uint8List bytes, String fileName})> _invoicePdf(Invoice invoice) async {
     final bytes = await SavedInvoicePrintPdf.build(invoice);
-    final safeCustomerName = invoice.customerName.replaceAll(RegExp(r'[^\w\u0600-\u06FF]+'), '_');
-    final formattedDate = DateFormat('yyyy-MM-dd').format(invoice.invoiceDate);
-    final fileName = '${safeCustomerName}_$formattedDate.pdf';
-    return (bytes: bytes, fileName: fileName);
+    return (bytes: bytes, fileName: ReportExport.shareFileName(_invoiceDocName(invoice), date: invoice.invoiceDate));
   }
 
+  /// ⭐ اسم الفاتورة كما يصل للزبون: «فاتورة 245 - أحمد علي - 2026-11-15.pdf»
+  String _invoiceDocName(Invoice invoice) {
+    final no = (invoice.invoiceNumber ?? '').trim().isNotEmpty ? invoice.invoiceNumber!.trim() : '${invoice.id ?? ''}';
+    final name = invoice.customerName.trim();
+    return 'فاتورة $no${name.isEmpty ? '' : ' - $name'}';
+  }
+
+  /// ⭐ مشاركة الفاتورة PDF (واتساب وغيره) بالمسار نفسه الذي تُشارك به السندات:
+  /// ملف مؤقت بنوع PDF صريح. السابق كتبه في مجلد USERPROFILE بلا نوع ملف، فكان
+  /// واتساب يستلم النص وحده (وعلى أندرويد لا يوجد USERPROFILE أصلاً).
   Future<void> _shareInvoicePdf(Invoice invoice) async {
     try {
-      final pdf = await _invoicePdf(invoice);
-      final fileName = pdf.fileName;
-
-      // 🌐 الويب: مشاركة وتنزيل PDF مباشرة عبر المتصفح دون مجلدات مؤقتة
-      if (kIsWeb) {
-        final bytes = pdf.bytes;
-        await Printing.sharePdf(
-          bytes: bytes,
-          filename: fileName,
-        );
-        return;
-      }
-
-      final directory = Directory('${Platform.environment['USERPROFILE']}/Documents/invoices');
-      if (!await directory.exists()) {
-        await directory.create(recursive: true);
-      }
-      final filePath = '${directory.path}/$fileName';
-      final file = File(filePath);
-      await file.writeAsBytes(pdf.bytes);
-
-      await Share.shareXFiles([XFile(file.path)], text: 'فاتورة ${invoice.customerName}');
+      final bytes = await SavedInvoicePrintPdf.build(invoice);
+      if (!mounted) return;
+      await ReportExport.sharePdf(context, bytes, _invoiceDocName(invoice),
+          date: invoice.invoiceDate, text: 'فاتورة ${invoice.customerName}');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -617,6 +604,7 @@ class _EditInvoicesScreenState extends State<EditInvoicesScreen> {
       }
     }
   }
+
 
 }
 
