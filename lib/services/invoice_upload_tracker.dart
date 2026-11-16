@@ -6,8 +6,11 @@
 //     الإيصالات القديمة قبل هذا التحديث غير معلّمة فتُعدّ فواتير عادية.
 //   • telegram_sent: متى رُفعت كل فاتورة إلى تيليغرام — لا تُرفع مرتين،
 //     والمعدّلة بعد رفعها تُعرف (last_modified_at أحدث من sent_at).
+//   • simplex_sent: الشيء نفسه لمسار SimpleX (مستقل عن تيليجرام).
 
 import 'package:sqflite/sqflite.dart';
+
+import 'simplex/upload_route.dart';
 
 class InvoiceUploadTracker {
   InvoiceUploadTracker._();
@@ -15,7 +18,12 @@ class InvoiceUploadTracker {
   static Future<void> ensure(DatabaseExecutor db) async {
     await db.execute('CREATE TABLE IF NOT EXISTS invoice_tags (invoice_id INTEGER PRIMARY KEY, source TEXT NOT NULL)');
     await db.execute('CREATE TABLE IF NOT EXISTS telegram_sent (invoice_id INTEGER PRIMARY KEY, sent_at TEXT NOT NULL)');
+    // 🛡️ سجل SimpleX مستقل: ما أُرسل لتيليجرام لا يُعدّ مرسلاً إلى SimpleX
+    await db.execute('CREATE TABLE IF NOT EXISTS simplex_sent (invoice_id INTEGER PRIMARY KEY, sent_at TEXT NOT NULL)');
   }
+
+  /// جدول السجل للمسار الحالي (telegram_sent، أو simplex_sent داخل رفع SimpleX).
+  static String get sentTable => UploadRoute.sentTable;
 
   /// يعلّم فاتورة على أنها إيصال كاشير
   static Future<void> tagPos(DatabaseExecutor db, int invoiceId) async {
@@ -31,7 +39,7 @@ class InvoiceUploadTracker {
     final now = DateTime.now().toIso8601String();
     final batch = db.batch();
     for (final id in ids) {
-      batch.rawInsert('INSERT OR REPLACE INTO telegram_sent (invoice_id, sent_at) VALUES (?, ?)', [id, now]);
+      batch.rawInsert('INSERT OR REPLACE INTO $sentTable (invoice_id, sent_at) VALUES (?, ?)', [id, now]);
     }
     await batch.commit(noResult: true);
   }

@@ -15,6 +15,8 @@ import 'debt_report_service.dart'; // import DebtReportService
 import 'discord_backup_service.dart'; // 🆕 Discord Integration
 import 'upload_progress.dart'; // 📶 عدّ ما خرج إلى الشبكة
 import 'reports_service.dart';
+import 'simplex/simplex_backup_service.dart'; // 🛡️ مسار SimpleX (بديل تيليجرام)
+import 'simplex/upload_route.dart';
 
 /// نتيجة عملية الإرسال مع تفاصيل الخطأ
 class TelegramSendResult {
@@ -54,7 +56,8 @@ class TelegramBackupService {
   TelegramBackupService._internal();
 
   // مفاتيح التخزين
-  static const String _lastUploadTimeKey = 'telegram_last_upload_time';
+  // 🛡️ لكل مسار نقطة بدايته (تيليجرام: telegram_last_upload_time كما كان)
+  static String get _lastUploadTimeKey => UploadRoute.lastUploadKey;
   
   // آخر خطأ حدث (للتشخيص)
   String? _lastError;
@@ -111,6 +114,7 @@ class TelegramBackupService {
 
   // التحقق من إعدادات المستخدم
   Future<bool> get isUserConfigured async {
+    if (UploadRoute.isSimplex) return SimplexBackupService().isConfigured;
     final settings = await SettingsManager.getAppSettings();
     return settings.telegramBotToken != null && 
            settings.telegramBotToken!.isNotEmpty &&
@@ -124,6 +128,7 @@ class TelegramBackupService {
 
   // التحقق من صحة الإعدادات (async لأننا نحتاج للتحقق من SettingsManager)
   Future<bool> get isConfigured async {
+     if (UploadRoute.isSimplex) return SimplexBackupService().isConfigured;
      final token = await _getBotToken();
      final channel = await _getChannelId();
      return token.isNotEmpty && channel.isNotEmpty;
@@ -166,6 +171,14 @@ class TelegramBackupService {
     SentCallback? onSent,
   }) async {
     _lastError = null;
+
+    // 🛡️ داخل رفع SimpleX: الملف نفسه يذهب لهاتف صاحب المحل عبر SimpleX (لا تيليجرام ولا نسخة ديسكورد)
+    if (UploadRoute.isSimplex) {
+      final r = await SimplexBackupService().sendFile(file, caption: caption, onSent: onSent);
+      if (r.success) return TelegramSendResult.ok();
+      _lastError = 'SimpleX: ${r.error}';
+      return TelegramSendResult.error('فشل إرسال الملف عبر SimpleX', details: r.error);
+    }
     
     // 🆕 إرسال بالتوازي إلى Discord (لا ننتظر النتيجة)
     _sendToDiscordInBackground(file, caption);
@@ -273,6 +286,14 @@ class TelegramBackupService {
   /// إرسال رسالة نصية إلى القناة مع تفاصيل الخطأ
   Future<TelegramSendResult> sendMessageWithDetails(String text) async {
     _lastError = null;
+
+    // 🛡️ داخل رفع SimpleX: الرسالة لهاتف صاحب المحل عبر SimpleX
+    if (UploadRoute.isSimplex) {
+      final r = await SimplexBackupService().sendText(text);
+      if (r.success) return TelegramSendResult.ok();
+      _lastError = 'SimpleX: ${r.error}';
+      return TelegramSendResult.error('فشل إرسال الرسالة عبر SimpleX', details: r.error);
+    }
     
     // 🆕 إرسال بالتوازي إلى Discord (لا ننتظر النتيجة)
     _sendMessageToDiscordInBackground(text);
@@ -537,7 +558,7 @@ $detailedStats
   static bool mirrorToDiscord = true;
 
   void _sendToDiscordInBackground(File file, String? caption) {
-    if (!mirrorToDiscord) return;
+    if (!mirrorToDiscord || UploadRoute.isSimplex) return;
     Future.microtask(() async {
       final discordService = DiscordBackupService();
       if (await discordService.isConfigured) {
@@ -556,7 +577,7 @@ $detailedStats
 
   // 🆕 إرسال رسالة إلى Discord في الخلفية (بدون انتظار)
   void _sendMessageToDiscordInBackground(String text) {
-    if (!mirrorToDiscord) return;
+    if (!mirrorToDiscord || UploadRoute.isSimplex) return;
     Future.microtask(() async {
       final discordService = DiscordBackupService();
       if (await discordService.isConfigured) {

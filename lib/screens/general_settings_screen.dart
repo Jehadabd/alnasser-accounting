@@ -32,6 +32,8 @@ import 'package:share_plus/share_plus.dart';
 import 'alert_settings_screen.dart'; // 🔔
 import 'invoice_design_screen.dart'; // 🧳 تصميم الفاتورة
 import 'telegram_settings_screen.dart'; // 📤 إعدادات تيليغرام
+import 'simplex_settings_screen.dart'; // 🛡️ إعدادات SimpleX
+import '../services/simplex/simplex_backup_service.dart';
 import '../owner/owner_access.dart'; // 👑 ميزات حساب المالك
 import '../erp/erp_common.dart' show HubSection, HubTile;
 import '../services/upload_targets.dart';
@@ -910,6 +912,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       });
       final drive = await GoogleDriveService.instance.status(); // محلي: بلا إنترنت
       if (mounted) setState(() => _targetLinked[UploadTargets.gdrive] = drive.signedIn);
+      final sx = await SimplexBackupService().isConfigured; // محلي: بلا إنترنت
+      if (mounted) setState(() => _targetLinked[UploadTargets.simplex] = sx);
     } catch (_) {}
   }
 
@@ -919,6 +923,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         UploadTargets.discord => const DiscordSettingsScreen(),
         UploadTargets.dropbox => const DropboxBackupScreen(),
         UploadTargets.gdrive => const GoogleDriveSettingsScreen(),
+        UploadTargets.simplex => const SimplexSettingsScreen(),
         _ => null,
       };
 
@@ -3886,18 +3891,21 @@ class _UploadTargetRow extends StatelessWidget {
     UploadTargets.dropbox: Icons.cloud_rounded,
     UploadTargets.discord: Icons.discord,
     UploadTargets.gdrive: Icons.add_to_drive_rounded,
+    UploadTargets.simplex: Icons.shield_rounded,
   };
   static const _colors = {
     UploadTargets.telegram: Color(0xFF229ED9),
     UploadTargets.dropbox: Color(0xFF0061FE),
     UploadTargets.discord: Color(0xFF5865F2),
     UploadTargets.gdrive: Color(0xFF1A73E8),
+    UploadTargets.simplex: Color(0xFF0053D0),
   };
   static const _names = {
     UploadTargets.telegram: 'تيليجرام',
     UploadTargets.dropbox: 'دروب بوكس',
     UploadTargets.discord: 'ديسكورد',
     UploadTargets.gdrive: 'Google Drive',
+    UploadTargets.simplex: 'SimpleX',
   };
 
   @override
@@ -3951,6 +3959,7 @@ class _UploadTargetRow extends StatelessWidget {
                     hint: switch (target) {
                       UploadTargets.telegram => 'الربط بالبوت والقناة، ما يُرفع من الفواتير، والشرح خطوة بخطوة',
                       UploadTargets.gdrive => 'مفاتيح Google، ربط الحساب وإعادة ربطه، والرفع الآن',
+                      UploadTargets.simplex => 'تثبيت المحرك، ربط هاتفك برمز QR، وما يُرسل',
                       _ => 'الربط والشرح خطوة بخطوة',
                     },
                     linked: linked,

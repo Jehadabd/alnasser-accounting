@@ -6,6 +6,11 @@
 //   • ديسكورد: يستلم نسخة من كل ما يُرسل لتيليغرام؛ إن أُوقف تيليغرام تُرسل
 //     له قاعدة البيانات مضغوطة مباشرة.
 //   • Google Drive (لمشتركي المزامنة وحساب المالك فقط): قاعدة البيانات مضغوطة + سجل الديون PDF.
+//   • SimpleX (Windows): محتوى تيليجرام نفسه إلى هاتف صاحب المحل — مجاني وبلا حد 50 ميغا.
+
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/app_settings.dart';
 import 'sync_perks.dart';
@@ -17,14 +22,16 @@ class UploadTargets {
   static const dropbox = 'dropbox';
   static const discord = 'discord';
   static const gdrive = 'gdrive';
+  static const simplex = 'simplex';
 
-  static const all = [telegram, dropbox, discord, gdrive];
+  static const all = [telegram, dropbox, discord, gdrive, simplex];
 
   static const labels = {
     telegram: 'تيليغرام',
     dropbox: 'دروب بوكس',
     discord: 'ديسكورد',
     gdrive: 'Google Drive',
+    simplex: 'SimpleX',
   };
 
   static const hints = {
@@ -32,12 +39,14 @@ class UploadTargets {
     dropbox: 'نسخة احتياطية كاملة',
     discord: 'نسخة مما يُرسل لتيليغرام (أو قاعدة البيانات وحدها إن أُوقف تيليغرام)',
     gdrive: 'قاعدة البيانات مضغوطة + سجل الديون PDF',
+    simplex: 'محتوى تيليجرام نفسه إلى هاتفك — مجاني وبلا حد 50 ميغا',
   };
 
-  /// ⭐ الوجهات المتاحة لهذا الترخيص: Google Drive من ميزات اشتراك المزامنة.
+  /// ⭐ الوجهات المتاحة لهذا الترخيص: Google Drive من ميزات اشتراك المزامنة،
+  /// و SimpleX على Windows فقط (محرّكه برنامج Windows).
   static List<String> get available => [
         for (final t in all)
-          if (t != gdrive || SyncPerks.enabled) t,
+          if ((t != gdrive || SyncPerks.enabled) && (t != simplex || (!kIsWeb && Platform.isWindows))) t,
       ];
 
   /// الترتيب المحفوظ مكمّلاً بأي وجهة ناقصة (المتاحة فقط).

@@ -37,7 +37,7 @@ class TelegramInvoiceExportService {
     await InvoiceUploadTracker.ensure(db);
     final r = await db.rawQuery("""
       SELECT COUNT(*) AS c
-      FROM invoices i LEFT JOIN telegram_sent s ON s.invoice_id = i.id
+      FROM invoices i LEFT JOIN ${InvoiceUploadTracker.sentTable} s ON s.invoice_id = i.id
       WHERE i.status = 'محفوظة' AND COALESCE(i.is_deleted, 0) = 0
         AND s.invoice_id IS NULL AND i.created_at > ?
     """, [after.toIso8601String()]);
@@ -108,7 +108,7 @@ class TelegramInvoiceExportService {
         invoicesData = await db.rawQuery("""
           SELECT i.*, s.sent_at AS _sent_at,
                  ${InvoiceUploadTracker.isPosSql('i')} AS _is_pos
-          FROM invoices i LEFT JOIN telegram_sent s ON s.invoice_id = i.id
+          FROM invoices i LEFT JOIN ${InvoiceUploadTracker.sentTable} s ON s.invoice_id = i.id
           WHERE i.status = 'محفوظة' AND COALESCE(i.is_deleted, 0) = 0 AND (
             (s.invoice_id IS NULL AND i.created_at > ?)
             ${resend ? "OR (s.invoice_id IS NOT NULL AND COALESCE(i.last_modified_at, '') > s.sent_at)" : ''}

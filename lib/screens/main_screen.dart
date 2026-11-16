@@ -12,6 +12,9 @@ import '../services/telegram_invoice_export_service.dart';
 import '../services/dropbox_backup_service.dart'; // ☁️ Dropbox
 import '../services/discord_backup_service.dart';
 import '../services/upload_targets.dart';
+import '../services/simplex/simplex_backup_service.dart'; // 🛡️ SimpleX
+import '../services/simplex/upload_route.dart';
+import '../services/simplex/simplex_engine.dart';
 import '../services/sync_perks.dart'; // ⭐ ميزات اشتراك المزامنة
 import '../owner/google_drive_service.dart';
 import '../widgets/upload_progress_dialog.dart'; // ☁️ نافذة الرفع
@@ -212,6 +215,10 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
       _closing = false;
       return;
     }
+    // 🛡️ محرك SimpleX لا يبقى يعمل بعد إغلاق البرنامج (كل رفع ينتظر اكتماله قبل أن ينتهي)
+    try {
+      await SimplexEngine.stop().timeout(const Duration(seconds: 4));
+    } catch (_) {}
     try {
       await windowManager.setPreventClose(false);
       await windowManager.destroy();
@@ -455,8 +462,10 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
             if (total > 0 && sent >= total) netMs = DateTime.now().difference(netStartedAt!).inMilliseconds;
             plan.sent(sent, total);
           }
-          try {
-          if (target == UploadTargets.telegram) {
+          // 📤 خطوات تيليجرام (القاعدة، التقارير، الفواتير، الملخص). تُستعمل كما هي لـ SimpleX
+          //    داخل UploadRoute.runSimplex: المحتوى نفسه، والسجل ونقطة البداية لكل مسار وحده.
+          //    تعيد false إن أُغلقت الشاشة (يتوقف الرفع كما كان).
+          Future<bool> runTelegramSteps(DateTime? lastUpload) async {
                 // 1) رفع قاعدة البيانات إلى Telegram (محلي + تيليجرام فقط)
                 // يرمي إن لم تصل القاعدة؛ ويعيد مشاكل غير قاتلة (تقارير PDF لم تُرسل...).
                 // الخطأ يُسجَّل ويكمل باقي الوجهات (Dropbox/Discord...) بدل أن يوقفها.
@@ -471,7 +480,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
                 // 2) إرسال الفواتير إلى Telegram
                 final bool isConfigured = await telegramService.isConfigured;
                 if (isConfigured) {
-                  DateTime? exportAfterDate = lastUploadTime;
+                  DateTime? exportAfterDate = lastUpload;
           
                   // طريقتا رفع الفواتير «لا ترفع» ⇒ لا فواتير ولا سؤال
                   final noInvoices = appSet.telegramRegularInvoicesMode == 'off' && appSet.telegramPosInvoicesMode == 'off';
@@ -480,7 +489,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
                     statusNotifier.value = 'بانتظار اختيار مدى الفواتير...';
             
                     // الخيارات المتاحة للمستخدم
-                    if (!mounted) return;
+                    if (!mounted) return false;
                     final exporter = TelegramInvoiceExportService();
                     workWatch.stop(); // انتظار المستخدم ليس جزءاً من العمل
                     final rangeChoice = await showDialog<String>(
@@ -547,6 +556,25 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
                       errors.add('التفاصيل: ${summaryResult.errorDetails}');
                     }
                   }
+                }
+                return true;
+          }
+
+          try {
+          if (target == UploadTargets.telegram) {
+                if (!await runTelegramSteps(lastUploadTime)) return;
+          } else if (target == UploadTargets.simplex) {
+                // 🛡️ SimpleX: محتوى تيليجرام نفسه إلى هاتف صاحب المحل
+                if (!await SimplexBackupService().isConfigured) {
+                  skipped = true; // غير مربوط ⇒ تُتخطّى
+                } else {
+                  final before = errors.length;
+                  final ok = await UploadRoute.runSimplex(
+                      () async => runTelegramSteps(await telegramService.getLastUploadTime()));
+                  for (var k = before; k < errors.length; k++) {
+                    errors[k] = 'SimpleX: ${errors[k].replaceAll('Telegram', 'SimpleX').replaceAll('تيليجرام', 'SimpleX')}';
+                  }
+                  if (!ok) return;
                 }
           } else if (target == UploadTargets.dropbox) {
                 // 4) رفع النسخة الاحتياطية إلى Dropbox (إذا كان متصلاً)

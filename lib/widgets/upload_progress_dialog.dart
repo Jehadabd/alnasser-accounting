@@ -24,12 +24,14 @@ const _targetIcons = {
   UploadTargets.dropbox: Icons.cloud_rounded,
   UploadTargets.discord: Icons.discord,
   UploadTargets.gdrive: Icons.add_to_drive_rounded,
+  UploadTargets.simplex: Icons.shield_rounded,
 };
 const _targetColors = {
   UploadTargets.telegram: Color(0xFF229ED9),
   UploadTargets.dropbox: Color(0xFF0061FE),
   UploadTargets.discord: Color(0xFF5865F2),
   UploadTargets.gdrive: Color(0xFF1A73E8),
+  UploadTargets.simplex: Color(0xFF0053D0),
 };
 
 class UploadProgressDialog extends StatefulWidget {
