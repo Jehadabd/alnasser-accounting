@@ -350,10 +350,29 @@ class _SimplexSettingsScreenState extends State<SimplexSettingsScreen> {
             LinearProgressIndicator(value: _installProgress, color: _sx),
             const SizedBox(height: 8),
             Text(_installStep, style: const TextStyle(color: kSetMuted, fontSize: 12.5)),
+          ] else if (_installed) ...[
+            // مثبّت: لا زر بارز (كان «إعادة التنزيل والتحقق» يبدو كأنه مطلوب فيُنزَّل الملف مرة ثانية بلا داعٍ)
+            const SetBanner('المحرك مثبّت وبصمته مطابقة للإصدار الرسمي — لا حاجة لفعل شيء هنا. انتقل إلى الخطوة 2.',
+                kind: SetBannerKind.ok),
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: TextButton.icon(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        if (await _confirm('إعادة تنزيل المحرك',
+                            'لا تحتاجها إلا إذا تعطّل المحرك أو حُذف ملفه. سيُنزَّل الملف (نحو 130 ميغا) من جديد وتُطابق بصمته. ربط هاتفك لا يتأثر.')) {
+                          await _install();
+                        }
+                      },
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('إعادة التنزيل (عند العطل فقط)'),
+              ),
+            ),
           ] else
             SetPrimaryButton(
-              label: _installed ? 'إعادة التنزيل والتحقق' : 'تثبيت المحرك',
-              icon: _installed ? Icons.refresh_rounded : Icons.download_rounded,
+              label: 'تثبيت المحرك',
+              icon: Icons.download_rounded,
               color: _sx,
               onPressed: busy ? null : _install,
             ),
