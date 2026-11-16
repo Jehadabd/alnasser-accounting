@@ -69,7 +69,7 @@ class ReceiptPdf {
 
     final doc = pw.Document();
     doc.addPage(pw.Page(
-      pageFormat: PdfPageFormat.a5.landscape,
+      pageFormat: PdfPageFormat.a4, // 📄 كل السندات A4
       margin: const pw.EdgeInsets.all(18),
       textDirection: pw.TextDirection.rtl,
       theme: pw.ThemeData.withFont(base: f, bold: f),

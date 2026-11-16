@@ -4,6 +4,7 @@ import '../widgets/scan_settings_tile.dart'; // 🔫
 import '../widgets/batch_policy_tile.dart'; // 📅 أي دفعة تخرج أولاً
 import '../widgets/exit_backup_tile.dart'; // 💾 نسخة عند الخروج
 import '../widgets/summary_placement_tile.dart'; // 📌 مكان المجاميع
+import '../widgets/invoice_auto_print_tile.dart'; // 🖨️ الطباعة التلقائية
 import 'dart:io';
 import 'invoice_entry_layout_screen.dart'; // 🧩
 import 'package:flutter/material.dart';
@@ -1553,8 +1554,15 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'الفاتورة والطباعة',
           Icons.receipt_long_outlined,
           'تصميم الفاتورة، إعدادات الفاتورة، الطابعات',
-          keywords: 'مكان المجاميع ملخص أسفل الورقة تحت آخر بند سند إشعار مدين دائن إرجاع إضافة تسوية فاتورة تصميم مصمم شعار شركة هاتف طابعة طابعات إيصال حرارية كاشير A4 رقم الجهاز تمرير مخزون سالب كلفة تكلفة متوسط آخر سعر شراء مجاميع',
+          keywords: 'طباعة تلقائية مباشرة افتراضية مكان المجاميع ملخص أسفل الورقة تحت آخر بند سند إشعار مدين دائن إرجاع إضافة تسوية فاتورة تصميم مصمم شعار شركة هاتف طابعة طابعات إيصال حرارية كاشير A4 رقم الجهاز تمرير مخزون سالب كلفة تكلفة متوسط آخر سعر شراء مجاميع',
           [
+          // 🖨️ الطباعة التلقائية: مباشرة إلى الطابعة، أو فتح PDF للطباعة منه
+          _buildSettingsCard(
+            icon: Icons.print_rounded,
+            iconColor: const Color(0xFF0F766E),
+            title: 'طريقة طباعة الفاتورة',
+            child: const InvoiceAutoPrintTile(),
+          ),
           // 📌 مكان مربع المجاميع في كل فاتورة تُطبع (ثابت، يسري على الفواتير السابقة)
           _buildSettingsCard(
             icon: Icons.vertical_align_bottom_rounded,

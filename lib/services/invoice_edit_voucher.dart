@@ -189,7 +189,7 @@ class InvoiceEditVoucher {
 
     final pdf = pw.Document();
     pdf.addPage(pw.Page(
-      pageFormat: PdfPageFormat.a5,
+      pageFormat: PdfPageFormat.a4, // 📄 كل السندات A4
       margin: const pw.EdgeInsets.all(18),
       textDirection: pw.TextDirection.rtl,
       build: (ctx) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [

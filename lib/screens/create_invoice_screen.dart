@@ -1226,8 +1226,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                           return SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             dense: true,
-                            title: const Text('طباعة الفاتورة تلقائياً بعد الحفظ'),
-                            subtitle: const Text('بنوع الطباعة المختار في الإعدادات (A4 أو حرارية)'),
+                            title: const Text('الطباعة التلقائية'),
+                            subtitle: const Text(
+                                'مفعّلة: تُطبع الفاتورة بعد الحفظ، وزر «طباعة» يرسلها فوراً إلى الطابعة الافتراضية بلا نوافذ. '
+                                'مطفأة: زر «طباعة» يفتح الفاتورة PDF لتطبعها منه.'),
                             value: on,
                             onChanged: prefs == null
                                 ? null

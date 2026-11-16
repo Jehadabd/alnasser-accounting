@@ -137,6 +137,43 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
   
   // Methods moved to InvoiceController
 
+  /// 🖨️ طباعة مباشرة على ويندوز بلا نافذة: طابعة الإعدادات (الفواتير A4، أو الكاشير
+  /// لـ 80 ملم) إن كانت طابعة ويندوز، وإلا طابعة ويندوز الافتراضية. false = لم تُطبع.
+  Future<bool> _printDirectWindows(Uint8List bytes, String docName, {required bool roll}) async {
+    Printer? printer;
+    try {
+      final target = roll
+          ? await SettingsManager.getPosThermalPrinter()
+          : await SettingsManager.getInvoicePrinter();
+      if (target != null && target.connectionType == PrinterConnectionType.system) {
+        final url = target.address.trim().isNotEmpty ? target.address : target.name;
+        printer = Printer(url: url, name: target.name);
+      } else {
+        for (final pr in await Printing.listPrinters()) {
+          if (pr.isDefault) {
+            printer = pr;
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ اختيار الطابعة: $e');
+    }
+    if (printer == null) return false;
+    var ok = false;
+    try {
+      ok = await Printing.directPrintPdf(printer: printer, onLayout: (_) async => bytes, name: docName);
+    } catch (e) {
+      debugPrint('⚠️ الطباعة المباشرة: $e');
+    }
+    if (ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('أُرسلت الفاتورة إلى الطابعة «${printer.name}»')),
+      );
+    }
+    return ok;
+  }
+
   Future<String> saveInvoicePdf(
       pw.Document pdf, String customerName, DateTime invoiceDate, {Uint8List? bytes}) async {
     try {
@@ -959,48 +996,36 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
 
       if (Platform.isWindows) {
-        // ⭐ كان هنا «start /min» يفتح ملف PDF في العارض مصغَّراً ولا يطبع شيئاً، مع
-        //    رسالة «أُرسلت للطابعة». الآن: طباعة فعلية على الطابعة المختارة في
-        //    الإعدادات (الفواتير A4، أو الكاشير للحرارية 80mm)، وإلا نافذة الطباعة.
+        // 🖨️ زر «طباعة» على الحاسبة — حسب «الطباعة التلقائية» (المزيد في شاشة الفاتورة،
+        //    أو الإعدادات ← الفاتورة والطباعة):
+        //    • مفعّلة: تُرسل فوراً إلى الطابعة المختارة في الإعدادات، وإلا طابعة ويندوز
+        //      الافتراضية — بلا أي نافذة.
+        //    • مطفأة (الافتراضي): تُفتح الفاتورة PDF في العارض الافتراضي (إيدج عادة)
+        //      وتُطبع منه — كما كان البرنامج سابقاً.
         final bytes = await pdf.save();
+        String? saved;
         try {
           // نسخة محفوظة في «المستندات\invoices» كما كانت
-          await saveInvoicePdf(pdf, customerNameController.text, selectedDate, bytes: bytes);
+          saved = await saveInvoicePdf(pdf, customerNameController.text, selectedDate, bytes: bytes);
         } catch (_) {}
-        final target = rollFormat
-            ? await SettingsManager.getPosThermalPrinter()
-            : await SettingsManager.getInvoicePrinter();
         final no = invoiceToManage?.invoiceNumber ?? (invoiceToManage?.id == null ? '' : '${invoiceToManage!.id}');
         final docName = 'فاتورة $no ${customerNameController.text}'.replaceAll(RegExp(r'\s+'), ' ').trim();
-        if (target != null && target.connectionType == PrinterConnectionType.system) {
-          final printerName = target.address.trim().isNotEmpty ? target.address : target.name;
-          var ok = false;
-          try {
-            ok = await Printing.directPrintPdf(
-              printer: Printer(url: printerName),
-              onLayout: (_) async => bytes,
-              name: docName,
-            );
-          } catch (e) {
-            debugPrint('⚠️ الطباعة المباشرة: $e');
+        var auto = false;
+        try {
+          auto = (await SharedPreferences.getInstance()).getBool('invoice_auto_print_after_save') ?? false;
+        } catch (_) {}
+        if (auto && await _printDirectWindows(bytes, docName, roll: rollFormat)) return;
+        if (saved != null && saved.isNotEmpty) {
+          await Process.start('cmd', ['/c', 'start', '/min', '', saved]);
+          if (mounted && auto) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              backgroundColor: Colors.orange,
+              content: Text('تعذّرت الطباعة المباشرة — فُتحت الفاتورة لتطبعها من العارض'),
+            ));
           }
-          if (ok) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('أُرسلت الفاتورة إلى الطابعة «${target.name}»')),
-              );
-            }
-            return;
-          }
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                  backgroundColor: Colors.orange,
-                  content: Text('تعذّرت الطباعة المباشرة على «${target.name}» — اختر الطابعة من النافذة')),
-            );
-          }
+          return;
         }
-        // لا طابعة محددة في الإعدادات، أو طابعة شبكة يدوية، أو فشلت المباشرة ⇒ نافذة الطباعة
+        // تعذّر حفظ الملف: نافذة الطباعة في ويندوز
         await Printing.layoutPdf(onLayout: (_) async => bytes, name: docName);
         return;
       }
