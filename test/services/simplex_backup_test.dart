@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:alnaser/services/simplex/simplex_backup_service.dart';
+import 'package:alnaser/services/simplex/simplex_client.dart';
 import 'package:alnaser/services/simplex/simplex_engine.dart';
 import 'package:alnaser/services/simplex/upload_route.dart';
 
@@ -77,5 +78,21 @@ void main() {
     expect(inside, (true, 'simplex_sent', 'simplex_last_upload_time'));
     expect(UploadRoute.isSimplex, isFalse);
     expect(UploadRoute.lastUploadKey, 'telegram_last_upload_time');
+  });
+
+  test('خطأ BROKER يُشرح باسم الخادم ونوعه (لا كلمة BROKER وحدها)', () {
+    final e = {
+      'type': 'errorAgent',
+      'agentError': {
+        'type': 'BROKER',
+        'brokerAddress': 'smp://abc123=@smp8.simplex.im,xyz.onion',
+        'brokerErr': {'type': 'TIMEOUT'}
+      }
+    };
+    final d = SimplexClient.describeError(e);
+    expect(d, contains('smp8.simplex.im'));
+    expect(d, contains('انتهت المهلة'));
+    expect(d, isNot(contains('abc123')));
+    expect(SimplexClient.isTransient(Exception('SimpleX: $d')), isTrue);
   });
 }

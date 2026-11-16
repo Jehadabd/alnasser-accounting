@@ -122,6 +122,7 @@ class SimplexEngine {
         throw SimplexException('تعذّر قراءة بصمة الملف من GitHub — لا يُنزَّل ملف لا يمكن التحقق منه. أعد المحاولة بعد قليل');
       }
       final tmp = File(p.join(bin.path, 'download.part.exe'));
+      if (await tmp.exists()) await tmp.delete(); // بقايا محاولة سابقة
       s('تنزيل محرك SimpleX (مرة واحدة)…', 0);
       await _download(_downloadUrl, tmp, (f) => s('تنزيل محرك SimpleX…', f));
       final got = await _sha256(tmp);
@@ -131,16 +132,35 @@ class SimplexEngine {
         } catch (_) {}
         throw SimplexException('بصمة الملف المنزَّل لا تطابق الإصدار الرسمي — حُذف ولم يُشغَّل. أعد المحاولة');
       }
-      await stop(); // ملف قديم قد يكون قيد التشغيل
       final exe = File(await _exe());
-      if (await exe.exists()) await exe.delete();
-      await tmp.rename(exe.path);
+      if (await exe.exists() && await _sha256(exe) == got) {
+        // الملف المثبّت هو نفسه ⇒ لا إيقاف ولا استبدال (كان يوقف المحرك ثم يفشل الحذف
+        // لأن Windows لا يسمح بحذف ملف ما زال قيد التشغيل، فيبقى download.part.exe معلّقاً)
+        await tmp.delete();
+      } else {
+        await stop(); // ملف قديم قد يكون قيد التشغيل
+        await _deleteWhenFree(exe);
+        await tmp.rename(exe.path);
+      }
       _checkedSig = null;
       await (await _stamp()).writeAsString(jsonEncode({'version': version, 'sha256': got, 'at': DateTime.now().toIso8601String()}));
       s('تم تثبيت محرك SimpleX $version');
     } finally {
       _installing = false;
     }
+  }
+
+  /// Windows يُبقي الملف مقفلاً لحظات بعد إيقاف العملية: محاولات حذف لمدة 10 ثوانٍ.
+  static Future<void> _deleteWhenFree(File f) async {
+    for (var i = 0; i < 20; i++) {
+      try {
+        if (await f.exists()) await f.delete();
+        return;
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
+    }
+    throw SimplexException('ملف المحرك القديم ما زال قيد الاستعمال — أغلق البرنامج وافتحه ثم أعد المحاولة');
   }
 
   /// البصمة من بيانات الإصدار: حقل digest للملف، وإلا سطر SHA2-256 في وصف الإصدار.
@@ -213,6 +233,8 @@ class SimplexEngine {
         '--create-bot-allow-files',
         '--files-folder', files,
         '--device-name', 'Alnaser',
+        // مهلة الاتصال بخوادم SimpleX: الافتراضي 7 ثوانٍ قصير على إنترنت بطيء (TIMEOUT)
+        '--tcp-timeout', '30',
       ],
       workingDirectory: await root(),
       // detachedWithStdio: بلا نافذة سوداء، والمخرجات تُقرأ دائماً (لو لم تُقرأ لامتلأت فتوقف)

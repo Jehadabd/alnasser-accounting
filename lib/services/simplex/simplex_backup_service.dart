@@ -63,7 +63,7 @@ class SimplexBackupService {
   /// رابط دعوة لمرة واحدة (يُعرض رمز QR). الرابط القصير إن توفّر (أسهل للمسح).
   Future<String> createInvite() async {
     final uid = await _userId();
-    final r = await _c.cmd('/_connect $uid');
+    final r = await _withRetry(() => _c.cmd('/_connect $uid', timeout: const Duration(seconds: 90)));
     final link = r['connLinkInvitation'];
     final conn = r['connection'];
     if (conn is Map && conn['pccConnId'] is num) {
@@ -84,6 +84,18 @@ class SimplexBackupService {
       if (f is String && f.isNotEmpty) return f;
     }
     throw SimplexException('لم يُنشئ المحرك رابط دعوة');
+  }
+
+  /// الشبكات البطيئة: محاولة ثانية وثالثة بعد مهلة قصيرة قبل إظهار الخطأ.
+  static Future<T> _withRetry<T>(Future<T> Function() f) async {
+    for (var attempt = 1;; attempt++) {
+      try {
+        return await f();
+      } catch (e) {
+        if (attempt >= 3 || !SimplexClient.isTransient(e)) rethrow;
+        await Future<void>.delayed(Duration(seconds: 3 * attempt));
+      }
+    }
   }
 
   /// ينتظر أن يمسح الهاتف الرمز ويصبح الإرسال ممكناً. يحفظ جهة الاتصال ويعيد اسمها.

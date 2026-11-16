@@ -98,11 +98,36 @@ class SimplexClient {
     final inner = e['errorType'] ?? e['agentError'] ?? e['storeError'];
     if (inner is Map) {
       final t = inner['type'];
+      // BROKER = خادم SimpleX لم يُوصل إليه: نوعه (مهلة/شبكة/عنوان) واسم الخادم بدل كلمة واحدة
+      if (t == 'BROKER') {
+        final be = inner['brokerErr'];
+        final bt = be is Map ? '${be['type']}' : '$be';
+        final ne = be is Map ? be['networkError'] : null;
+        final host = brokerHost('${inner['brokerAddress'] ?? ''}');
+        final why = switch (bt) {
+          'TIMEOUT' => 'انتهت المهلة قبل أن يرد الخادم (الإنترنت بطيء أو الخادم محجوب على هذه الشبكة)',
+          'NETWORK' => 'تعذّر الاتصال بالخادم${ne is Map ? ' (${ne['type'] ?? ''})' : ''} — الإنترنت مقطوع أو الخادم محجوب',
+          'HOST' => 'عنوان الخادم لم يُعرف (DNS)',
+          'TRANSPORT' => 'خطأ في الاتصال الآمن بالخادم (تاريخ الحاسبة؟)',
+          _ => bt,
+        };
+        return 'لم يُوصل إلى خادم SimpleX${host.isEmpty ? '' : ' $host'}: $why';
+      }
       final more = inner['message'] ?? inner['errorMessage'];
       return more != null ? '$t: $more' : '$t';
     }
     return '${e['type'] ?? e}';
   }
+
+  /// اسم الخادم من عنوان smp://key@host1,host2 (بلا المفتاح).
+  static String brokerHost(String addr) {
+    final at = addr.lastIndexOf('@');
+    final rest = at >= 0 ? addr.substring(at + 1) : addr;
+    return rest.split(',').first.split('/').first;
+  }
+
+  /// خطأ شبكة عابر يستحق إعادة المحاولة؟
+  static bool isTransient(Object e) => '$e'.contains('لم يُوصل إلى خادم SimpleX');
 
   /// يغلق الاتصال (المحرك نفسه يبقى إلى أن يُوقف).
   Future<void> close() async {
