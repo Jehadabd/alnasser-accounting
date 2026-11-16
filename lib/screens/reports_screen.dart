@@ -12,6 +12,7 @@ import '../accounting/screens/income_statement_screen.dart';
 import '../accounting/screens/trial_balance_screen.dart';
 import '../erp/erp_common.dart' show HubSection, HubTile;
 import '../erp/reports/finance_reports.dart';
+import '../erp/reports/vouchers_summary_report.dart'; // 🧾 ملخص السندات
 import '../models/app_settings.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
@@ -101,6 +102,9 @@ class ReportsScreen extends StatefulWidget {
               subtitle: 'كل فاتورة بسطر: المدفوع والمتبقي والربح، مع التصدير', permission: AppPermissions.viewCostProfit),
           HubTile('تحليل المصاريف', Icons.pie_chart_rounded, kSetRed, () => go(const ExpenseAnalysisScreen()),
               subtitle: 'أين ذهبت الأموال؟', permission: AppPermissions.accounting),
+          HubTile('ملخص السندات', Icons.summarize_rounded, kSetNavy, () => go(const VouchersSummaryScreen()),
+              subtitle: 'كل سند مصروف وصرف وقبض بحسابه: الكهرباء، الأجور، مسحوبات المالك…',
+              permission: AppPermissions.accounting),
           HubTile('حركة الصندوق', Icons.account_balance_wallet_outlined, kSetGreen, () => go(const CashMovementScreen()),
               subtitle: 'الوارد والصادر والرصيد', permission: AppPermissions.accounting),
         ]),
