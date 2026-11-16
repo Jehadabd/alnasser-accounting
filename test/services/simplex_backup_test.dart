@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:alnaser/services/simplex/simplex_backup_service.dart';
 import 'package:alnaser/services/simplex/simplex_client.dart';
 import 'package:alnaser/services/simplex/simplex_engine.dart';
+import 'package:alnaser/services/simplex/simplex_socks.dart';
 import 'package:alnaser/services/simplex/upload_route.dart';
 
 void main() {
@@ -94,5 +95,27 @@ void main() {
     expect(d, contains('انتهت المهلة'));
     expect(d, isNot(contains('abc123')));
     expect(SimplexClient.isTransient(Exception('SimpleX: $d')), isTrue);
+  });
+
+  group('وسيط DNS', () {
+    test('عنوان حقيقي من جواب DoH، والجواب المزيّف 0.0.0.0 يُرفض', () {
+      const real = '{"Status":0,"Answer":[{"name":"smp4.simplex.im","type":1,"data":"172.236.220.91"}]}';
+      const fake = '{"Status":0,"Answer":[{"name":"smp4.simplex.im","type":1,"data":"0.0.0.0"}]}';
+      const cname = '{"Answer":[{"type":5,"data":"x.example."},{"type":1,"data":"1.2.3.4"}]}';
+      expect(SimplexDns.ipFromDohJson(real), '172.236.220.91');
+      expect(SimplexDns.ipFromDohJson(fake), isNull);
+      expect(SimplexDns.ipFromDohJson(cname), '1.2.3.4');
+      expect(SimplexDns.ipFromDohJson('{"Status":3}'), isNull);
+    });
+
+    test('أسماء الخوادم فقط (لا حقن في رابط DoH)', () {
+      expect(SimplexDns.validHost('smp4.simplex.im'), isTrue);
+      expect(SimplexDns.validHost('a&type=TXT'), isFalse);
+      expect(SimplexDns.validHost('-bad.com'), isFalse);
+    });
+
+    test('الوسيط يقبل منافذ SimpleX فقط', () {
+      expect(SimplexSocks.allowedPorts, {443, 5223});
+    });
   });
 }

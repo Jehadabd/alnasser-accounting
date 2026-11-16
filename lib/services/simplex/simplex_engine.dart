@@ -26,6 +26,8 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'simplex_socks.dart';
+
 class SimplexException implements Exception {
   SimplexException(this.message);
   final String message;
@@ -204,11 +206,17 @@ class SimplexEngine {
     if (!supported) throw SimplexException('SimpleX متاح حالياً على Windows فقط');
     if (!await isInstalled()) throw SimplexException('محرك SimpleX غير مثبّت — من إعدادات SimpleX اضغط «تثبيت المحرك»');
 
-    // 1) يعمل من هذه الجلسة أو من جلسة سابقة؟
-    final known = _port ?? await _readRun().then((r) => r?.$2);
+    // 1) يعمل من هذه الجلسة أو من جلسة سابقة؟ يُعاد استعماله فقط إن أمكن تشغيل الوسيط
+    //    على المنفذ نفسه الذي بدأ المحرك به (وإلا لن يصل المحرك إلى أي خادم).
+    final run = await _readRun();
+    final known = _port ?? run?.$2;
     if (known != null && await _reachable(known)) {
-      _port = known;
-      return known;
+      final want = run?.$3;
+      if (want != null && await SimplexSocks.start(preferPort: want) == want) {
+        _port = known;
+        return known;
+      }
+      _add('المحرك الشغّال بدأ بلا الوسيط الحالي — إعادة تشغيله');
     }
     await _killStale();
 
@@ -220,8 +228,10 @@ class SimplexEngine {
     final files = await filesDir();
     await Directory(files).create(recursive: true);
     final key = await _dbKey();
+    // 🧭 وسيط DNS: شبكات تحجب أسماء خوادم SimpleX في DNS (جواب 0.0.0.0) — انظر simplex_socks.dart
+    final socks = await SimplexSocks.start();
 
-    _add('تشغيل المحرك على 127.0.0.1:$port');
+    _add('تشغيل المحرك على 127.0.0.1:$port (الوسيط على $socks)');
     final proc = await Process.start(
       exe,
       [
@@ -235,6 +245,8 @@ class SimplexEngine {
         '--device-name', 'Alnaser',
         // مهلة الاتصال بخوادم SimpleX: الافتراضي 7 ثوانٍ قصير على إنترنت بطيء (TIMEOUT)
         '--tcp-timeout', '30',
+        '--socks-proxy', '127.0.0.1:$socks',
+        '--host-mode', 'public', // عناوين الخوادم العادية (لا عناوين .onion — الوسيط ليس Tor)
       ],
       workingDirectory: await root(),
       // detachedWithStdio: بلا نافذة سوداء، والمخرجات تُقرأ دائماً (لو لم تُقرأ لامتلأت فتوقف)
@@ -263,7 +275,7 @@ class SimplexEngine {
 
     proc.stdout.transform(const Utf8Decoder(allowMalformed: true)).listen(take, onError: (_) {}, onDone: closed);
     proc.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen(take, onError: (_) {}, onDone: closed);
-    await (await _runFile()).writeAsString(jsonEncode({'pid': proc.pid, 'port': port}));
+    await (await _runFile()).writeAsString(jsonEncode({'pid': proc.pid, 'port': port, 'socks': socks}));
 
     for (var i = 0; i < 60; i++) {
       await Future.delayed(const Duration(milliseconds: 500));
@@ -287,7 +299,7 @@ class SimplexEngine {
 
   /// منفذ المحرك إن كان يعمل الآن (بلا تشغيل).
   static Future<int?> runningPort() async {
-    final known = _port ?? await _readRun().then((r) => r?.$2);
+    final known = _port ?? (await _readRun())?.$2;
     if (known != null && await _reachable(known)) return known;
     return null;
   }
@@ -298,6 +310,7 @@ class SimplexEngine {
     final pid = _proc?.pid ?? run?.$1;
     _port = null;
     _proc = null;
+    await SimplexSocks.stop();
     if (pid != null && await _isOurProcess(pid)) {
       try {
         Process.killPid(pid);
@@ -325,12 +338,13 @@ class SimplexEngine {
 
   // ───────────── أدوات ─────────────
 
-  static Future<(int, int)?> _readRun() async {
+  /// (رقم العملية، منفذ المحرك، منفذ الوسيط)
+  static Future<(int, int, int?)?> _readRun() async {
     try {
       final f = await _runFile();
       if (!await f.exists()) return null;
       final j = jsonDecode(await f.readAsString()) as Map;
-      return ((j['pid'] as num).toInt(), (j['port'] as num).toInt());
+      return ((j['pid'] as num).toInt(), (j['port'] as num).toInt(), (j['socks'] as num?)?.toInt());
     } catch (_) {
       return null;
     }
