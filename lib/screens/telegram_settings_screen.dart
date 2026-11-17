@@ -9,6 +9,7 @@ import '../services/telegram_backup_service.dart';
 import '../services/telegram_invoice_export_service.dart';
 import '../widgets/owner_summary_card.dart'; // 📊 ملخص المالك اليومي
 import '../widgets/settings_kit.dart';
+import 'telegram_proxy_screen.dart'; // 🧦 بروكسي عند الحظر
 import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 
 class TelegramSettingsScreen extends StatefulWidget {
@@ -809,6 +810,20 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
               OwnerSummaryCard(telegramReady: connected),
 
               // إجراءات متقدمة
+              // 🧦 عند حظر تيليجرام: رفع عبر بروكسي (إضافة — لا يغيّر شيئاً وهو مطفأ)
+              SetCard(
+                title: 'عند حظر تيليجرام',
+                icon: Icons.vpn_lock_rounded,
+                color: kSetNavy,
+                padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+                child: SetActionRow(
+                  icon: Icons.settings_ethernet_rounded,
+                  title: 'الرفع عبر بروكسي SOCKS5 / HTTP',
+                  subtitle: 'من قنوات تيليجرام أو برنامج VPN على هذه الحاسبة — لرفع تيليجرام فقط',
+                  color: kSetNavy,
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TelegramProxyScreen())),
+                ),
+              ),
               SetCard(
                 title: 'إجراءات متقدمة',
                 icon: Icons.tune_rounded,

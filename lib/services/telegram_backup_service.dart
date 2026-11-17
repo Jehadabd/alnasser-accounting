@@ -17,6 +17,7 @@ import 'upload_progress.dart'; // 📶 عدّ ما خرج إلى الشبكة
 import 'reports_service.dart';
 import 'simplex/simplex_backup_service.dart'; // 🛡️ مسار SimpleX (بديل تيليجرام)
 import 'simplex/upload_route.dart';
+import 'telegram_net/telegram_proxy.dart'; // 🧦 بروكسي اختياري عند حظر تيليجرام
 
 /// نتيجة عملية الإرسال مع تفاصيل الخطأ
 class TelegramSendResult {
@@ -195,7 +196,7 @@ class TelegramBackupService {
       
       // 🔒 تحقق كامل من شهادة الأمان (كان يُقبل أي شهادة «لتجاوز مشاكل SSL»: من يتحكم بالشبكة
       //    كان يستطيع انتحال خادم تيليجرام وقراءة توكن البوت والملفات المرسلة)
-      final httpClient = HttpClient();
+      final httpClient = await TelegramProxy.client(); // 🧦 مباشر كما كان، أو عبر بروكسي إن فُعّل (عند الحظر)
       
       final botToken = await _getBotToken();
       final uri = Uri.parse('https://api.telegram.org/bot$botToken/sendDocument');
@@ -309,7 +310,7 @@ class TelegramBackupService {
       
       // 🔒 تحقق كامل من شهادة الأمان (كان يُقبل أي شهادة «لتجاوز مشاكل SSL»: من يتحكم بالشبكة
       //    كان يستطيع انتحال خادم تيليجرام وقراءة توكن البوت والملفات المرسلة)
-      final httpClient = HttpClient();
+      final httpClient = await TelegramProxy.client(); // 🧦 مباشر كما كان، أو عبر بروكسي إن فُعّل (عند الحظر)
       
       final botToken = await _getBotToken();
       final uri = Uri.parse('https://api.telegram.org/bot$botToken/sendMessage');
