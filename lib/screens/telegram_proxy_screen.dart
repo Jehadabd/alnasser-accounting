@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/settings_manager.dart';
+import '../services/telegram_net/tdlib_engine.dart';
+import '../services/telegram_net/telegram_mtproto.dart';
 import '../services/telegram_net/telegram_proxy.dart';
 import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart';
@@ -77,7 +79,7 @@ class _TelegramProxyScreenState extends State<TelegramProxyScreen> {
 
   void _onPaste(String v) {
     if (TelegramProxy.isMtprotoLink(v)) {
-      setState(() => _result = (false, 'هذا رابط MTProto (فيه secret) — لا يعمل هنا. هذه الشاشة لبروكسي SOCKS5/HTTP فقط.'));
+      setState(() => _result = (false, 'هذا رابط MTProto (فيه secret) — الصقه في بطاقة «MTProto — الطريقة المميزة» أعلاه.'));
       return;
     }
     final c = TelegramProxy.parse(v, fallback: _type);
@@ -144,7 +146,7 @@ class _TelegramProxyScreenState extends State<TelegramProxyScreen> {
   Widget build(BuildContext context) {
     return SettingsScaffold(
       title: 'تيليجرام عند الحظر',
-      subtitle: 'رفع تيليجرام عبر بروكسي SOCKS5 أو HTTP',
+      subtitle: 'طريقتان إضافيتان — والمباشرة باقية كما هي',
       icon: Icons.vpn_lock_rounded,
       loading: !_loaded,
       children: !_loaded ? null : _content(),
@@ -155,14 +157,15 @@ class _TelegramProxyScreenState extends State<TelegramProxyScreen> {
         SetHero(
           icon: Icons.vpn_lock_rounded,
           color: _tg,
-          title: 'بروكسي لرفع تيليجرام فقط',
-          text: 'عندما يُحظر تيليجرام: شغّل هذا الخيار فيمر رفع تيليجرام وحده عبر البروكسي، وبقية البرنامج لا يتأثر. '
-              'وهو مطفأ يرفع البرنامج مباشرة كما كان.',
-          status: SetStatusPill(_enabled ? 'يعمل عبر البروكسي' : 'مطفأ — اتصال مباشر', ok: _enabled),
+          title: 'رفع تيليجرام رغم الحظر',
+          text: 'طريقتان تخصّان رفع تيليجرام وحده (بقية البرنامج لا تتأثر): MTProto المميزة بروابط القنوات، '
+              'أو بروكسي SOCKS5/HTTP. وكلتاهما مطفأة يرفع البرنامج مباشرة كما كان.',
+          status: SetStatusPill(_enabled ? 'بروكسي SOCKS/HTTP يعمل' : 'بروكسي SOCKS/HTTP مطفأ', ok: _enabled),
         ),
+        const _MtprotoCard(),
         SetCard(
-          title: 'البروكسي',
-          subtitle: 'من قنوات تيليجرام، أو من برنامج VPN على هذه الحاسبة',
+          title: 'الطريقة الثانية — بروكسي SOCKS5 / HTTP',
+          subtitle: 'من قنوات تيليجرام، أو من برنامج VPN على هذه الحاسبة (تُستعمل حين تكون MTProto مطفأة)',
           icon: Icons.settings_ethernet_rounded,
           color: _tg,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -304,4 +307,352 @@ class _TelegramProxyScreenState extends State<TelegramProxyScreen> {
           ]),
         ),
       ];
+}
+
+// ═══════════════════════ ⭐ MTProto — الطريقة المميزة ═══════════════════════
+
+class _MtprotoCard extends StatefulWidget {
+  const _MtprotoCard();
+
+  @override
+  State<_MtprotoCard> createState() => _MtprotoCardState();
+}
+
+class _MtprotoCardState extends State<_MtprotoCard> {
+  static const _a = Color(0xFF6D28D9); // بنفسجي مميز
+  static const _b = Color(0xFF229ED9); // أزرق تيليجرام
+
+  final _link = TextEditingController();
+  bool _loaded = false;
+  bool _installed = false;
+  bool _installing = false;
+  String _step = '';
+  double? _progress;
+  bool _enabled = false;
+  List<String> _links = const [];
+  bool _busy = false;
+  (bool, String)? _result;
+
+  bool get _creds => TelegramMtproto.hasCredentials;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _link.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final inst = await TdlibEngine.isInstalled();
+    final en = await TelegramMtproto.isEnabled();
+    final links = await TelegramMtproto.proxies();
+    if (!mounted) return;
+    setState(() {
+      _loaded = true;
+      _installed = inst;
+      _enabled = en;
+      _links = links;
+    });
+  }
+
+  Future<void> _install() async {
+    setState(() {
+      _installing = true;
+      _step = 'جارٍ البدء…';
+      _progress = null;
+      _result = null;
+    });
+    try {
+      await TdlibEngine.install(step: (t, [f]) {
+        if (mounted) {
+          setState(() {
+            _step = t;
+            _progress = f;
+          });
+        }
+      });
+      if (mounted) setToast(context, 'تم تثبيت محرك MTProto');
+    } catch (e) {
+      if (mounted) setState(() => _result = (false, '$e'));
+    }
+    if (mounted) setState(() => _installing = false);
+    await _load();
+  }
+
+  Future<void> _addLink([String? raw]) async {
+    final v = (raw ?? _link.text).trim();
+    if (v.isEmpty) return;
+    if (TelegramMtproto.proxyJson(v) == null) {
+      setState(() => _result = (false, 'هذا ليس رابط بروكسي تيليجرام (يبدأ بـ tg://proxy أو t.me/proxy أو tg://socks)'));
+      return;
+    }
+    if (_links.contains(v)) {
+      setState(() => _result = (false, 'الرابط موجود في القائمة'));
+      return;
+    }
+    final l = [..._links, v];
+    await TelegramMtproto.setProxies(l);
+    _link.clear();
+    setState(() {
+      _links = l;
+      _result = (true, 'أُضيف: ${TelegramMtproto.proxyLabel(v)}');
+    });
+    await TelegramMtproto.reapply().catchError((_) {});
+  }
+
+  Future<void> _remove(String v) async {
+    final l = [..._links]..remove(v);
+    await TelegramMtproto.setProxies(l);
+    setState(() => _links = l);
+  }
+
+  Future<void> _moveFirst(String v) async {
+    final l = [v, ..._links.where((x) => x != v)];
+    await TelegramMtproto.setProxies(l);
+    setState(() => _links = l);
+  }
+
+  Future<String?> _token() async {
+    final t = (await SettingsManager.getAppSettings()).telegramBotToken ?? '';
+    return t.isEmpty ? null : t;
+  }
+
+  Future<void> _test() async {
+    final token = await _token();
+    if (token == null) {
+      setState(() => _result = (false, 'أدخل توكن البوت أولاً في إعدادات تيليجرام'));
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _result = null;
+    });
+    try {
+      final name = await TelegramMtproto.test(token);
+      if (!mounted) return;
+      setState(() => _result = (true, 'نجح: البوت $name متصل عبر ${TelegramMtproto.lastProxyUsed ?? 'MTProto'}'));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _result = (false, '$e'.replaceFirst(RegExp(r'^TDLib \d+: '), '')));
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _toggle(bool v) async {
+    await TelegramMtproto.setEnabled(v);
+    if (!mounted) return;
+    setState(() => _enabled = v);
+    setToast(context, v ? 'رفع تيليجرام صار عبر MTProto' : 'أُطفئت MTProto — الرفع كما كان');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ready = _creds && _installed;
+    return Semantics(
+      container: true,
+      label: 'MTProto الطريقة المميزة',
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(1.6), // إطار متدرّج
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(22),
+          gradient: const LinearGradient(colors: [_a, _b], begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd),
+          boxShadow: [BoxShadow(color: _a.withValues(alpha: 0.18), blurRadius: 24, offset: const Offset(0, 10))],
+        ),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20.5)),
+          child: !_loaded
+              ? const SizedBox(height: 80, child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+              : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  _header(),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'تعمل مع روابط البروكسي المنشورة في قنوات تيليجرام (tg://proxy… فيها secret). '
+                    'الاتصال مشفّر من البرنامج إلى تيليجرام نفسه — البروكسي لا يقرأ شيئاً — وحد الملف 2 غيغا بدل 50 ميغا.',
+                    style: TextStyle(color: kSetMuted, height: 1.55, fontSize: 13),
+                  ),
+                  const SizedBox(height: 14),
+                  if (!_creds)
+                    const SetBanner(
+                      'هذه النسخة من البرنامج بُنيت بلا بيانات التطبيق (api_id / api_hash) — تُضاف عند البناء، ولا يُدخلها الزبون.',
+                      kind: SetBannerKind.warn,
+                    )
+                  else ...[
+                    _stepTitle('1', 'محرك MTProto على هذه الحاسبة'),
+                    AnimatedSwitcher(duration: const Duration(milliseconds: 250), child: _engine()),
+                    const SizedBox(height: 16),
+                    _stepTitle('2', 'روابط البروكسي (يُجرَّب الأول فالأول)'),
+                    _linkField(ready),
+                    const SizedBox(height: 8),
+                    ..._links.map(_linkTile),
+                    if (_links.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 6),
+                        child: Text('بلا روابط: يتصل مباشرة بلغة MTProto (يكفي إن حُظرت واجهة البوت فقط).',
+                            style: TextStyle(color: kSetMuted, fontSize: 12.5)),
+                      ),
+                    const SizedBox(height: 14),
+                    _stepTitle('3', 'التشغيل'),
+                    SetSwitch(
+                      title: 'رفع تيليجرام عبر MTProto',
+                      subtitle: _enabled ? 'مفعّل — نفس البوت والقناة والمحتوى' : 'مطفأ — الرفع كما كان',
+                      icon: Icons.bolt_rounded,
+                      color: _a,
+                      value: _enabled,
+                      onChanged: (!ready || _busy) ? null : _toggle,
+                    ),
+                    const SizedBox(height: 8),
+                    SetPrimaryButton(
+                      label: 'اختبار الاتصال',
+                      icon: Icons.network_check_rounded,
+                      color: _a,
+                      busy: _busy,
+                      onPressed: (!ready || _busy) ? null : _test,
+                    ),
+                  ],
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 220),
+                    child: _result == null
+                        ? const SizedBox(width: double.infinity)
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: SetBanner(_result!.$2, kind: _result!.$1 ? SetBannerKind.ok : SetBannerKind.error),
+                          ),
+                  ),
+                ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _header() => Row(children: [
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            gradient: const LinearGradient(colors: [_a, _b]),
+          ),
+          child: const Icon(Icons.auto_awesome_rounded, color: Colors.white),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Text('MTProto', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: kSetText)),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(30),
+            gradient: const LinearGradient(colors: [_a, _b]),
+          ),
+          child: const Text('الطريقة المميزة', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+        ),
+      ]);
+
+  Widget _stepTitle(String n, String t) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(children: [
+          CircleAvatar(radius: 11, backgroundColor: _a.withValues(alpha: 0.12), child: Text(n, style: const TextStyle(color: _a, fontSize: 12, fontWeight: FontWeight.w900))),
+          const SizedBox(width: 8),
+          Text(t, style: const TextStyle(fontWeight: FontWeight.w800, color: kSetText)),
+        ]),
+      );
+
+  Widget _engine() {
+    if (_installing) {
+      return Column(key: const ValueKey('ing'), crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(value: _progress, color: _a, minHeight: 6)),
+        const SizedBox(height: 6),
+        Text(_step, style: const TextStyle(color: kSetMuted, fontSize: 12.5)),
+      ]);
+    }
+    if (_installed) {
+      return Row(key: const ValueKey('ok'), children: [
+        const Icon(Icons.verified_rounded, color: kSetGreen, size: 20),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text('مثبّت (TDLib ${TdlibEngine.version}) وبصمته مطابقة لفهرس NuGet',
+              style: const TextStyle(color: kSetGreen, fontWeight: FontWeight.w700, fontSize: 13)),
+        ),
+      ]);
+    }
+    return SetPrimaryButton(
+      key: const ValueKey('btn'),
+      label: 'تثبيت محرك MTProto (مرة واحدة)',
+      icon: Icons.download_rounded,
+      color: _a,
+      onPressed: _install,
+    );
+  }
+
+  Widget _linkField(bool ready) => TextField(
+        controller: _link,
+        textDirection: TextDirection.ltr,
+        enabled: _installed,
+        decoration: InputDecoration(
+          labelText: 'ألصق رابط بروكسي من القنوات',
+          hintText: 'tg://proxy?server=…&port=…&secret=…',
+          prefixIcon: const Icon(Icons.link_rounded),
+          suffixIcon: Row(mainAxisSize: MainAxisSize.min, children: [
+            IconButton(
+              tooltip: 'لصق',
+              icon: const Icon(Icons.content_paste_rounded),
+              onPressed: !_installed
+                  ? null
+                  : () async {
+                      final d = await Clipboard.getData(Clipboard.kTextPlain);
+                      if (d?.text != null) await _addLink(d!.text);
+                    },
+            ),
+            IconButton(
+              tooltip: 'إضافة',
+              icon: const Icon(Icons.add_circle_rounded, color: _a),
+              onPressed: !_installed ? null : () => _addLink(),
+            ),
+          ]),
+        ),
+        onSubmitted: (_) => _addLink(),
+      );
+
+  Widget _linkTile(String v) {
+    final first = _links.isNotEmpty && _links.first == v;
+    final used = TelegramMtproto.lastProxyUsed == TelegramMtproto.proxyLabel(v);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: used ? kSetGreen.withValues(alpha: 0.07) : kSetBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: used ? kSetGreen.withValues(alpha: 0.35) : kSetBorder),
+      ),
+      child: Row(children: [
+        Icon(used ? Icons.check_circle_rounded : Icons.vpn_key_outlined, size: 18, color: used ? kSetGreen : kSetMuted),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(TelegramMtproto.proxyLabel(v),
+              textDirection: TextDirection.ltr, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ),
+        if (!first)
+          IconButton(
+            tooltip: 'جعله الأول',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.vertical_align_top_rounded, size: 20),
+            onPressed: () => _moveFirst(v),
+          ),
+        IconButton(
+          tooltip: 'حذف',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.delete_outline_rounded, size: 20, color: kSetRed),
+          onPressed: () => _remove(v),
+        ),
+      ]),
+    );
+  }
 }

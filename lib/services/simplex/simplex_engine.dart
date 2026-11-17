@@ -405,6 +405,10 @@ class SimplexEngine {
     return n;
   }
 
+  /// للاستعمال من محركات أخرى (محرك MTProto): نفس التنزيل الآمن.
+  static Future<String> fetchText(String u, {Map<String, String>? headers}) => _getText(u, headers: headers);
+  static Future<void> fetchFile(String u, File out, void Function(double) progress) => _download(u, out, progress);
+
   // ───────────── تنزيل يتحمّل شهادات Windows ─────────────
   // (الطريقة نفسها المستعملة لتنزيل Node.js لخادم واتساب: عند خطأ شهادة الجذر فقط
   //  يُعاد الطلب بأداة Windows — curl.exe ثم PowerShell — والتحقق من الشهادة لا يُطفأ أبداً.

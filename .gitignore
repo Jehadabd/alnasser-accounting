@@ -48,6 +48,8 @@ app.*.map.json
 .env
 .env.local
 .env.*.local
+# ⭐ بيانات تطبيق تيليجرام (api_id / api_hash) — تُمرَّر عند البناء بـ --dart-define-from-file
+tg_api.json
 
 # Bundled Windows binaries
 windows/bundled/

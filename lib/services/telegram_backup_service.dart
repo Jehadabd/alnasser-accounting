@@ -18,6 +18,7 @@ import 'reports_service.dart';
 import 'simplex/simplex_backup_service.dart'; // 🛡️ مسار SimpleX (بديل تيليجرام)
 import 'simplex/upload_route.dart';
 import 'telegram_net/telegram_proxy.dart'; // 🧦 بروكسي اختياري عند حظر تيليجرام
+import 'telegram_net/telegram_mtproto.dart'; // ⭐ MTProto عند الحظر
 
 /// نتيجة عملية الإرسال مع تفاصيل الخطأ
 class TelegramSendResult {
@@ -193,6 +194,15 @@ class TelegramBackupService {
     try {
       final channelId = await _getChannelId();
       debugPrint('📤 إرسال ملف إلى القناة: $channelId');
+
+      // ⭐ الطريقة المميزة عند الحظر (MTProto عبر TDLib) — إن فُعّلت؛ وإلا يكمل كما كان
+      if (await TelegramMtproto.isActive()) {
+        final err = await TelegramMtproto.sendDocument(
+            token: await _getBotToken(), channelId: channelId, file: file, caption: caption, onSent: onSent);
+        if (err == null) return TelegramSendResult.ok();
+        _lastError = 'MTProto: $err';
+        return TelegramSendResult.error('فشل إرسال الملف عبر MTProto', details: err);
+      }
       
       // 🔒 تحقق كامل من شهادة الأمان (كان يُقبل أي شهادة «لتجاوز مشاكل SSL»: من يتحكم بالشبكة
       //    كان يستطيع انتحال خادم تيليجرام وقراءة توكن البوت والملفات المرسلة)
@@ -307,6 +317,14 @@ class TelegramBackupService {
     try {
       final channelId = await _getChannelId();
       debugPrint('📤 إرسال رسالة إلى القناة: $channelId');
+
+      // ⭐ الطريقة المميزة عند الحظر (MTProto عبر TDLib) — إن فُعّلت؛ وإلا يكمل كما كان
+      if (await TelegramMtproto.isActive()) {
+        final err = await TelegramMtproto.sendHtml(token: await _getBotToken(), channelId: channelId, html: text);
+        if (err == null) return TelegramSendResult.ok();
+        _lastError = 'MTProto: $err';
+        return TelegramSendResult.error('فشل إرسال الرسالة عبر MTProto', details: err);
+      }
       
       // 🔒 تحقق كامل من شهادة الأمان (كان يُقبل أي شهادة «لتجاوز مشاكل SSL»: من يتحكم بالشبكة
       //    كان يستطيع انتحال خادم تيليجرام وقراءة توكن البوت والملفات المرسلة)
