@@ -185,6 +185,33 @@ class TelegramProxy {
     return c;
   }
 
+  /// طريق الاتصال الحالي لرسائل الإعدادات: «عبر Tor» / «عبر البروكسي …» / null (مباشر).
+  static Future<String?> routeName() async {
+    if (await TorEngine.isActive()) return 'عبر Tor';
+    final cfg = await active();
+    return cfg == null ? null : 'عبر البروكسي ${cfg.label}';
+  }
+
+  /// طلب Bot API (getMe / getUpdates / sendMessage) من نفس طريق الرفع: Tor ثم البروكسي ثم مباشر.
+  /// [form] ⇒ POST بصيغة النموذج. يعيد (رمز HTTP، النص). التحقق من الشهادة كامل.
+  static Future<(int, String)> botApi(String token, String method,
+      {Map<String, String>? form, Duration timeout = const Duration(seconds: 30)}) async {
+    final c = await client();
+    try {
+      final uri = Uri.parse('https://api.telegram.org/bot$token/$method');
+      final req = await (form == null ? c.getUrl(uri) : c.postUrl(uri)).timeout(timeout);
+      if (form != null) {
+        req.headers.contentType = ContentType('application', 'x-www-form-urlencoded', charset: 'utf-8');
+        req.write(Uri(queryParameters: form).query);
+      }
+      final res = await req.close().timeout(timeout);
+      final body = await res.transform(utf8.decoder).join().timeout(timeout);
+      return (res.statusCode, body);
+    } finally {
+      c.close(force: true);
+    }
+  }
+
   /// يربط [c] بالبروكسي [cfg] (يُستعمل أيضاً لزر «اختبار» قبل الحفظ).
   static Future<void> configure(HttpClient c, TgProxyConfig cfg) async {
     if (cfg.type == TgProxyType.http) {

@@ -209,6 +209,85 @@ class TelegramMtproto {
     return names != null && names.isNotEmpty ? '@${names.first}' : '${me['first_name'] ?? ''}';
   }
 
+  /// اسم القناة كما يراه البوت (لرسالة الاختبار). null إن تعذّر.
+  static Future<String?> chatTitle(String token, String channelId) async {
+    try {
+      await _ready(token);
+      final id = await _chat(channelId);
+      final c = await _c.request({'@type': 'getChat', 'chat_id': id});
+      final t = c['title'];
+      return t is String && t.isNotEmpty ? t : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 🔎 اكتشاف القناة عبر MTProto (getUpdates من Bot API لا يمر من هنا): يستمع لما يصل البوت
+  /// خلال [window] — منشور في القناة أو إضافة البوت إليها — ثم يقرأ اسم كل محادثة.
+  /// يعود بعد أول محادثة بثانيتين، أو بقائمة فارغة إن لم يصل شيء.
+  static Future<List<({String id, String title, String type})>> discoverChats(String token,
+      {Duration window = const Duration(seconds: 60)}) async {
+    final seen = <int>{};
+    final first = Completer<void>();
+    int? me;
+    final sub = _c.updates.listen((u) {
+      final t = u['@type'];
+      int? chat;
+      if (t == 'updateNewMessage') {
+        final msg = u['message'];
+        if (msg is Map) chat = (msg['chat_id'] as num?)?.toInt();
+      } else if (t == 'updateChatMember') {
+        final m = u['new_chat_member'];
+        if (m is! Map) return;
+        final who = m['member_id'];
+        final uid = who is Map ? (who['user_id'] as num?)?.toInt() : null;
+        if (me != null && uid != me) return; // عضو آخر، لا البوت
+        chat = (u['chat_id'] as num?)?.toInt();
+        final st = m['status'];
+        final stType = st is Map ? '${st['@type']}' : '';
+        if (chat != null && (stType == 'chatMemberStatusLeft' || stType == 'chatMemberStatusBanned')) {
+          seen.remove(chat); // أُزيل البوت ⇒ لا تُعرض
+          return;
+        }
+      }
+      if (chat == null) return;
+      seen.add(chat);
+      if (!first.isCompleted) first.complete();
+    });
+    try {
+      await _ready(token);
+      me = ((await _c.request({'@type': 'getMe'}))['id'] as num?)?.toInt();
+      try {
+        await first.future.timeout(window);
+        await Future<void>.delayed(const Duration(seconds: 2));
+      } on TimeoutException {
+        // لم يصل شيء خلال المهلة
+      }
+    } finally {
+      await sub.cancel();
+    }
+    final out = <({String id, String title, String type})>[];
+    for (final id in seen) {
+      try {
+        final c = await _c.request({'@type': 'getChat', 'chat_id': id});
+        final ct = c['type'];
+        final kind = ct is Map ? '${ct['@type']}' : '';
+        final isChannel = ct is Map && ct['is_channel'] == true;
+        final String type;
+        if (kind == 'chatTypeSupergroup') {
+          type = isChannel ? 'channel' : 'supergroup';
+        } else if (kind == 'chatTypePrivate') {
+          type = 'private';
+        } else {
+          type = 'group';
+        }
+        final title = type == 'private' ? 'محادثتك الخاصة مع البوت (${c['title'] ?? ''})' : '${c['title'] ?? id}';
+        out.add((id: '$id', title: title, type: type));
+      } catch (_) {}
+    }
+    return out;
+  }
+
   /// محاولة، وعند فشل الشبكة: إعادة اختيار البروكسي ثم محاولة ثانية.
   static Future<String?> _guard(String token, Future<void> Function() body) async {
     try {

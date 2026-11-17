@@ -1,7 +1,6 @@
 // lib/screens/telegram_settings_screen.dart
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/auth_service.dart';
 import '../services/settings_manager.dart';
@@ -10,6 +9,9 @@ import '../services/telegram_invoice_export_service.dart';
 import '../widgets/owner_summary_card.dart'; // 📊 ملخص المالك اليومي
 import '../widgets/settings_kit.dart';
 import 'telegram_proxy_screen.dart'; // 🧦 بروكسي عند الحظر
+import '../services/telegram_net/tdlib_client.dart' show TdError;
+import '../services/telegram_net/telegram_mtproto.dart'; // ⭐ الاختبار والاكتشاف عبر MTProto إن فُعّل
+import '../services/telegram_net/telegram_proxy.dart'; // 🧅 الاختبار والاكتشاف عبر Tor/البروكسي إن فُعّل
 import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
 
 class TelegramSettingsScreen extends StatefulWidget {
@@ -128,11 +130,22 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
     if (!silent) setState(() => _isLoading = true);
 
     try {
-      final response = await http.get(
-        Uri.parse('https://api.telegram.org/bot$token/getMe'),
-      ).timeout(const Duration(seconds: 10));
-
-      final data = json.decode(response.body);
+      // ⭐ MTProto مفعّل ⇒ الاختبار يمر منه (نفس طريق الرفع)
+      if (await TelegramMtproto.isActive()) {
+        final name = await TelegramMtproto.test(token).timeout(const Duration(seconds: 90));
+        if (mounted) {
+          setState(() {
+            _botTokenController.text = token;
+            _botName = name;
+            _botUsername = name.startsWith('@') ? name.substring(1) : null;
+            _isLoading = false;
+          });
+        }
+        return true;
+      }
+      // 🧅 Tor أو البروكسي إن فُعّل، وإلا مباشر (نفس طريق الرفع)
+      final (_, body) = await TelegramProxy.botApi(token, 'getMe');
+      final data = json.decode(body);
       if (data['ok'] == true) {
         if (mounted) {
           setState(() {
@@ -152,9 +165,12 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
         return false;
       }
     } catch (e) {
-      if (mounted && !silent) {
-         setState(() => _isLoading = false);
-         _showSnackBar('خطأ في الاتصال', isError: true);
+      if (!silent) {
+        final via = await _routeSuffix();
+        if (mounted) {
+          setState(() => _isLoading = false);
+          _showSnackBar('خطأ في الاتصال$via: ${_errText(e)}', isError: true);
+        }
       }
       return false;
     }
@@ -204,31 +220,47 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
     }
     if (mounted) setState(() => _testing = true);
 
+    const testText = '✅ اختبار الاتصال من تطبيق إدارة المتجر.\n\nالإعدادات صحيحة وتعمل بنجاح!';
     try {
-      final response = await http.post(
-        Uri.parse('https://api.telegram.org/bot$token/sendMessage'),
-        body: {
-          'chat_id': channelId,
-          'text': '✅ اختبار الاتصال من تطبيق إدارة المتجر.\n\nالإعدادات صحيحة وتعمل بنجاح!',
-        },
-      ).timeout(const Duration(seconds: 10));
-
-      final data = json.decode(response.body);
+      // ⭐ MTProto مفعّل ⇒ الرسالة التجريبية تمر منه (نفس طريق الرفع)
+      if (await TelegramMtproto.isActive()) {
+        final err = await TelegramMtproto.sendHtml(token: token, channelId: channelId, html: testText)
+            .timeout(const Duration(seconds: 120));
+        final title = err == null ? await TelegramMtproto.chatTitle(token, channelId) : null;
+        if (!mounted) return;
+        if (err == null) {
+          setState(() {
+            _channelName = title ?? channelId;
+            _lastTest = (true, 'وصلت الرسالة التجريبية عبر MTProto${title == null ? '' : ' إلى «$title»'} بنجاح.');
+          });
+          if (!silentSuccess) _showSnackBar('تم إرسال رسالة تجريبية بنجاح');
+        } else {
+          setState(() => _lastTest = (false, 'فشل الاتصال عبر MTProto: $err'));
+          _showSnackBar('فشل الاتصال', isError: true);
+        }
+        return;
+      }
+      // 🧅 Tor أو البروكسي إن فُعّل، وإلا مباشر
+      final route = await TelegramProxy.routeName();
+      final (status, body) = await TelegramProxy.botApi(token, 'sendMessage', form: {'chat_id': channelId, 'text': testText});
+      final data = json.decode(body);
       if (!mounted) return;
       if (data['ok'] == true) {
         setState(() {
           _channelName = data['result']['chat']['title'];
-          _lastTest = (true, 'وصلت الرسالة التجريبية${_channelName == null ? '' : ' إلى «$_channelName»'} بنجاح.');
+          _lastTest = (true, 'وصلت الرسالة التجريبية${route == null ? '' : ' $route'}${_channelName == null ? '' : ' إلى «$_channelName»'} بنجاح.');
         });
         if (!silentSuccess) _showSnackBar('تم إرسال رسالة تجريبية بنجاح');
       } else {
-        final desc = '${data['description'] ?? response.statusCode}';
+        final desc = '${data['description'] ?? status}';
         setState(() => _lastTest = (false, 'فشل الاتصال: ${_explainTelegramError(desc)}'));
         _showSnackBar('فشل الاتصال', isError: true);
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _lastTest = (false, 'خطأ في الإرسال — تحقّق من الإنترنت.\n$e'));
+      final via = await _routeSuffix();
+      if (!mounted) return;
+      setState(() => _lastTest = (false, 'خطأ في الإرسال$via — تحقّق من الإنترنت.\n${_errText(e)}'));
       _showSnackBar('خطأ في الإرسال', isError: true);
     } finally {
       if (mounted) setState(() => _testing = false);
@@ -345,13 +377,23 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
     }
     setState(() => _detecting = true);
     try {
-      final r = await http
-          .get(Uri.parse('https://api.telegram.org/bot$token/getUpdates'))
-          .timeout(const Duration(seconds: 15));
-      final data = json.decode(r.body);
+      // ⭐ MTProto مفعّل ⇒ getUpdates (Bot API) لا يمر منه: نستمع لما يصل البوت الآن
+      if (await TelegramMtproto.isActive()) {
+        setState(() => _lastTest = (
+              true,
+              'يستمع عبر MTProto (حتى دقيقة)… اكتب الآن أي رسالة في القناة (والبوت مشرف فيها).'
+            ));
+        final list = await TelegramMtproto.discoverChats(token);
+        if (!mounted) return;
+        await _pickDetected(list);
+        return;
+      }
+      // 🧅 Tor أو البروكسي إن فُعّل، وإلا مباشر
+      final (status, body) = await TelegramProxy.botApi(token, 'getUpdates');
+      final data = json.decode(body);
       if (!mounted) return;
       if (data is! Map || data['ok'] != true) {
-        final desc = data is Map ? '${data['description'] ?? r.statusCode}' : '${r.statusCode}';
+        final desc = data is Map ? '${data['description'] ?? status}' : '$status';
         setState(() => _lastTest = (false, 'تعذّر الاكتشاف: ${_explainTelegramError(desc)}'));
         return;
       }
@@ -378,9 +420,32 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
             : '${chat['title'] ?? chat['username'] ?? chat['id']}';
         found['${chat['id']}'] = (id: '${chat['id']}', title: title, type: type);
       }
-      // القنوات أولاً ثم المجموعات ثم المحادثة الخاصة
+      await _pickDetected(found.values.toList());
+    } catch (e) {
+      final via = await _routeSuffix();
+      if (mounted) setState(() => _lastTest = (false, 'تعذّر الاكتشاف$via — تحقّق من الإنترنت ومن التوكن.\n${_errText(e)}'));
+    } finally {
+      if (mounted) setState(() => _detecting = false);
+    }
+  }
+
+  /// « عبر MTProto/Tor/البروكسي» لرسائل الخطأ (فارغ إن كان الاتصال مباشراً).
+  Future<String> _routeSuffix() async {
+    try {
+      if (await TelegramMtproto.isActive()) return ' عبر MTProto';
+      final r = await TelegramProxy.routeName();
+      return r == null ? '' : ' $r';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _errText(Object e) => e is TdError ? TelegramMtproto.describe(e) : TelegramProxy.describe(e);
+
+  /// يعرض ما اكتُشف (القنوات أولاً ثم المجموعات ثم المحادثة الخاصة) ويضع المختار في الحقل.
+  Future<void> _pickDetected(List<({String id, String title, String type})> found) async {
       int rank(String t) => t == 'channel' ? 0 : (t == 'private' ? 2 : 1);
-      final list = found.values.toList()..sort((a, b) => rank(a.type).compareTo(rank(b.type)));
+      final list = found..sort((a, b) => rank(a.type).compareTo(rank(b.type)));
       if (list.isEmpty) {
         setState(() => _lastTest = (
               false,
@@ -416,11 +481,6 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
         _channelName = null;
         _lastTest = (true, 'وُجدت «${pick.title}» — اضغط «حفظ وربط الاتصال» لإكمال الربط.');
       });
-    } catch (e) {
-      if (mounted) setState(() => _lastTest = (false, 'تعذّر الاكتشاف — تحقّق من الإنترنت ومن التوكن.\n$e'));
-    } finally {
-      if (mounted) setState(() => _detecting = false);
-    }
   }
 
   // ─────────── الشرح خطوة بخطوة ───────────
