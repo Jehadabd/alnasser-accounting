@@ -21,6 +21,8 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'tor_engine.dart';
+
 enum TgProxyType { socks5, http }
 
 class TgProxyConfig {
@@ -161,6 +163,12 @@ class TelegramProxy {
   /// HttpClient لطلبات تيليجرام: مباشر إن كان البروكسي مطفأ (كما كان دائماً).
   static Future<HttpClient> client() async {
     final c = HttpClient();
+    // 🧅 Tor التلقائي (إن فُعّل) يسبق البروكسي اليدوي: يُشغَّل هنا إن لم يكن يعمل (مع زر الرفع)
+    if (await TorEngine.isActive()) {
+      final port = await TorEngine.ensureRunning();
+      await configure(c, TgProxyConfig(type: TgProxyType.socks5, host: '127.0.0.1', port: port));
+      return c;
+    }
     final cfg = await active();
     if (cfg == null) return c;
     await configure(c, cfg);

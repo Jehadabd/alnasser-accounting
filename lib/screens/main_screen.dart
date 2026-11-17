@@ -15,6 +15,7 @@ import '../services/upload_targets.dart';
 import '../services/simplex/simplex_backup_service.dart'; // 🛡️ SimpleX
 import '../services/simplex/upload_route.dart';
 import '../services/simplex/simplex_engine.dart';
+import '../services/telegram_net/tor_engine.dart'; // 🧅
 import '../services/sync_perks.dart'; // ⭐ ميزات اشتراك المزامنة
 import '../owner/google_drive_service.dart';
 import '../widgets/upload_progress_dialog.dart'; // ☁️ نافذة الرفع
@@ -71,6 +72,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
   void initState() {
     super.initState();
     _attachExitBackup();
+    unawaited(TorEngine.autoStart()); // 🧅 Tor لتيليجرام: يبدأ مع البرنامج إن اختار المستخدم ذلك
     _loadSettings();
     // تأكد من تهيئة مزود التطبيق لتفعيل دعم Google Drive
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -218,6 +220,9 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
     // 🛡️ محرك SimpleX لا يبقى يعمل بعد إغلاق البرنامج (كل رفع ينتظر اكتماله قبل أن ينتهي)
     try {
       await SimplexEngine.stop().timeout(const Duration(seconds: 4));
+    } catch (_) {}
+    try {
+      await TorEngine.stop(); // (Tor يُغلق نفسه أيضاً إن أُغلق البرنامج)
     } catch (_) {}
     try {
       await windowManager.setPreventClose(false);

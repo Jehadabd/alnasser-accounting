@@ -10,6 +10,7 @@ import '../services/settings_manager.dart';
 import '../services/telegram_net/tdlib_engine.dart';
 import '../services/telegram_net/telegram_mtproto.dart';
 import '../services/telegram_net/telegram_proxy.dart';
+import '../services/telegram_net/tor_engine.dart';
 import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart';
 
@@ -158,14 +159,15 @@ class _TelegramProxyScreenState extends State<TelegramProxyScreen> {
           icon: Icons.vpn_lock_rounded,
           color: _tg,
           title: 'رفع تيليجرام رغم الحظر',
-          text: 'طريقتان تخصّان رفع تيليجرام وحده (بقية البرنامج لا تتأثر): MTProto المميزة بروابط القنوات، '
-              'أو بروكسي SOCKS5/HTTP. وكلتاهما مطفأة يرفع البرنامج مباشرة كما كان.',
+          text: 'ثلاث طرق تخصّان رفع تيليجرام وحده (بقية البرنامج لا تتأثر): MTProto المميزة بروابط القنوات، '
+              'و Tor التلقائي بلا أي إعداد، وبروكسي SOCKS5/HTTP. وكلها مطفأة يرفع البرنامج مباشرة كما كان.',
           status: SetStatusPill(_enabled ? 'بروكسي SOCKS/HTTP يعمل' : 'بروكسي SOCKS/HTTP مطفأ', ok: _enabled),
         ),
         const _MtprotoCard(),
+        const _TorCard(),
         SetCard(
           title: 'الطريقة الثانية — بروكسي SOCKS5 / HTTP',
-          subtitle: 'من قنوات تيليجرام، أو من برنامج VPN على هذه الحاسبة (تُستعمل حين تكون MTProto مطفأة)',
+          subtitle: 'من قنوات تيليجرام، أو من برنامج VPN على هذه الحاسبة (تُستعمل حين تكون MTProto و Tor مطفأتين)',
           icon: Icons.settings_ethernet_rounded,
           color: _tg,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -653,6 +655,241 @@ class _MtprotoCardState extends State<_MtprotoCard> {
           onPressed: () => _remove(v),
         ),
       ]),
+    );
+  }
+}
+
+// ═══════════════════════ 🧅 Tor — تلقائي بلا إعداد ═══════════════════════
+
+class _TorCard extends StatefulWidget {
+  const _TorCard();
+
+  @override
+  State<_TorCard> createState() => _TorCardState();
+}
+
+class _TorCardState extends State<_TorCard> {
+  static const _c = Color(0xFF7D4698); // بنفسجي Tor
+
+  bool _loaded = false;
+  bool _installed = false;
+  String? _version;
+  bool _installing = false;
+  String _step = '';
+  double? _progress;
+  bool _enabled = false;
+  TorStartMode _mode = TorStartMode.onUpload;
+  bool _busy = false;
+  (bool, String)? _result;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final inst = await TorEngine.isInstalled();
+    final ver = await TorEngine.installedVersion();
+    final en = await TorEngine.isEnabled();
+    final mode = await TorEngine.startMode();
+    if (!mounted) return;
+    setState(() {
+      _loaded = true;
+      _installed = inst;
+      _version = ver;
+      _enabled = en;
+      _mode = mode;
+    });
+  }
+
+  Future<void> _install() async {
+    setState(() {
+      _installing = true;
+      _step = 'جارٍ البدء…';
+      _progress = null;
+      _result = null;
+    });
+    try {
+      await TorEngine.install(step: (t, [f]) {
+        if (mounted) {
+          setState(() {
+            _step = t;
+            _progress = f;
+          });
+        }
+      });
+      if (mounted) setToast(context, 'تم تثبيت Tor');
+    } catch (e) {
+      if (mounted) setState(() => _result = (false, '$e'));
+    }
+    if (mounted) setState(() => _installing = false);
+    await _load();
+  }
+
+  Future<void> _toggle(bool v) async {
+    await TorEngine.setEnabled(v);
+    if (!mounted) return;
+    setState(() => _enabled = v);
+    setToast(context, v ? 'رفع تيليجرام صار عبر Tor' : 'أُطفئ Tor — الرفع كما كان');
+    if (v && _mode == TorStartMode.onAppStart) TorEngine.autoStart();
+  }
+
+  Future<void> _setMode(TorStartMode m) async {
+    await TorEngine.setStartMode(m);
+    if (!mounted) return;
+    setState(() => _mode = m);
+    if (_enabled && m == TorStartMode.onAppStart) TorEngine.autoStart();
+  }
+
+  Future<void> _test() async {
+    final token = (await SettingsManager.getAppSettings()).telegramBotToken ?? '';
+    if (token.isEmpty) {
+      setState(() => _result = (false, 'أدخل توكن البوت أولاً في إعدادات تيليجرام'));
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _result = null;
+    });
+    try {
+      final port = await TorEngine.ensureRunning();
+      final err = await TelegramProxy.test(TgProxyConfig(type: TgProxyType.socks5, host: '127.0.0.1', port: port), token);
+      if (!mounted) return;
+      setState(() => _result = err == null ? (true, 'نجح: وصل البرنامج إلى تيليجرام عبر Tor') : (false, err));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _result = (false, '$e'));
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  void _showLog() {
+    showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('سجل Tor'),
+        content: SizedBox(
+          width: 560,
+          height: 360,
+          child: ValueListenableBuilder<List<String>>(
+            valueListenable: TorEngine.log,
+            builder: (_, l, __) => l.isEmpty
+                ? const Center(child: Text('لا شيء بعد', style: TextStyle(color: kSetMuted)))
+                : SelectableText(l.join('\n'), textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('إغلاق'))],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SetCard(
+      title: 'Tor — تلقائي بلا إعداد',
+      subtitle: 'لا روابط ولا أرقام: يتصل بنفسه عبر جسر Snowflake (أبطأ من غيره)',
+      icon: Icons.shield_moon_rounded,
+      color: _c,
+      child: !_loaded
+          ? const SizedBox(height: 60, child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+          : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const SizedBox(height: 6),
+              const Text(
+                'Tor شبكة مجانية مفتوحة المصدر لتجاوز الحجب. الاتصال مشفّر من البرنامج إلى تيليجرام نفسه: '
+                'محطات Tor ترى «اتصالاً بتيليجرام» فقط ولا تقرأ التوكن ولا الملفات.',
+                style: TextStyle(color: kSetMuted, height: 1.55, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                child: _installing
+                    ? Column(key: const ValueKey('ing'), crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(value: _progress, color: _c, minHeight: 6)),
+                        const SizedBox(height: 6),
+                        Text(_step, style: const TextStyle(color: kSetMuted, fontSize: 12.5)),
+                      ])
+                    : _installed
+                        ? Row(key: const ValueKey('ok'), children: [
+                            const Icon(Icons.verified_rounded, color: kSetGreen, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text('Tor مثبّت${_version != null ? ' ($_version)' : ''} وبصمته مطابقة للمنشورة',
+                                  style: const TextStyle(color: kSetGreen, fontWeight: FontWeight.w700, fontSize: 13)),
+                            ),
+                          ])
+                        : SetPrimaryButton(
+                            key: const ValueKey('btn'),
+                            label: 'تثبيت Tor (مرة واحدة)',
+                            icon: Icons.download_rounded,
+                            color: _c,
+                            onPressed: _install,
+                          ),
+              ),
+              const SizedBox(height: 10),
+              SetSwitch(
+                title: 'رفع تيليجرام عبر Tor',
+                subtitle: _enabled ? 'مفعّل' : 'مطفأ — الرفع كما كان',
+                icon: Icons.power_settings_new_rounded,
+                color: _c,
+                value: _enabled,
+                onChanged: (!_installed || _busy) ? null : _toggle,
+              ),
+              const SizedBox(height: 8),
+              const Text('متى يبدأ الاتصال؟', style: TextStyle(fontWeight: FontWeight.w700, color: kSetText)),
+              const SizedBox(height: 6),
+              SegmentedButton<TorStartMode>(
+                segments: const [
+                  ButtonSegment(value: TorStartMode.onUpload, label: Text('عند ضغط «رفع البيانات»'), icon: Icon(Icons.cloud_upload_outlined)),
+                  ButtonSegment(value: TorStartMode.onAppStart, label: Text('عند فتح البرنامج'), icon: Icon(Icons.rocket_launch_outlined)),
+                ],
+                selected: {_mode},
+                onSelectionChanged: (!_installed) ? null : (s) => _setMode(s.first),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _mode == TorStartMode.onUpload
+                    ? 'يتصل أولاً ثم يرفع — قد يأخذ دقيقة أو اثنتين في أول رفع.'
+                    : 'يتصل في الخلفية مع فتح البرنامج، فيبدأ الرفع فوراً عند الضغط.',
+                style: const TextStyle(color: kSetMuted, fontSize: 12.5),
+              ),
+              const SizedBox(height: 12),
+              ValueListenableBuilder<int>(
+                valueListenable: TorEngine.bootstrap,
+                builder: (_, b, __) => (_busy && b < 100)
+                    ? Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(value: b / 100, color: _c, minHeight: 6)),
+                          const SizedBox(height: 4),
+                          Text('الاتصال بشبكة Tor: $b%', style: const TextStyle(color: kSetMuted, fontSize: 12.5)),
+                        ]),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              Row(children: [
+                Expanded(
+                  child: SetPrimaryButton(
+                    label: 'اختبار الاتصال',
+                    icon: Icons.network_check_rounded,
+                    color: _c,
+                    busy: _busy,
+                    onPressed: (!_installed || _busy) ? null : _test,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(tooltip: 'سجل Tor', onPressed: _showLog, icon: const Icon(Icons.article_outlined)),
+              ]),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 220),
+                child: _result == null
+                    ? const SizedBox(width: double.infinity)
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: SetBanner(_result!.$2, kind: _result!.$1 ? SetBannerKind.ok : SetBannerKind.error),
+                      ),
+              ),
+            ]),
     );
   }
 }

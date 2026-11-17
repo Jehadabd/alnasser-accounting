@@ -1,0 +1,352 @@
+// lib/services/telegram_net/tor_engine.dart
+//
+// 🧅 الطريقة التلقائية لتيليجرام عند الحظر: Tor مع Snowflake.
+//
+// • Tor Expert Bundle الرسمي لنظام Windows من torproject.org (آخر نسخة مستقرة)، وتُطابق
+//   بصمة SHA-256 للحزمة مع ملف البصمات المنشور بجانبها قبل الاستخراج. حزمة لا تطابق تُحذف.
+// • الاتصال عبر جسر Snowflake (lyrebird.exe المرفق بالحزمة) — سطر الجسر يُقرأ من
+//   pt_config.json الرسمي داخل الحزمة نفسها (لا أسطر مكتوبة يدوياً تقدم مع الوقت).
+// • tor.exe يعمل في الخلفية بلا نافذة على 127.0.0.1 فقط، ويُغلق نفسه إن أُغلق البرنامج
+//   (__OwningControllerProcess). رفع تيليجرام وحده يمر عبره (telegram_proxy.dart).
+// • التشفير من البرنامج إلى api.telegram.org نفسه: محطات Tor لا تقرأ التوكن ولا الملفات.
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint, kIsWeb, visibleForTesting;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../simplex/simplex_engine.dart' show SimplexEngine, SimplexException;
+
+enum TorStartMode { onUpload, onAppStart }
+
+class TorEngine {
+  TorEngine._();
+
+  static const _kEnabled = 'tg_tor_enabled';
+  static const _kMode = 'tg_tor_start_mode';
+  static const _versionsUrl = 'https://aus1.torproject.org/torbrowser/update_3/release/downloads.json';
+  static const _hosts = ['https://dist.torproject.org/torbrowser', 'https://archive.torproject.org/tor-package-archive/torbrowser'];
+
+  static bool get supported => !kIsWeb && Platform.isWindows;
+
+  // ───────────── الإعداد ─────────────
+
+  static Future<bool> isEnabled() async => (await SharedPreferences.getInstance()).getBool(_kEnabled) ?? false;
+  static Future<void> setEnabled(bool v) async {
+    await (await SharedPreferences.getInstance()).setBool(_kEnabled, v);
+    if (!v) await stop();
+  }
+
+  static Future<TorStartMode> startMode() async =>
+      (await SharedPreferences.getInstance()).getString(_kMode) == 'app' ? TorStartMode.onAppStart : TorStartMode.onUpload;
+  static Future<void> setStartMode(TorStartMode m) async =>
+      (await SharedPreferences.getInstance()).setString(_kMode, m == TorStartMode.onAppStart ? 'app' : 'upload');
+
+  /// مفعّل ومثبّت (بلا شبكة).
+  static Future<bool> isActive() async => supported && await isEnabled() && await isInstalled();
+
+  // ───────────── المسارات والتثبيت ─────────────
+
+  static Future<String> root() async => p.join((await getApplicationSupportDirectory()).path, 'tor');
+  static Future<String> _bin() async => p.join(await root(), 'bin');
+  static Future<File> _stamp() async => File(p.join(await _bin(), 'installed.json'));
+  static Future<String> _exe() async => p.join(await _bin(), 'tor', 'tor.exe');
+  static Future<String> _ptDir() async => p.join(await _bin(), 'tor', 'pluggable_transports');
+
+  static Future<bool> isInstalled() async {
+    if (!supported) return false;
+    try {
+      final st = jsonDecode(await (await _stamp()).readAsString()) as Map;
+      return st['version'] != null && await File(await _exe()).exists() && await File(p.join(await _ptDir(), 'pt_config.json')).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<String?> installedVersion() async {
+    try {
+      return '${(jsonDecode(await (await _stamp()).readAsString()) as Map)['version']}';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool _installing = false;
+
+  static Future<void> install({void Function(String text, [double? progress])? step}) async {
+    if (!supported) throw SimplexException('Tor متاح حالياً على Windows فقط');
+    if (_installing) throw SimplexException('التثبيت جارٍ بالفعل');
+    _installing = true;
+    void s(String t, [double? f]) {
+      _add(t);
+      step?.call(t, f);
+    }
+
+    try {
+      s('معرفة آخر نسخة مستقرة من Tor…');
+      final ver = versionFromDownloadsJson(await SimplexEngine.fetchText(_versionsUrl));
+      if (ver == null) throw SimplexException('تعذّر معرفة نسخة Tor الحالية');
+      final name = bundleName(ver);
+      String? want;
+      String? base;
+      for (final h in _hosts) {
+        try {
+          final sums = await SimplexEngine.fetchText('$h/$ver/sha256sums-signed-build.txt');
+          want = hashFor(sums, name);
+          if (want != null) {
+            base = '$h/$ver';
+            break;
+          }
+        } catch (e) {
+          _add('تعذّر $h: $e');
+        }
+      }
+      if (want == null || base == null) throw SimplexException('تعذّر قراءة بصمة حزمة Tor — لا يُنزَّل ما لا يمكن التحقق منه');
+
+      final bin = Directory(await _bin());
+      await bin.create(recursive: true);
+      final tmp = File(p.join(bin.path, 'download.tar.gz'));
+      if (await tmp.exists()) await tmp.delete();
+      s('تنزيل Tor $ver (مرة واحدة)…', 0);
+      await SimplexEngine.fetchFile('$base/$name', tmp, (f) => s('تنزيل Tor…', f));
+      final bytes = await tmp.readAsBytes();
+      await tmp.delete();
+      final got = sha256.convert(bytes).toString();
+      if (got != want) throw SimplexException('بصمة حزمة Tor لا تطابق المنشورة — حُذفت ولم تُستعمل. أعد المحاولة');
+
+      s('استخراج الملفات…');
+      await stop();
+      final tar = TarDecoder().decodeBytes(GZipDecoder().decodeBytes(bytes));
+      var n = 0;
+      for (final f in tar.files) {
+        if (!f.isFile) continue;
+        final rel = safeRelative(f.name);
+        if (rel == null) continue; // مسار يخرج من المجلد: يُتجاهل
+        final out = File(p.join(bin.path, rel));
+        await out.parent.create(recursive: true);
+        await out.writeAsBytes(f.content as List<int>, flush: true);
+        n++;
+      }
+      if (!await File(await _exe()).exists()) throw SimplexException('الحزمة لا تحتوي tor.exe');
+      if (await snowflakeBridges() == null) throw SimplexException('الحزمة لا تحتوي إعداد جسر Snowflake');
+      await (await _stamp()).writeAsString(jsonEncode({'version': ver, 'sha256': got, 'files': n, 'at': DateTime.now().toIso8601String()}));
+      s('تم تثبيت Tor $ver');
+    } finally {
+      _installing = false;
+    }
+  }
+
+  /// أسطر جسور Snowflake من pt_config.json المرفق بالحزمة.
+  static Future<List<String>?> snowflakeBridges() async {
+    try {
+      return bridgesFromPtConfig(await File(p.join(await _ptDir(), 'pt_config.json')).readAsString(), 'snowflake');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// برنامج Snowflake كما يسمّيه pt_config.json (lyrebird في النسخ الحديثة، snowflake-client قديماً).
+  static Future<String> _snowflakeExe() async {
+    final dir = await _ptDir();
+    try {
+      final name = snowflakeExecName(await File(p.join(dir, 'pt_config.json')).readAsString());
+      if (name != null && await File(p.join(dir, name)).exists()) return name;
+    } catch (_) {}
+    if (await File(p.join(dir, 'lyrebird.exe')).exists()) return 'lyrebird.exe';
+    if (await File(p.join(dir, 'snowflake-client.exe')).exists()) return 'snowflake-client.exe';
+    throw SimplexException('برنامج Snowflake غير موجود في حزمة Tor — أعد التثبيت');
+  }
+
+  // ───────────── التشغيل ─────────────
+
+  static final ValueNotifier<int> bootstrap = ValueNotifier(0); // نسبة الاتصال 0-100
+  static final ValueNotifier<List<String>> log = ValueNotifier(const []);
+  static void _add(String s) {
+    final l = [...log.value, '${DateTime.now().toIso8601String().substring(11, 19)}  $s'];
+    log.value = l.length > 200 ? l.sublist(l.length - 200) : l;
+    debugPrint('🧅 Tor: $s');
+  }
+
+  static Process? _proc;
+  static int? _socks;
+  static Completer<int>? _ready;
+
+  /// منفذ SOCKS إن كان Tor متصلاً الآن (بلا تشغيل).
+  static int? get readyPort => (_ready?.isCompleted ?? false) && _proc != null ? _socks : null;
+
+  /// يشغّل Tor (إن لم يكن يعمل) وينتظر اكتمال الاتصال، ويعيد منفذ SOCKS.
+  static Future<int> ensureRunning({Duration timeout = const Duration(minutes: 4)}) async {
+    final r = _ready;
+    if (r != null && _proc != null) return r.future.timeout(timeout, onTimeout: () => throw _timeoutError());
+    if (!await isInstalled()) throw SimplexException('Tor غير مثبّت — من «عند حظر تيليجرام» اضغط «تثبيت Tor»');
+    final bridges = await snowflakeBridges();
+    if (bridges == null || bridges.isEmpty) throw SimplexException('إعداد جسر Snowflake مفقود — أعد تثبيت Tor');
+
+    final ready = Completer<int>();
+    _ready = ready;
+    try {
+      final rootDir = await root();
+      final data = Directory(p.join(rootDir, 'data'));
+      await data.create(recursive: true);
+      final s = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = s.port;
+      await s.close();
+      final torrc = File(p.join(rootDir, 'torrc'));
+      await torrc.writeAsString(buildTorrc(
+        dataDir: data.path,
+        socksPort: port,
+        lyrebird: await _snowflakeExe(), // نسبي لمجلد التشغيل (المسار الكامل قد يحوي مسافات لا يفهمها سطر exec)
+        bridges: bridges,
+        ownerPid: pid,
+      ));
+      bootstrap.value = 0;
+      _add('تشغيل Tor (Snowflake) على 127.0.0.1:$port');
+      final proc = await Process.start(await _exe(), ['-f', torrc.path],
+          workingDirectory: await _ptDir(), mode: ProcessStartMode.detachedWithStdio);
+      _proc = proc;
+      _socks = port;
+      final re = RegExp(r'Bootstrapped (\d+)%');
+      void onLine(String line) {
+        final m = re.firstMatch(line);
+        if (m != null) {
+          bootstrap.value = int.parse(m.group(1)!);
+          _add(line.substring(line.indexOf('Bootstrapped')));
+          if (bootstrap.value >= 100 && !ready.isCompleted) ready.complete(port);
+        } else if (line.contains('[err]') || line.contains('[warn]')) {
+          _add(line.length > 200 ? line.substring(0, 200) : line);
+        }
+      }
+
+      proc.stdout.transform(const Utf8Decoder(allowMalformed: true)).transform(const LineSplitter()).listen(onLine, onError: (_) {});
+      proc.stderr.transform(const Utf8Decoder(allowMalformed: true)).transform(const LineSplitter()).listen(onLine, onError: (_) {},
+          onDone: () {
+        if (!ready.isCompleted) ready.completeError(SimplexException('توقف Tor قبل أن يتصل — راجع «سجل Tor»'));
+        if (identical(_proc, proc)) {
+          _proc = null;
+          _ready = null;
+        }
+      });
+      return await ready.future.timeout(timeout, onTimeout: () => throw _timeoutError());
+    } catch (e) {
+      if (!ready.isCompleted) ready.completeError(e);
+      await stop();
+      rethrow;
+    }
+  }
+
+  /// عند فتح البرنامج: يبدأ الاتصال مبكراً إن اختار المستخدم ذلك (بلا انتظار ولا أخطاء ظاهرة).
+  static Future<void> autoStart() async {
+    try {
+      if (await isActive() && await startMode() == TorStartMode.onAppStart) await ensureRunning();
+    } catch (e) {
+      _add('التشغيل التلقائي: $e');
+    }
+  }
+
+  static SimplexException _timeoutError() =>
+      SimplexException('لم يكتمل اتصال Tor (وصل ${bootstrap.value}%) — قد يكون Snowflake محجوباً على هذه الشبكة');
+
+  static Future<void> stop() async {
+    final pr = _proc;
+    _proc = null;
+    _ready = null;
+    _socks = null;
+    bootstrap.value = 0;
+    if (pr != null) {
+      try {
+        pr.kill();
+      } catch (_) {}
+      _add('أُوقف Tor');
+    }
+  }
+
+  // ───────────── أدوات صافية (مختبرة) ─────────────
+
+  @visibleForTesting
+  static String bundleName(String ver) => 'tor-expert-bundle-windows-x86_64-$ver.tar.gz';
+
+  /// النسخة من downloads.json الخاص بمحدّث متصفح Tor.
+  @visibleForTesting
+  static String? versionFromDownloadsJson(String body) {
+    final j = jsonDecode(body);
+    final v = j is Map ? j['version'] : null;
+    return v is String && RegExp(r'^\d+(\.\d+){1,3}[a-z0-9]*$').hasMatch(v) ? v : null;
+  }
+
+  /// سطر «hash  name» من ملف البصمات.
+  @visibleForTesting
+  static String? hashFor(String sums, String name) {
+    for (final line in const LineSplitter().convert(sums)) {
+      final parts = line.trim().split(RegExp(r'\s+'));
+      if (parts.length >= 2 && parts.last.replaceFirst('*', '') == name && RegExp(r'^[0-9a-f]{64}$').hasMatch(parts.first)) {
+        return parts.first;
+      }
+    }
+    return null;
+  }
+
+  /// مسار نسبي آمن داخل المجلد (لا مطلق ولا ..)، أو null.
+  @visibleForTesting
+  static String? safeRelative(String name) {
+    final n = name.replaceAll('\\', '/');
+    if (n.startsWith('/') || RegExp(r'^[A-Za-z]:').hasMatch(n)) return null;
+    final parts = n.split('/').where((s) => s.isNotEmpty && s != '.').toList();
+    if (parts.isEmpty || parts.contains('..')) return null;
+    return p.joinAll(parts);
+  }
+
+  @visibleForTesting
+  static List<String>? bridgesFromPtConfig(String json, String transport) {
+    final j = jsonDecode(json);
+    final b = j is Map ? (j['bridges'] as Map?)?[transport] : null;
+    if (b is! List) return null;
+    final out = [for (final x in b) if (x is String && x.trim().startsWith(transport)) x.trim()];
+    return out.isEmpty ? null : out;
+  }
+
+  /// اسم الملف من «ClientTransportPlugin snowflake exec ${pt_path}lyrebird» → lyrebird.exe
+  @visibleForTesting
+  static String? snowflakeExecName(String ptConfigJson) {
+    final j = jsonDecode(ptConfigJson);
+    final pts = j is Map ? j['pluggableTransports'] : null;
+    if (pts is! Map) return null;
+    for (final v in pts.values) {
+      if (v is! String) continue;
+      final m = RegExp(r'ClientTransportPlugin\s+([\w,]+)\s+exec\s+(\S+)').firstMatch(v);
+      if (m == null || !m.group(1)!.split(',').contains('snowflake')) continue;
+      final name = m.group(2)!.replaceAll(r'${pt_path}', '').split(RegExp(r'[\\/]')).last;
+      if (!RegExp(r'^[\w.\-]+$').hasMatch(name)) return null;
+      return name.toLowerCase().endsWith('.exe') ? name : '$name.exe';
+    }
+    return null;
+  }
+
+  @visibleForTesting
+  static String buildTorrc({
+    required String dataDir,
+    required int socksPort,
+    required String lyrebird,
+    required List<String> bridges,
+    required int ownerPid,
+  }) {
+    String q(String s) => '"${s.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"';
+    return [
+      'DataDirectory ${q(dataDir)}',
+      'SocksPort 127.0.0.1:$socksPort',
+      'ControlPort 0',
+      'Log notice stdout',
+      'AvoidDiskWrites 1',
+      '__OwningControllerProcess $ownerPid',
+      'UseBridges 1',
+      'ClientTransportPlugin snowflake exec $lyrebird',
+      for (final b in bridges) 'Bridge $b',
+      '',
+    ].join('\n');
+  }
+}
