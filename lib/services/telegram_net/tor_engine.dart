@@ -1,10 +1,11 @@
 // lib/services/telegram_net/tor_engine.dart
 //
-// 🧅 الطريقة التلقائية لتيليجرام عند الحظر: Tor مع Snowflake.
+// 🧅 الطريقة التلقائية لتيليجرام عند الحظر: Tor مع جسوره المدمجة (Snowflake و obfs4 و meek).
 //
 // • Tor Expert Bundle الرسمي لنظام Windows من torproject.org (آخر نسخة مستقرة)، وتُطابق
 //   بصمة SHA-256 للحزمة مع ملف البصمات المنشور بجانبها قبل الاستخراج. حزمة لا تطابق تُحذف.
-// • الاتصال عبر جسر Snowflake (lyrebird.exe المرفق بالحزمة) — سطر الجسر يُقرأ من
+// • كل الجسور المدمجة معاً (Snowflake + obfs4 + meek) فيستعمل Tor أول ما يعمل منها — مقيس:
+//   Snowflake وحده توقف عند 10% على شبكة المحل. الجسور وبرامجها تُقرأ من
 //   pt_config.json الرسمي داخل الحزمة نفسها (لا أسطر مكتوبة يدوياً تقدم مع الوقت).
 // • tor.exe يعمل في الخلفية بلا نافذة على 127.0.0.1 فقط، ويُغلق نفسه إن أُغلق البرنامج
 //   (__OwningControllerProcess). رفع تيليجرام وحده يمر عبره (telegram_proxy.dart).
@@ -134,7 +135,7 @@ class TorEngine {
         n++;
       }
       if (!await File(await _exe()).exists()) throw SimplexException('الحزمة لا تحتوي tor.exe');
-      if (await snowflakeBridges() == null) throw SimplexException('الحزمة لا تحتوي إعداد جسر Snowflake');
+      if ((await builtinBridges()).isEmpty) throw SimplexException('الحزمة لا تحتوي إعداد الجسور المدمجة');
       await (await _stamp()).writeAsString(jsonEncode({'version': ver, 'sha256': got, 'files': n, 'at': DateTime.now().toIso8601String()}));
       s('تم تثبيت Tor $ver');
     } finally {
@@ -149,6 +150,33 @@ class TorEngine {
     } catch (_) {
       return null;
     }
+  }
+
+  /// كل الجسور المدمجة (Snowflake أولاً ثم obfs4 ثم meek) من pt_config.json.
+  static Future<List<String>> builtinBridges() async {
+    try {
+      final json = await File(p.join(await _ptDir(), 'pt_config.json')).readAsString();
+      return [
+        for (final t in const ['snowflake', 'obfs4', 'meek', 'webtunnel']) ...?bridgesFromPtConfig(json, t),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// أسطر ClientTransportPlugin من pt_config.json (بأسماء ملفات نسبية لمجلد التشغيل).
+  static Future<List<String>> _pluginLines() async {
+    final dir = await _ptDir();
+    try {
+      final lines = pluginLinesFromPtConfig(await File(p.join(dir, 'pt_config.json')).readAsString());
+      final ok = <String>[];
+      for (final l in lines) {
+        final exe = l.split(RegExp(r'\s+')).elementAt(3);
+        if (await File(p.join(dir, exe)).exists()) ok.add(l);
+      }
+      if (ok.isNotEmpty) return ok;
+    } catch (_) {}
+    return ['ClientTransportPlugin snowflake exec ${await _snowflakeExe()}'];
   }
 
   /// برنامج Snowflake كما يسمّيه pt_config.json (lyrebird في النسخ الحديثة، snowflake-client قديماً).
@@ -185,8 +213,9 @@ class TorEngine {
     final r = _ready;
     if (r != null && _proc != null) return r.future.timeout(timeout, onTimeout: () => throw _timeoutError());
     if (!await isInstalled()) throw SimplexException('Tor غير مثبّت — من «عند حظر تيليجرام» اضغط «تثبيت Tor»');
-    final bridges = await snowflakeBridges();
-    if (bridges == null || bridges.isEmpty) throw SimplexException('إعداد جسر Snowflake مفقود — أعد تثبيت Tor');
+    final bridges = await builtinBridges();
+    if (bridges.isEmpty) throw SimplexException('إعداد الجسور المدمجة مفقود — أعد تثبيت Tor');
+    final geoip = p.join(await _bin(), 'data', 'geoip');
 
     final ready = Completer<int>();
     _ready = ready;
@@ -201,12 +230,13 @@ class TorEngine {
       await torrc.writeAsString(buildTorrc(
         dataDir: data.path,
         socksPort: port,
-        lyrebird: await _snowflakeExe(), // نسبي لمجلد التشغيل (المسار الكامل قد يحوي مسافات لا يفهمها سطر exec)
+        plugins: await _pluginLines(), // أسماء نسبية لمجلد التشغيل (المسار الكامل قد يحوي مسافات لا يفهمها سطر exec)
+        geoipDir: await File(geoip).exists() ? p.dirname(geoip) : null,
         bridges: bridges,
         ownerPid: pid,
       ));
       bootstrap.value = 0;
-      _add('تشغيل Tor (Snowflake) على 127.0.0.1:$port');
+      _add('تشغيل Tor (${bridges.length} جسراً مدمجاً) على 127.0.0.1:$port');
       final proc = await Process.start(await _exe(), ['-f', torrc.path],
           workingDirectory: await _ptDir(), mode: ProcessStartMode.detachedWithStdio);
       _proc = proc;
@@ -250,7 +280,7 @@ class TorEngine {
   }
 
   static SimplexException _timeoutError() =>
-      SimplexException('لم يكتمل اتصال Tor (وصل ${bootstrap.value}%) — قد يكون Snowflake محجوباً على هذه الشبكة');
+      SimplexException('لم يكتمل اتصال Tor (وصل ${bootstrap.value}%) — جسور Tor المدمجة لم تعمل على هذه الشبكة');
 
   static Future<void> stop() async {
     final pr = _proc;
@@ -311,6 +341,25 @@ class TorEngine {
     return out.isEmpty ? null : out;
   }
 
+  /// «ClientTransportPlugin X exec ${pt_path}Y [args]» → «ClientTransportPlugin X exec Y.exe [args]».
+  @visibleForTesting
+  static List<String> pluginLinesFromPtConfig(String ptConfigJson) {
+    final j = jsonDecode(ptConfigJson);
+    final pts = j is Map ? j['pluggableTransports'] : null;
+    if (pts is! Map) return const [];
+    final out = <String>[];
+    for (final v in pts.values) {
+      if (v is! String) continue;
+      final m = RegExp(r'^ClientTransportPlugin\s+([\w,]+)\s+exec\s+(\S+)(.*)$').firstMatch(v.trim());
+      if (m == null) continue;
+      var exe = m.group(2)!.replaceAll(r'${pt_path}', '').split(RegExp(r'[\\/]')).last;
+      if (!RegExp(r'^[\w.\-]+$').hasMatch(exe)) continue;
+      if (!exe.toLowerCase().endsWith('.exe')) exe = '$exe.exe';
+      out.add('ClientTransportPlugin ${m.group(1)} exec $exe${m.group(3)}'.trimRight());
+    }
+    return out;
+  }
+
   /// اسم الملف من «ClientTransportPlugin snowflake exec ${pt_path}lyrebird» → lyrebird.exe
   @visibleForTesting
   static String? snowflakeExecName(String ptConfigJson) {
@@ -332,7 +381,8 @@ class TorEngine {
   static String buildTorrc({
     required String dataDir,
     required int socksPort,
-    required String lyrebird,
+    required List<String> plugins,
+    String? geoipDir,
     required List<String> bridges,
     required int ownerPid,
   }) {
@@ -345,7 +395,8 @@ class TorEngine {
       'AvoidDiskWrites 1',
       '__OwningControllerProcess $ownerPid',
       'UseBridges 1',
-      'ClientTransportPlugin snowflake exec $lyrebird',
+      ...plugins,
+      if (geoipDir != null) ...['GeoIPFile ${q(p.join(geoipDir, 'geoip'))}', 'GeoIPv6File ${q(p.join(geoipDir, 'geoip6'))}'],
       for (final b in bridges) 'Bridge $b',
       '',
     ].join('\n');

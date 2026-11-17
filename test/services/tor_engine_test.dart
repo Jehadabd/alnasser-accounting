@@ -40,17 +40,32 @@ void main() {
     expect(TorEngine.snowflakeExecName(modern), 'lyrebird.exe');
   });
 
+  test('أسطر برامج الجسور من pt_config.json (أسماء نسبية، مع الوسائط)', () {
+    const cfg = '{"pluggableTransports":{'
+        '"lyrebird":"ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec \${pt_path}lyrebird.exe",'
+        '"snowflake":"ClientTransportPlugin snowflake exec \${pt_path}lyrebird.exe",'
+        '"conjure":"ClientTransportPlugin conjure exec \${pt_path}conjure-client.exe -registerURL https://registration.refraction.network/api",'
+        '"bad":"ClientTransportPlugin x exec \${pt_path}../../evil"}}';
+    expect(TorEngine.pluginLinesFromPtConfig(cfg), [
+      'ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec lyrebird.exe',
+      'ClientTransportPlugin snowflake exec lyrebird.exe',
+      'ClientTransportPlugin conjure exec conjure-client.exe -registerURL https://registration.refraction.network/api',
+      'ClientTransportPlugin x exec evil.exe',
+    ]);
+  });
+
   test('ملف torrc: محلي فقط، يُغلق مع البرنامج، وجسور Snowflake', () {
     final t = TorEngine.buildTorrc(
       dataDir: r'C:\Users\a b\AppData\tor\data',
       socksPort: 50123,
-      lyrebird: 'lyrebird.exe',
+      plugins: ['ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec lyrebird.exe'],
       bridges: ['snowflake 192.0.2.3:80 X'],
       ownerPid: 4242,
     );
     expect(t, contains('SocksPort 127.0.0.1:50123'));
     expect(t, contains('__OwningControllerProcess 4242'));
-    expect(t, contains('ClientTransportPlugin snowflake exec lyrebird.exe'));
+    expect(t, contains('ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec lyrebird.exe'));
+    expect(t, isNot(contains('GeoIPFile')));
     expect(t, contains('Bridge snowflake 192.0.2.3:80 X'));
     expect(t, contains(r'DataDirectory "C:\\Users\\a b\\AppData\\tor\\data"'));
     expect(t, contains('UseBridges 1'));

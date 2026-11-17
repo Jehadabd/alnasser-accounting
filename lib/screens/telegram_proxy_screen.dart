@@ -788,7 +788,7 @@ class _TorCardState extends State<_TorCard> {
   Widget build(BuildContext context) {
     return SetCard(
       title: 'Tor — تلقائي بلا إعداد',
-      subtitle: 'لا روابط ولا أرقام: يتصل بنفسه عبر جسر Snowflake (أبطأ من غيره)',
+      subtitle: 'لا روابط ولا أرقام: يتصل بنفسه عبر جسور Tor المدمجة (أبطأ من غيره)',
       icon: Icons.shield_moon_rounded,
       color: _c,
       child: !_loaded
