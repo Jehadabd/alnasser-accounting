@@ -304,7 +304,8 @@ class TorEngine {
   @visibleForTesting
   static List<String>? bridgesFromPtConfig(String json, String transport) {
     final j = jsonDecode(json);
-    final b = j is Map ? (j['bridges'] as Map?)?[transport] : null;
+    final all = j is Map ? j['bridges'] : null;
+    final b = all is Map ? all[transport] : null;
     if (b is! List) return null;
     final out = [for (final x in b) if (x is String && x.trim().startsWith(transport)) x.trim()];
     return out.isEmpty ? null : out;
