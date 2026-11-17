@@ -810,7 +810,7 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
               OwnerSummaryCard(telegramReady: connected),
 
               // إجراءات متقدمة
-              // 🧦 عند حظر تيليجرام: رفع عبر بروكسي (إضافة — لا يغيّر شيئاً وهو مطفأ)
+              // 🧦 عند حظر تيليجرام: MTProto أو Tor أو بروكسي (إضافة — لا يغيّر شيئاً وهو مطفأ)
               SetCard(
                 title: 'عند حظر تيليجرام',
                 icon: Icons.vpn_lock_rounded,
@@ -818,8 +818,8 @@ class _TelegramSettingsScreenState extends State<TelegramSettingsScreen> {
                 padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
                 child: SetActionRow(
                   icon: Icons.settings_ethernet_rounded,
-                  title: 'الرفع عبر بروكسي SOCKS5 / HTTP',
-                  subtitle: 'من قنوات تيليجرام أو برنامج VPN على هذه الحاسبة — لرفع تيليجرام فقط',
+                  title: 'MTProto · Tor · بروكسي SOCKS5 / HTTP',
+                  subtitle: 'طرق لرفع تيليجرام عندما يُحظر — لرفع تيليجرام فقط',
                   color: kSetNavy,
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TelegramProxyScreen())),
                 ),
