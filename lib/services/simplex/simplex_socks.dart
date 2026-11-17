@@ -253,3 +253,140 @@ class _Session {
     } catch (_) {}
   }
 }
+
+// ═══════════════ وسيط تنزيل يتجاوز حجب DNS (HTTP CONNECT) ═══════════════
+//
+// لتنزيل المحركات (Tor / TDLib / SimpleX) حين يحجب DNS المزوّد المواقع الرسمية (مقيس: 
+// torproject.org يفشل في DNS المزوّد، وعناوينه الحقيقية من DoH تتصل). HttpClient يطلب
+// CONNECT من هذا الوسيط، فيحل الاسم عبر DoH ويتصل مباشرة. TLS والتحقق من الشهادة بين
+// البرنامج والموقع نفسه كما هما. يقبل مواقع التنزيل الرسمية على المنفذ 443 فقط.
+
+class DohConnectProxy {
+  DohConnectProxy._();
+
+  static ServerSocket? _server;
+
+  static const allowedSuffixes = [
+    'torproject.org',
+    'api.nuget.org',
+    'github.com',
+    'githubusercontent.com',
+    'simplex.chat',
+  ];
+
+  @visibleForTesting
+  static bool allowed(String host, int port) {
+    final h = host.toLowerCase();
+    return port == 443 && allowedSuffixes.any((s) => h == s || h.endsWith('.$s'));
+  }
+
+  static Future<int> start() async {
+    final s0 = _server;
+    if (s0 != null) return s0.port;
+    final s = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    _server = s;
+    s.listen((c) => _HttpConnectSession(c).run(), onError: (_) {});
+    return s.port;
+  }
+}
+
+class _HttpConnectSession {
+  _HttpConnectSession(this.c);
+  final Socket c;
+  final _buf = <int>[];
+  Completer<void>? _wait;
+  StreamSubscription<Uint8List>? _sub;
+  Socket? _remote;
+  bool _closed = false;
+
+  Future<void> run() async {
+    _sub = c.listen((d) {
+      final r = _remote;
+      if (r != null) {
+        try {
+          r.add(d);
+        } catch (_) {
+          _close();
+        }
+        return;
+      }
+      _buf.addAll(d);
+      final w = _wait;
+      _wait = null;
+      w?.complete();
+    }, onDone: _close, onError: (_) => _close(), cancelOnError: true);
+    try {
+      int end;
+      while ((end = _headEnd()) < 0) {
+        if (_buf.length > 8192 || _closed) {
+          _close();
+          return;
+        }
+        final w = Completer<void>();
+        _wait = w;
+        await w.future;
+      }
+      final first = latin1.decode(_buf.sublist(0, end)).split('\r\n').first.split(' ');
+      _buf.removeRange(0, end + 4);
+      final target = first.length >= 2 && first[0].toUpperCase() == 'CONNECT' ? first[1] : '';
+      final colon = target.lastIndexOf(':');
+      final host = colon > 0 ? target.substring(0, colon) : '';
+      final port = colon > 0 ? int.tryParse(target.substring(colon + 1)) ?? 0 : 0;
+      if (!DohConnectProxy.allowed(host, port)) {
+        _reply('403 Forbidden');
+        return;
+      }
+      final ip = await SimplexDns.resolve(host);
+      final r = await Socket.connect(ip, port, timeout: const Duration(seconds: 25));
+      if (_closed) {
+        r.destroy();
+        return;
+      }
+      c.add(latin1.encode('HTTP/1.1 200 Connection established\r\n\r\n'));
+      final pending = List<int>.of(_buf);
+      _buf.clear();
+      if (pending.isNotEmpty) r.add(pending);
+      _remote = r;
+      r.listen((d) {
+        if (_closed) return;
+        try {
+          c.add(d);
+        } catch (_) {
+          _close();
+        }
+      }, onDone: _close, onError: (_) => _close(), cancelOnError: true);
+    } catch (e) {
+      debugPrint('DoH proxy: $e');
+      _reply('502 Bad Gateway');
+    }
+  }
+
+  int _headEnd() {
+    for (var i = 0; i + 3 < _buf.length; i++) {
+      if (_buf[i] == 13 && _buf[i + 1] == 10 && _buf[i + 2] == 13 && _buf[i + 3] == 10) return i;
+    }
+    return -1;
+  }
+
+  void _reply(String status) {
+    try {
+      c.add(latin1.encode('HTTP/1.1 $status\r\nContent-Length: 0\r\n\r\n'));
+    } catch (_) {}
+    Future<void>.delayed(const Duration(milliseconds: 200), _close);
+  }
+
+  void _close() {
+    if (_closed) return;
+    _closed = true;
+    final w = _wait;
+    _wait = null;
+    if (w != null && !w.isCompleted) w.complete();
+    _sub?.cancel();
+    try {
+      c.destroy();
+    } catch (_) {}
+    try {
+      _remote?.destroy();
+    } catch (_) {}
+  }
+}

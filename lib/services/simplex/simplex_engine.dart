@@ -26,7 +26,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'simplex_socks.dart';
+import 'simplex_socks.dart'; // وسيط SOCKS لـ SimpleX + وسيط تنزيل DoH
 
 class SimplexException implements Exception {
   SimplexException(this.message);
@@ -423,10 +423,21 @@ class SimplexEngine {
       if (r.statusCode != 200) throw SimplexException('تعذّر القراءة (HTTP ${r.statusCode}): $u');
       return utf8.decode(r.bodyBytes);
     } on SocketException catch (e) {
-      throw SimplexException('لا إنترنت أو الموقع محجوب: ${e.message}');
+      // 🧭 DNS المزوّد يحجب الموقع؟ محاولة ثانية بأسماء من DNS المشفّر (DoH)
+      _add('تعذّر ${Uri.parse(u).host} (${e.message}) — إعادة المحاولة عبر DNS المشفّر');
+      try {
+        return await _getTextViaDoh(u, headers: headers);
+      } catch (e2) {
+        throw SimplexException('لا إنترنت أو الموقع محجوب: ${e.message} | عبر DNS المشفّر: $e2');
+      }
     } on TimeoutException {
       throw SimplexException('انتهت المهلة: $u');
     } catch (e) {
+      // مكتبة http قد تغلّف خطأ الشبكة (ClientException) — المعاملة نفسها
+      if (!_isCertError(e) && ('$e'.contains('Failed host lookup') || '$e'.contains('SocketException'))) {
+        _add('تعذّر ${Uri.parse(u).host} — إعادة المحاولة عبر DNS المشفّر');
+        return _getTextViaDoh(u, headers: headers);
+      }
       if (!_isCertError(e) || !Platform.isWindows) rethrow;
       final tmp = File(p.join(await root(), 'fetch_${DateTime.now().microsecondsSinceEpoch}.txt'));
       try {
@@ -438,9 +449,31 @@ class SimplexEngine {
     }
   }
 
+  /// قراءة نص عبر وسيط DoH (عند حجب DNS).
+  static Future<String> _getTextViaDoh(String u, {Map<String, String>? headers}) async {
+    final port = await DohConnectProxy.start();
+    final c = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 30)
+      ..findProxy = (_) => 'PROXY 127.0.0.1:$port';
+    try {
+      final req = await c.getUrl(Uri.parse(u)).timeout(const Duration(seconds: 40));
+      headers?.forEach(req.headers.set);
+      final res = await req.close().timeout(const Duration(seconds: 40));
+      if (res.statusCode != 200) throw SimplexException('تعذّر القراءة (HTTP ${res.statusCode}): $u');
+      return await res.transform(const Utf8Decoder(allowMalformed: true)).join().timeout(const Duration(seconds: 60));
+    } finally {
+      c.close(force: true);
+    }
+  }
+
   static Future<void> _download(String u, File out, void Function(double) progress) async {
     try {
       await _downloadDart(u, out, progress);
+    } on SimplexException catch (e) {
+      if (!e.message.startsWith('لا إنترنت أو الموقع محجوب')) rethrow;
+      // 🧭 DNS المزوّد يحجب الموقع؟ إعادة التنزيل بأسماء من DNS المشفّر (DoH)
+      _add('تعذّر ${Uri.parse(u).host} — إعادة التنزيل عبر DNS المشفّر');
+      await _downloadDart(u, out, progress, viaDoh: true);
     } catch (e) {
       if (!_isCertError(e) || !Platform.isWindows) rethrow;
       _add('شهادة الموقع لم تُقبل — إعادة التنزيل بأداة Windows');
@@ -448,9 +481,13 @@ class SimplexEngine {
     }
   }
 
-  static Future<void> _downloadDart(String u, File out, void Function(double) progress) async {
+  static Future<void> _downloadDart(String u, File out, void Function(double) progress, {bool viaDoh = false}) async {
     final part = File('${out.path}.tmp');
     final c = HttpClient()..connectionTimeout = const Duration(seconds: 30);
+    if (viaDoh) {
+      final port = await DohConnectProxy.start();
+      c.findProxy = (_) => 'PROXY 127.0.0.1:$port';
+    }
     try {
       final res = await (await c.getUrl(Uri.parse(u))).close(); // يتبع التحويلات (GitHub)
       if (res.statusCode != 200) throw SimplexException('تعذّر التنزيل (HTTP ${res.statusCode})');

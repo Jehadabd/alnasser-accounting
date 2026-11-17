@@ -118,4 +118,14 @@ void main() {
       expect(SimplexSocks.allowedPorts, {443, 5223});
     });
   });
+
+  test('وسيط التنزيل يقبل المواقع الرسمية على 443 فقط', () {
+    expect(DohConnectProxy.allowed('dist.torproject.org', 443), isTrue);
+    expect(DohConnectProxy.allowed('aus1.torproject.org', 443), isTrue);
+    expect(DohConnectProxy.allowed('api.nuget.org', 443), isTrue);
+    expect(DohConnectProxy.allowed('objects.githubusercontent.com', 443), isTrue);
+    expect(DohConnectProxy.allowed('torproject.org.evil.com', 443), isFalse);
+    expect(DohConnectProxy.allowed('dist.torproject.org', 80), isFalse);
+    expect(DohConnectProxy.allowed('nuget.org', 443), isFalse);
+  });
 }
