@@ -171,6 +171,16 @@ class TelegramProxy {
     }
     final cfg = await active();
     if (cfg == null) return c;
+    // بروكسي على هذه الحاسبة (برنامج VPN مثل Psiphon) مغلق؟ رسالة واضحة بدل «refused» غامضة
+    if (cfg.host == '127.0.0.1' || cfg.host == 'localhost') {
+      try {
+        (await Socket.connect(InternetAddress.loopbackIPv4, cfg.port, timeout: const Duration(seconds: 2))).destroy();
+      } catch (_) {
+        c.close(force: true);
+        throw SocketException('البروكسي ${cfg.label} لا يعمل — شغّل برنامج الـVPN (مثل Psiphon) وتأكد من المنفذ، '
+            'أو أطفئ البروكسي من «عند حظر تيليجرام»');
+      }
+    }
     await configure(c, cfg);
     return c;
   }
