@@ -15,6 +15,7 @@ import '../services/dropbox_backup_service.dart';
 import '../services/backup_space_planner.dart';
 import '../widgets/settings_kit.dart';
 import '../widgets/setup_guide.dart'; // 🧭 الشرح خطوة بخطوة
+import '../widgets/dropbox_troubleshoot.dart'; // 🩺 حل مشاكل Dropbox
 import '../widgets/migration_guard_views.dart' show restoreSummaryText;
 
 class DropboxBackupScreen extends StatefulWidget {
@@ -47,6 +48,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   bool _connecting = false;
   bool _showCodeInput = false;
   String? _authError;
+  String? _matchedKey; // 🩺 مشكلة عُرفت من رابط صفحة خطأ لُصق في خانة الكود
 
   // النسخ الجاري
   bool _backingUp = false;
@@ -123,6 +125,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     setState(() {
       _showCodeInput = true;
       _authError = null;
+      _matchedKey = null;
     });
     final ok = await canLaunchUrl(uri) && await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && mounted) setState(() => _authError = 'تعذّر فتح المتصفح — تحقّق من وجود متصفح افتراضي.');
@@ -132,6 +135,17 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     final input = _codeController.text.trim();
     if (input.isEmpty) {
       setState(() => _authError = 'الصق الكود أو رابط الصفحة أولاً');
+      return;
+    }
+    // 🩺 لُصق رابط صفحة خطأ من Dropbox لا كوداً: نعرّف المشكلة ونفتح حلّها
+    if (DropboxTroubleshoot.isErrorPage(input)) {
+      final p = DropboxTroubleshoot.match(input, appKey: _appKey, appName: _appName);
+      setState(() {
+        _matchedKey = p?.key;
+        _authError = p == null
+            ? 'هذا رابط صفحة خطأ من Dropbox وليس كوداً — ابحث عن رسالتها في «حل مشاكل Dropbox» أسفل الشاشة.'
+            : 'Dropbox رفض الربط: «${p.title}».\nمن يصلحها: ${p.who}\nالحل خطوة بخطوة مفتوح في «حل مشاكل Dropbox» أسفل الشاشة.';
+      });
       return;
     }
     setState(() {
@@ -144,6 +158,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     if (success) {
       _codeController.clear();
       setState(() {
+        _matchedKey = null;
         _showCodeInput = false;
         _perm = null; // يُعاد الفحص تلقائياً على الربط الجديد
         _lastResult = (true, 'تم الاتصال بـ Dropbox بنجاح — جارٍ فحص الأذونات...');
@@ -350,7 +365,21 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
         _settingsCard(),
         _listCard(),
       ],
+      DropboxTroubleshootCard(appKey: _appKey, appName: _appName, openKey: _problemKey),
     ];
+  }
+
+  /// 🩺 المشكلة المطابقة للخطأ الظاهر الآن (تُفتح وحدها في «حل مشاكل Dropbox»).
+  String? get _problemKey {
+    if (_matchedKey != null) return _matchedKey;
+    final texts = [_authError, if (_lastResult != null && !_lastResult!.$1) _lastResult!.$2];
+    for (final t in texts) {
+      final p = DropboxTroubleshoot.match(t, appKey: _appKey, appName: _appName);
+      if (p != null) return p.key;
+    }
+    if (_authStatus == DropboxAuthStatus.error) return 'network';
+    if (_authStatus == DropboxAuthStatus.needsAuth) return 'expired';
+    return null;
   }
 
   @override
@@ -644,7 +673,11 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
             ],
           ),
           GuideStep('اضغط الزر الأزرق «فتح صفحة Dropbox» أدناه — يفتح المتصفح. سجّل الدخول إن طُلب منك.'),
-          GuideStep('تظهر صفحة تسأل: هل تسمح لهذا التطبيق بالوصول؟ اضغط «Continue / متابعة» ثم «Allow / السماح».'),
+          GuideStep(
+            'تظهر صفحة تسأل: هل تسمح لهذا التطبيق بالوصول؟ اضغط «Continue / متابعة» ثم «Allow / السماح».',
+            note: 'ظهرت صفحة خطأ بدلها (مثل «This app has reached its user limit»)؟ انسخ رابطها من شريط العنوان '
+                'والصقه في خانة الكود ثم «تأكيد» — يعرض البرنامج السبب والحل.',
+          ),
           GuideStep(
             'تظهر صفحة فيها «Access Code Generated» وتحتها كود طويل. اضغط زر النسخ بجانبه (أو ظلّله وانسخه Ctrl+C)، '
             'وارجع هنا والصقه في الخانة (Ctrl+V) ثم اضغط «تأكيد».',
