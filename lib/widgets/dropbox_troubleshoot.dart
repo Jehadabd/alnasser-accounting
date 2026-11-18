@@ -43,42 +43,61 @@ class DropboxTroubleshoot {
   static const _connected = 'https://www.dropbox.com/account/connected_apps';
 
   static List<DropboxProblem> problems({required String appKey, required String appName}) {
+    final app = appName.trim().isEmpty ? 'تطبيق محلك' : 'التطبيق «${appName.trim()}»';
+    final keyShown = appKey.trim().isEmpty ? '(لم يُحفظ مفتاح بعد)' : appKey;
     final console = GuideStep(
-      'افتح App Console بحساب Dropbox الذي أنشأ التطبيق «$appName»، واضغط على اسمه.',
+      'افتح App Console بحساب Dropbox الذي أنشأ $app، واضغط على اسمه.',
       links: const [GuideLink('افتح App Console', DropboxBackupService.appConsoleUrl, icon: Icons.open_in_new_rounded)],
     );
     final sameKey = GuideStep(
       'تأكّد أنه التطبيق نفسه: «App key» في صفحته يجب أن يساوي هذا المفتاح. إن اختلف فأنت في تطبيق آخر.',
-      copies: [appKey],
+      copies: [keyShown],
       warn: true,
     );
     const relink = GuideStep('ارجع إلى البرنامج واضغط «فتح صفحة Dropbox» من جديد ثم أكمل الربط.');
     return [
+      const DropboxProblem(
+        key: 'no_app',
+        title: 'الرفع إلى Dropbox متوقف — لا يوجد تطبيق خاص بمحلك',
+        symptom: '«الرفع متوقف: أنشئ تطبيق Dropbox خاصاً بمحلك» أو «لم يُضبط تطبيق Dropbox خاص بمحلك» '
+            'أو «هذا مفتاح تطبيق المطوّر ولا يُقبل».',
+        who: 'أنت — مرة واحدة.',
+        needles: ['الرفع متوقف', 'لم يُضبط تطبيق Dropbox', 'مفتاح تطبيق المطوّر', 'لا يوجد تطبيق Dropbox خاص'],
+        steps: [
+          GuideStep('لكل محل تطبيق Dropbox خاص في حسابه هو، فلا يرتبط بالمطوّر ولا بغيره. بدونه لا ربط ولا رفع.'),
+          GuideStep('اتبع بطاقة «أنشئ تطبيق Dropbox الخاص بمحلك» في هذه الشاشة خطوة خطوة، ثم الصق «App key» واضغط «حفظ التطبيق».'),
+          GuideStep(
+            'إن قال Dropbox إن الاسم مستعمل («name is taken» أو مشابه): أضف إلى الاسم أرقاماً وأعد «Create app».',
+            warn: true,
+          ),
+          GuideStep('بعد الحفظ اضغط «فتح صفحة Dropbox» واربط بالحساب نفسه الذي أنشأ التطبيق.'),
+          GuideStep('نسخك السابقة باقية في حسابك على Dropbox ولم يُحذف منها شيء، لكنها لن تظهر في قائمة التطبيق الجديد.'),
+        ],
+      ),
       DropboxProblem(
         key: 'user_limit',
         title: 'This app has reached its user limit',
         symptom: 'صفحة Dropbox في المتصفح: «Error connecting app: This app has reached its user limit» '
             '(وفي شريط العنوان check_add_user_increase_limit).',
-        who: 'صاحب تطبيق Dropbox (حساب المطوّر) — مرة واحدة. لا يُصلح من البرنامج.',
+        who: 'أنت — من المتصفح أو من حساب Dropbox الذي أنشأ تطبيق محلك.',
         needles: const ['check_add_user_increase_limit', 'reached its user limit', 'user limit'],
         steps: [
           const GuideStep(
-            'السبب: تطبيق Dropbox جديد في «وضع التطوير» يقبل افتراضياً حساب صاحبه فقط. '
-            'أي حساب Dropbox آخر (حساب المحل أو الزبون) يُرفض بهذه الرسالة. حساب صاحب التطبيق نفسه يُربط بلا مشكلة.',
+            'السبب: تطبيق Dropbox الجديد («وضع التطوير») يقبل افتراضياً الحساب الذي أنشأه فقط، '
+            'وأنت تربط بحساب آخر — غالباً كان المتصفح مسجّلاً بحساب Dropbox غير الذي أنشأ التطبيق.',
           ),
-          console,
+          GuideStep(
+            'الحل الأسهل: في المتصفح اخرج من Dropbox (أو افتح نافذة خاصة InPrivate/Incognito) '
+            'وسجّل بالحساب الذي أنشأ $app، ثم في البرنامج «فتح صفحة Dropbox» من جديد.',
+            links: const [GuideLink('فتح Dropbox', 'https://www.dropbox.com/home', icon: Icons.open_in_new_rounded)],
+          ),
+          const GuideStep(
+            'أو إن أردت فعلاً ربطه بحساب آخر: من الحساب الذي أنشأ التطبيق افتح App Console ← التطبيق ← تبويب «Settings» '
+            '← سطر «Development users» (بجانبه «Only you») ← «Enable additional users».',
+            links: [GuideLink('افتح App Console', DropboxBackupService.appConsoleUrl, icon: Icons.open_in_new_rounded)],
+          ),
           sameKey,
-          const GuideStep(
-            'في تبويب «Settings» ابحث عن سطر «Development users» (مكتوب بجانبه «Only you»)، '
-            'واضغط «Enable additional users». يصبح التطبيق يقبل حسابات أخرى (حتى 500 حساب في وضع التطوير).',
-          ),
           relink,
-          const GuideStep(
-            'إن لم تصل إلى حساب صاحب التطبيق: أنشئ تطبيقاً خاصاً بك في App Console '
-            '(Create app ← Scoped access ← App folder)، ثم ضع مفتاحه من بطاقة «تطبيق Dropbox» في هذه الشاشة، '
-            'وفعّل أذوناته واضغط «Enable additional users» فيه أيضاً إن كان غيرك سيربط به.',
-            note: 'إن امتلأت الـ 500: في تبويب Settings نفسه زر «Apply for production» لطلب رفع الحد من Dropbox.',
-          ),
         ],
       ),
       DropboxProblem(
@@ -86,7 +105,7 @@ class DropboxTroubleshoot {
         title: 'التطبيق غير موجود أو مفتاحه خطأ',
         symptom: 'صفحة Dropbox: «Invalid client_id» أو «app not found» أو «This app is disabled»، '
             'أو رفض الربط مع ردّ فيه invalid_client.',
-        who: 'صاحب تطبيق Dropbox، أو أنت إن كان التطبيق تطبيقك.',
+        who: 'أنت — من حساب Dropbox الذي أنشأ تطبيق محلك.',
         needles: const ['invalid_client', 'app not found', 'app is disabled', 'disabled app'],
         steps: [
           console,
@@ -120,7 +139,7 @@ class DropboxTroubleshoot {
         title: 'ينقص تطبيق Dropbox إذن',
         symptom: 'بطاقة «أذونات Dropbox» تُظهر إذناً ناقصاً، أو رسالة «ينقص تطبيق Dropbox إذن»، '
             'أو ردّ فيه missing_scope / required_scope.',
-        who: 'صاحب تطبيق Dropbox — مرة واحدة.',
+        who: 'أنت — من حساب Dropbox الذي أنشأ تطبيق محلك، مرة واحدة.',
         needles: const ['missing_scope', 'required_scope', 'insufficient_scope', 'ينقص تطبيق Dropbox إذن'],
         steps: [
           console,

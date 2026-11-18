@@ -3,6 +3,7 @@
 // 🩺 حل مشاكل Dropbox: التعرّف على المشكلة من رسالة الخطأ أو رابط صفحة الخطأ.
 // التشغيل: flutter test test/widgets/dropbox_troubleshoot_test.dart
 
+import 'package:alnaser/services/dropbox_backup_service.dart';
 import 'package:alnaser/widgets/dropbox_troubleshoot.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -32,6 +33,14 @@ void main() {
     expect(_k('هذه النسخة من برنامج أحدث أو برنامج آخر'), 'restore');
     expect(_k('رسالة لا علاقة لها'), isNull);
     expect(_k(''), isNull);
+  });
+
+  test('الرفع متوقف بلا تطبيق خاص ⇒ مشكلة «لا يوجد تطبيق»، ومفاتيح المطوّر مرفوضة', () {
+    expect(_k('الرفع متوقف: أنشئ تطبيق Dropbox خاصاً بمحلك واربطه'), 'no_app');
+    expect(_k('هذا مفتاح تطبيق المطوّر ولا يُقبل'), 'no_app');
+    expect(DropboxBackupService.isDeveloperKey('3qcpvyen8wn3cvp'), isTrue);
+    expect(DropboxBackupService.isDeveloperKey(' yklmvnhmfsz65yh '), isTrue);
+    expect(DropboxBackupService.isDeveloperKey('a1b2c3d4e5f6g7h'), isFalse);
   });
 
   test('كل مشكلة لها عنوان وخطوات', () {

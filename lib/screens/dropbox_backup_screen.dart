@@ -6,6 +6,8 @@
 //   • عدد النسخ المحتفظ بها يُحفظ ويستعمله الرفع التلقائي أيضاً.
 //   • الاستعادة عبر مسار الاستعادة الآمن ثم إعادة تحميل التطبيق.
 
+import 'dart:math' show Random;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:url_launcher/url_launcher.dart';
@@ -37,9 +39,23 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   String? _account;
   String? _listError;
   DropboxSpace? _space; // 💾 مساحة الحساب
-  String _appKey = DropboxBackupService.defaultAppKey; // 🔑 تطبيق Dropbox المستعمل
-  String _appName = DropboxBackupService.defaultAppName;
+  String _appKey = ''; // 🔑 تطبيق Dropbox الخاص بالمحل ('' ⇒ لم يُنشأ بعد)
+  String _appName = '';
   bool _otherApp = false; // ربط محفوظ بتطبيق قديم ⇒ اربط من جديد
+  bool _wasDev = false; // كان يرفع عبر تطبيق المطوّر ⇒ الرفع متوقف حتى ينشئ تطبيقه
+
+  // 🆕 إنشاء التطبيق الخاص (أول مرة)
+  final _newKeyCtl = TextEditingController();
+  final _newNameCtl = TextEditingController();
+  String? _newAppError;
+  bool _savingApp = false;
+  late final String _suggestedName = _suggestName();
+
+  static String _suggestName() {
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+    final r = Random.secure();
+    return 'AlnaserBackup-${List.generate(6, (_) => chars[r.nextInt(chars.length)]).join()}';
+  }
   DropboxPermissionReport? _perm; // 🩺 نتيجة فحص الأذونات (يعمل تلقائياً عند الاتصال)
   bool _checkingPerm = false;
 
@@ -75,6 +91,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   @override
   void dispose() {
     _codeController.dispose();
+    _newKeyCtl.dispose();
+    _newNameCtl.dispose();
     super.dispose();
   }
 
@@ -92,7 +110,13 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     setState(() => _refreshing = true);
     final status = await _backupService.checkAuthStatus();
     final otherApp = await _backupService.linkedToOtherApp();
-    if (mounted) setState(() => _otherApp = otherApp);
+    final wasDev = !await _backupService.hasOwnApp() && await _backupService.wasOnDeveloperApp();
+    if (mounted) {
+      setState(() {
+        _otherApp = otherApp;
+        _wasDev = wasDev;
+      });
+    }
     List<BackupInfo> list = _backups;
     String? listError;
     String? account = _account;
@@ -343,6 +367,29 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
 
   List<Widget> _content() {
     final connected = _authStatus == DropboxAuthStatus.authenticated;
+    if (_appKey.isEmpty) {
+      // 🔑 لا تطبيق خاص بالمحل ⇒ لا ربط ولا رفع حتى يُنشأ (لا رفع عبر تطبيق المطوّر)
+      return [
+        _hero(),
+        if (_wasDev)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 14),
+            child: SetBanner(
+              'الرفع إلى Dropbox متوقف عندك: البرنامج لم يعد يرفع عبر تطبيق المطوّر — لكل محل تطبيقه الخاص في حسابه، '
+              'فلا يرتبط بأحد غيره. أنشئ تطبيقك أدناه (مرة واحدة، دقائق قليلة) ثم اربطه. '
+              'نسخك السابقة باقية في حسابك على Dropbox ولم يُحذف منها شيء، لكنها لن تظهر في قائمة التطبيق الجديد.',
+              kind: SetBannerKind.error,
+            ),
+          ),
+        if (_lastResult != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: SetBanner(_lastResult!.$2, kind: _lastResult!.$1 ? SetBannerKind.ok : SetBannerKind.error),
+          ),
+        _createAppCard(),
+        DropboxTroubleshootCard(appKey: _appKey, appName: _appName, openKey: _problemKey),
+      ];
+    }
     return [
       _hero(),
       _appCard(),
@@ -412,7 +459,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
       DropboxAuthStatus.authenticated => ('متصل${_account == null ? '' : ': $_account'}', true),
       DropboxAuthStatus.needsAuth => ('انتهى الاتصال — سجّل الدخول من جديد', false),
       DropboxAuthStatus.error => ('تعذّر الوصول — تحقّق من الإنترنت', false),
-      DropboxAuthStatus.notConfigured => ('غير متصل', false),
+      DropboxAuthStatus.notConfigured => (_appKey.isEmpty ? 'لا يوجد تطبيق Dropbox خاص بمحلك بعد' : 'غير متصل', false),
     };
     return Wrap(spacing: 8, runSpacing: 6, children: [
       SetStatusPill(label, ok: ok),
@@ -424,7 +471,7 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
   Widget _hero() => SetHero(
         icon: Icons.cloud_rounded,
         color: _dbx,
-        title: 'Dropbox — $_appName',
+        title: _appName.isEmpty ? 'Dropbox' : 'Dropbox — $_appName',
         text: _account ?? 'احفظ نسخة من قاعدة بياناتك في حسابك على Dropbox، مع حذف النسخ الأقدم تلقائياً.',
         status: _statusPills(),
       );
@@ -505,9 +552,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
           initiallyOpen: missing.isNotEmpty || listScopeError,
           child: SetupGuide(color: _dbx, steps: [
             const GuideStep(
-              'هذه الخطوات لصاحب تطبيق Dropbox الذي يستعمله البرنامج (المطوّر) مرة واحدة فقط — '
-              'من يستعمل البرنامج لا يدخل App Console أبداً، يضغط «ربط» فقط. '
-              'Dropbox لا يسمح لأي برنامج بتعديل أذونات تطبيقه تلقائياً؛ لذلك هذه الخطوة يدوية.',
+              'تُصلح من حساب Dropbox الذي أنشأ تطبيق محلك، مرة واحدة. '
+              'Dropbox لا يسمح لأي برنامج بتعديل أذونات تطبيق تلقائياً؛ لذلك هذه الخطوة يدوية.',
             ),
             GuideStep(
               'افتح App Console بحساب Dropbox الذي أنشأ التطبيق «$_appName»، واضغط على اسمه.',
@@ -549,10 +595,121 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
     );
   }
 
+  /// 🆕 إنشاء تطبيق Dropbox الخاص بالمحل (أول مرة) — خطوات، ثم لصق المفتاح هنا.
+  Widget _createAppCard() => SetCard(
+        title: 'أنشئ تطبيق Dropbox الخاص بمحلك',
+        subtitle: 'مرة واحدة — دقائق قليلة — مجاناً. بعده يرتبط البرنامج بحسابك أنت فقط',
+        icon: Icons.add_box_rounded,
+        color: _dbx,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const SizedBox(height: 8),
+          SetupGuide(color: _dbx, steps: [
+            const GuideStep(
+              'سجّل الدخول إلى Dropbox بحساب المحل — الحساب نفسه الذي ستُحفظ فيه النسخ. '
+              'إن لم يكن عندك حساب أنشئه (المجاني يكفي).',
+              links: [
+                GuideLink('تسجيل الدخول', 'https://www.dropbox.com/login', icon: Icons.login_rounded),
+                GuideLink('إنشاء حساب', 'https://www.dropbox.com/register', icon: Icons.person_add_alt_1_rounded),
+              ],
+              note: 'أنشئ التطبيق واربطه بالحساب نفسه. إن ربطته بحساب آخر يرفض Dropbox بـ «This app has reached its user limit».',
+              warn: true,
+            ),
+            const GuideStep(
+              'افتح صفحة إنشاء تطبيق في App Console.',
+              links: [GuideLink('إنشاء تطبيق (Create app)', DropboxBackupService.appCreateUrl, icon: Icons.open_in_new_rounded)],
+            ),
+            const GuideStep('في «Choose an API» اختر «Scoped access»، وفي «Choose the type of access» اختر «App folder» '
+                '(يرى البرنامج مجلده فقط، لا ملفاتك الأخرى).'),
+            GuideStep(
+              'في «Name your app» الصق هذا الاسم (يجب ألا يكون مستعملاً في Dropbox كله — إن رُفض أضف إليه رقماً)، '
+              'ثم ضع ✔ على الموافقة واضغط «Create app».',
+              copies: [_suggestedName],
+            ),
+            const GuideStep(
+              'افتح تبويب «Permissions» وضع ✔ أمام هذه الأذونات الأربعة، ثم اضغط «Submit» أسفل الصفحة:',
+              copies: DropboxBackupService.requiredScopes,
+              note: 'بدون «Submit» لا يُحفظ شيء.',
+              warn: true,
+            ),
+            GuideStep(
+              'ارجع إلى تبويب «Settings» وانسخ «App key» (لا تنسخ App secret — لا حاجة له إطلاقاً)، '
+              'والصقه هنا مع اسم التطبيق، ثم اضغط «حفظ التطبيق».',
+              extra: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _newNameCtl,
+                  decoration: InputDecoration(
+                    labelText: 'اسم التطبيق (للعرض)',
+                    hintText: _suggestedName,
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _newKeyCtl,
+                  textDirection: TextDirection.ltr,
+                  decoration: InputDecoration(
+                    labelText: 'App key',
+                    hintText: 'مثل: a1b2c3d4e5f6g7h',
+                    errorText: _newAppError,
+                    errorMaxLines: 3,
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onSubmitted: (_) => _saveNewApp(),
+                ),
+                const SizedBox(height: 10),
+                SetPrimaryButton(
+                  label: 'حفظ التطبيق',
+                  icon: Icons.check_rounded,
+                  color: _dbx,
+                  busy: _savingApp,
+                  onPressed: _savingApp ? null : _saveNewApp,
+                ),
+              ]),
+            ),
+            const GuideStep('تظهر بعدها بطاقة «ربط حساب Dropbox»: اضغط «فتح صفحة Dropbox» واربط بالحساب نفسه.'),
+          ]),
+        ]),
+      );
+
+  Future<void> _saveNewApp() async {
+    final key = _newKeyCtl.text.trim();
+    final name = _newNameCtl.text.trim();
+    if (!DropboxBackupService.isValidAppKey(key)) {
+      setState(() => _newAppError = 'مفتاح غير صحيح — انسخ «App key» من تبويب Settings (حروف إنجليزية صغيرة وأرقام فقط).');
+      return;
+    }
+    setState(() {
+      _savingApp = true;
+      _newAppError = null;
+    });
+    try {
+      await _backupService.setApp(key: key, name: name.isEmpty ? _suggestedName : name);
+    } on DropboxException catch (e) {
+      if (mounted) {
+        setState(() {
+          _savingApp = false;
+          _newAppError = e.message;
+        });
+      }
+      return;
+    }
+    _newKeyCtl.clear();
+    await _loadApp();
+    if (!mounted) return;
+    setState(() {
+      _savingApp = false;
+      _lastResult = (true, 'حُفظ تطبيقك «$_appName» — بقي ربط الحساب: اضغط «فتح صفحة Dropbox».');
+    });
+    await _checkAuthAndLoadBackups();
+  }
+
   /// 🔑 تطبيق Dropbox المستعمل (الاسم والمفتاح كما في App Console) وتغييره.
   Widget _appCard() => SetCard(
         title: 'تطبيق Dropbox',
-        subtitle: _appName,
+        subtitle: _appName.isEmpty ? 'تطبيق محلك' : _appName,
         icon: Icons.apps_rounded,
         color: _dbx,
         trailing: TextButton.icon(
@@ -591,8 +748,8 @@ class _DropboxBackupScreenState extends State<DropboxBackupScreen> {
           color: _dbx,
           width: 480,
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const SetBanner('انسخ «App key» من قائمة Apps في App Console. لا حاجة لـ App secret إطلاقاً. '
-                'تغيير المفتاح يقطع الاتصال الحالي فتربط من جديد.'),
+            const SetBanner('انسخ «App key» من تبويب Settings لتطبيقك في App Console. لا حاجة لـ App secret إطلاقاً. '
+                'تغيير المفتاح يقطع الاتصال الحالي فتربط من جديد. مفتاح تطبيق المطوّر لا يُقبل.'),
             const SizedBox(height: 12),
             TextField(
               controller: nameCtl,

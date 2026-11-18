@@ -153,9 +153,11 @@ class DropboxBackupService {
   DropboxBackupService._internal();
 
   // 🔑 تطبيق Dropbox (App Console). الربط بطريقة PKCE: يكفي «App key» العام — لا سرّ
-  //    (App secret) داخل البرنامج. التطبيق القديم (StoreApp) كان بحساب آخر ولا تُضبط أذوناته.
-  static const String defaultAppKey = '3qcpvyen8wn3cvp';
-  static const String defaultAppName = 'asdfghertyu';
+  //    (App secret) داخل البرنامج.
+  //    لكل محل تطبيقه الخاص في حسابه هو (قرار صاحب البرنامج: لا يرتبط الزبون بالمطوّر):
+  //    لا مفتاح افتراضي، ولا تُقبل مفاتيح تطبيقات المطوّر — بلا تطبيق خاص لا ربط ولا رفع.
+  static const List<String> developerAppKeys = ['3qcpvyen8wn3cvp', 'yklmvnhmfsz65yh'];
+  static bool isDeveloperKey(String k) => developerAppKeys.contains(k.trim());
   static const String _appKeyPref = 'dropbox_app_key';
   static const String _appNamePref = 'dropbox_app_name';
 
@@ -178,21 +180,44 @@ class DropboxBackupService {
 
   /// مفتاح تطبيق Dropbox المستعمل (معرّف عام وليس سرّاً) — يطابقه المستخدم بعمود
   /// «App key» في App Console.
+  /// '' ⇒ لم يُضبط تطبيق خاص بعد (أو ضُبط مفتاح المطوّر قديماً — لا يُقبل).
   Future<String> appKey() async {
     try {
       final v = (await SharedPreferences.getInstance()).getString(_appKeyPref)?.trim();
-      if (v != null && v.isNotEmpty) return v;
+      if (v != null && v.isNotEmpty && !isDeveloperKey(v)) return v;
     } catch (_) {}
-    return defaultAppKey;
+    return '';
+  }
+
+  /// هل ضُبط لهذا المحل تطبيق Dropbox خاص به؟
+  Future<bool> hasOwnApp() async => (await appKey()).isNotEmpty;
+
+  /// كان مربوطاً بتطبيق المطوّر (قبل التحويل إلى تطبيق خاص لكل محل)؟
+  Future<bool> wasOnDeveloperApp() async {
+    final t = await _secureStorage.read(key: _tokenKey);
+    if (t == null || t.isEmpty) return false;
+    final k = await _secureStorage.read(key: _tokenAppKeyKey);
+    return k == null || k.isEmpty || isDeveloperKey(k);
+  }
+
+  /// سبب توقف الرفع إلى Dropbox لمن كان يرفع سابقاً (null ⇒ لا يُبلَّغ، مثل من لم يربط أصلاً).
+  Future<String?> blockedReason() async {
+    if (await hasOwnApp()) return null;
+    if (await wasOnDeveloperApp()) {
+      return 'الرفع متوقف: أنشئ تطبيق Dropbox خاصاً بمحلك واربطه من «إعدادات Dropbox» '
+          '(لم يعد البرنامج يرفع عبر تطبيق المطوّر).';
+    }
+    return null;
   }
 
   /// اسم تطبيق Dropbox كما في App Console (للعرض فقط — Dropbox لا يعطيه عبر الـ API).
   Future<String> appName() async {
+    if (!await hasOwnApp()) return '';
     try {
       final v = (await SharedPreferences.getInstance()).getString(_appNamePref)?.trim();
       if (v != null && v.isNotEmpty) return v;
     } catch (_) {}
-    return defaultAppName;
+    return '';
   }
 
   static final _appKeyPattern = RegExp(r'^[a-z0-9]{8,32}$');
@@ -201,17 +226,17 @@ class DropboxBackupService {
   /// تغيير تطبيق Dropbox. تغيير المفتاح يقطع الاتصال الحالي (الرمز مربوط بالتطبيق).
   Future<void> setApp({required String key, required String name}) async {
     final k = key.trim();
-    if (!isValidAppKey(k)) throw DropboxException('App key غير صحيح — انسخه من عمود «App key» في App Console.');
-    final changed = k != await appKey();
-    if (changed) await logout();
-    final prefs = await SharedPreferences.getInstance();
-    if (k == defaultAppKey) {
-      await prefs.remove(_appKeyPref);
-    } else {
-      await prefs.setString(_appKeyPref, k);
+    if (!isValidAppKey(k)) throw DropboxException('App key غير صحيح — انسخه من سطر «App key» في تبويب Settings لتطبيقك في App Console.');
+    if (isDeveloperKey(k)) {
+      throw DropboxException('هذا مفتاح تطبيق المطوّر ولا يُقبل — أنشئ تطبيقاً خاصاً بمحلك وضع مفتاحه هو.');
     }
+    final changed = k != await appKey();
+    // الربط القديم (تطبيق آخر أو تطبيق المطوّر) يُقطع ويُبطل عند Dropbox
+    if (changed || await wasOnDeveloperApp()) await logout();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_appKeyPref, k);
     final n = name.trim();
-    if (n.isEmpty || n == defaultAppName) {
+    if (n.isEmpty) {
       await prefs.remove(_appNamePref);
     } else {
       await prefs.setString(_appNamePref, n);
@@ -222,7 +247,8 @@ class DropboxBackupService {
   Future<bool> linkedToOtherApp() async {
     final t = await _secureStorage.read(key: _tokenKey);
     if (t == null || t.isEmpty) return false;
-    return await _secureStorage.read(key: _tokenAppKeyKey) != await appKey();
+    final k = await appKey();
+    return k.isEmpty || await _secureStorage.read(key: _tokenAppKeyKey) != k;
   }
 
   /// آخر ردّ رفض به Dropbox الكود (للعرض).
@@ -245,7 +271,8 @@ class DropboxBackupService {
   Future<String?> getAccessToken() async {
     final t = await _secureStorage.read(key: _tokenKey);
     if (t == null || t.isEmpty) return t;
-    if (await _secureStorage.read(key: _tokenAppKeyKey) != await appKey()) return null;
+    final k = await appKey();
+    if (k.isEmpty || await _secureStorage.read(key: _tokenAppKeyKey) != k) return null;
     return t;
   }
 
@@ -334,6 +361,7 @@ class DropboxBackupService {
   /// 🔌 التحقق من حالة الاتصال
   Future<DropboxAuthStatus> checkAuthStatus() async {
     try {
+      if (!await hasOwnApp()) return DropboxAuthStatus.notConfigured; // لا تطبيق خاص ⇒ لا ربط
       if (await linkedToOtherApp()) return DropboxAuthStatus.needsAuth; // تغيّر التطبيق ⇒ اربط من جديد
       final token = await getAccessToken();
       if (token == null || token.isEmpty) {
@@ -490,6 +518,9 @@ class DropboxBackupService {
   /// 🔗 رابط الموافقة في Dropbox (PKCE، بلا إعادة توجيه: يعرض Dropbox الكود فينسخه المستخدم).
   /// يولّد «code_verifier» عشوائياً ويحفظه حتى لصق الكود (يبقى بعد إعادة فتح البرنامج).
   Future<String> getAuthorizationUrl() async {
+    if (!await hasOwnApp()) {
+      throw DropboxException('أنشئ تطبيق Dropbox الخاص بمحلك وضع مفتاحه أولاً (بطاقة «تطبيق Dropbox»).');
+    }
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
     final rnd = Random.secure();
     final verifier = List.generate(64, (_) => chars[rnd.nextInt(chars.length)]).join();
@@ -530,6 +561,10 @@ class DropboxBackupService {
       return false;
     }
     final key = await appKey();
+    if (key.isEmpty) {
+      lastAuthError = 'أنشئ تطبيق Dropbox الخاص بمحلك وضع مفتاحه أولاً.';
+      return false;
+    }
     try {
       final response = await http.post(
         Uri.parse(_tokenUrl),
@@ -693,6 +728,7 @@ class DropboxBackupService {
 
   /// صفحة إعدادات تطبيقات Dropbox (لتفعيل الأذونات).
   static const appConsoleUrl = 'https://www.dropbox.com/developers/apps';
+  static const appCreateUrl = 'https://www.dropbox.com/developers/apps/create';
 
   /// الأذونات التي يستعملها البرنامج فعلاً (تبويب «Permissions» في App Console):
   ///   account_info.read  ← اسم الحساب والمساحة (users/get_current_account, get_space_usage)
@@ -808,6 +844,15 @@ class DropboxBackupService {
     BackupPackage? ownedPkg;
     try {
       final max = maxBackups ?? await getMaxBackups();
+
+      // 0. لا تطبيق Dropbox خاص بالمحل ⇒ لا رفع (لا رفع عبر تطبيق المطوّر)
+      if (!await hasOwnApp()) {
+        return BackupResult(
+          success: false,
+          error: await blockedReason() ??
+              'لم يُضبط تطبيق Dropbox خاص بمحلك — أنشئه واربطه من «إعدادات Dropbox».',
+        );
+      }
 
       // 1. التحقق من الاتصال
       onProgress?.call(5, 'التحقق من الاتصال بـ Dropbox...');

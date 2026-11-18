@@ -599,7 +599,13 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
                     errors.add('Dropbox: ${dropboxResult.error}');
                   }
                 } else {
-                  skipped = true; // غير مربوط ⇒ تُتخطّى
+                  // كان يرفع عبر تطبيق المطوّر ⇒ يُبلَّغ بوضوح أن الرفع متوقف (لا يُتخطّى بصمت)
+                  final blocked = await dropboxService.blockedReason();
+                  if (blocked != null) {
+                    errors.add('Dropbox: $blocked');
+                  } else {
+                    skipped = true; // غير مربوط ⇒ تُتخطّى
+                  }
                 }
           } else if (target == UploadTargets.discord) {
             // مع تيليغرام: استلم نسخة من كل ما أُرسل هناك. بدونه: قاعدة البيانات مباشرة
