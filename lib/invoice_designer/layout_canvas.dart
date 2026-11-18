@@ -77,6 +77,13 @@ class LayoutCanvas extends StatelessWidget {
               Positioned.fill(child: Container(color: Colors.white)),
               if (showGrid) Positioned.fill(child: CustomPaint(painter: _GridPainter(s))),
               for (final e in layout.elements) _positioned(e, s),
+              // 🧻 الإيصال: حدود مساحة الطباعة الفعلية (الطابعة الحرارية لا تطبع على الحافتين)
+              if (interactive && layout.paper.isRoll)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(painter: _RollMarginPainter(s, rollMarginMm(layout.paper))),
+                  ),
+                ),
             ],
           ),
         ),
@@ -228,6 +235,36 @@ class _ElementFrameState extends State<_ElementFrame> {
       ),
     );
   }
+}
+
+/// 🧻 هامش لا تطبعه الطابعة الحرارية على كل جانب: ورق 80 ← مساحة ~72 ملم، وورق 58 ← ~48 ملم.
+double rollMarginMm(LayoutPaper p) => switch (p) {
+      LayoutPaper.roll80 => 4.0,
+      LayoutPaper.roll58 => 5.0,
+      LayoutPaper.a4 => 0.0,
+    };
+
+/// خطّان متقطعان أحمران عند حدود مساحة الطباعة الفعلية للإيصال (في المصمم فقط، لا يُطبعان).
+class _RollMarginPainter extends CustomPainter {
+  _RollMarginPainter(this.s, this.marginMm);
+  final double s;
+  final double marginMm;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (marginMm <= 0) return;
+    final p = Paint()
+      ..color = const Color(0x99E11D48)
+      ..strokeWidth = 1;
+    for (final x in [marginMm * s, size.width - marginMm * s]) {
+      for (double y = 0; y < size.height; y += 8) {
+        canvas.drawLine(Offset(x, y), Offset(x, math.min(size.height, y + 4)), p);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RollMarginPainter old) => old.s != s || old.marginMm != marginMm;
 }
 
 class _GridPainter extends CustomPainter {

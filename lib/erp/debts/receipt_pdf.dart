@@ -9,6 +9,7 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../../accounting/screens/acc_ui.dart';
 import '../../services/settings_manager.dart';
+import '../../services/logo_service.dart'; // 🖼️ شعار المحل
 import '../../services/printed_vouchers.dart' show PrintStamp; // 🧾 رمز التحقق
 import '../../services/voucher_print.dart'; // 🧾 تصميم سند القبض
 import '../arabic_words.dart';
@@ -60,6 +61,10 @@ class ReceiptPdf {
     final settings = await SettingsManager.getAppSettings();
     final branch = settings.branchName.trim();
     final shopName = settings.invoiceDesign.companyName.trim().isEmpty ? 'الناصر' : settings.invoiceDesign.companyName.trim();
+    pw.MemoryImage? logo; // 🖼️ شعار المحل في كل السندات
+    try {
+      logo = await LogoService.getLogoImage(appSettings: settings);
+    } catch (_) {}
     final isBase = currency == 'IQD';
     final total = lines.fold<double>(0, (s, l) => s + d0(l['amount']));
     final totalFc = lines.fold<double>(0, (s, l) => s + d0(l['fc_amount']));
@@ -81,9 +86,15 @@ class ReceiptPdf {
         ),
         child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
           pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text(shopName, style: st(20, color: navy)),
-              if (branch.isNotEmpty) pw.Text(branch, style: st(10, color: PdfColors.grey700)),
+            pw.Row(children: [
+              if (logo != null) ...[
+                pw.SizedBox(width: 58, height: 44, child: pw.Image(logo, fit: pw.BoxFit.contain)),
+                pw.SizedBox(width: 8),
+              ],
+              pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                pw.Text(shopName, style: st(20, color: navy)),
+                if (branch.isNotEmpty) pw.Text(branch, style: st(10, color: PdfColors.grey700)),
+              ]),
             ]),
             pw.Container(
               padding: const pw.EdgeInsets.symmetric(horizontal: 22, vertical: 6),

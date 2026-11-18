@@ -12,6 +12,7 @@ import 'package:pdf/widgets.dart' as pw;
 import '../../accounting/screens/acc_ui.dart';
 import '../../accounting/vouchers_service.dart';
 import '../../services/settings_manager.dart';
+import '../../services/logo_service.dart'; // 🖼️ شعار المحل
 import '../arabic_words.dart';
 import '../erp_common.dart';
 import '../report_export.dart';
@@ -53,6 +54,10 @@ class VoucherPdf {
     final settings = await SettingsManager.getAppSettings();
     final shop = settings.invoiceDesign.companyName.trim().isEmpty ? 'الناصر' : settings.invoiceDesign.companyName.trim();
     final branch = settings.branchName.trim();
+    pw.MemoryImage? logo; // 🖼️ شعار المحل في كل السندات
+    try {
+      logo = await LogoService.getLogoImage(appSettings: settings);
+    } catch (_) {}
     const navy = PdfColor.fromInt(0xFF0F3460);
     pw.TextStyle st(double s, {PdfColor? color}) => pw.TextStyle(font: f, fontSize: s, color: color);
     final amount = d0(v['amount']);
@@ -78,9 +83,15 @@ class VoucherPdf {
         ),
         child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
           pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text(shop, style: st(18, color: navy)),
-              if (branch.isNotEmpty) pw.Text(branch, style: st(10, color: PdfColors.grey700)),
+            pw.Row(children: [
+              if (logo != null) ...[
+                pw.SizedBox(width: 58, height: 44, child: pw.Image(logo, fit: pw.BoxFit.contain)),
+                pw.SizedBox(width: 8),
+              ],
+              pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                pw.Text(shop, style: st(18, color: navy)),
+                if (branch.isNotEmpty) pw.Text(branch, style: st(10, color: PdfColors.grey700)),
+              ]),
             ]),
             pw.Container(
               padding: const pw.EdgeInsets.symmetric(horizontal: 22, vertical: 6),

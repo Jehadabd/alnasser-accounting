@@ -599,11 +599,38 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
       if (!receipt) ('invoiceAfter', 'الفاتورة بعد', true),
       ('amountWords', 'المبلغ كتابةً', false),
       ('accountant', 'المحاسب', false),
-      ('printedAt', 'وقت الطباعة', false),
+      ('printedDate', 'تاريخ الطباعة', false),
+      ('printedAt', 'تاريخ ووقت الطباعة', false),
       ('printedBy', 'طُبع بواسطة', false),
       ('verifyCode', 'رمز التحقق', false),
     ];
   }
+
+  /// 🧾 بيانات الفاتورة الجاهزة: (المفتاح، الاسم على الورقة، مبلغ؟) — اضغط لتُضاف.
+  static const List<(String, String, bool)> _invoiceItems = [
+    ('invoiceNo', 'رقم الفاتورة', false),
+    ('date', 'تاريخ الفاتورة', false),
+    ('dateTime', 'التاريخ والوقت', false),
+    ('printedDate', 'تاريخ الطباعة', false),
+    ('printedAt', 'تاريخ ووقت الطباعة', false),
+    ('printedBy', 'طُبع بواسطة', false),
+    ('customer', 'السيد', false),
+    ('phone', 'الهاتف', false),
+    ('address', 'العنوان', false),
+    ('paymentType', 'طريقة الدفع', false),
+    ('user', 'المستخدم', false),
+    ('preparer', 'المجهز', false),
+    ('accountant', 'المحاسب', false),
+    ('branch', 'الفرع', false),
+    ('itemsCount', 'عدد المواد', false),
+    ('amountWords', 'المبلغ كتابةً', false),
+    ('copy', 'نسخة', false),
+    ('net', 'الصافي للدفع', true),
+    ('paid', 'المبلغ المدفوع', true),
+    ('remaining', 'المبلغ المتبقي', true),
+    ('previousDebt', 'الدين السابق', true),
+    ('currentDebt', 'المطلوب الحالي', true),
+  ];
 
   /// يضيف حقلاً (نص) أو مبلغاً (مربع) من بيانات السند إلى الورقة.
   void _addDataItem(String key, String label, bool money) {
@@ -626,6 +653,7 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
         ..['label'] = label;
       e.w = key == 'amountWords' || key == 'voucherReason' ? 150 : 70;
     }
+    e.w = math.min(e.w, math.max(10.0, c.widthMm - 2)); // إيصال 58/80 ملم: لا يتجاوز الورقة
     e.x = e.x.clamp(0, math.max(0, c.widthMm - e.w)).toDouble();
     e.y = e.y.clamp(0, math.max(0, c.heightMm - e.h)).toDouble();
     _mutate(() {
@@ -1129,6 +1157,25 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
               ),
           ]),
         ],
+        // 🧾 بيانات الفاتورة: اضغط لتُضاف (تُملأ تلقائياً عند الطباعة)
+        if (!_isVoucher) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 12, 4, 8),
+            child: Text('بيانات الفاتورة — اضغط لتُضاف',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: _C.muted)),
+          ),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final it in _invoiceItems)
+              ActionChip(
+                avatar: Icon(it.$3 ? Icons.payments_outlined : Icons.short_text_rounded, size: 16, color: _C.blue),
+                label: Text(it.$2, style: const TextStyle(fontSize: 12)),
+                visualDensity: VisualDensity.compact,
+                side: BorderSide(color: _C.blue.withValues(alpha: 0.35)),
+                backgroundColor: _C.blue.withValues(alpha: 0.05),
+                onPressed: () => _addDataItem(it.$1, it.$2, it.$3),
+              ),
+          ]),
+        ],
         for (final g in _groups.entries) ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
@@ -1574,6 +1621,14 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
               max: 1000,
               onChanged: (v) => _mutate(() => c.heightMm = v),
             ),
+          if (c.paper.isRoll)
+            Text(
+              'الخطّان الأحمران المتقطعان على الورقة = حدود ما تطبعه الطابعة الحرارية فعلاً '
+              '(${c.paper == LayoutPaper.roll58 ? 'ورق 58 ملم ← نحو 48 ملم' : 'ورق 80 ملم ← نحو 72 ملم'}). '
+              'ضع العناصر بينهما وإلا قد تُقصّ حوافها. ويجب أن يطابق عرضُ التصميم عرضَ الورق في '
+              '«عرض ورق الطابعة الحرارية» في إعدادات الطابعات على هذا الجهاز.',
+              style: const TextStyle(fontSize: 11.5, color: _C.muted, height: 1.5),
+            ),
           OutlinedButton.icon(
             onPressed: _openCompanySettings,
             icon: const Icon(Icons.business_outlined, size: 18),
@@ -1660,15 +1715,51 @@ class _InvoiceDesignerScreenState extends State<InvoiceDesignerScreen> {
               ),
             ),
           ]),
-          if (e.b('stretch', false))
+          if (e.b('stretch', false)) ...[
             const Padding(
               padding: EdgeInsets.only(top: 4, bottom: 2),
               child: Text(
-                'الكلمة تتمدد لتملأ المربع: اسحب حافة المربع يميناً ويساراً لتصير أعرض، '
-                'أو أعلى وأسفل لتصير أطول. مكانها لا يتغير.',
+                'الكلمة تملأ مربعها تماماً: طولها = عرض المربع، وارتفاعها = ارتفاعه — كلٌّ وحده. '
+                'مثلاً على عرض الورقة كاملاً وبارتفاع قليل: اضغط «على عرض الورقة» ثم صغّر «ارتفاع الكلمة».',
                 style: TextStyle(fontSize: 11.5, color: _C.muted, height: 1.5),
               ),
             ),
+            Row(children: [
+              Expanded(
+                child: MiniNum(
+                    label: 'طول الكلمة',
+                    suffix: 'ملم',
+                    value: e.w,
+                    step: 1,
+                    min: 2,
+                    max: c.widthMm,
+                    onChanged: (v) => _mutate(() => e.w = v)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: MiniNum(
+                    label: 'ارتفاع الكلمة',
+                    suffix: 'ملم',
+                    value: e.h,
+                    step: 0.5,
+                    min: 2,
+                    max: 200,
+                    onChanged: (v) => _mutate(() => e.h = v)),
+              ),
+            ]),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: OutlinedButton.icon(
+                onPressed: () => _mutate(() {
+                  final m = c.paper.isRoll ? 1.0 : 5.0;
+                  e.x = m;
+                  e.w = c.widthMm - 2 * m;
+                }),
+                icon: const Icon(Icons.swap_horiz_rounded, size: 16),
+                label: const Text('على عرض الورقة كاملاً'),
+              ),
+            ),
+          ],
           _alignRow(e.s('align', 'right'), (v) => set('align', v)),
           ColorRow(label: 'لون النص', value: e.i('color', 0xFF000000), onChanged: (v) => set('color', v)),
         ]),

@@ -72,6 +72,7 @@ class InvoicePrintData {
         fields = {
           // 🖨️ لحظة الطباعة ومن يطبع (المحاسب = من سجّل، يمرّره المستدعي)
           'printedAt': _nowText(),
+          'printedDate': dateText(DateTime.now()), // 📅 يوم الطباعة (لا يوم إنشاء الفاتورة)
           'printedBy': AuthService().currentUser?.shownName ?? '',
           'footer': company.footerNote,
           'branch': company.branch,

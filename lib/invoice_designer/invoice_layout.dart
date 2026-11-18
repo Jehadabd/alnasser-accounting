@@ -113,7 +113,8 @@ class LayoutCatalog {
     'boxName': 'الصندوق',
     'docNo': 'رقم المستند',
     // 🖨️ تُملأ لحظة الطباعة
-    'printedAt': 'وقت الطباعة',
+    'printedDate': 'تاريخ الطباعة',
+    'printedAt': 'تاريخ ووقت الطباعة',
     'printedBy': 'طُبع بواسطة',
     'verifyCode': 'رمز التحقق ورقم النسخة',
   };

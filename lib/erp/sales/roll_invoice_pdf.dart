@@ -40,6 +40,8 @@ class InvoicePrintFormat {
 class RollInvoicePdf {
   RollInvoicePdf._();
 
+  static String _two(int v) => v.toString().padLeft(2, '0');
+
   static double _qty(InvoiceItem i) {
     final l = i.quantityLargeUnit ?? 0;
     if (l > 0) return l;
@@ -73,10 +75,13 @@ class RollInvoicePdf {
           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
           children: [pw.Text(k, style: st(size, bold: bold)), pw.Text(v, style: st(size, bold: bold))],
         );
+    final printedAt = DateTime.now();
     final doc = pw.Document();
     doc.addPage(pw.Page(
-      pageFormat: (paper == 58 ? PdfPageFormat.roll57 : PdfPageFormat.roll80)
-          .copyWith(marginLeft: 8 * k, marginRight: 8 * k, marginTop: 8, marginBottom: 8),
+      // 🧻 بعرض مساحة الطباعة الفعلية (72 ملم لورق 80، و48 لورق 58) كإيصال الكاشير — كانت
+      //    الصفحة بعرض الورق كله (80/57 ملم) فقد تُقصّ حافتا الإيصال على الطابعة الحرارية.
+      pageFormat: PdfPageFormat(ReceiptPaper.printableMm(paper) * PdfPageFormat.mm, double.infinity,
+          marginLeft: 1 * PdfPageFormat.mm, marginRight: 1 * PdfPageFormat.mm, marginTop: 8, marginBottom: 8),
       textDirection: pw.TextDirection.rtl,
       theme: pw.ThemeData.withFont(base: f, bold: f),
       build: (_) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
@@ -115,6 +120,8 @@ class RollInvoicePdf {
         pw.Text(ArabicWords.money(total), style: st(8)),
         pw.SizedBox(height: 6),
         pw.Center(child: pw.Text('شكراً لتعاملكم معنا', style: st(9))),
+        // 📅 تاريخ الطباعة (قد يختلف عن تاريخ الفاتورة إن طُبعت لاحقاً)
+        pw.Center(child: pw.Text('طُبعت في ${fmtDate(printedAt)} ${_two(printedAt.hour)}:${_two(printedAt.minute)}', style: st(7))),
       ]),
     ));
     return doc;
