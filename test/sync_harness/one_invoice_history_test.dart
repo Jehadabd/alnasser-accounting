@@ -695,8 +695,8 @@ void main() {
         ..writeln('الفاتورة: ${invoiceNo.isEmpty ? '؟' : invoiceNo} — العميلان: $_nameA ، $_nameB')
         ..writeln(finalHistory == null
             ? 'سجل التعديلات: لم يُقرأ'
-            : 'سجل التعديلات: ${finalHistory!['snapshots']} نسخة (غير معروفة ${finalHistory!['unknown']}) — '
-                'أحداث تعديل ${finalHistory!['events']} — سندات تعديل ${finalHistory!['vouchers']} — تسويات ${finalHistory!['adjustments']}')
+            : 'سجل التعديلات: ${finalHistory['snapshots']} نسخة (غير معروفة ${finalHistory['unknown']}) — '
+                'أحداث تعديل ${finalHistory['events']} — سندات تعديل ${finalHistory['vouchers']} — تسويات ${finalHistory['adjustments']}')
         ..writeln('القاعدة: ${dbOut.existsSync() ? dbOut.path : 'لم تُكتب'}')
         ..writeln('مشاكل: $problemCount${problemCount > problems.length ? ' (أول ${problems.length})' : ''}')
         ..writeAll(problems.map((p) => '  ✗ $p\n'))
