@@ -4,12 +4,15 @@
 //   ويندوز:  %LOCALAPPDATA%\alnaser_logs\dart_errors.log   (بجانب native_errors.log)
 //   أندرويد: <مجلد التطبيق>/alnaser_logs/dart_errors.log
 // يكتب فقط ولا يغيّر السلوك. الملف يُقصّ إن تجاوز 1 ميجا.
+// ويغذّي أداة «تشخيص الأخطاء» (ErrorJournal) بالأخطاء نفسها.
 
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'diagnostics/error_journal.dart'; // 🩺 أداة «تشخيص الأخطاء»
 
 class ErrorLog {
   ErrorLog._();
@@ -18,7 +21,11 @@ class ErrorLog {
   static int _written = 0;
 
   static Future<void> install() async {
-    if (kIsWeb) return;
+    if (kIsWeb) {
+      await ErrorJournal.install(null); // في الذاكرة فقط
+      return;
+    }
+    Directory? journalDir;
     try {
       Directory dir;
       final local = Platform.environment['LOCALAPPDATA'];
@@ -33,12 +40,17 @@ class ErrorLog {
         await f.writeAsString('');
       }
       _file = f;
+      journalDir = dir;
       _write('===== start ${DateTime.now().toIso8601String()} (${Platform.operatingSystem}) =====');
     } catch (_) {}
+    await ErrorJournal.install(journalDir);
 
     final prevFlutter = FlutterError.onError;
     FlutterError.onError = (details) {
       _write('[FlutterError] ${details.exceptionAsString()}\n${details.stack ?? ''}');
+      ErrorJournal.record(
+          source: ErrorSource.flutter, error: details.exceptionAsString(), stack: details.stack, context: details.context?.toString());
+      unawaited(ErrorJournal.save()); // قد يُغلق البرنامج بعدها
       if (prevFlutter != null) {
         prevFlutter(details);
       } else {
@@ -49,6 +61,8 @@ class ErrorLog {
     final prevPlatform = PlatformDispatcher.instance.onError;
     PlatformDispatcher.instance.onError = (error, stack) {
       _write('[Uncaught] $error\n$stack');
+      ErrorJournal.record(source: ErrorSource.uncaught, error: error, stack: stack);
+      unawaited(ErrorJournal.save());
       // نُبقي البرنامج يعمل: الخطأ سُجّل، ولا داعي لإغلاقه
       return prevPlatform?.call(error, stack) ?? true;
     };

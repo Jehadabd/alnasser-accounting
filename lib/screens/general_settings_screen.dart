@@ -61,6 +61,7 @@ import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 
 import '../models/account_statement_item.dart';
 import 'data_import_screen.dart'; // 📥 استيراد من Excel
+import 'diagnostics/error_diagnostics_screen.dart'; // 🩺 تشخيص الأخطاء
 import 'financial_deep_check_screen.dart'; // 🔬
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
 import '../widgets/loading_dialog.dart';
@@ -2363,9 +2364,22 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _SettingsSection(
           'النظام والأدوات',
           Icons.build_circle_outlined,
-          'الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
-          keywords: 'استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
+          'تشخيص الأخطاء، الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
+          keywords: 'تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
           [
+          // 🩺 تشخيص الأخطاء — أول ما في الشاشة
+          _buildSettingsCard(
+            icon: Icons.health_and_safety_rounded,
+            iconColor: Colors.red,
+            title: 'تشخيص الأخطاء',
+            child: ErrorDiagnosticsTile(
+              onTap: () {
+                if (requirePermission(context, AppPermissions.manageUsers)) {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const ErrorDiagnosticsScreen()));
+                }
+              },
+            ),
+          ),
           // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
           _buildSettingsCard(
             icon: Icons.tune,
