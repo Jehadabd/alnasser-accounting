@@ -168,11 +168,14 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
       final row = await _txByUuid(a['tx'] as String);
       if (row == null) return {'ok': false, 'stage': 'load', 'err': 'المعاملة غير موجودة'};
       final t = DebtTransaction.fromMap(row);
-      final note = (a['note'] as String?)?.trim();
+      final typed = ((a['note'] as String?) ?? '').trim();
+      final dialogNote = typed.isEmpty ? null : typed; // EditTxResult.note
+      final amount = (a['amount'] as num).toDouble();
       final updated = t.copyWith(
-        amountChanged: (a['amount'] as num).toDouble(),
-        transactionNote: (note == null || note.isEmpty) ? null : note,
+        amountChanged: amount,
+        transactionNote: dialogNote ?? '',
         transactionDate: DateTime.parse(a['date'] as String),
+        transactionType: (amount >= 0) ? 'manual_debt' : 'manual_payment',
       );
       try {
         await DatabaseService().updateTransaction(updated);

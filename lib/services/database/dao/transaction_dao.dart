@@ -381,8 +381,11 @@ class TransactionDao {
             runningBalance = newBalance;
           }
         }
+
+        // 🔗 التاريخ قد تغيّر فتغيّر موضع المعاملة: السلسلة بالترتيب الجديد
+        await rechainIn(txn, oldTx.customerId);
       });
-      
+
       // إعادة حساب رصيد العميل بناءً على التعديلات
       // هذه الدالة ستقوم بحساب الرصيد النهائي وتحديث العميل
       await recalculateAndApplyCustomerDebt(updated.customerId);
@@ -402,6 +405,42 @@ class TransactionDao {
   /// 🛡️ قاعدة الرصيد السالب (كما في InvoiceController.validateDebtChangeWontCauseNegativeBalance):
   /// يُرفض التغيير فقط إن كان هو نفسه يُنقص رصيد العميل إلى ما دون الصفر. عميل رصيده
   /// سالب أصلاً لا يُمنع من تعديل يزيد رصيده أو لا يغيّره.
+  /// 🔗 سلسلة «الرصيد قبل/بعد» لكل معاملات العميل بالترتيب الذي يعرضه كشفه
+  /// (التاريخ ثم الرقم): قبل كل معاملة = بعد سابقتها، وبعدها = قبلها + مبلغها.
+  ///
+  /// لماذا: تعديل معاملة كان يحسب السلسلة بترتيبها **القديم** (يُقرأ قبل حفظ التاريخ
+  /// الجديد)، فإن تغيّر تاريخها انحرف «الرصيد قبل/بعد» لها ولما بعدها — في الكشف
+  /// وتفاصيل الشهر وحوار التعديل و«إشعار مدين» المطبوع. المجموع لم يتأثر قط.
+  /// (اختبار الفاتورة الواحدة: one_invoice_history_test — «كشف الحساب»)
+  ///
+  /// لا يغيّر مبلغاً ولا نوعاً ولا رصيد العميل ولا حالة الرفع: عمودا السلسلة فقط،
+  /// ويكتب الصف الذي يختلف فقط.
+  static Future<void> rechainIn(DatabaseExecutor db, int customerId) async {
+    final rows = await db.query(
+      'transactions',
+      columns: ['id', 'amount_changed', 'balance_before_transaction', 'new_balance_after_transaction'],
+      where: 'customer_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
+      whereArgs: [customerId],
+      orderBy: 'transaction_date ASC, id ASC',
+    );
+    double running = 0.0;
+    for (final r in rows) {
+      final amount = (r['amount_changed'] as num?)?.toDouble() ?? 0.0;
+      final after = MoneyCalculator.add(running, amount);
+      final b0 = (r['balance_before_transaction'] as num?)?.toDouble();
+      final a0 = (r['new_balance_after_transaction'] as num?)?.toDouble();
+      if (b0 == null || a0 == null || (b0 - running).abs() > 0.0001 || (a0 - after).abs() > 0.0001) {
+        await db.update(
+          'transactions',
+          {'balance_before_transaction': running, 'new_balance_after_transaction': after},
+          where: 'id = ?',
+          whereArgs: [r['id']],
+        );
+      }
+      running = after;
+    }
+  }
+
   static void assertNotNegative({required double before, required double after, required String what}) {
     if (after < before - 0.005 && after < -0.01) {
       String f(double v) => v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2);
@@ -493,7 +532,10 @@ class TransactionDao {
           runningBalance = MoneyCalculator.add(runningBalance, transactions[i].amountChanged);
         }
       }
-      
+
+      // 🔗 كانت السلسلة تُبنى على «بعد» المعاملة السابقة كما هو مخزّن (وقد يكون منحرفاً)
+      await rechainIn(db, transaction.customerId);
+
       await recalculateAndApplyCustomerDebt(transaction.customerId);
     } catch (e) {
       throw Exception(DatabaseHelpers.handleDatabaseError(e));

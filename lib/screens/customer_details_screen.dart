@@ -2354,7 +2354,8 @@ class TransactionListTile extends StatelessWidget {
                 if (r == null) return;
                 final updated = transaction.copyWith(
                   amountChanged: r.amount,
-                  transactionNote: r.note,
+                  // 📝 ملاحظة ممسوحة = نص فارغ: copyWith يتجاهل null فكانت الملاحظة القديمة تعود
+                  transactionNote: r.note ?? '',
                   transactionDate: r.date,
                   transactionType: (r.amount >= 0) ? 'manual_debt' : 'manual_payment',
                 );

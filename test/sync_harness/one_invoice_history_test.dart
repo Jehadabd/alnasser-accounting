@@ -518,10 +518,16 @@ void main() {
           final typed = (note ?? '').trim();
           final stored = (r['note'] as String?) ?? '';
           if (typed.isNotEmpty && stored != typed) bad('$lbl ($kind): الملاحظة المحفوظة «$stored» والمكتوبة «$typed»');
-          if (typed.isEmpty && stored.isNotEmpty) {
-            notes.add('مسح ملاحظة معاملة من حوار «تعديل المعاملة» لا يُحفظ: تبقى الملاحظة القديمة '
-                '(copyWith يتجاهل الملاحظة الفارغة). مثال: «$stored»');
-            count('مسح ملاحظة لم يُحفظ');
+          if (typed.isEmpty && stored.isNotEmpty) bad('$lbl ($kind): مُسحت الملاحظة وبقيت محفوظة «$stored»');
+          if (typed.isEmpty && stored.isEmpty && kind == 'clearNote') count('مسح ملاحظة حُفظ');
+          // 🔗 تغيّر التاريخ ⇒ تغيّر موضعها في الكشف: السلسلة تُفحص فوراً
+          if (date != t.date) {
+            final cc = await scen('chainCheck', {
+              'custs': [t.cust]
+            });
+            for (final p in ((cc['problems'] as List?) ?? const []).take(3)) {
+              bad('$lbl ($kind) كشف الحساب بعد تغيير التاريخ: $p');
+            }
           }
           t.amount = dd(r['amount']);
           t.note = r['note'] as String?;
