@@ -6,6 +6,7 @@
 //   • سند صرف — مرتجع فاتورة نقدية (بالقلم)          [cash_refund]
 //   • إشعار مدين — إضافة على فاتورة آجلة (بالقلم)    [debit_note]
 //   • إشعار دائن — مرتجع فاتورة آجلة (بالقلم)        [credit_note]
+//   • إشعار مدين — دين يدوي (بضاعة بلا فاتورة)       [manual_debit_note] — ManualDebtNotes
 //
 // لكل نوع: التصميم المختار له (أو شكل البرنامج الحالي إن لم يُختر)، وإعداد
 // الطباعة بعد الحفظ: اسألني / اطبع دائماً / لا تُظهر.
@@ -31,6 +32,7 @@ import 'database_service.dart';
 import 'invoice_edit_events.dart';
 import 'invoice_edit_log.dart';
 import 'invoice_edit_voucher.dart';
+import 'manual_debt_notes.dart'; // 🧾 إشعار مدين للدين اليدوي
 import 'printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة ورمز التحقق
 import 'settings_manager.dart';
 import '../wa_messages/wa_doc_sender.dart'; // 📨 إرسال السند لصاحبه
@@ -46,8 +48,9 @@ class VoucherKinds {
   static const debitNote = InvoiceEditEvents.kindDebitNote;
   static const creditNote = InvoiceEditEvents.kindCreditNote;
   static const invoiceSettlement = InvoiceEditEvents.kindInvoiceSettlement;
+  static const manualDebt = 'manual_debit_note';
 
-  static const all = [receipt, invoiceSettlement, cashReceipt, cashRefund, debitNote, creditNote];
+  static const all = [receipt, invoiceSettlement, cashReceipt, cashRefund, debitNote, creditNote, manualDebt];
 
   static String targetKey(String kind) => 'voucher_$kind';
 
@@ -58,6 +61,7 @@ class VoucherKinds {
         cashRefund => 'سند صرف — مرتجع بضاعة',
         debitNote => 'إشعار مدين',
         creditNote => 'إشعار دائن',
+        manualDebt => 'إشعار مدين',
         _ => 'سند',
       };
 
@@ -68,6 +72,7 @@ class VoucherKinds {
         cashRefund => 'سند صرف — مرتجع من فاتورة نقدية',
         debitNote => 'إشعار مدين — إضافة على فاتورة آجلة',
         creditNote => 'إشعار دائن — مرتجع من فاتورة آجلة',
+        manualDebt => 'إشعار مدين — دين يدوي (بضاعة بلا فاتورة)',
         _ => kind,
       };
 
@@ -78,6 +83,7 @@ class VoucherKinds {
         cashRefund => 'تعديل فاتورة نقدية بالقلم ونقص مجموعها: ما يُرد للزبون',
         debitNote => 'تعديل فاتورة آجلة بالقلم وزاد مجموعها: يزيد دين العميل',
         creditNote => 'تعديل فاتورة آجلة بالقلم ونقص مجموعها: ينقص دين العميل',
+        manualDebt => 'إضافة دين يدوية من سجل الديون: أخذ العميل بضاعة سُجّل مبلغها فقط',
         _ => '',
       };
 
@@ -88,6 +94,7 @@ class VoucherKinds {
         cashRefund => Icons.assignment_return_rounded,
         debitNote => Icons.trending_up_rounded,
         creditNote => Icons.trending_down_rounded,
+        manualDebt => Icons.post_add_rounded,
         _ => Icons.receipt_rounded,
       };
 
@@ -98,6 +105,7 @@ class VoucherKinds {
         cashRefund => const Color(0xFFB45309),
         debitNote => const Color(0xFF1D4ED8),
         creditNote => const Color(0xFFB91C1C),
+        manualDebt => const Color(0xFF6D28D9),
         _ => const Color(0xFF0F3460),
       };
 }
@@ -555,5 +563,114 @@ class VoucherPrint {
       return;
     }
     await ReportExport.openPdf(context, bytes, name);
+  }
+
+  // ═══════════════════════ إشعار مدين — دين يدوي (بضاعة بلا فاتورة) ═══════════════════════
+
+  /// بيانات طباعة إشعار الدين اليدوي.
+  static Future<InvoicePrintData> manualDebtData(ManualDebtNote n, {PrintStamp? stamp}) async {
+    final db = await DatabaseService().database;
+    final dateStr = InvoicePrintData.dateText(n.date);
+    return InvoicePrintData(
+      company: await PrintCompany.load(),
+      fields: {
+        'voucherTitle': VoucherKinds.title(VoucherKinds.manualDebt),
+        'voucherNo': '${n.noteNo}',
+        'invoiceNo': '${n.noteNo}',
+        'date': dateStr,
+        'time': InvoicePrintData.timeText(n.date),
+        'dateTime': '$dateStr ${InvoicePrintData.timeText(n.date)}',
+        'customer': n.customerName,
+        'phone': n.phone,
+        'address': n.address,
+        'voucherReason': n.note.isEmpty ? 'بضاعة بلا فاتورة — قُيّد مبلغها ديناً' : n.note,
+        'paymentType': 'دين',
+        'user': n.recordedBy,
+        'accountant': await displayNameOf(db, n.recordedBy),
+        if (stamp != null) 'verifyCode': stamp.line,
+      },
+      rows: const [],
+      totals: {
+        'voucherAmount': n.amount,
+        'net': n.amount,
+        if (n.before != null) 'previousDebt': n.before!,
+        if (n.after != null) 'currentDebt': n.after!,
+      },
+      paymentType: 'دين',
+    );
+  }
+
+  /// ملف الإشعار كما يُطبع، ويُسجَّل نسخةً في سجل السندات المطبوعة (فشل التسجيل يُرمى).
+  /// null = الحركة غير موجودة أو حُذفت أو ليست ديناً يدوياً.
+  static Future<({Uint8List bytes, ManualDebtNote note})?> manualDebtPdf(String txUuid) async {
+    final n = await ManualDebtNotes.load(txUuid);
+    if (n == null) return null;
+    final stamp = await PrintedVouchers.forManualDebt(n);
+    final data = await manualDebtData(n, stamp: stamp);
+    final layout = await designFor(VoucherKinds.manualDebt) ?? InvoiceLayoutTemplates.defaultFor(VoucherKinds.manualDebt);
+    return (bytes: await _render(layout, data), note: n);
+  }
+
+  /// بعد حفظ دين يدوي: إشعار مدين حسب إعداد النوع (اسألني / دائماً / لا تُظهر).
+  /// الدين محفوظ ومرقّم في كل الأحوال — هذا للورقة فقط.
+  static Future<void> offerManualDebt(BuildContext context, String txUuid) async {
+    final mode = await modeFor(VoucherKinds.manualDebt);
+    if (mode == 'never' || !context.mounted) return;
+    var wa = false;
+    if (mode == 'ask') {
+      final n = await ManualDebtNotes.load(txUuid);
+      if (n == null || !context.mounted) return;
+      final choice = await _ask(
+        context,
+        VoucherKinds.manualDebt,
+        number: '${n.noteNo}',
+        amount: n.amount,
+        facts: [
+          if (n.customerName.isNotEmpty) n.customerName,
+          if (n.before != null && n.after != null) 'حساب العميل ${_m(n.before!)} ← ${_m(n.after!)}',
+          if (n.note.isNotEmpty) n.note,
+        ],
+      );
+      if (choice == null || !context.mounted) return;
+      wa = choice == 'wa';
+    }
+    await printManualDebt(context, txUuid, wa: wa);
+  }
+
+  /// يطبع إشعار الدين اليدوي (أو يرسله إلى واتساب العميل) — نسخة مسجّلة في الحالتين.
+  static Future<void> printManualDebt(BuildContext context, String txUuid, {bool wa = false}) async {
+    if (wa && !await WaDocSender.precheck(context)) return;
+    final ({Uint8List bytes, ManualDebtNote note})? built;
+    try {
+      built = await manualDebtPdf(txUuid);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('لم يُطبع الإشعار: تعذّر تسجيله في سجل السندات المطبوعة ($e)'),
+          backgroundColor: Colors.red,
+        ));
+      }
+      return;
+    }
+    if (built == null || !context.mounted) return;
+    final n = built.note;
+    final name = '${VoucherKinds.title(VoucherKinds.manualDebt)}_${n.noteNo}';
+    if (wa) {
+      final pdf = built.bytes;
+      await WaDocSender.send(
+          context,
+          () async => WaDoc(
+                showsDebt: true,
+                bytes: pdf,
+                fileName: '${name.replaceAll(' ', '_')}.pdf',
+                caption: '${VoucherKinds.title(VoucherKinds.manualDebt)} رقم ${n.noteNo} — ${n.customerName}',
+                customerId: n.customerId,
+                customerName: n.customerName,
+                phone: n.phone.isEmpty ? null : n.phone,
+              ),
+          source: 'voucher');
+      return;
+    }
+    await ReportExport.openPdf(context, built.bytes, name);
   }
 }

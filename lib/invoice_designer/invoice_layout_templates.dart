@@ -288,6 +288,64 @@ class InvoiceLayoutTemplates {
         _pageNo(287),
       ]);
 
+  // ═══════════════════ 🧾 إشعار مدين — دين يدوي (بضاعة بلا فاتورة) ═══════════════════
+  // بلا فاتورة أصلية ولا بنود: المبلغ، البيان، وأثره على حساب العميل، وإقرار العميل بالاستلام.
+
+  static const _purple = 0xFF6D28D9;
+  static const _manualLabels = {
+    'voucherAmount': 'مبلغ الإشعار',
+    'previousDebt': 'الرصيد قبل الإشعار',
+    'currentDebt': 'الرصيد بعد الإشعار',
+  };
+
+  static InvoiceLayout _manualDebtOfficial() => _a4('إشعار مدين رسمي بإطار', [
+        _rect(5, 5, 200, 150, border: 1.2, borderColor: _purple, radius: 2),
+        _e(ElType.companyName, 112, 10, 88, 11, {'fontSize': 20.0, 'bold': true, 'align': 'right', 'color': _purple}),
+        _e(ElType.companyInfo, 112, 21, 88, 15,
+            {'fontSize': 9.0, 'align': 'right', 'color': _grey, 'lines': ['description', 'address']}),
+        _e(ElType.logo, 88, 9, 34, 26),
+        _e(ElType.companyInfo, 10, 10, 74, 24,
+            {'fontSize': 9.0, 'align': 'left', 'color': _grey, 'lines': ['phones', 'tax', 'cr']}),
+        _rect(68, 38, 74, 11, border: 0, bg: _purple, radius: 2),
+        _text(68, 38, 74, 11, '{voucherTitle}', fs: 16, bold: true, align: 'center', color: _white),
+        _box(10, 53, 190, 16, ['voucherNo', 'dateTime', 'customer', 'phone', 'address', 'user'],
+            style: 'grid', cols: 3, mode: 'lines', borderColor: _purple, border: 0.5, fs: 9.5,
+            labels: {'user': 'سجّله'}),
+        _field(10, 71, 190, 8, 'voucherReason', label: 'البيان', fs: 10, border: 0.5, borderColor: _purple),
+        _rect(106, 82, 94, 30, border: 0.8, borderColor: _purple, bg: 0xFFF3EEFD, radius: 2),
+        _text(108, 84, 90, 7, 'مبلغ الإشعار', fs: 10, align: 'center', color: _purple),
+        _text(108, 92, 90, 14, '{voucherAmount}', fs: 22, bold: true, align: 'center', color: _purple),
+        _box(10, 82, 92, 30, ['previousDebt', 'currentDebt'],
+            mode: 'lines', title: 'حساب العميل', titleBg: _grey, highlight: 'currentDebt', highlightColor: _red,
+            borderColor: _purple, fs: 10, labels: _manualLabels),
+        _field(10, 116, 190, 8, 'amountWords', showLabel: false, align: 'center', border: 0.5, borderColor: _purple, fs: 10),
+        _text(10, 126, 190, 6, 'يُقرّ العميل باستلام بضاعة بالمبلغ أعلاه، وقُيّد المبلغ ديناً على حسابه.',
+            fs: 9, align: 'center', color: _grey),
+        ..._signature(140, 134, 50, 'المحاسب: {accountant}'),
+        ..._signature(20, 134, 50, 'توقيع العميل'),
+        _text(10, 149, 190, 5, 'طُبع في {printedAt} — بواسطة {printedBy}', fs: 8, align: 'center', color: _grey),
+      ]);
+
+  static InvoiceLayout _manualDebtAmount() => _a4('إشعار مدين — المبلغ بارز', [
+        ..._header(nameColor: _purple),
+        _line(8, 32.5, 194, color: _purple),
+        _rect(8, 36, 76, 34, border: 0, bg: _purple, radius: 2),
+        _text(10, 37, 72, 8, '{voucherTitle} رقم {voucherNo}', fs: 12, bold: true, align: 'center', color: _white),
+        _text(10, 46, 72, 15, '{voucherAmount}', fs: 24, bold: true, align: 'center', color: _white),
+        _text(10, 62, 72, 6, 'دينار عراقي', fs: 8.5, align: 'center', color: _white),
+        _box(88, 36, 114, 34, ['customer', 'dateTime', 'phone', 'address'],
+            mode: 'lines', borderColor: _purple, border: 0.6, radius: 1.5, fs: 10.5),
+        _field(8, 74, 194, 8, 'amountWords', showLabel: false, align: 'center', fs: 11, border: 0.5, borderColor: _purple, radius: 1.5),
+        _field(8, 85, 194, 8, 'voucherReason', label: 'البيان', border: 0.5, borderColor: _grey, radius: 1.5),
+        _box(8, 97, 194, 22, ['previousDebt', 'voucherAmount', 'currentDebt'],
+            style: 'grid', cols: 3, mode: 'group', highlight: 'currentDebt', highlightColor: _red,
+            borderColor: _grey, border: 0.8, radius: 1.5, fs: 11, labels: _manualLabels),
+        ..._signature(130, 128, 60, 'المحاسب: {accountant}'),
+        ..._signature(20, 128, 60, 'توقيع العميل'),
+        _line(8, 146, 194, t: 0.4, color: _grey, dashed: true),
+        _text(8, 148, 194, 5, 'طُبع في {printedAt}', fs: 8, align: 'center', color: _grey),
+      ]);
+
   // ═══════════════════ 🧾 سند قبض — تسديد دين (ووصل عدة عملاء) ═══════════════════
 
   static List<Map<String, dynamic>> get _colsReceipt => [
@@ -575,6 +633,14 @@ class InvoiceLayoutTemplates {
             const LayoutTemplate('vr_bw', 'أبيض وأسود', 'للطابعات بلا ألوان: خطوط سوداء بلا تعبئة، والدافع والمحاسب', _receiptBW),
             LayoutTemplate('blank', 'ورقة بيضاء', 'صمّم كل شيء بنفسك من قائمة العناصر', () => _blank(LayoutPaper.a4)),
           ],
+        'manual_debit_note' => [
+            const LayoutTemplate('vm_official', 'رسمي بإطار (نصف صفحة)',
+                'المبلغ بارز، البيان، الرصيد قبل الإشعار وبعده، المبلغ كتابةً، وإقرار العميل وتوقيعه',
+                _manualDebtOfficial),
+            const LayoutTemplate('vm_amount', 'المبلغ بارز (نصف صفحة)',
+                'المبلغ كبير في مربع ملوّن، والرصيد قبل وبعد في صف، وتوقيعان', _manualDebtAmount),
+            LayoutTemplate('blank', 'ورقة بيضاء', 'صمّم كل شيء بنفسك من قائمة العناصر', () => _blank(LayoutPaper.a4)),
+          ],
         'cash_receipt' || 'cash_refund' => [
             const LayoutTemplate('vc_official', 'رسمي بإطار',
                 'المواد التي تغيّرت، أثر السند على الفاتورة، والمبلغ نقداً في مربع بارز، وثلاثة تواقيع', _cashOfficial),
@@ -598,6 +664,7 @@ class InvoiceLayoutTemplates {
   static InvoiceLayout defaultFor(String kind) => switch (kind) {
         'receipt' => _receiptOfficial(),
         'cash_receipt' || 'cash_refund' => _cashOfficial(),
+        'manual_debit_note' => _manualDebtOfficial(),
         _ => _voucherOfficial(),
       };
 

@@ -26,6 +26,7 @@ import '../erp/device_defaults.dart';
 import '../erp/debts/receipts_service.dart';
 import '../erp/debts/receipt_pdf.dart';
 import '../services/voucher_print.dart'; // 🧾 إعداد طباعة سند القبض
+import '../services/manual_debt_notes.dart'; // 🧾 إشعار مدين للدين اليدوي
 import '../erp/report_export.dart';
 import '../accounting/screens/acc_ui.dart' show accAppBar;
 import 'dart:math' as math;
@@ -331,6 +332,34 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             final file = File(filePath);
             await file.writeAsBytes(await pdf.save());
             await Process.start('cmd', ['/c', 'start', 'msedge', filePath]);
+          }
+        }
+        // 🧾 إشعار مدين (بضاعة بلا فاتورة): يُرقَّم في الخلفية دائماً، والورقة حسب إعداد
+        //    النوع في «مصمم السندات». الدين محفوظ قبل هذا — فشل الترقيم أو الطباعة لا يلغيه.
+        if (_isDebt && mounted) {
+          var numbered = false;
+          try {
+            await ManualDebtNotes.assign(uuid: uuid, customerId: widget.customer.id, amount: amount);
+            numbered = true;
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('حُفظ الدين، لكن تعذّر ترقيم إشعاره الآن ($e) — يُرقَّم عند طباعته'),
+                backgroundColor: Colors.orange,
+              ));
+            }
+          }
+          if (numbered && mounted) {
+            try {
+              await VoucherPrint.offerManualDebt(context, uuid);
+            } catch (e) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('حُفظ الدين، لكن تعذّرت طباعة الإشعار: $e'),
+                  backgroundColor: Colors.orange,
+                ));
+              }
+            }
           }
         }
         if (mounted) Navigator.pop(context);

@@ -25,6 +25,7 @@ import '../accounting/ledger.dart';
 import '../erp/control/control_common.dart';
 import '../erp/erp_common.dart';
 import 'invoice_edit_events.dart';
+import 'manual_debt_notes.dart' show ManualDebtNote;
 
 /// ما يُطبع على الورقة.
 class PrintStamp {
@@ -46,6 +47,7 @@ class PrintedVoucherKind {
   static const creditNote = 'credit_note';
   static const invoiceSettlement = 'invoice_settlement';
   static const legacyReceipt = 'legacy_receipt';
+  static const manualDebt = 'manual_debit_note';
 
   static String label(String k) => switch (k) {
         receipt => 'سند قبض — تسديد دين',
@@ -55,6 +57,7 @@ class PrintedVoucherKind {
         creditNote => 'إشعار دائن — مرتجع من فاتورة آجلة',
         invoiceSettlement => 'سند قبض — تسديد فاتورة آجلة',
         legacyReceipt => 'سند قبض — الأرشيف القديم',
+        manualDebt => 'إشعار مدين — دين يدوي (بضاعة بلا فاتورة)',
         _ => k,
       };
 }
@@ -65,6 +68,7 @@ class PrintedRef {
   static const customerReceipt = 'customer_receipt'; // customer_receipts.id
   static const editEvent = 'edit_event'; // invoice_edit_events.id
   static const legacyReceipt = 'legacy_receipt'; // customer_receipt_vouchers.id
+  static const debtTx = 'debt_tx'; // transactions.id (دين يدوي)
 }
 
 /// حال العملية الآن مقارنةً بما طُبع.
@@ -261,6 +265,25 @@ class PrintedVouchers {
         details: details,
       );
 
+  /// إشعار مدين لدين يدوي (بضاعة بلا فاتورة).
+  static Future<PrintStamp> forManualDebt(ManualDebtNote n) => register(
+        kind: PrintedVoucherKind.manualDebt,
+        voucherNo: '${n.noteNo}',
+        amount: n.amount,
+        customerId: n.customerId,
+        customerName: n.customerName,
+        refType: PrintedRef.debtTx,
+        refId: n.txId,
+        details: {
+          'date': n.date.toIso8601String(),
+          'reason': n.note,
+          'debt_before': n.before,
+          'debt_after': n.after,
+          'recorded_by': n.recordedBy,
+          'tx_uuid': n.txUuid,
+        },
+      );
+
   /// سند من «أرشيف سندات القبض القديم».
   static Future<PrintStamp> forLegacyReceipt({
     required int archiveId,
@@ -388,6 +411,17 @@ class PrintedVouchers {
           final n = ((later.first['n'] as num?) ?? 0).toInt();
           if (n > 0) return (VoucherState.laterEdit, 'السند صحيح، لكن الفاتورة عُدّلت $n مرة بعده');
           return (VoucherState.ok, 'التعديل موجود بالمبلغ نفسه');
+        case PrintedRef.debtTx:
+          final t = await db.query('transactions',
+              columns: ['amount_changed', 'is_deleted'], where: 'id = ?', whereArgs: [v.refId], limit: 1);
+          if (t.isEmpty || ((t.first['is_deleted'] as num?) ?? 0) == 1) {
+            return (VoucherState.deleted, 'حركة الدين حُذفت من سجل الديون بعد طباعة الإشعار');
+          }
+          final now = d0(t.first['amount_changed']);
+          if ((now - v.amount).abs() >= 0.5) {
+            return (VoucherState.changed, 'مبلغ الدين الآن ${fmtQty(now)} لا ${fmtQty(v.amount)} كما طُبع');
+          }
+          return (VoucherState.ok, 'حركة الدين موجودة بالمبلغ نفسه');
         case PrintedRef.legacyReceipt:
           final r = await db.query('customer_receipt_vouchers',
               columns: ['paid_amount'], where: 'id = ?', whereArgs: [v.refId], limit: 1);

@@ -99,7 +99,9 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
 
   Future<void> _reprint(PrintedVoucher v, {bool share = false, bool wa = false}) async {
     // 📨 واتساب: يُفحص قبل البناء كي لا تُسجَّل نسخة لن تُرسل
-    if (wa && v.refType != PrintedRef.editEvent && !await WaDocSender.precheck(context)) return;
+    if (wa && v.refType != PrintedRef.editEvent && v.refType != PrintedRef.debtTx && !await WaDocSender.precheck(context)) {
+      return;
+    }
     if (!mounted) return;
     try {
       switch (v.refType) {
@@ -107,6 +109,14 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
           await _reprintReceipt(v.refId!, share: share, wa: wa);
         case PrintedRef.editEvent:
           await VoucherPrint.printEditEvent(context, v.refId!, wa: wa);
+        case PrintedRef.debtTx:
+          final db = await controlDb();
+          final t = await db.query('transactions',
+              columns: ['transaction_uuid'], where: 'id = ?', whereArgs: [v.refId], limit: 1);
+          final uuid = t.isEmpty ? '' : '${t.first['transaction_uuid'] ?? ''}';
+          if (uuid.isEmpty) throw ErpException('حركة الدين غير موجودة في سجل الديون');
+          if (!mounted) return;
+          await VoucherPrint.printManualDebt(context, uuid, wa: wa);
         case PrintedRef.legacyReceipt:
           final db = await controlDb();
           final r = await db.query('customer_receipt_vouchers', where: 'id = ?', whereArgs: [v.refId], limit: 1);
@@ -368,6 +378,7 @@ class _PrintedVouchersScreenState extends State<PrintedVouchersScreen> {
         PrintedVoucherKind.cashRefund,
         PrintedVoucherKind.debitNote,
         PrintedVoucherKind.creditNote,
+        if (widget.invoiceId == null) PrintedVoucherKind.manualDebt,
         if (widget.invoiceId == null) PrintedVoucherKind.legacyReceipt,
       ];
 

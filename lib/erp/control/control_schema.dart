@@ -8,7 +8,7 @@
 //   • fixed_assets     بتمويل box/opening ⇒ قيد شراء الأصل؛ وبحالة 'disposed' ⇒ قيد الاستبعاد.
 //   • depreciation_runs بحالة 'posted' ⇒ قيد إهلاك الشهر.
 //   • landed_costs     بطريقة box/reclass ⇒ قيد مصاريف الشحن على المخزون.
-// وما سواها سجلات متابعة فقط: invoice_prints، printed_vouchers، approval_log، bank_recs، bank_rec_marks.
+// وما سواها سجلات متابعة فقط: invoice_prints، printed_vouchers، manual_debt_notes، approval_log، bank_recs، bank_rec_marks.
 
 import 'package:sqflite/sqflite.dart';
 
@@ -158,6 +158,19 @@ class ControlSchema {
     'CREATE INDEX IF NOT EXISTS idx_pv_invoice ON printed_vouchers(invoice_id)',
     'CREATE INDEX IF NOT EXISTS idx_pv_ref ON printed_vouchers(ref_type, ref_id)',
     'CREATE INDEX IF NOT EXISTS idx_pv_code ON printed_vouchers(verify_code)',
+
+    // 🧾 إشعارات الدين اليدوي (بضاعة بلا فاتورة): رقم متسلسل لكل دين يدوي، يُعطى لحظة الحفظ
+    //    سواء طُبع أم لا. سجل ترقيم فقط — القيد يشتقّه محرك الترحيل من سجل الديون كما كان.
+    '''
+    CREATE TABLE IF NOT EXISTS manual_debt_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      note_no INTEGER NOT NULL UNIQUE,
+      transaction_uuid TEXT NOT NULL UNIQUE,
+      customer_id INTEGER,
+      amount REAL NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at TEXT NOT NULL
+    )''',
 
     // 🚢 مصاريف الشحن والجمارك المحمّلة على كلفة مادة
     '''

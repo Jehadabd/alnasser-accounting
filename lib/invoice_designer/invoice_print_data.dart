@@ -168,6 +168,7 @@ class InvoicePrintData {
     final now = DateTime.now();
     final receipt = kind == 'receipt';
     final cash = kind == 'cash_receipt' || kind == 'cash_refund';
+    final manual = kind == 'manual_debit_note';
     final minus = kind == 'cash_refund' || kind == 'credit_note';
     final title = switch (kind) {
       'receipt' => 'سند قبض',
@@ -175,6 +176,7 @@ class InvoicePrintData {
       'cash_refund' => 'سند صرف — مرتجع بضاعة',
       'debit_note' => 'إشعار مدين',
       'invoice_settlement' => 'سند قبض — تسديد فاتورة',
+      'manual_debit_note' => 'إشعار مدين',
       _ => 'إشعار دائن',
     };
     Map<String, String> row(Map<String, String> m) => {
@@ -184,7 +186,9 @@ class InvoicePrintData {
           ])
             k: m[k] ?? '',
         };
-    final rows = receipt
+    final rows = manual
+        ? <Map<String, String>>[]
+        : receipt
         ? [
             row({'serial': '1', 'details': 'محمد أحمد', 'priceBeforeDiscount': '250,000', 'price': '250,000',
                 'amount': '100,000', 'blank': '150,000'}),
@@ -210,7 +214,11 @@ class InvoicePrintData {
         'phone': '07701234567',
         'address': 'الموصل - حي الزهور',
         'paymentType': receipt || cash ? 'نقد' : 'دين',
-        'voucherReason': receipt ? 'تسديد دين' : 'تعديل على الفاتورة رقم 1202610045',
+        'voucherReason': receipt
+            ? 'تسديد دين'
+            : manual
+                ? 'بضاعة بلا فاتورة — مواد كهربائية متفرقة'
+                : 'تعديل على الفاتورة رقم 1202610045',
         'boxName': 'الصندوق الرئيسي',
         'docNo': '',
         'user': 'الكاشير',
@@ -219,6 +227,8 @@ class InvoicePrintData {
       rows: rows,
       totals: receipt
           ? {'voucherAmount': 100000, 'net': 100000, 'paid': 100000, 'previousDebt': 250000, 'currentDebt': 150000}
+          : manual
+          ? {'voucherAmount': 75000, 'net': 75000, 'previousDebt': 250000, 'currentDebt': 325000}
           : {
               'voucherAmount': amount,
               'net': amount,

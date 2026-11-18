@@ -54,7 +54,9 @@ class PrintTarget {
       'تعديل فاتورة آجلة بالقلم وزاد مجموعها', false, kind: 'debit_note');
   static const vCreditNote = PrintTarget('voucher_credit_note', 'إشعار دائن — مرتجع من فاتورة آجلة',
       'تعديل فاتورة آجلة بالقلم ونقص مجموعها', false, kind: 'credit_note');
-  static const vouchers = [vReceipt, vInvoiceSettlement, vCashReceipt, vCashRefund, vDebitNote, vCreditNote];
+  static const vManualDebt = PrintTarget('voucher_manual_debit_note', 'إشعار مدين — دين يدوي (بضاعة بلا فاتورة)',
+      'إضافة دين يدوية من سجل الديون', false, kind: 'manual_debit_note');
+  static const vouchers = [vReceipt, vInvoiceSettlement, vCashReceipt, vCashRefund, vDebitNote, vCreditNote, vManualDebt];
   static const everything = [...all, ...vouchers];
 
   /// أنواع الطباعة لمصمم نوع مستند واحد
