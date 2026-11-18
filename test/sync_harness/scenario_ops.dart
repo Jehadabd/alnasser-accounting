@@ -16,8 +16,35 @@ import 'package:alnaser/services/database_service.dart';
 import 'package:alnaser/services/invoice_edit_events.dart';
 import 'package:alnaser/services/invoice_edit_voucher.dart';
 import 'package:alnaser/services/invoice_safety/line_math_check.dart';
+import 'package:alnaser/models/transaction.dart';
+import 'package:alnaser/services/database/business/snapshot_chain.dart';
+import 'package:alnaser/services/database/dao/audit_dao.dart';
 
 double _d(Object? v) => (v as num?)?.toDouble() ?? 0.0;
+
+/// حجم الكرتون من وحدات المنتج (كما في شاشة المنتج: [{"unit_name":"كرتون","quantity":24}]).
+int? _cartonOf(String? hierarchy) {
+  if (hierarchy == null) return null;
+  final m = RegExp(r'"quantity"\s*:\s*(\d+)').firstMatch(hierarchy);
+  return m == null ? null : int.parse(m.group(1)!);
+}
+
+Future<Map<String, Object?>?> _txByUuid(String uuid) async {
+  final db = await DatabaseService().database;
+  final r = await db.query('transactions', where: 'transaction_uuid = ?', whereArgs: [uuid], limit: 1);
+  return r.isEmpty ? null : r.first;
+}
+
+Map<String, Object?> _txView(Map<String, Object?> r) => {
+      'id': r['id'],
+      'customerId': r['customer_id'],
+      'amount': _d(r['amount_changed']),
+      'note': r['transaction_note'],
+      'date': r['transaction_date'],
+      'type': r['transaction_type'],
+      'deleted': r['is_deleted'],
+      'invoiceId': r['invoice_id'],
+    };
 
 Future<Object?> scenOp(String op, Map<String, Object?> a) async {
   try {
@@ -67,6 +94,13 @@ Future<Map<String, Object?>> _invoiceInfo(String uuid) async {
           'qty': _d(it['quantity_individual']),
           'price': _d(it['applied_price']),
           'total': _d(it['item_total']),
+          // 📦 البيع بالكرتون: الكمية بالكرتون ومعامله، والكمية بالوحدة الأساسية
+          'qtyL': _d(it['quantity_large_unit']),
+          'units': _d(it['units_in_large_unit']),
+          'saleType': it['sale_type'],
+          'base': _d(it['quantity_large_unit']) > 0
+              ? _d(it['quantity_large_unit']) * (_d(it['units_in_large_unit']) > 0 ? _d(it['units_in_large_unit']) : 1)
+              : _d(it['quantity_individual']),
         },
     ],
   };
@@ -121,6 +155,95 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
         'matches': card.matches,
       };
 
+    // ───────────── 🧾 الفاتورة الواحدة (one_invoice_history_test.dart) ─────────────
+
+    case 'txRow':
+      final r = await _txByUuid(a['tx'] as String);
+      return r == null ? {'ok': true, 'exists': false} : {'ok': true, 'exists': true, ..._txView(r)};
+
+    case 'txEdit':
+      // ✏️ حوار «تعديل المعاملة» في بطاقة العميل (edit_transaction_dialog ← customer_details_screen):
+      //   transaction.copyWith(amountChanged: r.amount, transactionNote: r.note, transactionDate: r.date)
+      //   ثم DatabaseService().updateTransaction(updated) — بالترتيب نفسه.
+      final row = await _txByUuid(a['tx'] as String);
+      if (row == null) return {'ok': false, 'stage': 'load', 'err': 'المعاملة غير موجودة'};
+      final t = DebtTransaction.fromMap(row);
+      final note = (a['note'] as String?)?.trim();
+      final updated = t.copyWith(
+        amountChanged: (a['amount'] as num).toDouble(),
+        transactionNote: (note == null || note.isEmpty) ? null : note,
+        transactionDate: DateTime.parse(a['date'] as String),
+      );
+      try {
+        await DatabaseService().updateTransaction(updated);
+      } catch (e) {
+        return {'ok': false, 'stage': 'refused', 'err': '$e'.split('\n').first, ..._txView((await _txByUuid(a['tx'] as String))!)};
+      }
+      return {'ok': true, ..._txView((await _txByUuid(a['tx'] as String))!)};
+
+    case 'txConvert':
+      // 🔁 زر «تحويل النوع» في بطاقة العميل: DatabaseService().convertTransactionType(id)
+      final row = await _txByUuid(a['tx'] as String);
+      if (row == null) return {'ok': false, 'stage': 'load', 'err': 'المعاملة غير موجودة'};
+      try {
+        await DatabaseService().convertTransactionType(row['id'] as int);
+      } catch (e) {
+        return {'ok': false, 'stage': 'refused', 'err': '$e'.split('\n').first, ..._txView((await _txByUuid(a['tx'] as String))!)};
+      }
+      return {'ok': true, ..._txView((await _txByUuid(a['tx'] as String))!)};
+
+    case 'chainCheck':
+      // 🔗 سلسلة الأرصدة في كشف العميل: كل معاملة «قبلها» = «بعد» سابقتها، و«بعدها» = قبلها + مبلغها
+      final problems = <String>[];
+      for (final cu in (a['custs'] as List).cast<String>()) {
+        final c = await db.query('customers', columns: ['id', 'name', 'current_total_debt'], where: 'sync_uuid = ?', whereArgs: [cu], limit: 1);
+        if (c.isEmpty) {
+          problems.add('العميل $cu غير موجود');
+          continue;
+        }
+        final rows = await db.query('transactions',
+            where: 'customer_id = ? AND COALESCE(is_deleted, 0) = 0', whereArgs: [c.first['id']], orderBy: 'transaction_date ASC, id ASC');
+        var run = 0.0;
+        for (final r in rows) {
+          final b = _d(r['balance_before_transaction']), af = _d(r['new_balance_after_transaction']), am = _d(r['amount_changed']);
+          if ((b - run).abs() > 0.011 || (af - (run + am)).abs() > 0.011) {
+            problems.add('«${c.first['name']}» المعاملة ${r['id']} (${r['transaction_note'] ?? r['transaction_type']}): '
+                'قبلها $b والمفروض ${run.toStringAsFixed(2)}، بعدها $af والمفروض ${(run + am).toStringAsFixed(2)}');
+            if (problems.length > 20) break;
+          }
+          run += am;
+        }
+        if ((run - _d(c.first['current_total_debt'])).abs() > 0.011) {
+          problems.add('«${c.first['name']}» دينه المخزّن ${c.first['current_total_debt']} ومجموع كشفه $run');
+        }
+      }
+      return {'ok': true, 'problems': problems};
+
+    case 'invHistory':
+      // 📜 سجل تعديلات الفاتورة كما تبنيه شاشته (invoice_history_screen): النسخ تُعاد بناؤها
+      // بـ SnapshotChain.materialize، والنسخة التي لا تُبنى بدقة تظهر «غير معروفة».
+      final ir = await db.query('invoices', columns: ['id'], where: 'invoice_uuid = ?', whereArgs: [a['inv']], limit: 1);
+      if (ir.isEmpty) return {'ok': false, 'err': 'الفاتورة غير موجودة'};
+      final id = ir.first['id'];
+      final raw = await db.query('invoice_snapshots', where: 'invoice_id = ?', whereArgs: [id], orderBy: 'version_number ASC, id ASC');
+      final snaps = SnapshotChain.materialize(raw.map((r) => Map<String, dynamic>.from(r)).toList(), AuditDao.decodeSnapshotItems);
+      Future<int> n(String sql) async {
+        try {
+          return ((await db.rawQuery(sql, [id])).first['n'] as num).toInt();
+        } catch (_) {
+          return -1; // الجدول غير موجود
+        }
+      }
+      return {
+        'ok': true,
+        'id': id,
+        'snapshots': snaps.length,
+        'unknown': snaps.where((s) => s['items_unknown'] == 1).length,
+        'events': await n('SELECT COUNT(*) AS n FROM invoice_edit_events WHERE invoice_id = ?'),
+        'vouchers': await n('SELECT COUNT(*) AS n FROM invoice_edit_vouchers WHERE invoice_id = ?'),
+        'adjustments': await n('SELECT COUNT(*) AS n FROM invoice_adjustments WHERE invoice_id = ?'),
+      };
+
     case 'invSave':
       // ── بيانات الشاشة كما تبنيها invoice_actions ──
       Invoice? existing;
@@ -135,6 +258,24 @@ Future<Object?> _scenOp(String op, Map<String, Object?> a) async {
         final pid = (raw['prodId'] as num).toInt();
         final p = (await db.query('products', where: 'id = ?', whereArgs: [pid], limit: 1)).first;
         final qty = _d(raw['qty']), price = _d(raw['price']);
+        // 📦 نوع البيع «كرتون» (اختياري): كما تبنيه الشاشة للوحدة الكبيرة
+        final carton = raw['large'] == true ? _cartonOf(p['unit_hierarchy'] as String?) : null;
+        if (carton != null) {
+          items.add(InvoiceItem(
+            invoiceId: existing?.id ?? 0,
+            productId: pid,
+            productName: p['name'] as String,
+            unit: 'piece',
+            unitPrice: price,
+            costPrice: 0.5 * qty * carton,
+            quantityLargeUnit: qty,
+            unitsInLargeUnit: carton.toDouble(),
+            appliedPrice: price,
+            itemTotal: qty * price,
+            saleType: 'كرتون',
+          ));
+          continue;
+        }
         items.add(InvoiceItem(
           invoiceId: existing?.id ?? 0,
           productId: pid,
