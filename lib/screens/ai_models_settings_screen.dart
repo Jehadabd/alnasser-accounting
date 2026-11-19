@@ -727,70 +727,444 @@ class _AddModelDialogState extends State<_AddModelDialog> {
 
 // ───────────────────────── خطوات إنشاء المفتاح ─────────────────────────
 
+/// رابط في دليل المفتاح.
+class _GuideLink {
+  const _GuideLink(this.label, this.url, [this.icon = Icons.open_in_new_rounded]);
+  final String label;
+  final String url;
+  final IconData icon;
+}
+
+/// خطوة: عنوان، شرح، ونص يُنسخ (بداية المفتاح)، وروابطها.
+class _GuideStep {
+  const _GuideStep(this.title, this.body, {this.code, this.links = const []});
+  final String title;
+  final String body;
+  final String? code;
+  final List<_GuideLink> links;
+}
+
+/// ملاحظة أسفل الخطوات.
+class _GuideNote {
+  const _GuideNote(this.icon, this.text, {this.warn = false});
+  final IconData icon;
+  final String text;
+  final bool warn;
+}
+
+class _Guide {
+  const _Guide({required this.title, required this.tagline, required this.badges, required this.links, required this.steps, required this.notes});
+  final String title;
+  final String tagline;
+  final List<String> badges;
+  final List<_GuideLink> links;
+  final List<_GuideStep> steps;
+  final List<_GuideNote> notes;
+
+  static _Guide of(AiProvider p) => switch (p) {
+        AiProvider.gemini => const _Guide(
+            title: 'مفتاح Google Gemini مجاني',
+            tagline: 'الأقوى بين المجانيات، ويقرأ ملف الـ PDF مباشرة',
+            badges: ['بالإيميل فقط', 'بلا بطاقة', 'يقرأ PDF'],
+            links: [
+              _GuideLink('Google AI Studio', 'https://aistudio.google.com', Icons.home_rounded),
+              _GuideLink('صفحة المفاتيح', 'https://aistudio.google.com/app/apikey', Icons.key_rounded),
+              _GuideLink('حدود الاستخدام', 'https://aistudio.google.com/rate-limit', Icons.speed_rounded),
+              _GuideLink('الحصة المجانية', 'https://ai.google.dev/gemini-api/docs/pricing', Icons.receipt_long_rounded),
+            ],
+            steps: [
+              _GuideStep('سجّل الدخول', 'افتح Google AI Studio وادخل بحساب Google — إيميل فقط، بلا رقم هاتف ولا بطاقة.',
+                  links: [_GuideLink('افتح AI Studio', 'https://aistudio.google.com')]),
+              _GuideStep('أنشئ المفتاح', 'من صفحة المفاتيح اضغط «Create API key»، واختر مشروعاً أو أنشئ مشروعاً جديداً.',
+                  links: [_GuideLink('صفحة المفاتيح', 'https://aistudio.google.com/app/apikey')]),
+              _GuideStep('انسخه', 'المفتاح يبدأ هكذا:', code: 'AIza…'),
+              _GuideStep('الصقه واختبر', 'في خانة Google Gemini هنا ثم «حفظ واختبار» — يختبر البرنامج نماذج Gemini المتاحة لحسابك ويرتّبها لك.'),
+            ],
+            notes: [
+              _GuideNote(Icons.autorenew_rounded, 'الحصة مجانية وتتجدد يومياً. أرقامها الدقيقة في صفحة «حدود الاستخدام».'),
+              _GuideNote(Icons.layers_rounded, 'مفاتيح المشروع نفسه تتشارك الحصة نفسها — المفتاح الثاني ينفع فقط إن كان من مشروع آخر.'),
+              _GuideNote(Icons.privacy_tip_outlined, 'في الطبقة المجانية قد تستعمل Google المحتوى المرسل لتحسين منتجاتها.', warn: true),
+            ],
+          ),
+        AiProvider.groq => const _Guide(
+            title: 'مفتاح Groq مجاني',
+            tagline: 'سريع جداً — Qwen 3.8 يقرأ صور الفواتير',
+            badges: ['بالإيميل فقط', 'بلا بطاقة', '1000 طلب يومياً'],
+            links: [
+              _GuideLink('Groq Console', 'https://console.groq.com', Icons.home_rounded),
+              _GuideLink('صفحة المفاتيح', 'https://console.groq.com/keys', Icons.key_rounded),
+              _GuideLink('قراءة الصور', 'https://console.groq.com/docs/vision', Icons.image_search_rounded),
+            ],
+            steps: [
+              _GuideStep('أنشئ حساباً', 'سجّل بالإيميل أو بحساب Google أو GitHub.',
+                  links: [_GuideLink('افتح Groq Console', 'https://console.groq.com')]),
+              _GuideStep('أنشئ المفتاح', 'من «API Keys» اضغط «Create API Key»، اكتب اسماً مثل «الناصر» ثم Submit.',
+                  links: [_GuideLink('صفحة المفاتيح', 'https://console.groq.com/keys')]),
+              _GuideStep('انسخه فوراً', 'يظهر مرة واحدة فقط، ويبدأ هكذا:', code: 'gsk_…'),
+              _GuideStep('الصقه واختبر', 'في خانة Groq هنا ثم «حفظ واختبار».'),
+            ],
+            notes: [
+              _GuideNote(Icons.image_rounded, 'النموذج الذي يقرأ الصور: qwen/qwen3.8-27b — 3 صور في الطلب، والـ PDF الطويل يُقسم تلقائياً.'),
+              _GuideNote(Icons.handshake_rounded, 'حدّه 8000 توكن في الدقيقة: يعمل مع «التعاون بين نموذجين» ولا يستطيع رؤية قائمة موادك كاملة.'),
+            ],
+          ),
+        AiProvider.openrouter => const _Guide(
+            title: 'مفتاح OpenRouter مجاني',
+            tagline: 'نماذج مجانية متعددة تقرأ الصور (Gemma، Nemotron…)',
+            badges: ['بالإيميل فقط', 'بلا بطاقة', '50 طلباً يومياً'],
+            links: [
+              _GuideLink('موقع OpenRouter', 'https://openrouter.ai', Icons.home_rounded),
+              _GuideLink('صفحة المفاتيح', 'https://openrouter.ai/settings/keys', Icons.key_rounded),
+              _GuideLink('إعدادات الخصوصية', 'https://openrouter.ai/settings/privacy', Icons.shield_outlined),
+              _GuideLink('النماذج المجانية', 'https://openrouter.ai/collections/free-models', Icons.card_giftcard_rounded),
+            ],
+            steps: [
+              _GuideStep('أنشئ حساباً', 'اضغط «Sign in» وسجّل بحساب Google أو GitHub أو بإيميلك. لا رقم هاتف ولا بطاقة.',
+                  links: [_GuideLink('افتح OpenRouter', 'https://openrouter.ai')]),
+              _GuideStep('افتح صفحة المفاتيح', 'من القائمة: Settings ← Keys.',
+                  links: [_GuideLink('صفحة المفاتيح', 'https://openrouter.ai/settings/keys')]),
+              _GuideStep('أنشئ المفتاح', 'اضغط «Create Key»، اكتب اسماً مثل «الناصر»، اترك Credit limit فارغاً ثم Create.'),
+              _GuideStep('انسخه فوراً', 'يظهر مرة واحدة فقط، ويبدأ هكذا:', code: 'sk-or-v1-…'),
+              _GuideStep('الصقه واختبر',
+                  'في خانة OpenRouter هنا ثم «حفظ واختبار»: يجلب البرنامج النماذج المجانية التي تقرأ الصور، ويختبر أفضل 5، ويرتّبها لك.'),
+              _GuideStep('إن ظهر خطأ «data policy»', 'افتح إعدادات الخصوصية واسمح بالنماذج المجانية، ثم أعد الاختبار.',
+                  links: [_GuideLink('إعدادات الخصوصية', 'https://openrouter.ai/settings/privacy')]),
+            ],
+            notes: [
+              _GuideNote(Icons.autorenew_rounded,
+                  '50 طلباً يومياً لكل النماذج المجانية معاً، و1000 إن شحنت 10\$ مرة واحدة (لا تُصرف على المجانية). كل فاتورة ≈ طلبان.'),
+              _GuideNote(Icons.swap_horiz_rounded, 'النماذج المجانية تتبدل كل أسابيع — أعد الاختبار شهرياً.'),
+              _GuideNote(Icons.picture_as_pdf_outlined,
+                  'لا يُرسل البرنامج ملف PDF إلى OpenRouter أبداً (يقرؤه بخدمة مدفوعة) — يحوّل الصفحات إلى صور بنفسه.',
+                  warn: true),
+            ],
+          ),
+      };
+}
+
+/// يفتح الرابط في المتصفح، وإن تعذّر يُنسخ.
+Future<void> _openLink(BuildContext context, String url) async {
+  var ok = false;
+  try {
+    ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  } catch (_) {}
+  if (ok) return;
+  await Clipboard.setData(ClipboardData(text: url));
+  if (context.mounted) setToast(context, 'تعذّر فتح المتصفح — نُسخ الرابط: $url');
+}
+
 class _GuideDialog extends StatelessWidget {
   const _GuideDialog({required this.provider});
   final AiProvider provider;
 
-  List<String> get _steps => switch (provider) {
-        AiProvider.gemini => const [
-            'افتح Google AI Studio (الزر أدناه) وسجّل الدخول بحساب Google — إيميل فقط، بلا رقم هاتف ولا بطاقة.',
-            'اضغط «Create API key» (أو Get API key ثم Create). اختر مشروعاً أو أنشئ مشروعاً جديداً.',
-            'انسخ المفتاح (يبدأ بـ AIza…) والصقه في خانة Google Gemini هنا، ثم «حفظ واختبار».',
-            'يختبر البرنامج نماذج Gemini المتاحة لحسابك ويرتّبها. الأفضل عادةً Gemini 3.8 Flash ثم Flash-Lite.',
-            'الحصة مجانية وتتجدد يومياً. أرقامها الدقيقة في AI Studio ← Rate limits. '
-                'مفاتيح المشروع نفسه تتشارك الحصة نفسها — المفتاح الثاني ينفع فقط إن كان من مشروع آخر.',
-            'الخصوصية: في الطبقة المجانية قد تستعمل Google المحتوى المرسل لتحسين منتجاتها.',
-          ],
-        AiProvider.groq => const [
-            'افتح Groq Console (الزر أدناه) وسجّل بالإيميل أو بحساب Google/GitHub.',
-            'من القائمة: API Keys ← Create API Key ← اكتب اسماً (مثلاً «الناصر») ← Submit.',
-            'انسخ المفتاح فوراً (يبدأ بـ gsk_…) — لا يظهر مرة أخرى. الصقه في خانة Groq هنا، ثم «حفظ واختبار».',
-            'النموذج الذي يقرأ الصور: qwen/qwen3.8-27b — حصته المجانية 1000 طلب يومياً.',
-            'حدوده: 3 صور في الطلب (الـ PDF الطويل يُقسم تلقائياً)، و8000 توكن في الدقيقة — '
-                'لهذا يعمل مع «التعاون بين نموذجين» ولا يستطيع رؤية قائمة موادك كاملة.',
-          ],
-        AiProvider.openrouter => const [
-            'افتح openrouter.ai واضغط Sign in — سجّل بحساب Google أو GitHub أو بإيميلك. لا رقم هاتف ولا بطاقة.',
-            'افتح صفحة المفاتيح (الزر أدناه، أو من القائمة: Settings ← Keys).',
-            'اضغط «Create Key»، اكتب اسماً (مثلاً «الناصر»)، اترك Credit limit فارغاً، ثم Create.',
-            'انسخ المفتاح فوراً (يبدأ بـ sk-or-v1-…) — لا يظهر مرة أخرى.',
-            'الصقه في خانة OpenRouter هنا واضغط «حفظ واختبار»: يجلب البرنامج النماذج المجانية التي تقرأ الصور، '
-                'ويختبر أفضل 5 على فاتورة تجريبية، ويرتّبها لك — اعتمد المقترحة بضغطة.',
-            'إن ظهر خطأ «data policy» أو «No endpoints found»: افتح Settings ← Privacy في OpenRouter '
-                'واسمح بالنماذج المجانية، ثم أعد الاختبار.',
-            'الحصة: 50 طلباً يومياً لكل النماذج المجانية (:free) معاً، وترتفع إلى 1000 يومياً إن شحنت 10\$ مرة واحدة '
-                '(لا تُصرف على المجانية). كل فاتورة ≈ طلبان (قراءة + مطابقة).',
-            'النماذج المجانية تتبدل كل أسابيع: أعد الاختبار شهرياً. البرنامج لا يرسل PDF إلى OpenRouter أبداً '
-                '(يقرؤه بخدمة مدفوعة) — يحوّل الصفحات إلى صور بنفسه.',
-          ],
-      };
+  @override
+  Widget build(BuildContext context) {
+    final g = _Guide.of(provider);
+    final c = _providerColor(provider);
+    final h = MediaQuery.of(context).size.height;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      backgroundColor: kSetBg,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.96, end: 1),
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, child) => Opacity(opacity: ((v - 0.96) / 0.04).clamp(0.0, 1.0), child: Transform.scale(scale: v, child: child)),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 620, maxHeight: h * 0.88),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _GuideHeader(guide: g, provider: provider, color: c),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  const _SectionLabel('روابط سريعة'),
+                  const SizedBox(height: 8),
+                  Wrap(spacing: 8, runSpacing: 8, children: [for (final l in g.links) _LinkChip(link: l, color: c)]),
+                  const SizedBox(height: 20),
+                  const _SectionLabel('الخطوات'),
+                  const SizedBox(height: 10),
+                  for (var i = 0; i < g.steps.length; i++)
+                    _StepTile(index: i, step: g.steps[i], color: c, last: i == g.steps.length - 1),
+                  if (g.notes.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    const _SectionLabel('معلومات مهمة'),
+                    const SizedBox(height: 8),
+                    for (final n in g.notes) _NoteCard(note: n),
+                  ],
+                ]),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+              decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: kSetBorder))),
+              child: Row(children: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
+                const Spacer(),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: c,
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: () => _openLink(context, provider.keysUrl),
+                  icon: const Icon(Icons.key_rounded, size: 18),
+                  label: const Text('افتح صفحة المفاتيح', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _GuideHeader extends StatelessWidget {
+  const _GuideHeader({required this.guide, required this.provider, required this.color});
+  final _Guide guide;
+  final AiProvider provider;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final c = _providerColor(provider);
-    return AlertDialog(
-      title: Row(children: [
-        Icon(_providerIcon(provider), color: c),
-        const SizedBox(width: 8),
-        Expanded(child: Text('مفتاح ${provider.label} — خطوة بخطوة')),
+    final dark = Color.lerp(color, Colors.black, 0.28)!;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [color, dark], begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.32)),
+            ),
+            child: Icon(_providerIcon(provider), color: Colors.white, size: 28),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(guide.title, style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              Text(guide.tagline, style: TextStyle(color: Colors.white.withValues(alpha: 0.88), height: 1.4)),
+            ]),
+          ),
+          IconButton(
+            tooltip: 'إغلاق',
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.close_rounded, color: Colors.white),
+          ),
+        ]),
+        const SizedBox(height: 14),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final b in guide.badges)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.check_rounded, size: 15, color: Colors.white),
+                const SizedBox(width: 4),
+                Text(b, style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w700)),
+              ]),
+            ),
+        ]),
       ]),
-      content: SizedBox(width: 560, child: SingleChildScrollView(child: SetSteps(_steps, color: c))),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
-        FilledButton.icon(
-          style: FilledButton.styleFrom(backgroundColor: c),
-          onPressed: () async {
-            try {
-              await launchUrl(Uri.parse(provider.keysUrl), mode: LaunchMode.externalApplication);
-            } catch (_) {
-              await Clipboard.setData(ClipboardData(text: provider.keysUrl));
-              if (context.mounted) setToast(context, 'نُسخ الرابط: ${provider.keysUrl}');
-            }
-          },
-          icon: const Icon(Icons.open_in_new_rounded),
-          label: const Text('افتح صفحة المفاتيح'),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) =>
+      Text(text, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: kSetMuted, letterSpacing: 0.2));
+}
+
+/// رابط قابل للضغط: يفتح المتصفح، ويتلوّن عند المرور عليه.
+class _LinkChip extends StatefulWidget {
+  const _LinkChip({required this.link, required this.color});
+  final _GuideLink link;
+  final Color color;
+  @override
+  State<_LinkChip> createState() => _LinkChipState();
+}
+
+class _LinkChipState extends State<_LinkChip> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.color;
+    return Semantics(
+      link: true,
+      label: widget.link.label,
+      child: Tooltip(
+        message: widget.link.url,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            decoration: BoxDecoration(
+              color: _hover ? c.withValues(alpha: 0.12) : Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: _hover ? c : c.withValues(alpha: 0.28)),
+              boxShadow: _hover ? [BoxShadow(color: c.withValues(alpha: 0.18), blurRadius: 12, offset: const Offset(0, 4))] : const [],
+            ),
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _openLink(context, widget.link.url),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(widget.link.icon, size: 17, color: c),
+                    const SizedBox(width: 6),
+                    Text(widget.link.label, style: TextStyle(color: c, fontWeight: FontWeight.w700, decoration: _hover ? TextDecoration.underline : null)),
+                    const SizedBox(width: 4),
+                    Icon(Icons.north_west_rounded, size: 13, color: c.withValues(alpha: 0.7)),
+                  ]),
+                ),
+              ),
+            ),
+          ),
         ),
-      ],
+      ),
+    );
+  }
+}
+
+/// خطوة في خط زمني مرقّم.
+class _StepTile extends StatelessWidget {
+  const _StepTile({required this.index, required this.step, required this.color, required this.last});
+  final int index;
+  final _GuideStep step;
+  final Color color;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        SizedBox(
+          width: 34,
+          child: Column(children: [
+            Container(
+              width: 30,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(colors: [color, Color.lerp(color, Colors.black, 0.2)!]),
+                boxShadow: [BoxShadow(color: color.withValues(alpha: 0.30), blurRadius: 8, offset: const Offset(0, 3))],
+              ),
+              child: Text('${index + 1}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+            ),
+            if (!last)
+              Expanded(
+                child: Container(width: 2, margin: const EdgeInsets.symmetric(vertical: 4), color: color.withValues(alpha: 0.18)),
+              ),
+          ]),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: last ? 4 : 18, top: 4),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(step.title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: kSetText)),
+              const SizedBox(height: 4),
+              Text(step.body, style: const TextStyle(color: kSetMuted, height: 1.55)),
+              if (step.code != null) ...[
+                const SizedBox(height: 8),
+                _CodeChip(code: step.code!, color: color),
+              ],
+              if (step.links.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(spacing: 8, runSpacing: 6, children: [
+                  for (final l in step.links)
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: color,
+                        backgroundColor: color.withValues(alpha: 0.08),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () => _openLink(context, l.url),
+                      icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                      label: Text(l.label, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                ]),
+              ],
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// بداية المفتاح بخط ثابت — ليعرف المستخدم أنه نسخ الشيء الصحيح.
+class _CodeChip extends StatelessWidget {
+  const _CodeChip({required this.code, required this.color});
+  final String code;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F172A),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.vpn_key_rounded, size: 15, color: Color(0xFF94A3B8)),
+          const SizedBox(width: 8),
+          Text(code,
+              textDirection: TextDirection.ltr,
+              style: const TextStyle(color: Color(0xFFE2E8F0), fontFamily: 'monospace', fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+        ]),
+      );
+}
+
+class _NoteCard extends StatelessWidget {
+  const _NoteCard({required this.note});
+  final _GuideNote note;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = note.warn ? kSetOrange : kSetBlue;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: c.withValues(alpha: 0.22)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+          child: Icon(note.icon, size: 17, color: c),
+        ),
+        const SizedBox(width: 10),
+        Expanded(child: Text(note.text, style: const TextStyle(color: kSetText, height: 1.55))),
+      ]),
     );
   }
 }
