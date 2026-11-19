@@ -144,10 +144,12 @@ class _LicenseScreenState extends State<LicenseScreen> {
       if (widget.accountOnly && await _separateFromOldShop(oldProject)) return;
       if (!mounted) return;
       final sync = _licenseService.payload?.syncAllowed == true;
-      // 1) جهاز إضافي على شبكة حاسبة السيرفر ⇒ يرتبط بها وحده فوراً (طرفية على
-      //    قاعدتها مباشرة) — بلا أي سؤال. هذا يسبق المزامنة: نفس المحل = نفس القاعدة.
-      if (_mode == 1 && await _autoJoinLan(keepSearching: !sync)) return;
-      // 2) لا سيرفر على هذه الشبكة (فرع/محافظة أخرى) + حساب مزامنة ⇒ عبر الإنترنت
+      // 1) حساب بلا مزامنة: الجهاز الإضافي طرفية على حاسبة السيرفر في شبكة المحل
+      //    (يرتبط بها وحده فوراً، أو يبقى يبحث عنها).
+      //    ⭐ حساب مزامنة: الجهاز الإضافي مستقل — قاعدته عنده ويتزامن عبر الإنترنت من أي
+      //    مكان وأي شبكة، ولا يعتمد على تشغيل الجهاز الرئيسي. لا يرتبط بحاسبة السيرفر.
+      if (_mode == 1 && !sync && await _autoJoinLan(keepSearching: true)) return;
+      // 2) حساب مزامنة ⇒ عبر الإنترنت
       if (LicenseService.syncLinkApplied) {
         await _restartForSync();
         return;
@@ -276,10 +278,10 @@ class _LicenseScreenState extends State<LicenseScreen> {
         title: const Text('✅ أُضيف هذا الجهاز'),
         content: const Text(
           'هذا الحساب يشمل المزامنة عبر الإنترنت، لكن إعداد المزامنة لم يصل بعد.\n\n'
-          '• افتح البرنامج على الجهاز الرئيسي وهو متصل بالإنترنت: يرسل إعداده تلقائياً.\n'
+          '• اضبط المزامنة على الجهاز الرئيسي وهو متصل بالإنترنت: يرسل إعداده تلقائياً.\n'
           '• أو اطلب من الدعم ضبط المزامنة لحسابك.\n\n'
-          'عند وصوله يتصل هذا الجهاز وحده (من أي مكان، لا يلزم أن يكون على شبكة المحل) '
-          'ويطلب منك إعادة تشغيل البرنامج مرة واحدة.',
+          'اترك البرنامج مفتوحاً هنا: يسأل عن الإعداد كل دقيقة، وعند وصوله يتصل هذا الجهاز '
+          'وحده (من أي مكان، لا يلزم أن يكون على شبكة المحل) ويطلب إعادة تشغيل البرنامج مرة واحدة.',
           style: TextStyle(height: 1.6),
         ),
         actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('متابعة'))],

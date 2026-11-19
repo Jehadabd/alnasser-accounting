@@ -12,7 +12,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../services/firebase_sync/firebase_custom_config.dart';
 import '../services/license_service.dart';
+import 'firebase_custom_setup_screen.dart';
 import '../lan/lan_bootstrap.dart' show LanRuntime;
 import '../erp/erp_kit.dart' show ErpDialog;
 import '../widgets/settings_kit.dart';
@@ -68,9 +70,15 @@ class _LicenseDevicesScreenState extends State<LicenseDevicesScreen> {
   }
 
   Future<void> _addDevice() async {
+    final sync = _license.payload?.syncAllowed == true;
+    // ⭐ حساب مزامنة والمزامنة غير مضبوطة هنا بعد: الرمز لا يحمل ربطها، فيبقى الجهاز
+    //    الجديد ينتظر. نعرض ذلك قبل إنشاء الرمز لا بعده.
+    if (sync && !await _syncReadyOrAsk()) return;
+    if (!mounted) return;
     setState(() => _loading = true);
-    // 🖧 الرئيسي يخدم الأجهزة على شبكة المحل: الجهاز الجديد يرتبط به وحده بعد الرمز
-    await LanRuntime.ensureServerForPairing();
+    // 🖧 حساب بلا مزامنة: الرئيسي يخدم الأجهزة على شبكة المحل (الجديد يرتبط به بعد الرمز).
+    //    حساب مزامنة: الجهاز الإضافي مستقل يتصل عبر الإنترنت — لا يصير الرئيسي سيرفراً لأجله.
+    if (!sync) await LanRuntime.ensureServerForPairing();
     final r = await _license.createPairCode();
     if (!mounted) return;
     setState(() => _loading = false);
@@ -284,6 +292,54 @@ class _LicenseDevicesScreenState extends State<LicenseDevicesScreen> {
         ),
       ]),
     );
+  }
+
+  /// حساب مزامنة: هل ربط المزامنة مضبوط على هذا الجهاز الرئيسي؟ إن لا: يُسأل المستخدم.
+  /// true = أنشئ الرمز (مضبوطة، أو اختار المتابعة رغم ذلك).
+  Future<bool> _syncReadyOrAsk() async {
+    var ready = false;
+    try {
+      ready = await FirebaseCustomConfig.isCustomConfigured();
+    } catch (_) {}
+    if (ready || !mounted) return ready;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => ErpDialog(
+        title: 'المزامنة غير مضبوطة على هذا الجهاز بعد',
+        icon: Icons.cloud_off_rounded,
+        color: kSetOrange,
+        content: const Text(
+          'حسابك يشمل المزامنة عبر الإنترنت، لكنها لم تُضبط على هذا الجهاز الرئيسي. '
+          'الجهاز الإضافي يأخذ إعدادها من هنا، فإن أنشأت الرمز الآن يُضاف لكنه لا يعمل '
+          'حتى تضبطها (ثم يتصل وحده).
+
+'
+          'الأفضل: اضبط المزامنة أولاً ثم أنشئ الرمز.',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'anyway'), child: const Text('أنشئ الرمز على أي حال')),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, 'setup'),
+            icon: const Icon(Icons.cloud_sync_rounded),
+            label: const Text('اضبط المزامنة الآن'),
+          ),
+        ],
+      ),
+    );
+    if (choice == 'anyway') return true;
+    if (choice != 'setup' || !mounted) return false;
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()));
+    try {
+      ready = await FirebaseCustomConfig.isCustomConfigured();
+    } catch (_) {}
+    if (!mounted) return false;
+    if (!ready) {
+      setToast(context, 'لم تُضبط المزامنة بعد — اضبطها ثم اضغط «إضافة جهاز» من جديد', error: true);
+      return false;
+    }
+    return true;
   }
 
   Widget _deviceTile(LicenseDeviceInfo dev) {

@@ -4,6 +4,9 @@
 // الواجهة بطقم شاشات الإعدادات الموحّد (settings_kit): بطاقة حالة في الأعلى،
 // اختيار الوضع، ثم بطاقات الوضع المختار — والمنطق (التحميل، البحث، الاختبار،
 // الحفظ) كما هو.
+// ⭐ الجهاز الإضافي (مضاف برمز من الجهاز الرئيسي) لا يصير «حاسبة السيرفر» أبداً، ولا
+//    «جهازاً مستقلاً» بقاعدة منفصلة — إلا بحساب مزامنة: «مستقل بالمزامنة» يعمل عبر
+//    الإنترنت من أي مكان ولا يعتمد على تشغيل الجهاز الرئيسي.
 
 import 'dart:async';
 import 'dart:io';
@@ -17,6 +20,7 @@ import 'lan_codec.dart';
 import 'lan_server.dart';
 import 'lan_settings.dart';
 import 'windows_autostart.dart';
+import '../services/firebase_sync/firebase_custom_config.dart';
 import '../services/license_service.dart';
 import '../widgets/settings_kit.dart';
 
@@ -45,6 +49,27 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   final _secretFocus = FocusNode();
   StreamSubscription<List<LanClientInfo>>? _sub;
   List<LanClientInfo> _clients = const [];
+
+  /// جهاز إضافي في الترخيص (لا رئيسي).
+  bool get _extra {
+    final l = LicenseService().getStoredLicense();
+    return l != null && !l.isMainDevice;
+  }
+
+  /// جهاز إضافي بحساب يشمل المزامنة عبر الإنترنت.
+  bool get _extraSync => _extra && (LicenseService().getStoredLicense()?.isSyncAllowed ?? false);
+
+  /// الأوضاع المسموحة لهذا الجهاز.
+  bool _allowed(LanMode m) => switch (m) {
+        LanMode.server => !_extra,
+        LanMode.standalone => !_extra || _extraSync,
+        LanMode.client => true,
+      };
+
+  /// اسم الوضع ووصفه لهذا الجهاز.
+  (IconData, String, String, Color) _info(LanMode m) => m == LanMode.standalone && _extraSync
+      ? (Icons.cloud_sync_rounded, 'مستقل بالمزامنة', 'قاعدته على هذا الجهاز، ويتزامن عبر الإنترنت من أي مكان', kSetNavy)
+      : _modes[m]!;
 
   @override
   void initState() {
@@ -155,6 +180,28 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   }
 
   Future<void> _save() async {
+    if (!_allowed(_mode)) {
+      setToast(
+          context,
+          _mode == LanMode.server
+              ? 'هذا جهاز إضافي في الترخيص — لا يكون حاسبة السيرفر. السيرفر هو الجهاز الرئيسي.'
+              : 'هذا جهاز إضافي بحساب بلا مزامنة — يعمل طرفية على حاسبة السيرفر فقط.',
+          error: true);
+      return;
+    }
+    // ⭐ جهاز إضافي ← «مستقل بالمزامنة»: يجلب ربط المزامنة من سيرفر الترخيص قبل الحفظ
+    var syncLinked = true;
+    if (_extraSync && _mode == LanMode.standalone) {
+      try {
+        await LicenseService().refreshNow();
+      } catch (_) {}
+      try {
+        syncLinked = await FirebaseCustomConfig.isCustomConfigured();
+      } catch (_) {
+        syncLinked = false;
+      }
+      if (!mounted) return;
+    }
     final next = _s.copyWith(
       mode: _mode,
       host: _host.text.trim(),
@@ -194,7 +241,11 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                 'ثم على كل طرفية اختر «طرفية» وأدخل رمز الربط:\n\n${next.secret}',
           LanMode.client =>
             'أعد تشغيل البرنامج ليتصل بالسيرفر. من الآن كل البيانات تُقرأ وتُكتب في قاعدة السيرفر.',
-          LanMode.standalone => 'أعد تشغيل البرنامج ليعمل على قاعدة هذه الحاسبة وحدها.',
+          LanMode.standalone => _extraSync
+              ? 'أعد تشغيل البرنامج: يعمل هذا الجهاز مستقلاً على قاعدته، ويجلب بيانات المحل وحسابات '
+                  'الموظفين عبر المزامنة من أي شبكة — ولا يعتمد على تشغيل الجهاز الرئيسي.'
+                  '${syncLinked ? '' : '\n\nلم يصل إعداد المزامنة بعد: يصل وحده حين تُضبط المزامنة على الجهاز الرئيسي.'}'
+              : 'أعد تشغيل البرنامج ليعمل على قاعدة هذه الحاسبة وحدها.',
         }),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('لاحقاً')),
@@ -225,7 +276,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       });
 
   Widget _hero(bool running) {
-    final saved = _modes[_s.mode]!;
+    final saved = _info(_s.mode);
     final (String status, bool ok) = switch (_s.mode) {
       LanMode.server => (
           running ? 'السيرفر يعمل — ${_clients.length} طرفية متصلة' : 'محفوظ كسيرفر لكنه لا يعمل الآن — أعد تشغيل البرنامج',
@@ -237,7 +288,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
               : 'متصلة بـ ${_s.serverName.isEmpty ? _s.host : '«${_s.serverName}» (${_s.host})'}',
           _s.host.isNotEmpty
         ),
-      LanMode.standalone => ('يعمل وحده — لا شبكة', true),
+      LanMode.standalone => (_extraSync ? 'مستقل — يتزامن عبر الإنترنت' : 'يعمل وحده — لا شبكة', true),
     };
     return SetHero(
       icon: saved.$1,
@@ -250,7 +301,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   }
 
   Widget _modeTile(LanMode m) {
-    final (icon, title, desc, color) = _modes[m]!;
+    final (icon, title, desc, color) = _info(m);
     final sel = _mode == m;
     final current = _s.mode == m;
     return Expanded(
@@ -688,19 +739,30 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
           padding: const EdgeInsets.only(bottom: 14),
           child: IntrinsicHeight(
             child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              for (final m in LanMode.values) _modeTile(m),
+              for (final m in LanMode.values)
+                if (_allowed(m)) _modeTile(m),
             ]),
           ),
         ),
+        if (_extra)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: SetBanner(
+              _extraSync
+                  ? 'هذا جهاز إضافي في ترخيص المحل. «مستقل بالمزامنة» يعمل من أي مكان عبر الإنترنت ولا يعتمد '
+                      'على تشغيل الجهاز الرئيسي (المستحسن). «طرفية» تعمل على قاعدة حاسبة السيرفر ولا تعمل خارج شبكة المحل.'
+                  : 'هذا جهاز إضافي في ترخيص المحل بلا مزامنة: يعمل طرفية على حاسبة السيرفر (الجهاز الرئيسي) عبر شبكة المحل.',
+            ),
+          ),
         if (changed)
           Padding(
             padding: const EdgeInsets.only(bottom: 14),
             child: SetBanner(
-              'غيّرت الوضع إلى «${_modes[_mode]!.$2}» — لا يُطبَّق حتى تضغط «حفظ» وتعيد تشغيل البرنامج.',
+              'غيّرت الوضع إلى «${_info(_mode).$2}» — لا يُطبَّق حتى تضغط «حفظ» وتعيد تشغيل البرنامج.',
               kind: SetBannerKind.warn,
             ),
           ),
-        if (_mode == LanMode.standalone)
+        if (_mode == LanMode.standalone && !_extraSync)
           const Padding(
             padding: EdgeInsets.only(bottom: 14),
             child: SetBanner('قاعدة البيانات على هذا الجهاز وحده. لا يتصل به جهاز آخر ولا يتصل هو بسيرفر.'),
@@ -718,9 +780,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
         ],
         _guide(),
         SetPrimaryButton(
-          label: changed ? 'حفظ والتحويل إلى «${_modes[_mode]!.$2}»' : 'حفظ',
+          label: changed ? 'حفظ والتحويل إلى «${_info(_mode).$2}»' : 'حفظ',
           icon: Icons.save_rounded,
-          color: _modes[_mode]!.$4,
+          color: _info(_mode).$4,
           onPressed: _save,
         ),
         const SizedBox(height: 12),

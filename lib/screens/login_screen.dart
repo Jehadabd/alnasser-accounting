@@ -120,8 +120,28 @@ class _LoginScreenState extends State<LoginScreen> {
   int _lanTries = 0;
   String _lanStatus = 'أبحث عن حاسبة السيرفر على شبكة المحل...';
 
+  /// ⭐ جهاز إضافي بحساب مزامنة: مستقل يعمل عبر الإنترنت — لا يبحث عن حاسبة السيرفر.
+  bool _syncMode = false;
+
+  /// وصل ربط المزامنة في هذه الجلسة: يلزم إعادة تشغيل البرنامج ليتصل.
+  bool _syncReady = false;
+
   void _startSearchingLan({required bool syncAllowed, required bool viaSync}) {
     if (kIsWeb) return;
+    if (syncAllowed) {
+      _syncMode = true;
+      final restart = FirebaseCustomConfig.restartRequired;
+      setState(() {
+        _syncReady = restart;
+        _lanStatus = restart
+            ? 'وصل إعداد المزامنة ✅ — أعد تشغيل البرنامج ليتصل ويجلب البيانات وحسابات الموظفين.'
+            : viaSync
+                ? 'متصل بالمزامنة — أنتظر وصول حسابات الموظفين من الجهاز الرئيسي عبر الإنترنت...'
+                : 'أنتظر وصول إعداد المزامنة من الجهاز الرئيسي عبر الإنترنت...';
+      });
+      if (!viaSync && !restart) _startWaitingForSyncLink();
+      return;
+    }
     Future<void> attempt() async {
       if (_joining || _mode != _Mode.waitUsers) return;
       _joining = true;
@@ -167,6 +187,39 @@ class _LoginScreenState extends State<LoginScreen> {
 
     unawaited(attempt());
     _lanTimer = Timer.periodic(const Duration(seconds: 15), (_) => unawaited(attempt()));
+  }
+
+  /// ⭐ جهاز إضافي بحساب مزامنة لم يصله ربطها بعد (أُضيف قبل ضبط المزامنة على الجهاز
+  /// الرئيسي): يسأل سيرفر الترخيص — أول ربع ساعة كل دقيقة، ثم كل 5 دقائق — فيصل
+  /// الربط وحده حين يضبطه الرئيسي، بلا انتظار التحقق الدوري (كل 4 ساعات).
+  void _startWaitingForSyncLink() {
+    var busy = false;
+    var ticks = 0;
+    Future<void> attempt() async {
+      if (busy || _syncReady || _mode != _Mode.waitUsers) return;
+      busy = true;
+      var arrived = false;
+      try {
+        arrived = await FirebaseCustomConfig.isCustomConfigured();
+        if (!arrived && (ticks < 15 || ticks % 5 == 0)) {
+          await _license.refreshNow();
+          arrived = await FirebaseCustomConfig.isCustomConfigured();
+        }
+      } catch (_) {}
+      ticks++;
+      busy = false;
+      if (!mounted || _mode != _Mode.waitUsers) return;
+      setState(() {
+        _lanTries++;
+        _syncReady = arrived;
+        _lanStatus = arrived
+            ? 'وصل إعداد المزامنة ✅ — أعد تشغيل البرنامج ليتصل ويجلب البيانات وحسابات الموظفين.'
+            : 'لم يصل إعداد المزامنة بعد — أسأل عنه تلقائياً كل دقيقة.';
+      });
+    }
+
+    unawaited(attempt());
+    _lanTimer = Timer.periodic(const Duration(minutes: 1), (_) => unawaited(attempt()));
   }
 
   /// ⭐ «تفعيل بحساب آخر»: الجهاز يصير مستقلاً لشخص آخر. من جهاز إضافي يُرفض إن
@@ -674,7 +727,8 @@ class _LoginScreenState extends State<LoginScreen> {
   /// ⭐ جهاز إضافي ينتظر الجهاز الرئيسي: لا «إنشاء مدير». يبحث عن حاسبة السيرفر
   /// وحده، وبعد عدة محاولات فاشلة فقط يظهر سبب محتمل وإدخال العنوان يدوياً.
   Widget _waitUsersPanel() {
-    final stuck = _lanTries >= 3;
+    final stuck = _lanTries >= 3 && !_syncMode;
+    final syncStuck = _syncMode && !_syncReady && _lanTries >= 3;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -749,6 +803,39 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
         ),
+        if (syncStuck)
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Text(
+                'تأكد من شيئين:\n'
+                '• هذا الجهاز متصل بالإنترنت (أي شبكة، لا يلزم أن تكون شبكة المحل).\n'
+                '• المزامنة مضبوطة على الجهاز الرئيسي (الإعدادات ← المزامنة) وفُتح وهو متصل بالإنترنت.',
+                style: TextStyle(color: Colors.amber.shade900, height: 1.6),
+              ),
+            ),
+          ),
+        if (_syncReady)
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: FilledButton.icon(
+              onPressed: LanRuntime.relaunch,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              icon: const Icon(Icons.restart_alt_rounded),
+              label: Text(!kIsWeb && Platform.isWindows
+                  ? 'إعادة تشغيل البرنامج الآن'
+                  : 'إغلاق البرنامج الآن — ثم افتحه من جديد'),
+            ),
+          ),
         const SizedBox(height: 22),
         OutlinedButton.icon(
           onPressed: _activateOtherAccount,

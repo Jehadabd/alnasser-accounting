@@ -41,7 +41,10 @@ class LanRuntime {
 
     // 🖧 «طرفية» تشير إلى هذه الحاسبة نفسها (اسمها أو أحد عناوينها) خطأ مؤكد:
     // هذه الحاسبة هي السيرفر. تصير سيرفراً وتفتح مباشرة بلا رسالة «تعذّر الاتصال».
-    if (Platform.isWindows && await pointsToThisPc(settings)) {
+    // (الجهاز الإضافي في الترخيص لا يصير سيرفراً أبداً)
+    await LicenseService.init();
+    final extraDevice = LicenseService().getStoredLicense()?.isMainDevice == false;
+    if (Platform.isWindows && !extraDevice && await pointsToThisPc(settings)) {
       settings = settings.copyWith(mode: LanMode.server);
       await settings.save();
       AppNetworkMode.current = settings;
@@ -374,8 +377,40 @@ class _LanConnectionErrorAppState extends State<LanConnectionErrorApp> {
     }
   }
 
+  /// ⭐ جهاز إضافي بحساب مزامنة: يصير «مستقلاً بالمزامنة» — قاعدته عنده ويتزامن عبر
+  /// الإنترنت من أي شبكة، فلا يتوقف حين يبتعد عن شبكة المحل. لا يمس حاسبة السيرفر.
+  Future<void> _switchToSync(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('العمل عبر المزامنة من أي مكان؟'),
+        content: const Text(
+          'يصير هذا الجهاز مستقلاً: قاعدته عنده، ويجلب بيانات المحل وحسابات الموظفين عبر الإنترنت '
+          'من أي شبكة، ولا يعتمد على تشغيل حاسبة السيرفر. لا يُحذف شيء من حاسبة السيرفر.\n\n'
+          'أول مرة يحتاج وقتاً حتى تصل البيانات. ثم يُعاد تشغيل البرنامج.',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('نعم، عبر المزامنة')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    _timer?.cancel();
+    try {
+      await LicenseService().refreshNow(); // يجلب ربط المزامنة من سيرفر الترخيص
+    } catch (_) {}
+    final cur = await LanSettings.load();
+    await cur.copyWith(mode: LanMode.standalone).save();
+    await LanRuntime.relaunch();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final lic = LicenseService().getStoredLicense();
+    final extra = lic != null && !lic.isMainDevice; // جهاز إضافي لا يكون سيرفراً
+    final extraSync = extra && lic.isSyncAllowed;
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       locale: const Locale('ar'),
@@ -420,6 +455,14 @@ class _LanConnectionErrorAppState extends State<LanConnectionErrorApp> {
                       style: TextStyle(color: Colors.black54),
                     ),
                     const SizedBox(height: 20),
+                    if (extraSync) ...[
+                      FilledButton.icon(
+                        icon: const Icon(Icons.cloud_sync_rounded),
+                        label: const Text('اعمل من أي مكان عبر المزامنة'),
+                        onPressed: () => _switchToSync(context),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     FilledButton.icon(
                       icon: const Icon(Icons.settings_ethernet),
                       label: const Text('إعداد الشبكة'),
@@ -433,6 +476,7 @@ class _LanConnectionErrorAppState extends State<LanConnectionErrorApp> {
                         label: const Text('إعادة المحاولة'),
                         onPressed: LanRuntime.relaunch,
                       ),
+                      if (!extra) ...[
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
                         icon: const Icon(Icons.dns_outlined),
@@ -457,6 +501,7 @@ class _LanConnectionErrorAppState extends State<LanConnectionErrorApp> {
                           await LanRuntime.relaunch();
                         },
                       ),
+                      ],
                     ],
                     const SizedBox(height: 8),
                     TextButton(
