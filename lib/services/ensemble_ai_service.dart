@@ -1,8 +1,7 @@
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:pdfrx/pdfrx.dart';
-import 'dart:ui' as ui;
+import 'pdf_raster.dart';
 import 'template_service.dart'; 
 import 'ocr_service.dart';
 import 'vision_service.dart';
@@ -205,27 +204,15 @@ class EnsembleAIService {
   /// Helper to convert PDF Page 1 to Image (High-Res)
   Future<File> _convertPdfToImage(File pdfFile) async {
       try {
-           final doc = await PdfDocument.openFile(pdfFile.path);
-           final page = doc.pages[0];
-           
-           final pdfImage = await page.render(
-             width: (page.width * 3).toInt(), 
-             height: (page.height * 3).toInt(),
-             backgroundColor: Colors.white,
-           );
-           
-           if (pdfImage == null) throw Exception("Failed to render PDF page");
-           
-           final ui.Image image = await pdfImage.createImage();
-           final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-           if (byteData == null) throw Exception("Failed to convert PDF page to PNG data");
-           
+           // عبر pdf_raster.dart (لا pdfrx: تعارضها مع printing يُغلق التطبيق)
+           final pngs = await PdfRaster2Png.pages(await pdfFile.readAsBytes(), dpi: 216, max: 1);
+           if (pngs.isEmpty) throw Exception("Failed to render PDF page");
+
            final tempDir = Directory.systemTemp;
            final safeName = 'ensemble_pdf_${DateTime.now().millisecondsSinceEpoch}.png';
            final tempFile = File('${tempDir.path}\\$safeName');
-           
-           await tempFile.writeAsBytes(byteData.buffer.asUint8List());
-           image.dispose();
+
+           await tempFile.writeAsBytes(pngs.first);
            
            return tempFile;
       } catch (e) {

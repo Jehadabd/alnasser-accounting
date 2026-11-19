@@ -10,9 +10,9 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 import '../../owner/ai_invoice/ai_invoice_service.dart';
+import '../pdf_raster.dart';
 import 'ai_models_config.dart';
 import 'ai_vision_client.dart';
 
@@ -96,10 +96,8 @@ class AiModelProbe {
       ]),
     ));
     final pdf = await doc.save();
-    await for (final page in Printing.raster(pdf, dpi: 120)) {
-      _png = await page.toPng();
-      break;
-    }
+    final pngs = await PdfRaster2Png.pages(pdf, dpi: 120, max: 1);
+    if (pngs.isNotEmpty) _png = pngs.first;
     if (_png == null) throw Exception('تعذّر رسم الفاتورة التجريبية');
     return _png!;
   }

@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:pdfrx/pdfrx.dart';
-import 'dart:ui' as ui;
+import 'pdf_raster.dart';
 import 'dart:convert';
 import 'vision_service.dart';
 
@@ -48,27 +47,14 @@ class OcrService {
       
       if (file.path.toLowerCase().endsWith('.pdf')) {
         try {
-           final doc = await PdfDocument.openFile(file.path);
-           final page = doc.pages[0];
-           
-           // High DPI rendering for Geometry Accuracy
-           final pdfImage = await page.render(
-             width: (page.width * 4).toInt(), 
-             height: (page.height * 4).toInt(),
-           );
-           
-           if (pdfImage == null) throw Exception("Failed to render PDF page");
-           
-           final ui.Image image = await pdfImage.createImage();
-           final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-           if (byteData == null) throw Exception("Failed to convert PDF page to PNG data");
-           
+           // عبر pdf_raster.dart (لا pdfrx: تعارضها مع printing يُغلق التطبيق)
+           final pngs = await PdfRaster2Png.pages(await file.readAsBytes(), dpi: 288, max: 1);
+           if (pngs.isEmpty) throw Exception("Failed to render PDF page");
+
            final safeName = 'ocr_pdf_input_${DateTime.now().millisecondsSinceEpoch}.png';
            final safePath = '${tempDir.path}\\$safeName';
            processedFile = File(safePath);
-           await processedFile.writeAsBytes(byteData.buffer.asUint8List());
-           
-           image.dispose();
+           await processedFile.writeAsBytes(pngs.first);
         } catch (e) {
            debugPrint("PDF Conversion Error: $e");
            return "Error Converting PDF: $e";

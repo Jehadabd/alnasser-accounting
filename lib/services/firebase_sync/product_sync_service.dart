@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart' show Firebase;
 import 'package:sqflite/sqflite.dart' show Database, ConflictAlgorithm;
 import '../database_service.dart';
 import '../database/core/database_helpers.dart';
@@ -232,6 +233,9 @@ class ProductSyncService {
   }
 
   Future<void> uploadProductNow(String syncUuid, {Map<String, dynamic>? productData}) async {
+    // Firebase لم يُهيّأ (لا مزامنة على هذا الجهاز): لا محاولة ولا خطأ في «صحة المزامنة».
+    // المنتج يبقى «معلّقاً» (last_synced_at فارغ) فيُرفع مع syncPendingProducts عند تفعيلها.
+    if (Firebase.apps.isEmpty) return;
     try {
       final db = await _dbService.database;
 

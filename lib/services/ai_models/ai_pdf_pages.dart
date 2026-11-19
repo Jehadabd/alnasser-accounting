@@ -2,12 +2,11 @@
 //
 // 📄 ملف PDF ← صور صفحات (PNG) للنماذج التي لا تقرأ PDF مباشرة (Groq، OpenRouter).
 // النموذج يقرأ صورة الفاتورة نفسها — لا تحويل إلى نص.
-// يستعمل Printing.raster (حزمة printing الموجودة).
+// التحويل عبر PdfRaster2Png (مكان واحد، بالتسلسل — انظر pdf_raster.dart).
 
 import 'dart:typed_data';
 
-import 'package:printing/printing.dart';
-
+import '../pdf_raster.dart';
 import 'ai_vision_client.dart';
 
 class AiPdfPages {
@@ -18,13 +17,8 @@ class AiPdfPages {
 
   /// صور الصفحات بدقة تكفي للأرقام الصغيرة دون تضخيم الطلب.
   static Future<List<AiBlob>> toImages(Uint8List pdf, {double dpi = 150, int max = maxPages}) async {
-    final out = <AiBlob>[];
-    // كل الصفحات ثم نتوقف عند الحد (قائمة صفحات أطول من الملف قد ترفضها بعض المنصات)
-    await for (final page in Printing.raster(pdf, dpi: dpi)) {
-      out.add(AiBlob(await page.toPng(), 'image/png'));
-      if (out.length >= max) break;
-    }
-    return out;
+    final pngs = await PdfRaster2Png.pages(pdf, dpi: dpi, max: max);
+    return [for (final b in pngs) AiBlob(b, 'image/png')];
   }
 
   /// ما يُرسل لمزوّد: PDF كما هو (Gemini)، أو صور صفحاته، أو الصورة كما هي.

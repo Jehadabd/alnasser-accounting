@@ -17,7 +17,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:pdfrx/pdfrx.dart';
 import 'package:provider/provider.dart';
 
 import '../../accounting/screens/acc_ui.dart' show accRoute;
@@ -26,6 +25,7 @@ import '../../models/purchase_invoice_item.dart';
 import '../../models/supplier.dart';
 import '../../screens/create_purchase_invoice_screen.dart';
 import '../../services/database_service.dart';
+import '../../services/pdf_raster.dart';
 import '../../services/ai_models/ai_models_config.dart';
 import '../../services/purchase_service.dart';
 import '../../services/sync_perks.dart';
@@ -105,6 +105,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   Uint8List? _bytes;
   String _fileName = '';
   String? _savedPath;
+  Future<List<Uint8List>>? _pdfView; // صور صفحات الـ PDF للعرض (لا pdfrx — انظر pdf_raster.dart)
+  double _pdfZoom = 1;
   String? _error;
   AiInvoiceResult? _result;
   final List<_Row> _rows = [];
@@ -191,6 +193,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       _bytes = bytes;
       _fileName = f.name;
       _savedPath = saved;
+      _pdfView = null;
+      _pdfZoom = 1;
     });
     await _read();
   }
@@ -708,13 +712,76 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     return Container(
       color: const Color(0xFF1E1B4B),
       child: isPdf
-          ? (_savedPath != null && File(_savedPath!).existsSync()
-              ? PdfViewer.file(_savedPath!)
-              : const Center(child: Text('تعذّر عرض الـ PDF', style: TextStyle(color: Colors.white70))))
+          ? _pdfPages(bytes)
           : InteractiveViewer(
               maxScale: 6,
               child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
             ),
+    );
+  }
+
+  /// صفحات الـ PDF صوراً (تحويل واحد لكل ملف) مع تكبير/تصغير.
+  Widget _pdfPages(Uint8List bytes) {
+    const msg = TextStyle(color: Colors.white70);
+    return FutureBuilder<List<Uint8List>>(
+      future: _pdfView ??= PdfRaster2Png.pages(bytes, dpi: 144, max: 12),
+      builder: (context, s) {
+        if (s.hasError) return const Center(child: Text('تعذّر عرض الـ PDF', style: msg));
+        final pages = s.data;
+        if (pages == null) {
+          return const Center(child: CircularProgressIndicator(color: Colors.white70, strokeWidth: 2.5));
+        }
+        if (pages.isEmpty) return const Center(child: Text('الملف لا يحوي صفحات', style: msg));
+        return LayoutBuilder(builder: (context, c) {
+          final w = (c.maxWidth - 24) * _pdfZoom;
+          return Stack(children: [
+            Scrollbar(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 64),
+                itemCount: pages.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (_, i) => SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: w,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.memory(pages[i], fit: BoxFit.fitWidth, gaplessPlayback: true, filterQuality: FilterQuality.medium),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 12,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconButton(
+                      tooltip: 'تصغير',
+                      icon: const Icon(Icons.zoom_out, color: Colors.white),
+                      onPressed: _pdfZoom <= 1 ? null : () => setState(() => _pdfZoom = (_pdfZoom - 0.5).clamp(1.0, 3.0).toDouble()),
+                    ),
+                    Text('${(_pdfZoom * 100).round()}%  ·  ${pages.length} ص', style: const TextStyle(color: Colors.white, fontSize: 12.5)),
+                    IconButton(
+                      tooltip: 'تكبير',
+                      icon: const Icon(Icons.zoom_in, color: Colors.white),
+                      onPressed: _pdfZoom >= 3 ? null : () => setState(() => _pdfZoom = (_pdfZoom + 0.5).clamp(1.0, 3.0).toDouble()),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ]);
+        });
+      },
     );
   }
 
