@@ -17,6 +17,7 @@ import 'package:alnaser/models/product.dart';
 import 'package:alnaser/owner/ai_invoice/ai_alias_store.dart';
 import 'package:alnaser/owner/ai_invoice/ai_invoice_engine.dart';
 import 'package:alnaser/owner/ai_invoice/ai_invoice_service.dart';
+import 'package:alnaser/owner/ai_invoice/ai_purchase_prefill.dart';
 import 'package:alnaser/services/ai_models/ai_model_probe.dart';
 import 'package:alnaser/services/ai_models/ai_models_config.dart';
 import 'package:alnaser/services/ai_models/ai_router.dart';
@@ -559,6 +560,23 @@ void main() {
       expect(r.remaining, 700000);
       expect(r.paymentEvidence, 'المدفوع 300,000');
     });
+  });
+
+  test('وحدات المادة الجديدة: كرتون 1000 = 10 باكيت × 10 قطعة ⇒ الباكيت 100 والقطعة 10', () {
+    const plan = AiUnitPlan(baseUnit: 'قطعة', levels: [
+      {'unit_name': 'باكيت', 'quantity': 10},
+      {'unit_name': 'كرتون', 'quantity': 10},
+    ], baseCost: 10);
+    expect(plan.units, ['قطعة', 'باكيت', 'كرتون']);
+    expect(plan.factorOf('كرتون'), 100);
+    expect(plan.factorOf('باكيت'), 10);
+    expect(plan.factorOf('قطعة'), 1);
+    expect(plan.costOf('كرتون'), 1000);
+    expect(plan.costOf('باكيت'), 100);
+    expect(plan.describe(), 'كرتون = 10 باكيت • باكيت = 10 قطعة');
+    const single = AiUnitPlan(baseUnit: 'كرتون', levels: [], baseCost: 1000);
+    expect(single.factorOf('كرتون'), 1);
+    expect(single.describe(), contains('أصغر وحدة'));
   });
 
   test('درجة الفاتورة التجريبية', () {

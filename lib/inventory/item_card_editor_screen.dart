@@ -117,6 +117,9 @@ class ItemCardEditorScreen extends StatefulWidget {
     this.quickForPurchase = false,
     this.initialName,
     this.initialBarcode,
+    this.initialBaseUnit,
+    this.initialLevels = const [],
+    this.initialCost,
   });
 
   /// null = مادة جديدة
@@ -128,6 +131,12 @@ class ItemCardEditorScreen extends StatefulWidget {
   final bool quickForPurchase;
   final String? initialName;
   final String? initialBarcode;
+
+  /// 📦 من مراجعة فاتورة الذكاء الاصطناعي: الوحدة الأصغر، والوحدات الأكبر منها
+  /// ({'unit_name', 'quantity'} كل مستوى نسبةً للذي قبله)، وكلفة الوحدة الأصغر.
+  final String? initialBaseUnit;
+  final List<Map<String, dynamic>> initialLevels;
+  final double? initialCost;
 
   @override
   State<ItemCardEditorScreen> createState() => _ItemCardEditorScreenState();
@@ -472,6 +481,20 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         if (widget.quickForPurchase && _savedCount == 0) {
           if ((widget.initialName ?? '').trim().isNotEmpty) _name.text = widget.initialName!.trim();
           if ((widget.initialBarcode ?? '').trim().isNotEmpty) _barcode.text = widget.initialBarcode!.trim();
+          if ((widget.initialBaseUnit ?? '').trim().isNotEmpty) _baseUnit.text = widget.initialBaseUnit!.trim();
+          if (widget.initialLevels.isNotEmpty) {
+            _disposeLater([for (final u in _units) ...[u.name, u.qty, u.cost, u.price]]);
+            _units
+              ..clear()
+              ..addAll([
+                for (final l in widget.initialLevels)
+                  _UnitLine(name: '${l['unit_name'] ?? ''}', qty: _fmt((l['quantity'] as num?)?.toDouble())),
+              ]);
+            while (_units.length < 2) {
+              _units.add(_UnitLine());
+            }
+          }
+          if ((widget.initialCost ?? 0) > 0 && _canSeeCost) _cost.text = _fmt(widget.initialCost);
         }
       }
       _id = id;

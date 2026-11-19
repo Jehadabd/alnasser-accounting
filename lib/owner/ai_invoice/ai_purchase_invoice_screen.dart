@@ -32,6 +32,7 @@ import '../../services/sync_perks.dart';
 import '../../screens/ai_models_settings_screen.dart';
 import 'ai_alias_store.dart';
 import 'ai_invoice_service.dart';
+import 'ai_new_units_dialog.dart';
 import 'ai_purchase_prefill.dart';
 
 // ───────────────────────── ألوان ─────────────────────────
@@ -58,6 +59,9 @@ class _Row {
   final factor = TextEditingController();
   String unit = '';
   List<String> units = const [];
+
+  /// 📦 وحدات المادة الجديدة كما عرّفها المستخدم (null = لم تُعرَّف بعد).
+  AiUnitPlan? plan;
 
   double get q => _parse(qty.text);
   double get pr => _parse(price.text);
@@ -266,6 +270,14 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     final prod = l.productId == null ? null : _byId[l.productId];
     final units = <String>[];
     if (prod != null) units.addAll(AiInvoiceService.unitsOf(prod));
+    // مادة جديدة عُرّفت وحداتها: من الأكبر إلى الأصغر، والوحدة المختارة تبقى
+    final plan = row.plan;
+    if (prod == null && plan != null) {
+      row.units = plan.units.reversed.toList();
+      if (!row.units.contains(row.unit)) row.unit = row.units.first;
+      if (!keepFactor) row.factor.text = _plain(_factorFor(row));
+      return;
+    }
     String sale = l.saleUnit.trim();
     if (sale.isEmpty && l.unitsCount > 1) sale = l.unitType == 'meter' ? 'لفة' : 'كرتون';
     String? chosen;
@@ -285,6 +297,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
 
   double _factorFor(_Row row) {
     final prod = row.line.productId == null ? null : _byId[row.line.productId];
+    if (prod == null && row.plan != null) return row.plan!.factorOf(row.unit);
     if (prod != null) {
       final f = AiInvoiceService.factorFromProduct(prod, row.unit);
       if (f != null) return f;
@@ -323,6 +336,29 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     });
   }
 
+  /// اسم الوحدة الأصغر للسطر (للتعبئة و«لكل …»).
+  String _baseLabel(_Row row, Product? prod) =>
+      prod != null ? AiInvoiceService.baseUnitName(prod) : (row.plan?.baseUnit ?? 'قطعة');
+
+  /// 📦 تعريف وحدات المادة الجديدة: هل وحدة الفاتورة أصغر وحدة؟ وما الذي في داخلها؟
+  Future<void> _defineUnits(_Row row) async {
+    final plan = await showNewUnitsDialog(
+      context,
+      productName: row.line.cleanName,
+      buyUnit: row.plan != null ? row.plan!.units.last : row.unit,
+      buyPrice: row.pr,
+      qty: row.q,
+      current: row.plan,
+    );
+    if (plan == null || !mounted) return;
+    setState(() {
+      row.plan = plan;
+      row.unit = plan.units.last; // وحدة الشراء = الأكبر
+      _setupUnits(row, keepFactor: false);
+    });
+    _snack('حُفظت وحدات «${row.line.cleanName}»: ${plan.describe()}', _cLearned);
+  }
+
   // ───────────────────────── المتابعة ─────────────────────────
 
   Future<void> _continue() async {
@@ -341,6 +377,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     }
     final items = <PurchaseInvoiceItem>[];
     final originals = <String, String>{};
+    final plans = <String, AiUnitPlan>{};
     var learned = 0;
     for (final r in rows) {
       final l = r.line;
@@ -357,6 +394,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       ));
       if (prod == null) {
         originals[name] = l.originalName;
+        if (r.plan != null) plans[name] = r.plan!;
         continue;
       }
       // 🧠 نتعلّم ما صحّحتَه، وما أكّدتَه بمطابقة قوية (لا نتعلّم التقريبي غير المؤكد)
@@ -381,6 +419,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       attachmentPath: _savedPath,
       supplierId: _supplier!.id,
       originalNames: originals,
+      unitPlans: plans,
     );
     if (learned > 0) _snack('🧠 حُفظت $learned تسمية لهذا المورد — ستُطابَق تلقائياً في الفاتورة القادمة', _cLearned);
     await Navigator.push(context, accRoute<void>(CreatePurchaseInvoiceScreen(preselectedSupplier: _supplier, aiPrefill: prefill)));
@@ -992,6 +1031,10 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                       ]),
                     ),
                   ),
+                  if (prod == null) ...[
+                    const SizedBox(height: 8),
+                    _unitsButton(row),
+                  ],
                   for (final n in notes)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
@@ -1018,7 +1061,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                       ),
                     ),
                     Tooltip(
-                      message: 'كم ${prod == null ? 'قطعة' : AiInvoiceService.baseUnitName(prod)} في «${row.unit}»',
+                      message: 'كم ${_baseLabel(row, prod)} في «${row.unit}»',
                       child: _numField('التعبئة', row.factor, 90),
                     ),
                     _numField('السعر', row.price, 120),
@@ -1031,13 +1074,68 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                       ]),
                     ),
                     if (row.f > 1 && row.pr > 0)
-                      Text('= ${_fmt.format(row.pr / row.f)} لكل ${prod == null ? 'قطعة' : AiInvoiceService.baseUnitName(prod)}',
+                      Text('= ${_fmt.format(row.pr / row.f)} لكل ${_baseLabel(row, prod)}',
                           style: const TextStyle(fontSize: 11.5, color: _muted)),
                   ]),
                 ]),
               ),
             ),
           ]),
+        ),
+      ),
+    );
+  }
+
+  /// زر «وحدات المادة» لسطر مادة جديدة: يلفت النظر قبل التعريف، ويلخّصها بعده.
+  Widget _unitsButton(_Row row) {
+    final plan = row.plan;
+    final done = plan != null;
+    final c = done ? _cLearned : _cNew;
+    return Semantics(
+      button: true,
+      label: done ? 'تعديل وحدات المادة' : 'تعريف وحدات المادة',
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        decoration: BoxDecoration(
+          gradient: done
+              ? null
+              : LinearGradient(colors: [_cNew.withValues(alpha: 0.10), _aiB.withValues(alpha: 0.08)]),
+          color: done ? _cLearned.withValues(alpha: 0.06) : null,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: c.withValues(alpha: done ? 0.30 : 0.45), width: done ? 1 : 1.3),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _defineUnits(row),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(color: c.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(9)),
+                  child: Icon(done ? Icons.account_tree_rounded : Icons.straighten_rounded, size: 18, color: c),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(done ? 'وحدات المادة' : 'حدّد وحداتها — هل «${row.unit.isEmpty ? 'الوحدة' : row.unit}» أصغر وحدة؟',
+                        style: TextStyle(fontWeight: FontWeight.w800, color: c, fontSize: 13)),
+                    Text(
+                      plan != null
+                          ? '${plan.describe()} • كلفة «${plan.baseUnit}» ${_fmt.format(plan.baseCost)}'
+                          : 'اضغط لتعريف الوحدات الأصغر (باكيت، قطعة…) فتتوزع الكلفة عليها',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11.5, color: _muted),
+                    ),
+                  ]),
+                ),
+                Icon(done ? Icons.edit_rounded : Icons.chevron_left_rounded, color: c, size: 20),
+              ]),
+            ),
+          ),
         ),
       ),
     );

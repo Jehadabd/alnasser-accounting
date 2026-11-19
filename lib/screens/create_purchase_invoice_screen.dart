@@ -1078,6 +1078,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         initialCost: item.unitPrice, 
         initialUnit: item.unitName,
         initialQty: item.quantity,
+        initialUnitPlan: widget.aiPrefill?.unitPlans[item.productName ?? ''],
         onProductSelected: (product, quantity, price, unit) {
            // This callback is called when user clicks "Add" in the dialog
            final wasKnown = _products.any((p) => p.id == product.id && (p.id ?? -1) > 0);

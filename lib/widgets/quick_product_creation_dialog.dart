@@ -8,6 +8,7 @@ import '../services/database_service.dart';
 import '../widgets/formatters.dart';
 import '../widgets/camera_barcode_scanner_dialog.dart';
 import '../inventory/item_card_editor_screen.dart'; // 🧾 بطاقة المادة الحالية (مختصرة)
+import '../owner/ai_invoice/ai_purchase_prefill.dart' show AiUnitPlan; // 📦 وحدات عُرّفت في مراجعة الفاتورة
 
 // --- VISUAL CONSTANTS (From ProductEntryScreen) ---
 const Color kPrimaryColor = Color(0xFF5D5FEF);
@@ -190,6 +191,10 @@ class QuickProductCreationDialog extends StatefulWidget {
   final String? initialUnit;
   final double? initialQty;
 
+  /// 📦 وحدات المادة كما عرّفها المستخدم في مراجعة فاتورة الذكاء الاصطناعي
+  /// (الأصغر، والأكبر منها، وكلفة الأصغر) — تُعبّأ بها بطاقة المادة.
+  final AiUnitPlan? initialUnitPlan;
+
   const QuickProductCreationDialog({
     super.key,
     required this.existingProducts,
@@ -198,6 +203,7 @@ class QuickProductCreationDialog extends StatefulWidget {
     this.initialCost,
     this.initialUnit,
     this.initialQty,
+    this.initialUnitPlan,
   });
 
   @override
@@ -294,6 +300,20 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
       if (widget.initialQty != null) {
         _currentBuyQtyController.text = NumberFormat('#,##0.##', 'en_US').format(widget.initialQty!);
         _stockController.text = '0'; 
+      }
+
+      // 📦 وحدات عُرّفت في مراجعة الفاتورة: الأساسية = الأصغر، والهرم، وكلفة الأصغر
+      final plan = widget.initialUnitPlan;
+      if (plan != null) {
+        final f = NumberFormat('#,##0.##', 'en_US');
+        _baseUnitNameController.text = plan.baseUnit;
+        _hierarchyItems
+          ..clear()
+          ..addAll([
+            for (final l in plan.levels) {'unit_name': '${l['unit_name']}', 'contains_qty': (l['quantity'] as num).toDouble()},
+          ]);
+        _baseCostController.text = f.format(plan.baseCost);
+        _basePriceController.text = f.format(plan.baseCost);
       }
     }
   }
@@ -404,6 +424,9 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         quickForPurchase: true,
         initialName: (name ?? '').trim().isEmpty ? null : name,
         initialBarcode: barcode,
+        initialBaseUnit: widget.initialUnitPlan?.baseUnit,
+        initialLevels: widget.initialUnitPlan?.levels ?? const [],
+        initialCost: widget.initialUnitPlan?.baseCost,
       ),
     ));
     if (res is! int || !mounted) return;
