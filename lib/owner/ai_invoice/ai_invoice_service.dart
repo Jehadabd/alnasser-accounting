@@ -1,7 +1,8 @@
 // lib/owner/ai_invoice/ai_invoice_service.dart
 //
-// 🤖 قراءة فاتورة المورد (صورة أو PDF) بنموذج Gemini من Google ثم مطابقة
-// موادها مع موادنا.
+// 🤖 قراءة فاتورة المورد (صورة أو PDF) بنماذج الذكاء الاصطناعي ثم مطابقة موادها مع موادنا.
+// النماذج والمفاتيح والترتيب والتعاون بين نموذجين: الإعدادات ← النظام والأدوات ← نماذج
+// الذكاء الاصطناعي (ai_invoice_engine.dart). متاحة لحساب المالك واشتراك المزامنة (SyncPerks).
 //
 // ترتيب المطابقة لكل سطر (الأقوى أولاً):
 //   1) اسم تعلّمناه من تصحيح سابق لهذا المورد (أو عام)   ← ثقة 100%
@@ -10,18 +11,18 @@
 //   4) مطابقة محلية تقريبية (كلمات + أرقام المقاس)           ← ثقة أقل
 //   5) لا شيء ⇒ «مادة جديدة»
 //
-// المفاتيح من ملف .env: GEMINI_API_KEY ثم GEMINI_API_KEY_2 ثم _3 ثم _4
-// (عند نفاد حصة مفتاح أو رفضه ننتقل للتالي تلقائياً).
+// مفاتيح GEMINI_API_KEY في ملف ‎.env (الطريقة القديمة) تبقى تعمل إن لم يُضف مفتاح Gemini
+// من الإعدادات.
 
-import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:http/http.dart' as http;
 
 import '../../models/product.dart';
-import '../owner_access.dart';
+import '../../services/sync_perks.dart';
 import 'ai_alias_store.dart';
+import 'ai_invoice_engine.dart';
 
 /// مصدر المطابقة — يظهر للمستخدم كشارة
 enum AiMatchSource { learned, exact, ai, local, manual, none }
@@ -75,6 +76,7 @@ class AiInvoiceResult {
     this.amountPaid = 0,
     this.isCash = false,
     this.model = '',
+    this.engineNote = '',
   });
   final List<AiInvoiceLine> lines;
   final String invoiceNumber;
@@ -86,7 +88,12 @@ class AiInvoiceResult {
   final double shipping;
   final double amountPaid;
   final bool isCash;
+
+  /// النموذج (أو النموذجان) الذي قرأ وطابق.
   final String model;
+
+  /// ملاحظة للمستخدم (مثلاً: لم تكتمل المطابقة الذكية فطوبقت الأسطر محلياً).
+  final String engineNote;
 }
 
 class AiInvoiceException implements Exception {
@@ -98,9 +105,6 @@ class AiInvoiceException implements Exception {
 
 class AiInvoiceService {
   AiInvoiceService._();
-
-  static const _endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
-  static const _timeout = Duration(seconds: 150);
 
   static List<String> get apiKeys {
     final keys = <String>[];
@@ -168,96 +172,38 @@ class AiInvoiceService {
     required List<Product> products,
     required int? supplierId,
     String supplierName = '',
+    void Function(String status)? onStatus,
   }) async {
-    if (!OwnerAccess.enabled) {
-      throw AiInvoiceException('هذه الميزة متاحة لحساب المالك فقط');
-    }
-    final keys = apiKeys;
-    if (keys.isEmpty) {
-      throw AiInvoiceException('لا يوجد مفتاح Gemini في ملف ‎.env (GEMINI_API_KEY)');
+    if (!SyncPerks.enabled) {
+      throw AiInvoiceException('هذه الميزة متاحة لحساب المالك واشتراك المزامنة');
     }
     if (bytes.length > 18 * 1024 * 1024) {
       throw AiInvoiceException('الملف أكبر من 18 ميغابايت — صغّر الصورة أو قسّم الـ PDF');
     }
     final live = products.where((p) => p.id != null && !p.isDeleted).toList();
     final aliases = await AiAliasStore.forSupplier(supplierId);
-    final prompt = buildPrompt(products: live, aliases: aliases, supplierId: supplierId, supplierName: supplierName);
-
-    final body = jsonEncode({
-      'contents': [
-        {
-          'parts': [
-            {'text': prompt},
-            {
-              'inline_data': {'mime_type': mimeType, 'data': base64Encode(bytes)}
-            },
-          ]
-        }
-      ],
-      'generationConfig': {'response_mime_type': 'application/json', 'temperature': 0.1},
-    });
-
-    String? text;
-    final errors = <String>[];
-    for (var i = 0; i < keys.length; i++) {
-      try {
-        final res = await http
-            .post(Uri.parse(_endpoint),
-                headers: {'Content-Type': 'application/json', 'X-goog-api-key': keys[i]}, body: body)
-            .timeout(_timeout);
-        if (res.statusCode == 200) {
-          text = _textOf(res.body);
-          if (text.trim().isNotEmpty) break;
-          errors.add('مفتاح ${i + 1}: رد فارغ');
-          continue;
-        }
-        errors.add('مفتاح ${i + 1}: ${_httpReason(res.statusCode, res.body)}');
-        // 400 = الطلب نفسه مرفوض (ملف تالف/نوع غير مدعوم) — لا فائدة من مفتاح آخر
-        if (res.statusCode == 400 && !res.body.contains('API_KEY') && !res.body.contains('API key')) break;
-      } on TimeoutException {
-        errors.add('مفتاح ${i + 1}: انتهت المهلة');
-      } catch (e) {
-        errors.add('مفتاح ${i + 1}: تعذّر الاتصال ($e)');
-      }
-    }
-    if (text == null || text.trim().isEmpty) {
-      throw AiInvoiceException('فشلت قراءة الفاتورة:\n${errors.join('\n')}');
-    }
-
-    final json = _decodeJson(text);
-    final result = _parse(json);
-    applyMatching(result.lines, live, aliases, supplierId);
-    return result;
-  }
-
-  static String _textOf(String body) {
-    final decoded = jsonDecode(body) as Map<String, dynamic>;
-    final candidates = decoded['candidates'] as List?;
-    if (candidates == null || candidates.isEmpty) return '';
-    final content = (candidates.first as Map)['content'] as Map? ?? const {};
-    final parts = content['parts'] as List? ?? const [];
-    return parts.map((p) => (p as Map)['text']?.toString() ?? '').join();
-  }
-
-  static String _httpReason(int code, String body) {
-    switch (code) {
-      case 429:
-        return 'نفدت الحصة المجانية لهذا المفتاح (429)';
-      case 401:
-      case 403:
-        return 'المفتاح مرفوض أو غير مفعّل ($code)';
-      case 404:
-        return 'النموذج غير متاح لهذا المفتاح (404)';
-      case 500:
-      case 503:
-        return 'خادم Google مشغول ($code) — أعد المحاولة';
-    }
-    var msg = '';
     try {
-      msg = ((jsonDecode(body) as Map)['error'] as Map?)?['message']?.toString() ?? '';
-    } catch (_) {}
-    return 'HTTP $code ${msg.length > 160 ? msg.substring(0, 160) : msg}';
+      return await AiInvoiceEngine.run(
+        bytes: bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
+        mimeType: mimeType,
+        products: live,
+        aliases: aliases,
+        supplierId: supplierId,
+        supplierName: supplierName,
+        onStatus: onStatus,
+      );
+    } on AiInvoiceException {
+      rethrow;
+    } catch (e) {
+      throw AiInvoiceException('فشلت قراءة الفاتورة:\n$e');
+    }
   }
+
+  /// نص JSON من رد النموذج (مع إزالة ``` وما حوله).
+  static Map<String, dynamic> decodeJson(String raw) => _decodeJson(raw);
+
+  /// أسطر الفاتورة ورأسها من JSON النموذج (مع فحص الكمية × السعر = المبلغ).
+  static AiInvoiceResult parse(Map<String, dynamic> j) => _parse(j);
 
   static Map<String, dynamic> _decodeJson(String raw) {
     var t = raw.trim();

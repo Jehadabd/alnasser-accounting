@@ -1,9 +1,10 @@
 // lib/owner/ai_invoice/ai_purchase_invoice_screen.dart
 //
-// 👑🤖 «فاتورة شراء بالذكاء الاصطناعي» — لحساب المالك فقط.
+// 👑🤖 «فاتورة شراء بالذكاء الاصطناعي» — لحساب المالك واشتراك المزامنة (SyncPerks).
 //
 // 1) اختر صورة/PDF فاتورة المورد
-// 2) يقرأها Gemini ويطابق موادها مع موادنا (مع ما تعلّمه من تصحيحاتك السابقة)
+// 2) تقرأها نماذج الإعدادات (نموذج يقرأ وآخر يطابق — ai_invoice_engine.dart) وتطابق
+//    موادها مع موادنا (مع ما تعلّمه من تصحيحاتك السابقة)
 // 3) تراجع كل سطر: تغيّر المادة، الوحدة، التعبئة، الكمية، السعر
 // 4) «متابعة» ⇒ تُحفظ تصحيحاتك (ذاكرة الأسماء) وتُفتح فاتورة الشراء العادية معبأة
 //    والحفظ هناك يمرّ بكل حمايات الشاشة الأصلية (المخزون، الدين، الفترات المثبّتة).
@@ -25,8 +26,10 @@ import '../../models/purchase_invoice_item.dart';
 import '../../models/supplier.dart';
 import '../../screens/create_purchase_invoice_screen.dart';
 import '../../services/database_service.dart';
+import '../../services/ai_models/ai_models_config.dart';
 import '../../services/purchase_service.dart';
-import '../owner_access.dart';
+import '../../services/sync_perks.dart';
+import '../../screens/ai_models_settings_screen.dart';
 import 'ai_alias_store.dart';
 import 'ai_invoice_service.dart';
 import 'ai_purchase_prefill.dart';
@@ -92,6 +95,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   Supplier? _supplier;
   int _learnedCount = 0;
   bool _loading = true;
+  bool _hasKeys = true;
+  String _status = '';
 
   Uint8List? _bytes;
   String _fileName = '';
@@ -130,8 +135,10 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       final suppliers = await context.read<PurchaseService>().getSuppliers();
       final products = (await DatabaseService().getAllProducts()).where((p) => p.id != null && !p.isDeleted).toList();
       final learned = await AiAliasStore.count();
+      final hasKeys = await AiModelsStore.hasAnyKey();
       if (!mounted) return;
       setState(() {
+        _hasKeys = hasKeys;
         _suppliers = suppliers;
         _products = products;
         _byId = {for (final p in products) p.id!: p};
@@ -190,6 +197,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     setState(() {
       _phase = _Phase.reading;
       _error = null;
+      _status = '';
     });
     try {
       final r = await AiInvoiceService.extract(
@@ -198,6 +206,9 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         products: _products,
         supplierId: _supplier?.id,
         supplierName: _supplier?.name ?? '',
+        onStatus: (s) {
+          if (mounted) setState(() => _status = s);
+        },
       );
       if (!mounted) return;
       // مورد غير محدد: نحاول معرفته من رأس الفاتورة ثم نعيد تطبيق ما تعلّمناه له
@@ -376,6 +387,12 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     if (mounted) Navigator.pop(context);
   }
 
+  Future<void> _openModelsSettings() async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const AiModelsSettingsScreen()));
+    final hasKeys = await AiModelsStore.hasAnyKey();
+    if (mounted) setState(() => _hasKeys = hasKeys);
+  }
+
   void _snack(String msg, Color c) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: c, behavior: SnackBarBehavior.floating));
   }
@@ -385,7 +402,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   @override
   Widget build(BuildContext context) {
     // 👑 حماية ثانية: حتى لو فُتحت الشاشة من مكان آخر، غير المالك لا يستطيع استعمالها
-    if (!OwnerAccess.enabled) {
+    if (!SyncPerks.enabled) {
       return Scaffold(
         appBar: AppBar(title: const Text('فاتورة بالذكاء الاصطناعي')),
         body: const Center(
@@ -394,7 +411,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.lock_rounded, size: 56, color: _muted),
               SizedBox(height: 12),
-              Text('هذه الميزة متاحة لحساب المالك فقط', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              Text('هذه الميزة متاحة لحساب المالك واشتراك المزامنة',
+                  textAlign: TextAlign.center, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
             ]),
           ),
         ),
@@ -433,7 +451,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('فاتورة شراء بالذكاء الاصطناعي', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
-              Text(_supplier == null ? 'Gemini • حساب المالك' : 'المورد: ${_supplier!.name}',
+              Text(_supplier == null ? 'قراءة ومطابقة بالذكاء الاصطناعي' : 'المورد: ${_supplier!.name}',
                   style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.85))),
             ]),
           ),
@@ -449,6 +467,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
             IconButton(tooltip: 'إعادة القراءة', icon: const Icon(Icons.refresh_rounded), onPressed: _read),
           if (_phase != _Phase.reading)
             IconButton(tooltip: 'ملف آخر', icon: const Icon(Icons.upload_file_rounded), onPressed: _pick),
+          if (_phase != _Phase.reading)
+            IconButton(tooltip: 'النماذج والمفاتيح', icon: const Icon(Icons.tune_rounded), onPressed: _openModelsSettings),
         ],
       );
 
@@ -476,7 +496,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
 
   // ── 1) اختيار الملف
   Widget _pickView() {
-    final noKeys = !AiInvoiceService.hasKeys;
+    final noKeys = !_hasKeys;
     return Center(
       key: const ValueKey('pick'),
       child: SingleChildScrollView(
@@ -485,12 +505,23 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           constraints: const BoxConstraints(maxWidth: 620),
           child: Column(children: [
             if (_error != null) _banner(_error!, _cLow, Icons.error_outline_rounded),
-            if (noKeys)
+            if (noKeys) ...[
               _banner(
-                  'لا يوجد مفتاح Gemini على هذا الجهاز — ضع ملف ‎.env فيه GEMINI_API_KEY بجانب البرنامج '
-                  '(debt_book.exe) ثم أعد تشغيله. المفاتيح لا تُوزَّع مع البرنامج.',
+                  'لا يوجد مفتاح نموذج ذكاء اصطناعي على هذا الجهاز. أضف مفتاحاً مجانياً (Gemini أو Groq أو '
+                  'OpenRouter) من الإعدادات ← النظام والأدوات ← نماذج الذكاء الاصطناعي — فيها خطوات إنشائه.',
                   _cLow,
                   Icons.key_off_rounded),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: FilledButton.icon(
+                  onPressed: _openModelsSettings,
+                  style: FilledButton.styleFrom(backgroundColor: _aiA),
+                  icon: const Icon(Icons.key_rounded),
+                  label: const Text('إعداد النماذج والمفاتيح'),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
             const SizedBox(height: 8),
             InkWell(
               borderRadius: BorderRadius.circular(24),
@@ -535,7 +566,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
             _supplierField(),
             const SizedBox(height: 16),
             Row(children: [
-              Expanded(child: _miniStat(Icons.inventory_2_rounded, '${_products.length}', 'مادة تُرسل للمطابقة', _aiA)),
+              Expanded(child: _miniStat(Icons.inventory_2_rounded, '${_products.length}', 'مادة للمطابقة', _aiA)),
               const SizedBox(width: 10),
               Expanded(child: _miniStat(Icons.psychology_rounded, '$_learnedCount', 'تسمية تعلّمها من تصحيحاتك', _cLearned)),
             ]),
@@ -595,7 +626,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           ]),
         ),
         const SizedBox(height: 22),
-        const Text('يقرأ Gemini الفاتورة…', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _ink)),
+        Text(_status.isEmpty ? 'يقرأ الفاتورة…' : _status,
+            textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _ink)),
         const SizedBox(height: 8),
         Text(_fileName, style: const TextStyle(color: _muted)),
         const SizedBox(height: 18),
@@ -691,6 +723,16 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
+        if (r.engineNote.isNotEmpty) _banner(r.engineNote, _cMid, Icons.info_outline_rounded),
+        if (r.model.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(children: [
+              const Icon(Icons.auto_awesome_rounded, size: 16, color: _aiB),
+              const SizedBox(width: 6),
+              Expanded(child: Text(r.model, style: const TextStyle(fontSize: 12.5, color: _muted))),
+            ]),
+          ),
         // رأس الفاتورة
         Container(
           padding: const EdgeInsets.all(14),

@@ -27,7 +27,7 @@ import '../models/supplier_payment.dart';
 import '../services/purchase_service.dart';
 import '../services/suppliers_service.dart';
 import 'create_purchase_invoice_screen.dart';
-import '../owner/owner_access.dart';
+import '../services/sync_perks.dart'; // ⭐ فاتورة الشراء بالذكاء الاصطناعي
 import '../owner/ai_invoice/ai_purchase_invoice_screen.dart';
 import 'delegate_details_screen.dart';
 import 'invoice_details_split_screen.dart';
@@ -531,11 +531,11 @@ class _SupplierDetailsScreenState extends State<SupplierDetailsScreen> {
         color: const Color(0xFF2563EB),
         onTap: _createInvoice,
       ),
-      // 👑 حساب المالك فقط
-      if (OwnerAccess.enabled)
+      // 👑⭐ حساب المالك واشتراك المزامنة
+      if (SyncPerks.enabled)
         SupActionCard(
           icon: Icons.auto_awesome_rounded,
-          label: 'فاتورة بالذكاء الاصطناعي',
+          label: 'فاتورة شراء بالذكاء الاصطناعي',
           subtitle: 'من صورة أو PDF فاتورة المورد',
           color: const Color(0xFF4F46E5),
           onTap: () => _push(AiPurchaseInvoiceScreen(supplier: _supplier)),

@@ -62,6 +62,8 @@ import '../erp/activity/activity_log.dart' show ActivityLogScreen;
 import '../models/account_statement_item.dart';
 import 'data_import_screen.dart'; // 📥 استيراد من Excel
 import 'diagnostics/error_diagnostics_screen.dart'; // 🩺 تشخيص الأخطاء
+import 'ai_models_settings_screen.dart'; // 🤖 نماذج الذكاء الاصطناعي
+import '../services/sync_perks.dart';
 import 'financial_deep_check_screen.dart'; // 🔬
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
 import '../widgets/loading_dialog.dart';
@@ -2364,8 +2366,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _SettingsSection(
           'النظام والأدوات',
           Icons.build_circle_outlined,
-          'تشخيص الأخطاء، الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
-          keywords: 'تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
+          'تشخيص الأخطاء، نماذج الذكاء الاصطناعي، الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
+          keywords: 'ذكاء اصطناعي نماذج مفتاح api gemini groq openrouter تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
           [
           // 🩺 تشخيص الأخطاء — أول ما في الشاشة
           _buildSettingsCard(
@@ -2380,6 +2382,24 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               },
             ),
           ),
+          // 🤖 نماذج الذكاء الاصطناعي (فاتورة الشراء بالذكاء الاصطناعي) — المالك واشتراك المزامنة
+          if (SyncPerks.enabled)
+            _buildSettingsCard(
+              icon: Icons.auto_awesome_rounded,
+              iconColor: const Color(0xFF4F46E5),
+              title: 'نماذج الذكاء الاصطناعي',
+              child: _buildActionTile(
+                icon: Icons.key_rounded,
+                iconColor: const Color(0xFF4F46E5),
+                title: 'مفاتيح API وترتيب النماذج',
+                subtitle: 'Gemini و Groq و OpenRouter المجانية، الاختبار والترتيب، والتعاون بين نموذجين لقراءة فواتير الموردين',
+                onTap: () {
+                  if (requirePermission(context, AppPermissions.manageUsers)) {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const AiModelsSettingsScreen()));
+                  }
+                },
+              ),
+            ),
           // 🧭 أُزيلت هذه الأزرار من الرئيسية والأقسام وجُمعت هنا
           _buildSettingsCard(
             icon: Icons.tune,
