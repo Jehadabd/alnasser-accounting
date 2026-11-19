@@ -2,11 +2,12 @@
 //
 // 🩺 سجل أخطاء البرنامج لأداة «تشخيص الأخطاء» (الإعدادات ← النظام والأدوات).
 //
-// يجمع أربعة مصادر:
+// يجمع خمسة مصادر:
 //   • أخطاء Flutter (الشاشات) والأخطاء غير المعالَجة — من ErrorLog.install.
 //   • الأخطاء التي عالجها البرنامج وكتبها بـ debugPrint: السطر الذي يبدأ بـ ❌ أو 🔴،
 //     أو ⚠️ ومعه اسم استثناء (SocketException…). التنبيهات العادية لا تُسجَّل.
 //   • أعطال ويندوز الأصلية (native_errors.log من crash_guard.cpp): الخروج المفاجئ فقط.
+//   • كل رسالة خطأ حمراء ظهرت للمستخدم (ErrorCaptureMessenger حول كل الشاشات).
 //   • ما يسجّله الكود يدوياً: ErrorJournal.record(...).
 //
 // الأخطاء المتشابهة (تختلف بالأرقام فقط) مدخل واحد بعدد مرات حدوثها.
@@ -27,6 +28,7 @@ class ErrorSource {
   static const uncaught = 'uncaught'; // خطأ لم يعالجه البرنامج
   static const logged = 'logged'; // خطأ عالجه البرنامج وسجّله
   static const native = 'native'; // عطل أصلي في ويندوز (خروج مفاجئ)
+  static const shown = 'shown'; // رسالة خطأ حمراء ظهرت للمستخدم
   static const manual = 'manual';
 
   static String label(String s) => switch (s) {
@@ -34,6 +36,7 @@ class ErrorSource {
         uncaught => 'خطأ غير معالَج',
         logged => 'خطأ عالجه البرنامج',
         native => 'خروج مفاجئ (ويندوز)',
+        shown => 'رسالة ظهرت للمستخدم',
         _ => 'مسجَّل يدوياً',
       };
 }

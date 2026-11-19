@@ -1,12 +1,19 @@
 // test/services/error_diagnostics_test.dart
 //
 // 🩺 أداة «تشخيص الأخطاء»: محو الأسرار، تجميع الأخطاء المتشابهة، التقاط أسطر debugPrint،
-// قراءة الخروج المفاجئ من native_errors.log، ومطابقة كل خطأ بحلّه — بكود البرنامج نفسه.
+// قراءة الخروج المفاجئ من native_errors.log، ومطابقة كل خطأ بحلّه، والتقاط الرسائل الحمراء،
+// وبوابة «الرفع قبل الإصلاح»، وإصلاح «الرصيد قبل/بعد» بلا مساس بالمبالغ — بكود البرنامج نفسه.
 // التشغيل: flutter test test/services/error_diagnostics_test.dart
 
+import 'package:alnaser/services/database/dao/transaction_dao.dart';
 import 'package:alnaser/services/diagnostics/error_fixes.dart';
 import 'package:alnaser/services/diagnostics/error_journal.dart';
+import 'package:alnaser/services/diagnostics/fix_actions.dart';
+import 'package:alnaser/services/diagnostics/upload_gate.dart';
+import 'package:alnaser/widgets/error_capture_messenger.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 String _fix(String text, {String? source}) => ErrorFixes.match(text, source: source).key;
 
@@ -157,6 +164,119 @@ void main() {
       expect(_fix('خروج البرنامج — الرمز 0xC0000005 في debt_book.exe', source: ErrorSource.native), 'crash_generic');
       // رسالة عادية فيها «tdjson» ليست خروجاً مفاجئاً
       expect(_fix('TdError: tdjson not loaded'), 'tdlib');
+    });
+  });
+
+  group('الرسائل الحمراء للمستخدم', () {
+    SnackBar red(String text, {Color? bg = Colors.red, IconData? icon}) => SnackBar(
+          backgroundColor: bg,
+          content: Row(children: [
+            if (icon != null) Icon(icon),
+            Expanded(child: Padding(padding: const EdgeInsets.all(4), child: Text(text))),
+          ]),
+        );
+
+    test('الأحمر أو أيقونة الخطأ = رسالة خطأ، والأخضر لا', () {
+      expect(ErrorCaptureMessenger.isError(red('x')), isTrue);
+      expect(ErrorCaptureMessenger.isError(red('x', bg: const Color(0xFFB91C1C))), isTrue);
+      expect(ErrorCaptureMessenger.isError(red('x', bg: null, icon: Icons.error_outline_rounded)), isTrue);
+      expect(ErrorCaptureMessenger.isError(red('x', bg: const Color(0xFF047857))), isFalse);
+      expect(ErrorCaptureMessenger.isError(red('x', bg: null)), isFalse);
+    });
+
+    test('نص الرسالة يُقرأ من داخل الصفوف والحشوات', () {
+      expect(ErrorCaptureMessenger.textOf(red('تعذّر الحفظ', icon: Icons.error).content), 'تعذّر الحفظ');
+    });
+
+    test('خطأ البرنامج يُسجَّل، وخطأ الإدخال والصلاحية لا', () {
+      ErrorCaptureMessenger.capture(red('تعذّر الحفظ: database is locked'));
+      ErrorCaptureMessenger.capture(red('اكتب اسم الزبون'));
+      ErrorCaptureMessenger.capture(red('ليس لديك صلاحية لهذه العملية'));
+      ErrorCaptureMessenger.capture(red('تم الحفظ', bg: const Color(0xFF047857)));
+      final list = ErrorJournal.entries;
+      expect(list, hasLength(1));
+      expect(list.single.source, ErrorSource.shown);
+      expect(ErrorFixes.match(list.single.text, source: list.single.source).key, 'db_locked');
+    });
+  });
+
+  group('أزرار الإصلاح وبوابة الرفع', () {
+    test('كل زر مذكور في دليل الحلول موجود، ولا زر يفتح شاشة ويكتب معاً', () {
+      final keys = {for (final a in FixActions.all) a.key};
+      expect(keys.length, FixActions.all.length);
+      for (final f in [...ErrorFixes.all, ErrorFixes.genericCode, ErrorFixes.genericOther]) {
+        for (final k in f.actions) {
+          expect(keys.contains(k), isTrue, reason: '${f.key} → $k');
+        }
+      }
+      for (final a in FixActions.all) {
+        expect(a.what, isNotEmpty);
+        if (a.opens) expect(a.writes, isFalse);
+      }
+    });
+
+    test('الإصلاح مغلق بلا رفع، ومفتوح بعد رفع ناجح حتى تنتهي المدة', () async {
+      UploadGate.setLastOkForTest(null);
+      expect(UploadGate.isOpen, isFalse);
+      expect(UploadGate.available, isFalse);
+      expect(await UploadGate.uploadNow(), isFalse); // لا زر رفع مسجّل ⇒ لا فتح
+      expect(UploadGate.isOpen, isFalse);
+
+      Future<bool> fail() async => false;
+      UploadGate.register(fail);
+      expect(await UploadGate.uploadNow(), isFalse);
+      expect(UploadGate.isOpen, isFalse);
+      UploadGate.unregister(fail);
+
+      Future<bool> ok() async => true;
+      UploadGate.register(ok);
+      expect(await UploadGate.uploadNow(), isTrue);
+      expect(UploadGate.isOpen, isTrue);
+      UploadGate.unregister(ok);
+      expect(UploadGate.available, isFalse);
+
+      UploadGate.setLastOkForTest(DateTime.now().subtract(UploadGate.window + const Duration(seconds: 1)));
+      expect(UploadGate.isOpen, isFalse);
+      UploadGate.setLastOkForTest(null);
+    });
+  });
+
+  group('إصلاح «الرصيد قبل/بعد»', () {
+    sqfliteFfiInit();
+    test('الفحص يعدّ بلا كتابة، والإصلاح يصحّح السلسلة ولا يغيّر أي مبلغ', () async {
+      final db = await databaseFactoryFfiNoIsolate.openDatabase(inMemoryDatabasePath,
+          options: OpenDatabaseOptions(singleInstance: false));
+      await db.execute('CREATE TABLE transactions (id INTEGER PRIMARY KEY, customer_id INTEGER, amount_changed REAL, '
+          'balance_before_transaction REAL, new_balance_after_transaction REAL, transaction_date TEXT, is_deleted INTEGER)');
+      // ترتيب الكشف بالتاريخ: 3 (أكتوبر) ثم 1 ثم 2 — والمخزّن محسوب بالترتيب القديم 1، 2، 3
+      Future<void> tx(int id, double amount, String date, double before, {int deleted = 0}) => db.insert('transactions', {
+            'id': id,
+            'customer_id': 7,
+            'amount_changed': amount,
+            'balance_before_transaction': before,
+            'new_balance_after_transaction': before + amount,
+            'transaction_date': date,
+            'is_deleted': deleted,
+          });
+      await tx(1, 5000, '2026-11-01T10:00:00', 0);
+      await tx(2, -2000, '2026-11-02T10:00:00', 5000);
+      await tx(3, 10000, '2026-10-01T10:00:00', 3000);
+      await tx(4, 99999, '2026-09-01T10:00:00', 0, deleted: 1); // محذوفة: خارج الكشف
+      final amountsBefore = await db.rawQuery('SELECT id, amount_changed FROM transactions ORDER BY id');
+
+      expect(await TransactionDao.rechainIn(db, 7, dryRun: true), 3);
+      expect(await TransactionDao.rechainIn(db, 7, dryRun: true), 3); // الفحص لم يكتب شيئاً
+      expect(await TransactionDao.rechainIn(db, 7), 3);
+      expect(await TransactionDao.rechainIn(db, 7, dryRun: true), 0);
+
+      final rows = {for (final r in await db.query('transactions')) r['id']: r};
+      expect(rows[3]!['balance_before_transaction'], 0);
+      expect(rows[3]!['new_balance_after_transaction'], 10000);
+      expect(rows[1]!['balance_before_transaction'], 10000);
+      expect(rows[2]!['new_balance_after_transaction'], 13000);
+      expect(rows[4]!['balance_before_transaction'], 0); // المحذوفة لم تُلمس
+      expect(await db.rawQuery('SELECT id, amount_changed FROM transactions ORDER BY id'), amountsBefore);
+      await db.close();
     });
   });
 }

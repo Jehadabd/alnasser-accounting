@@ -5,7 +5,8 @@
 // يعرض كل خطأ حدث في البرنامج (ErrorJournal + الخروج المفاجئ من native_errors.log)،
 // مجمّعاً بنوعه وعدد مرات حدوثه. الضغط على الخطأ يفتح: ما الذي حدث، السبب المرجح،
 // خطوات الحل مرقّمة (ErrorFixes)، ومن يحلّه، والتفاصيل التقنية، و«نسخ التقرير».
-// للقراءة فقط: لا يغيّر بيانات ولا إعدادات — «تم الحل» علامة في السجل فقط.
+// «أدوات الإصلاح»: أزرار تنفّذ الحل (FixActions) — ما يكتب منها لا يعمل قبل رفع قاعدة البيانات
+// رفعاً ناجحاً (UploadGate) ثم تأكيد. لا زر يغيّر مبلغاً أو ديناً.
 
 import 'dart:io';
 
@@ -14,8 +15,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import '../../lan/lan_settings.dart' show AppNetworkMode;
+import '../../services/demo_mode.dart';
 import '../../services/diagnostics/error_fixes.dart';
 import '../../services/diagnostics/error_journal.dart';
+import '../../services/diagnostics/fix_actions.dart';
+import '../../services/diagnostics/upload_gate.dart';
+import '../financial_deep_check_screen.dart';
 import '../../services/dropbox_backup_service.dart';
 import '../../widgets/dropbox_troubleshoot.dart';
 import '../../widgets/settings_kit.dart';
@@ -129,6 +135,171 @@ class ErrorDiagnosticsTile extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+// ─────────────────────────── تنفيذ الإصلاح (بعد الرفع) ───────────────────────────
+
+String _hm(DateTime t) => DateFormat('HH:mm').format(t);
+
+/// ينفّذ زر إصلاح: الفحص فوراً؛ وما يكتب في القاعدة بعد رفع ناجح ثم تأكيد.
+Future<void> runFixAction(BuildContext context, FixAction a) async {
+  if (a.opens) {
+    if (a.key == 'deep_check') {
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => const FinancialDeepCheckScreen()));
+    }
+    return;
+  }
+  if (AppNetworkMode.isClient) {
+    setToast(context, 'هذا الجهاز طرفية: الإصلاح والفحص من حاسبة السيرفر التي عليها القاعدة', error: true);
+    return;
+  }
+  if (a.writes) {
+    // 🔐 1) رفع قاعدة البيانات أولاً (الوضع التجريبي: بيانات وهمية والرفع متوقف أصلاً)
+    if (!DemoMode.isOn && !UploadGate.isOpen) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.cloud_upload_rounded, color: kSetNavy, size: 36),
+          title: const Text('ارفع قاعدة البيانات أولاً'),
+          content: Text(UploadGate.available
+              ? 'قبل أي إصلاح تُرفع نسخة كاملة من قاعدة البيانات إلى تيليجرام أو Dropbox أو أي وجهة مفعّلة '
+                  '— إن لم يعجبك ناتج الإصلاح تستعيدها.\n\nيكفي نجاح الرفع إلى وجهة واحدة. بعده يبقى الإصلاح مفتوحاً '
+                  '${UploadGate.window.inMinutes} دقيقة.'
+              : 'زر الرفع غير متاح من هذه الشاشة الآن.\nارجع إلى الشاشة الرئيسية واضغط «رفع البيانات» من هنا بعد فتحها، '
+                  'ثم عد إلى «تشخيص الأخطاء».'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(UploadGate.available ? 'إلغاء' : 'حسناً')),
+            if (UploadGate.available)
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(ctx, true),
+                icon: const Icon(Icons.cloud_upload_rounded),
+                label: const Text('ارفع الآن'),
+              ),
+          ],
+        ),
+      );
+      if (go != true || !context.mounted) return;
+      final ok = await UploadGate.uploadNow();
+      if (!context.mounted) return;
+      if (!ok) {
+        setToast(context, 'لم ينجح الرفع إلى أي وجهة — لم يُنفَّذ الإصلاح', error: true);
+        return;
+      }
+    }
+    // 2) تأكيد ما سيحدث بالضبط
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(a.icon, color: kSetGreen, size: 34),
+        title: Text(a.title),
+        content: Text('${a.what}\n\n'
+            '${DemoMode.isOn ? 'الوضع التجريبي: بلا رفع (البيانات وهمية).' : 'نسخة القاعدة رُفعت ${UploadGate.lastOk == null ? '' : 'الساعة ${_hm(UploadGate.lastOk!)}'} ✓'}'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kSetGreen),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('نفّذ الإصلاح'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !context.mounted) return;
+  }
+  // 3) التنفيذ مع مؤشر انتظار
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => PopScope(
+      canPop: false,
+      child: AlertDialog(
+        content: Row(children: [
+          const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 3)),
+          const SizedBox(width: 16),
+          Expanded(child: Text('${a.title}…')),
+        ]),
+      ),
+    ),
+  );
+  final r = await FixActions.run(a.key);
+  if (!context.mounted) return;
+  Navigator.of(context, rootNavigator: true).pop();
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: Icon(r.ok ? Icons.check_circle_rounded : Icons.warning_amber_rounded, color: r.ok ? kSetGreen : kSetOrange, size: 38),
+      title: Text(a.title),
+      content: SelectableText(r.message, style: const TextStyle(height: 1.6)),
+      actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+    ),
+  );
+}
+
+/// صف زر إصلاح (في «أدوات الإصلاح» وفي صفحة الخطأ).
+class _FixActionRow extends StatelessWidget {
+  const _FixActionRow(this.action, {this.onDone});
+  final FixAction action;
+  final VoidCallback? onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    final a = action;
+    final c = a.writes ? kSetGreen : kSetBlue;
+    return Semantics(
+      button: true,
+      label: a.title,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () async {
+          await runFixAction(context, a);
+          onDone?.call();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(11)),
+              child: Icon(a.icon, color: c, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Flexible(
+                    child: Text(a.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: kSetText)),
+                  ),
+                  const SizedBox(width: 8),
+                  _Pill(a.writes ? 'يبدأ برفع القاعدة' : (a.opens ? 'يفتح شاشة' : 'قراءة فقط'),
+                      a.writes ? kSetOrange : kSetBlue,
+                      icon: a.writes ? Icons.cloud_upload_rounded : Icons.visibility_rounded),
+                ]),
+                const SizedBox(height: 3),
+                Text(a.what, style: const TextStyle(fontSize: 12.5, height: 1.5, color: kSetMuted)),
+              ]),
+            ),
+            const SizedBox(width: 6),
+            Icon(Icons.play_circle_fill_rounded, color: c, size: 26),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// حالة بوابة الإصلاح.
+class _GatePill extends StatelessWidget {
+  const _GatePill();
+
+  @override
+  Widget build(BuildContext context) {
+    if (DemoMode.isOn) return const SetStatusPill('الوضع التجريبي: الإصلاح بلا رفع', ok: true, icon: Icons.science_rounded);
+    final until = UploadGate.openUntil;
+    return until == null
+        ? const SetStatusPill('كل إصلاح يبدأ برفع قاعدة البيانات', ok: false, icon: Icons.cloud_upload_rounded)
+        : SetStatusPill('رُفعت القاعدة — الإصلاح مفتوح حتى ${_hm(until)}', ok: true, icon: Icons.lock_open_rounded);
   }
 }
 
@@ -308,9 +479,20 @@ class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
                 ),
         ),
         const SizedBox(height: 8),
+        SetCard(
+          title: 'أدوات الإصلاح',
+          subtitle: 'الفحص يعمل فوراً — وكل إصلاح يبدأ برفع قاعدة البيانات ثم تأكيدك',
+          icon: Icons.handyman_rounded,
+          color: kSetGreen,
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Padding(padding: EdgeInsets.fromLTRB(4, 4, 4, 6), child: _GatePill()),
+            for (final a in FixActions.all) _FixActionRow(a, onDone: _refresh),
+          ]),
+        ),
         const SetBanner(
-          'الأداة تقرأ فقط ولا تغيّر أي رقم. كلمات المرور ورموز البوتات والمفاتيح تُمحى من السجل قبل حفظه، '
-          'فالتقرير المنسوخ آمن للإرسال.',
+          'الفحص لا يغيّر شيئاً، والإصلاح لا يغيّر مبلغاً ولا ديناً ولا مخزوناً. كلمات المرور ورموز البوتات والمفاتيح '
+          'تُمحى من السجل قبل حفظه، فالتقرير المنسوخ آمن للإرسال.',
           icon: Icons.lock_outline_rounded,
         ),
       ],
@@ -723,6 +905,19 @@ class _ErrorDetailScreenState extends State<ErrorDetailScreen> {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: SetupGuide(steps: steps, color: kSetGreen),
         ),
+        if (f.actions.isNotEmpty)
+          SetCard(
+            title: 'أصلح من هنا',
+            subtitle: 'الفحص فوراً — والإصلاح بعد رفع قاعدة البيانات',
+            icon: Icons.handyman_rounded,
+            color: kSetGreen,
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Padding(padding: EdgeInsets.fromLTRB(4, 4, 4, 6), child: _GatePill()),
+              for (final k in f.actions)
+                if (FixActions.byKey(k) != null) _FixActionRow(FixActions.byKey(k)!, onDone: () => setState(() {})),
+            ]),
+          ),
         SetCard(
           title: 'التفاصيل التقنية',
           subtitle: 'للمطوّر — يُنسخ مع التقرير',

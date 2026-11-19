@@ -414,8 +414,9 @@ class TransactionDao {
   /// (اختبار الفاتورة الواحدة: one_invoice_history_test — «كشف الحساب»)
   ///
   /// لا يغيّر مبلغاً ولا نوعاً ولا رصيد العميل ولا حالة الرفع: عمودا السلسلة فقط،
-  /// ويكتب الصف الذي يختلف فقط.
-  static Future<void> rechainIn(DatabaseExecutor db, int customerId) async {
+  /// ويكتب الصف الذي يختلف فقط. يعيد عدد الصفوف المنحرفة؛ و[dryRun] يعدّها بلا كتابة
+  /// (أداة «تشخيص الأخطاء»: فحص سلسلة الأرصدة وإصلاحها).
+  static Future<int> rechainIn(DatabaseExecutor db, int customerId, {bool dryRun = false}) async {
     final rows = await db.query(
       'transactions',
       columns: ['id', 'amount_changed', 'balance_before_transaction', 'new_balance_after_transaction'],
@@ -424,21 +425,26 @@ class TransactionDao {
       orderBy: 'transaction_date ASC, id ASC',
     );
     double running = 0.0;
+    var drifted = 0;
     for (final r in rows) {
       final amount = (r['amount_changed'] as num?)?.toDouble() ?? 0.0;
       final after = MoneyCalculator.add(running, amount);
       final b0 = (r['balance_before_transaction'] as num?)?.toDouble();
       final a0 = (r['new_balance_after_transaction'] as num?)?.toDouble();
       if (b0 == null || a0 == null || (b0 - running).abs() > 0.0001 || (a0 - after).abs() > 0.0001) {
-        await db.update(
-          'transactions',
-          {'balance_before_transaction': running, 'new_balance_after_transaction': after},
-          where: 'id = ?',
-          whereArgs: [r['id']],
-        );
+        drifted++;
+        if (!dryRun) {
+          await db.update(
+            'transactions',
+            {'balance_before_transaction': running, 'new_balance_after_transaction': after},
+            where: 'id = ?',
+            whereArgs: [r['id']],
+          );
+        }
       }
       running = after;
     }
+    return drifted;
   }
 
   static void assertNotNegative({required double before, required double after, required String what}) {

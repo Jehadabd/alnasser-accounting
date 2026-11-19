@@ -77,6 +77,7 @@ import 'services/seat_service.dart';
 import 'erp/activity/screen_usage.dart' show ScreenUsageObserver; // 📈
 import 'widgets/home_destinations.dart' show HomeDests;
 import 'wa_messages/wa_send_notice.dart'; // 🔔 إشعار نتيجة إرسال واتساب
+import 'widgets/error_capture_messenger.dart'; // 🩺 التقاط رسائل الخطأ للمستخدم
 
 /// 🔥 مفتاح الملاح العام — يُستخدم من ReconciliationPrompt وغيرها لإظهار
 /// حوارات من خارج شجرة الويدجت.
@@ -633,7 +634,9 @@ class MyApp extends StatelessWidget {
         navigatorObservers: [sideNavObserver, SaveLock.newObserver(), screenUsageObserver],
         // ⌨️ اختصارات لوحة المفاتيح لكل الشاشات (F1 الكاشير، F2 قائمة، F4 المحاسبة...)
         // 🔔 إشعارات إرسال واتساب (أعلى يسار الشاشة، فوق كل الشاشات)
-        builder: (context, child) => WaSendNoticeHost(
+        // 🩺 كل رسالة خطأ حمراء تُسجَّل في «تشخيص الأخطاء» ثم تُعرض كما هي
+        builder: (context, child) => ErrorCaptureMessenger(
+          child: WaSendNoticeHost(
           child: GlobalShortcuts(
               navigatorKey: globalNavigatorKey,
               // 🧭 اللوحة الجانبية مرة واحدة حول كل الشاشات
@@ -646,6 +649,7 @@ class MyApp extends StatelessWidget {
                 ),
               ),
             ),
+        ),
         ),
       ),
     );

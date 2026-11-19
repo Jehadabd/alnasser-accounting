@@ -55,6 +55,7 @@ import '../services/disk_space/disk_space_guard.dart'; // 💽 حماية امت
 // ⭐ إغلاق نافذة الحاسبة يمر بـ ExitBackup (نسخة احتياطية عند الخروج) — انظر onWindowClose.
 import 'package:window_manager/window_manager.dart';
 import '../services/exit_backup.dart';
+import '../services/diagnostics/upload_gate.dart'; // 🔐 الإصلاح بعد رفع ناجح
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
@@ -72,6 +73,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
   void initState() {
     super.initState();
     _attachExitBackup();
+    UploadGate.register(_uploadForGate); // 🔐 «تشخيص الأخطاء» يرفع بهذا الزر قبل أي إصلاح
     unawaited(TorEngine.autoStart()); // 🧅 Tor لتيليجرام: يبدأ مع البرنامج إن اختار المستخدم ذلك
     _loadSettings();
     // تأكد من تهيئة مزود التطبيق لتفعيل دعم Google Drive
@@ -172,7 +174,15 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
   @override
   void dispose() {
     _detachExitBackup();
+    UploadGate.unregister(_uploadForGate);
     super.dispose();
+  }
+
+  /// 🔐 رفع البيانات لبوابة الإصلاح: true إن نجح إلى وجهة واحدة على الأقل.
+  Future<bool> _uploadForGate() async {
+    final done = Completer<bool>();
+    await _uploadData(done: done);
+    return done.isCompleted ? done.future : false;
   }
 
   // ─────────── ⭐ نسخة احتياطية عند إغلاق النافذة (الحاسبة) ───────────
@@ -357,14 +367,22 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
 
   // Modern specific button for targeted features
   // ☁️ رفع البيانات (Telegram/Dropbox) — صار زراً في الشريط العلوي بدل زر في الشبكة
-  Future<void> _uploadData() async {
+  Future<void> _uploadData({Completer<bool>? done}) async {
+    // 🔐 [done]: لبوابة الإصلاح — يُكمَل بنجاح الرفع إلى وجهة واحدة على الأقل
+    void finish(bool ok) {
+      if (done != null && !done.isCompleted) done.complete(ok);
+    }
     if (DemoMode.isOn) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('الوضع التجريبي: رفع البيانات متوقف (البيانات وهمية)'),
       ));
+      finish(false);
       return;
     }
-    if (!_checkPermission(AppPermissions.uploadDatabase)) return;
+    if (!_checkPermission(AppPermissions.uploadDatabase)) {
+      finish(false);
+      return;
+    }
     final appProvider = context.read<AppProvider>();
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('جاري تحضير النسخة الاحتياطية...');
@@ -387,7 +405,10 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
     diagnostics.forEach((key, value) => debugPrint('   $key: $value'));
 
     // ابدأ الرفع في مهمة منفصلة وتحديث المؤشر ثم إغلاق الحوار
-    if (!mounted) return;
+    if (!mounted) {
+      finish(false);
+      return;
+    }
     Future(() async {
       try {
         List<String> errors = [];
@@ -727,6 +748,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
       ),
     );
 
+    finish(targetResults.value.values.contains(1));
     if (!mounted) return;
     if (result?['success'] == true) {
       // من نتائج الرفع نفسه (بلا فحص جديد عبر الإنترنت)

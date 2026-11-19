@@ -37,6 +37,7 @@ class ErrorFix {
     this.needles = const [],
     this.who = FixWho.you,
     this.harmless = false,
+    this.actions = const [],
   });
 
   final String key;
@@ -59,6 +60,9 @@ class ErrorFix {
 
   /// تنبيه لا يضر البيانات (مثل حماية تعمل كما يجب).
   final bool harmless;
+
+  /// أزرار إصلاح تنفّذ الحل (مفاتيح FixActions) — ما يكتب منها لا يعمل قبل رفع القاعدة.
+  final List<String> actions;
 }
 
 class ErrorFixes {
@@ -135,6 +139,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'crash_memory',
+      actions: ['integrity'],
       title: 'أُغلق البرنامج: نفدت الذاكرة أو تلفت',
       category: 'crash',
       severity: FixSeverity.critical,
@@ -150,6 +155,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'crash_generic',
+      actions: ['integrity', 'checkpoint', 'deep_check'],
       title: 'أُغلق البرنامج فجأة',
       category: 'crash',
       severity: FixSeverity.critical,
@@ -167,6 +173,7 @@ class ErrorFixes {
     // ───────────── قاعدة البيانات ─────────────
     ErrorFix(
       key: 'db_corrupt',
+      actions: ['integrity', 'reindex', 'checkpoint'],
       title: 'قاعدة البيانات تالفة',
       category: 'db',
       severity: FixSeverity.critical,
@@ -184,6 +191,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'db_locked',
+      actions: ['checkpoint'],
       title: 'قاعدة البيانات مشغولة',
       category: 'db',
       severity: FixSeverity.error,
@@ -198,6 +206,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'db_schema',
+      actions: ['integrity'],
       title: 'قاعدة البيانات من إصدار مختلف',
       category: 'db',
       severity: FixSeverity.error,
@@ -226,6 +235,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'db_fk',
+      actions: ['integrity', 'deep_check'],
       title: 'سجل مرتبط بسجل غير موجود',
       category: 'db',
       severity: FixSeverity.error,
@@ -243,6 +253,7 @@ class ErrorFixes {
     // ───────────── الملفات والقرص ─────────────
     ErrorFix(
       key: 'disk_full',
+      actions: ['checkpoint'],
       title: 'القرص ممتلئ',
       category: 'disk',
       severity: FixSeverity.critical,
@@ -284,6 +295,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'disk_io',
+      actions: ['integrity'],
       title: 'خطأ في قراءة القرص',
       category: 'disk',
       severity: FixSeverity.critical,
@@ -676,6 +688,7 @@ class ErrorFixes {
     // ───────────── خلل في البرنامج ─────────────
     ErrorFix(
       key: 'code_null',
+      actions: ['deep_check'],
       title: 'خلل في البرنامج: قيمة ناقصة',
       category: 'code',
       severity: FixSeverity.error,
@@ -691,6 +704,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'code_range',
+      actions: ['deep_check'],
       title: 'خلل في البرنامج: عنصر غير موجود في القائمة',
       category: 'code',
       severity: FixSeverity.error,
@@ -705,6 +719,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'code_type',
+      actions: ['deep_check'],
       title: 'خلل في البرنامج: نوع بيانات غير متوقع',
       category: 'code',
       severity: FixSeverity.error,
@@ -753,6 +768,7 @@ class ErrorFixes {
   /// حل عام لاستثناء تقني لم يطابق شيئاً.
   static const genericCode = ErrorFix(
     key: 'generic_code',
+      actions: ['deep_check'],
     title: 'خطأ تقني في البرنامج',
     category: 'code',
     severity: FixSeverity.error,
