@@ -23,14 +23,15 @@ class ErrorCaptureMessenger extends ScaffoldMessenger {
 
   static final _input = RegExp(r'^\s*(اكتب|أدخل|ادخل|اختر|أضف|حدّد|حدد|يرجى|الرجاء|يجب|ليس لديك صلاحية|لا تملك صلاحية)');
 
-  static const _errorIcons = <IconData>{
-    Icons.error,
-    Icons.error_outline,
-    Icons.error_rounded,
-    Icons.error_outline_rounded,
-    Icons.error_outlined,
-    Icons.report_rounded,
-    Icons.dangerous_rounded,
+  // IconData لا تصلح في مجموعة const (لا مساواة أولية) ⇒ نقارن رمز الأيقونة
+  static final Set<int> _errorIcons = {
+    Icons.error.codePoint,
+    Icons.error_outline.codePoint,
+    Icons.error_rounded.codePoint,
+    Icons.error_outline_rounded.codePoint,
+    Icons.error_outlined.codePoint,
+    Icons.report_rounded.codePoint,
+    Icons.dangerous_rounded.codePoint,
   };
 
   /// هل هذه الرسالة رسالة خطأ؟ (لون أحمر أو أيقونة خطأ)
@@ -50,7 +51,7 @@ class ErrorCaptureMessenger extends ScaffoldMessenger {
     _walk(w, (x) {
       if (x is Icon) {
         final i = x.icon;
-        if (i != null && _errorIcons.contains(i)) {
+        if (i != null && i.fontFamily == 'MaterialIcons' && _errorIcons.contains(i.codePoint)) {
           found = true;
         }
       }

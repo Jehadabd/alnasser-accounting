@@ -13,7 +13,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' show DateFormat; // لا TextDirection الخاصة بـ intl
 
 import '../../lan/lan_settings.dart' show AppNetworkMode;
 import '../../services/demo_mode.dart';

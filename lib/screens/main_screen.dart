@@ -182,7 +182,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
   Future<bool> _uploadForGate() async {
     final done = Completer<bool>();
     await _uploadData(done: done);
-    return done.isCompleted ? done.future : false;
+    return done.isCompleted ? await done.future : false;
   }
 
   // ─────────── ⭐ نسخة احتياطية عند إغلاق النافذة (الحاسبة) ───────────
