@@ -15,6 +15,7 @@ import '../accounting/vouchers_service.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import 'global_search.dart';
+import '../screens/diagnostics/problem_report.dart'; // 🚩 أبلغ عن مشكلة
 
 class GlobalShortcuts extends StatelessWidget {
   const GlobalShortcuts({super.key, required this.navigatorKey, required this.child});
@@ -58,6 +59,11 @@ class GlobalShortcuts extends StatelessWidget {
             _go('/sales_hub', AppPermissions.salesDocs),
         const SingleActivator(LogicalKeyboardKey.keyI, control: true, shift: true): () =>
             _go('/inventory_hub', AppPermissions.itemCard),
+        // 🚩 أبلغ عن مشكلة في الشاشة الحالية (صورتها تُلتقط قبل فتح النافذة)
+        const SingleActivator(LogicalKeyboardKey.keyE, control: true, shift: true): () {
+          final ctx = navigatorKey.currentContext;
+          if (ctx != null) showProblemReport(ctx);
+        },
       },
       child: child,
     );

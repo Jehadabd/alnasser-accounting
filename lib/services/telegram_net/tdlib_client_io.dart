@@ -19,6 +19,7 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 
+import '../diagnostics/error_journal.dart'; // 🩺 توقف الخيط يظهر في «تشخيص الأخطاء»
 import 'tdlib_engine.dart';
 
 class TdError implements Exception {
@@ -72,6 +73,7 @@ class TdlibClient {
   late _ExecD _exec;
   Isolate? _isolate;
   ReceivePort? _port;
+  ReceivePort? _errPort; // 🩺 أخطاء خيط الاستقبال (كانت تضيع بلا أثر)
 
   int? _clientId;
   String? _botId; // الجلسة الحالية لأي بوت
@@ -101,7 +103,14 @@ class TdlibClient {
     final port = ReceivePort();
     _port = port;
     port.listen((m) => _onMessage(m as String));
-    _isolate = await Isolate.spawn(_receiveLoop, [port.sendPort, bin], debugName: 'tdlib_receive');
+    final errPort = ReceivePort();
+    _errPort = errPort;
+    errPort.listen((m) {
+      final err = m is List && m.isNotEmpty ? m.first : m;
+      final st = m is List && m.length > 1 ? '${m[1]}' : null;
+      ErrorJournal.recordText(ErrorSource.background, 'توقف خيط تيليجرام (MTProto/tdjson): $err${st == null ? '' : '\n$st'}');
+    });
+    _isolate = await Isolate.spawn(_receiveLoop, [port.sendPort, bin], debugName: 'tdlib_receive', onError: errPort.sendPort);
   }
 
   /// طلب متزامن (td_execute) — لما تسمح به TDLib فقط (parseTextEntities، setLogVerbosityLevel…).
@@ -257,6 +266,8 @@ class TdlibClient {
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
     _port?.close();
+    _errPort?.close();
+    _errPort = null;
   }
 
   static Future<String> _dbKey() async {

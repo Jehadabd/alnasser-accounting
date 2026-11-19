@@ -7,7 +7,11 @@
 //   • كل زر يكتب في القاعدة ([FixAction.writes]) لا يعمل إلا بعد رفع ناجح (UploadGate) —
 //     تفرضه الواجهة (runFixAction في شاشة التشخيص)، وتطلب تأكيداً بعده.
 //   • الفحص (قراءة فقط) يعمل بلا رفع.
+//   • زر الإصلاح لا يعمل إن لم يوجد خطأ: يفحص أولاً (FixActions.need) — إن كان كل شيء سليماً
+//     يقول ذلك ويتوقف، بلا رفع ولا تنفيذ.
 //   • على طرفية الشبكة المحلية لا إصلاح: القاعدة على حاسبة السيرفر.
+
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -18,6 +22,13 @@ import '../error_log.dart';
 class FixResult {
   const FixResult(this.ok, this.message);
   final bool ok;
+  final String message;
+}
+
+/// نتيجة الفحص المسبق لزر إصلاح: هل يوجد ما يُصلَح أصلاً؟
+class FixNeed {
+  const FixNeed(this.needed, this.message);
+  final bool needed;
   final String message;
 }
 
@@ -103,6 +114,35 @@ class FixActions {
     }
     return null;
   }
+
+  /// 🔎 فحص قبل الإصلاح (قراءة فقط، بلا رفع): الزر لا يعمل إن لم يوجد خطأ يصلحه.
+  static Future<FixNeed> need(String key) async {
+    try {
+      final db = await DatabaseService().database;
+      switch (key) {
+        case 'rechain':
+          final r = await _run('chain_check');
+          return FixNeed(!r.ok, r.message);
+        case 'reindex':
+          final rows = await db.rawQuery('PRAGMA integrity_check');
+          final msgs = [for (final r in rows) '${r.values.first}'];
+          final ok = msgs.length == 1 && msgs.first == 'ok';
+          return FixNeed(!ok, ok ? 'القاعدة سليمة: لا تلف يحتاج إعادة بناء الفهارس.' : 'وُجد تلف: ${msgs.take(3).join(' | ')}');
+        case 'checkpoint':
+          final wal = File('${db.path}-wal');
+          final size = await wal.exists() ? await wal.length() : 0;
+          final mb = size / (1024 * 1024);
+          return mb >= _walLimitMb
+              ? FixNeed(true, 'سجل الكتابة المؤقت ${mb.toStringAsFixed(1)} ميغابايت (الطبيعي أقل من $_walLimitMb).')
+              : FixNeed(false, 'سجل الكتابة المؤقت ${mb.toStringAsFixed(1)} ميغابايت — طبيعي، لا حاجة لتفريغه.');
+      }
+      return const FixNeed(true, '');
+    } catch (e) {
+      return FixNeed(false, 'تعذّر الفحص قبل الإصلاح: $e — لم يُنفَّذ شيء.');
+    }
+  }
+
+  static const int _walLimitMb = 8;
 
   /// ينفّذ الإجراء (البوابة والتأكيد في الواجهة قبل الاستدعاء).
   static Future<FixResult> run(String key) async {

@@ -542,6 +542,23 @@ class ErrorFixes {
       ],
     ),
 
+    // ───────────── فشل الرفع أو النسخ (بعد أسباب الشبكة: السبب الأدق يُعرض أولاً) ─────────────
+    ErrorFix(
+      key: 'backup_failed',
+      title: 'لم يكتمل رفع البيانات أو حفظ النسخة',
+      category: 'backup',
+      severity: FixSeverity.critical,
+      what: 'النسخة الاحتياطية لم تصل إلى وجهة أو أكثر (تيليجرام، Dropbox، Google Drive) أو لم تُحفظ على الحاسبة.',
+      cause: 'السبب مكتوب تحت اسم كل وجهة في «التفاصيل التقنية»: اتصال، رمز بوت، صلاحية مجلد، مساحة…',
+      needles: [r'لم يكتمل رفع البيانات', r'تعذّر حفظ النسخة', r'فشل الرفع', r'فشل رفع', r'Backup error', r'النسخة المحفوظة ناقصة'],
+      steps: [
+        GuideStep('اقرأ سطر كل وجهة في «التفاصيل التقنية» — ما نجح منها نجح، والفاشل وحده يحتاج إصلاحاً.', warn: true),
+        GuideStep('تأكد من الإنترنت ثم اضغط «رفع البيانات» مرة أخرى من الشاشة الرئيسية.'),
+        GuideStep('تيليجرام: «إعدادات تيليجرام» ← «اختبار الاتصال». Dropbox: شاشة Dropbox ← «حل مشاكل Dropbox».'),
+        GuideStep('إن كانت نسخة الخروج: اختر مجلداً آخر للنسخة، أو أفرغ مساحة في القرص.'),
+      ],
+    ),
+
     // ───────────── الطباعة ─────────────
     ErrorFix(
       key: 'print',
@@ -644,6 +661,22 @@ class ErrorFixes {
     ),
 
     // ───────────── الشاشة ─────────────
+    ErrorFix(
+      key: 'ui_freeze',
+      title: 'البرنامج تجمّد ولم يستجب',
+      category: 'ui',
+      severity: FixSeverity.warning,
+      what: 'البرنامج توقف عن الاستجابة للضغط وعن الرسم بضع ثوانٍ ثم عاد.',
+      cause: 'عملية ثقيلة على الخيط الرئيسي (تقرير كبير، نسخ أو استعادة، فحص)، أو قرص بطيء/ممتلئ، أو برنامج حماية يفحص الملفات.',
+      needles: [r'تجمّد البرنامج'],
+      who: FixWho.both,
+      steps: [
+        GuideStep('إن تجمّد أثناء ضغط زر: لا تضغطه مرة ثانية — انتظر حتى يستجيب، فقد تكون العملية تعمل.'),
+        GuideStep('انظر «الشاشات الأخيرة» في التفاصيل التقنية لتعرف أين حدث.'),
+        GuideStep('إن تكرّر في الشاشة نفسها: استثنِ مجلد البرنامج من برنامج الحماية، وتأكد أن في القرص مساحة.'),
+        _report,
+      ],
+    ),
     ErrorFix(
       key: 'ui_overflow',
       title: 'محتوى لا يتسع في الشاشة',
@@ -765,6 +798,23 @@ class ErrorFixes {
     ),
   ];
 
+  /// بلاغ كتبه المستخدم (Ctrl+Shift+E أو «أبلغ عن مشكلة»).
+  static const userReport = ErrorFix(
+    key: 'user_report',
+    title: 'بلاغ من المستخدم',
+    category: 'other',
+    severity: FixSeverity.warning,
+    what: 'المستخدم أبلغ عن مشكلة لم يرافقها خطأ يلتقطه البرنامج (زر لم يعمل، رقم غير متوقع…).',
+    cause: 'غير معروف — الوصف وصورة الشاشة واسمها في الأسفل.',
+    who: FixWho.both,
+    actions: ['integrity', 'chain_check', 'deep_check'],
+    steps: [
+      GuideStep('انظر هل ظهر خطأ آخر في الوقت نفسه في قائمة «تشخيص الأخطاء» — غالباً هو السبب.'),
+      GuideStep('أعد ما فعلته مرة واحدة. إن تكرّر فسجّل بلاغاً جديداً فور حدوثه (Ctrl+Shift+E).'),
+      _report,
+    ],
+  );
+
   /// حل عام لاستثناء تقني لم يطابق شيئاً.
   static const genericCode = ErrorFix(
     key: 'generic_code',
@@ -806,6 +856,7 @@ class ErrorFixes {
 
   /// الحل المناسب لنص الخطأ. [source] مصدر الخطأ (الخروج المفاجئ يُطابَق في قسمه فقط).
   static ErrorFix match(String text, {String? source}) {
+    if (source == 'report') return userReport;
     final native = source == 'native';
     for (final f in all) {
       if (native != (f.category == 'crash')) continue;

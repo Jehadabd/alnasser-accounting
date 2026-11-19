@@ -32,7 +32,11 @@ class ErrorCaptureMessenger extends ScaffoldMessenger {
     Icons.error_outlined.codePoint,
     Icons.report_rounded.codePoint,
     Icons.dangerous_rounded.codePoint,
+    Icons.cloud_off_rounded.codePoint,
   };
+
+  /// أيقونة خطأ؟ (تستعملها مراقبة النوافذ أيضاً)
+  static bool isErrorIcon(IconData i) => i.fontFamily == 'MaterialIcons' && _errorIcons.contains(i.codePoint);
 
   /// هل هذه الرسالة رسالة خطأ؟ (لون أحمر أو أيقونة خطأ)
   static bool isError(SnackBar s) {
@@ -51,7 +55,7 @@ class ErrorCaptureMessenger extends ScaffoldMessenger {
     _walk(w, (x) {
       if (x is Icon) {
         final i = x.icon;
-        if (i != null && i.fontFamily == 'MaterialIcons' && _errorIcons.contains(i.codePoint)) {
+        if (i != null && isErrorIcon(i)) {
           found = true;
         }
       }

@@ -11,6 +11,7 @@ import 'package:alnaser/services/diagnostics/error_journal.dart';
 import 'package:alnaser/services/diagnostics/fix_actions.dart';
 import 'package:alnaser/services/diagnostics/upload_gate.dart';
 import 'package:alnaser/widgets/error_capture_messenger.dart';
+import 'package:alnaser/widgets/error_dialog_observer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -277,6 +278,72 @@ void main() {
       expect(rows[4]!['balance_before_transaction'], 0); // المحذوفة لم تُلمس
       expect(await db.rawQuery('SELECT id, amount_changed FROM transactions ORDER BY id'), amountsBefore);
       await db.close();
+    });
+  });
+
+  group('تغطية كل أخطاء البرنامج', () {
+    test('أسطر الفشل بلا علامة ❌ تُلتقط، والنجاح و«بلا أخطاء» لا', () {
+      expect(ErrorJournal.looksLikeError('Backup error: SocketException: Connection reset'), isTrue);
+      expect(ErrorJournal.looksLikeError('فشل رفع صورة المادة'), isTrue);
+      expect(ErrorJournal.looksLikeError('تعذّر فتح الطابعة'), isTrue);
+      expect(ErrorJournal.looksLikeError('upload failed: 500'), isTrue);
+      expect(ErrorJournal.looksLikeError('📊 الفحص: 0 errors'), isFalse);
+      expect(ErrorJournal.looksLikeError('تمت المزامنة بلا أخطاء'), isFalse);
+      expect(ErrorJournal.looksLikeError('🔄 مزامنة 15 عميلاً'), isFalse);
+    });
+
+    test('التجمّد: فجوة 4 ثوانٍ فأكثر، ولا يُعدّ نوم الحاسبة تجمّداً', () {
+      expect(ErrorJournal.freezeSeconds(const Duration(milliseconds: 1100)), isNull);
+      expect(ErrorJournal.freezeSeconds(const Duration(seconds: 6)), 5);
+      expect(ErrorJournal.freezeSeconds(const Duration(minutes: 30)), isNull);
+      expect(ErrorFixes.match('تجمّد البرنامج 5 ثانية — لم يستجب للضغط ولا للرسم').key, 'ui_freeze');
+    });
+
+    test('نوافذ الخطأ تُسجَّل، وأسئلة التأكيد ونوافذ النجاح لا', () {
+      final up = ErrorDialogObserver.classify(
+          ['لم يكتمل رفع البيانات', 'Telegram: SocketException: Failed host lookup: api.telegram.org', 'حسناً']);
+      expect(up, startsWith('لم يكتمل رفع البيانات'));
+      expect(up, contains('SocketException'));
+      expect(ErrorDialogObserver.classify(['حذف الفاتورة؟', 'لا يمكن التراجع عن الحذف بعد تأكيده']), isNull);
+      expect(ErrorDialogObserver.classify(['تم الحفظ', 'حُفظت الفاتورة رقم 15']), isNull);
+      expect(ErrorDialogObserver.classify(['ارفع قاعدة البيانات أولاً', 'قبل أي إصلاح…']), isNull);
+      expect(ErrorDialogObserver.classify(['الطابعة', 'تعذّر الاتصال بالطابعة الآن'], errorIcon: true), isNotNull);
+      final save = ErrorDialogObserver.classify(['تعذّر حفظ النسخة الاحتياطية', 'النسخة المحفوظة ناقصة (100 من 200 بايت)']);
+      expect(ErrorFixes.match(save!).key, 'backup_failed');
+    });
+
+    test('«عرفت الخطأ — أغلقه» يُخرجه من القائمة، ويعود إن تكرّر', () {
+      ErrorJournal.recordText(ErrorSource.logged, 'فشل رفع الصورة');
+      final e = ErrorJournal.entries.single;
+      ErrorJournal.dismiss(e);
+      expect(ErrorJournal.unresolvedCount, 0);
+      ErrorJournal.reopen(e);
+      expect(ErrorJournal.unresolvedCount, 1);
+      ErrorJournal.dismiss(e);
+      ErrorJournal.recordText(ErrorSource.logged, 'فشل رفع الصورة');
+      expect(ErrorJournal.unresolvedCount, 1);
+      // الخروج المفاجئ يُغلق أيضاً
+      final n = ErrorJournal.parseNative('[2026-11-18 21:00:00.000] UNHANDLED - the app is closing code=0xC0000005 at x.dll+0x1 thread=1\n').single;
+      ErrorJournal.dismiss(n);
+      expect(n.resolved, isTrue);
+    });
+
+    test('كل بلاغ من المستخدم مدخل مستقل بحلّه الخاص', () {
+      ErrorJournal.recordReport('ضغطت حفظ ولم يحدث شيء', screen: 'CreateInvoiceScreen');
+      ErrorJournal.recordReport('ضغطت حفظ ولم يحدث شيء', screen: 'CreateInvoiceScreen');
+      final list = ErrorJournal.entries;
+      expect(list, hasLength(2));
+      expect(list.first.source, ErrorSource.report);
+      expect(list.first.detail, contains('CreateInvoiceScreen'));
+      expect(ErrorFixes.match(list.first.text, source: list.first.source).key, 'user_report');
+    });
+
+    test('الشاشات الأخيرة تُرفق بالخطأ', () {
+      ErrorJournal.screenOpened('MainScreen');
+      ErrorJournal.screenOpened('CreateInvoiceScreen');
+      ErrorJournal.recordText(ErrorSource.logged, '❌ فشل الحفظ');
+      expect(ErrorJournal.entries.single.detail, contains('MainScreen ← CreateInvoiceScreen'));
+      expect(ErrorJournal.currentScreen, 'CreateInvoiceScreen');
     });
   });
 }

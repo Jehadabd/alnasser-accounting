@@ -2,12 +2,18 @@
 //
 // 🩺 سجل أخطاء البرنامج لأداة «تشخيص الأخطاء» (الإعدادات ← النظام والأدوات).
 //
-// يجمع خمسة مصادر:
+// يجمع كل ما يمكن التقاطه آلياً:
 //   • أخطاء Flutter (الشاشات) والأخطاء غير المعالَجة — من ErrorLog.install.
 //   • الأخطاء التي عالجها البرنامج وكتبها بـ debugPrint: السطر الذي يبدأ بـ ❌ أو 🔴،
 //     أو ⚠️ ومعه اسم استثناء (SocketException…). التنبيهات العادية لا تُسجَّل.
 //   • أعطال ويندوز الأصلية (native_errors.log من crash_guard.cpp): الخروج المفاجئ فقط.
 //   • كل رسالة خطأ حمراء ظهرت للمستخدم (ErrorCaptureMessenger حول كل الشاشات).
+//   • كل نافذة خطأ ظهرت للمستخدم: «لم يكتمل رفع البيانات»، «تعذّر حفظ النسخة»… (ErrorDialogObserver).
+//   • تجمّد البرنامج 4 ثوانٍ فأكثر، وتوقف عمليات الخلفية (خيط تيليجرام).
+//   • بلاغ المستخدم مع صورة الشاشة (Ctrl+Shift+E في أي شاشة): لما لا يرافقه خطأ، كزر لم يعمل.
+// وكل خطأ يُرفق به آخر الشاشات التي فتحها المستخدم.
+//
+// لا يُلتقط: ما يُسكته الكود عمداً (catch (_) {})، والخروج المفاجئ على أندرويد (السجل الأصلي لويندوز).
 //   • ما يسجّله الكود يدوياً: ErrorJournal.record(...).
 //
 // الأخطاء المتشابهة (تختلف بالأرقام فقط) مدخل واحد بعدد مرات حدوثها.
@@ -18,6 +24,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -29,6 +36,10 @@ class ErrorSource {
   static const logged = 'logged'; // خطأ عالجه البرنامج وسجّله
   static const native = 'native'; // عطل أصلي في ويندوز (خروج مفاجئ)
   static const shown = 'shown'; // رسالة خطأ حمراء ظهرت للمستخدم
+  static const dialog = 'dialog'; // نافذة خطأ ظهرت للمستخدم (لم يكتمل الرفع، تعذّر الحفظ…)
+  static const freeze = 'freeze'; // البرنامج تجمّد ولم يستجب
+  static const report = 'report'; // بلاغ كتبه المستخدم (الزر لم يعمل…)
+  static const background = 'background'; // عملية في الخلفية توقفت
   static const manual = 'manual';
 
   static String label(String s) => switch (s) {
@@ -37,6 +48,10 @@ class ErrorSource {
         logged => 'خطأ عالجه البرنامج',
         native => 'خروج مفاجئ (ويندوز)',
         shown => 'رسالة ظهرت للمستخدم',
+        dialog => 'نافذة خطأ ظهرت للمستخدم',
+        freeze => 'تجمّد البرنامج',
+        report => 'بلاغ من المستخدم',
+        background => 'عملية في الخلفية',
         _ => 'مسجَّل يدوياً',
       };
 }
@@ -52,6 +67,7 @@ class ErrorEntry {
     required this.last,
     this.count = 1,
     this.resolved = false,
+    this.attachment,
   });
 
   final String id;
@@ -65,6 +81,9 @@ class ErrorEntry {
   /// علّمه المستخدم «تم الحل». يعود غير محلول إن تكرّر بعدها.
   bool resolved;
 
+  /// صورة الشاشة المرفقة ببلاغ المستخدم (مسار ملف PNG على هذا الجهاز).
+  final String? attachment;
+
   /// كل النص الذي تُطابَق عليه الحلول.
   String get text => detail == null ? message : '$message\n$detail';
 
@@ -77,6 +96,7 @@ class ErrorEntry {
         'last': last.toIso8601String(),
         'count': count,
         if (resolved) 'resolved': true,
+        if (attachment != null) 'attachment': attachment,
       };
 
   static ErrorEntry? fromJson(Object? j) {
@@ -93,6 +113,7 @@ class ErrorEntry {
       last: last,
       count: (j['count'] as num?)?.toInt() ?? 1,
       resolved: j['resolved'] == true,
+      attachment: j['attachment'] as String?,
     );
   }
 }
@@ -127,12 +148,20 @@ class ErrorJournal {
             final x = ErrorEntry.fromJson(e);
             if (x != null) _byId[x.id] = x;
           }
+          final ack = j is Map ? j['nativeAck'] : null;
+          if (ack is Map) {
+            for (final e in ack.entries) {
+              final t = DateTime.tryParse('${e.value}');
+              if (t != null) _nativeAck['${e.key}'] = t;
+            }
+          }
         }
       } catch (_) {
         // ملف تالف: نبدأ سجلاً جديداً (لا شيء يعتمد عليه)
       }
     }
     _hookDebugPrint();
+    startFreezeWatch();
   }
 
   static void _hookDebugPrint() {
@@ -151,12 +180,116 @@ class ErrorJournal {
 
   static final _exceptionName = RegExp(r'\b\w*(Exception|Error)\b');
 
+  // كلمات الفشل (العربية بلا \b: حدود الكلمات في RegExp للأحرف اللاتينية فقط)
+  static final _failure = RegExp(
+      r'فشل|تعذّر|تعذر|خطأ|لم يكتمل|لم ينجح|توقف عن العمل|\b\w*(Exception|Error)\b|\bfailed\b|\bfailure\b|\berror\b',
+      caseSensitive: false);
+  static final _notError = RegExp(
+      r'^(✅|ℹ️|📊|💡|🟢)|بلا (أخطاء|خطأ)|لا (أخطاء|خطأ)|دون (أخطاء|خطأ)|\b0 errors?\b|\bno errors?\b|errors?: 0\b',
+      caseSensitive: false);
+
   /// هل هذا السطر من debugPrint خطأ يستحق التسجيل؟
+  /// ❌ و🔴 دائماً؛ وأي سطر آخر فيه فشل أو استثناء (فشل، تعذّر، خطأ، Exception، failed…)
+  /// إلا ما يقول صراحة إنه نجاح أو «بلا أخطاء».
   static bool looksLikeError(String line) {
     final t = line.trimLeft();
+    if (t.isEmpty) return false;
     if (t.startsWith('❌') || t.startsWith('🔴')) return true;
-    if (t.startsWith('⚠️')) return _exceptionName.hasMatch(t);
-    return false;
+    if (_notError.hasMatch(t)) return false;
+    return _failure.hasMatch(t) || _exceptionName.hasMatch(t);
+  }
+
+  // ─────────────────────────── الشاشة الحالية (للسياق) ───────────────────────────
+
+  static final List<String> _screens = [];
+
+  /// الشاشة المفتوحة الآن (من ErrorDialogObserver).
+  static String? get currentScreen => _screens.isEmpty ? null : _screens.last;
+
+  /// يسجّل فتح شاشة (آخر 6 شاشات تُرفق بكل خطأ).
+  static void screenOpened(String name) {
+    if (_screens.isNotEmpty && _screens.last == name) return;
+    _screens.add(name);
+    if (_screens.length > 6) _screens.removeAt(0);
+  }
+
+  static String? get _trail => _screens.isEmpty ? null : 'الشاشات الأخيرة: ${_screens.join(' ← ')}';
+
+  // ─────────────────────────── التجمّد ───────────────────────────
+
+  static Timer? _watch;
+  static DateTime? _tick;
+
+  /// يراقب تجمّد البرنامج: مؤقت كل ثانية؛ إن تأخر 4 ثوانٍ فأكثر فالبرنامج كان متجمّداً
+  /// (لا يستجيب للضغط ولا يرسم). فجوة أكثر من دقيقتين = نوم الحاسبة، لا تجمّد.
+  static void startFreezeWatch() {
+    if (_watch != null) return;
+    _tick = DateTime.now();
+    _watch = Timer.periodic(const Duration(seconds: 1), (_) {
+      final now = DateTime.now();
+      final gap = now.difference(_tick ?? now);
+      _tick = now;
+      final sec = freezeSeconds(gap);
+      if (sec != null) {
+        recordText(ErrorSource.freeze, 'تجمّد البرنامج $sec ثانية — لم يستجب للضغط ولا للرسم');
+      }
+    });
+  }
+
+  /// كم ثانية تجمّد البرنامج إن كانت الفجوة بين نبضتين [gap] تدل على تجمّد، وإلا null.
+  @visibleForTesting
+  static int? freezeSeconds(Duration gap) {
+    final s = gap.inMilliseconds / 1000.0 - 1;
+    if (s < 4 || s > 120) return null;
+    return s.round();
+  }
+
+  // ─────────────────────────── بلاغ المستخدم ───────────────────────────
+
+  /// يحفظ صورة الشاشة للبلاغ (آخر 30 صورة فقط). null إن لا مجلد سجلات.
+  static Future<String?> saveAttachment(Uint8List png) async {
+    final dir = _dir;
+    if (dir == null) return null;
+    try {
+      final d = Directory('${dir.path}${Platform.pathSeparator}reports');
+      if (!await d.exists()) await d.create(recursive: true);
+      final f = File('${d.path}${Platform.pathSeparator}report_${DateTime.now().millisecondsSinceEpoch}.png');
+      await f.writeAsBytes(png, flush: true);
+      final all = (await d.list().toList()).whereType<File>().where((x) => x.path.endsWith('.png')).toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+      for (final old in all.take(all.length > 30 ? all.length - 30 : 0)) {
+        try {
+          await old.delete();
+        } catch (_) {}
+      }
+      return f.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static int _reportSeq = 0;
+
+  /// بلاغ كتبه المستخدم («ضغطت حفظ ولم يحدث شيء»). كل بلاغ مدخل مستقل.
+  static void recordReport(String text, {String? attachment, String? screen}) {
+    final now = DateTime.now();
+    final id = 'r${now.microsecondsSinceEpoch}_${_reportSeq++}'; // بلاغان في اللحظة نفسها لا يتداخلان
+    final detail = [
+      if (screen != null) 'الشاشة: $screen',
+      if (_trail != null) _trail!,
+    ].join('\n');
+    _byId[id] = ErrorEntry(
+      id: id,
+      source: ErrorSource.report,
+      message: _cut(sanitize(text.trim().isEmpty ? 'بلاغ بلا وصف' : text.trim()), _maxMessage),
+      detail: detail.isEmpty ? null : detail,
+      first: now,
+      last: now,
+      attachment: attachment,
+    );
+    if (_byId.length > maxEntries) _dropOldest();
+    _changed();
+    unawaited(save());
   }
 
   /// يسجّل خطأ (استثناء + مكانه).
@@ -183,7 +316,9 @@ class ErrorJournal {
     try {
       final m = _cut(sanitize(_stripMarkers(message)), _maxMessage);
       if (m.trim().isEmpty) return;
-      final d = detail == null ? null : _cut(sanitize(detail), _maxDetail);
+      final trail = _trail;
+      final raw = [if (detail != null && detail.trim().isNotEmpty) detail, if (trail != null) trail].join('\n');
+      final d = raw.isEmpty ? null : _cut(sanitize(raw), _maxDetail);
       final id = fingerprint(source, m);
       final now = DateTime.now();
       final e = _byId[id];
@@ -229,6 +364,31 @@ class ErrorJournal {
 
   static int get unresolvedCount => _byId.values.where((e) => !e.resolved).length;
 
+  // الخروج المفاجئ يُقرأ من ملف ويندوز في كل مرة: «أُغلق» = حتى آخر حدوث رآه المستخدم
+  static final Map<String, DateTime> _nativeAck = {};
+
+  /// «عرفت الخطأ — أغلقه» لخطأ من أي مصدر: يختفي من القائمة ويعود إن تكرّر.
+  static void dismiss(ErrorEntry e) {
+    if (e.source == ErrorSource.native) {
+      _nativeAck[e.id] = e.last;
+      e.resolved = true;
+      _changed();
+    } else {
+      setResolved(e.id, true);
+    }
+  }
+
+  /// يعيد خطأً مغلقاً إلى القائمة.
+  static void reopen(ErrorEntry e) {
+    if (e.source == ErrorSource.native) {
+      _nativeAck.remove(e.id);
+      e.resolved = false;
+      _changed();
+    } else {
+      setResolved(e.id, false);
+    }
+  }
+
   static void setResolved(String id, bool resolved) {
     final e = _byId[id];
     if (e == null || e.resolved == resolved) return;
@@ -265,6 +425,7 @@ class ErrorJournal {
       final body = jsonEncode({
         'v': 1,
         'entries': [for (final e in entries) e.toJson()],
+        if (_nativeAck.isNotEmpty) 'nativeAck': {for (final e in _nativeAck.entries) e.key: e.value.toIso8601String()},
       });
       final tmp = File('${f.path}.tmp');
       await tmp.writeAsString(body, flush: true);
@@ -288,7 +449,12 @@ class ErrorJournal {
         final start = len > 512 * 1024 ? len - 512 * 1024 : 0;
         await raf.setPosition(start);
         final bytes = await raf.read(len - start);
-        return parseNative(utf8.decode(bytes, allowMalformed: true));
+        final list = parseNative(utf8.decode(bytes, allowMalformed: true));
+        for (final e in list) {
+          final ack = _nativeAck[e.id];
+          if (ack != null && !e.last.isAfter(ack)) e.resolved = true; // أُغلق ولم يتكرر بعدها
+        }
+        return list;
       } finally {
         await raf.close();
       }
@@ -394,5 +560,7 @@ class ErrorJournal {
     _dir = null;
     _saveTimer?.cancel();
     _saveTimer = null;
+    _screens.clear();
+    _nativeAck.clear();
   }
 }

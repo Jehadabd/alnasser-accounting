@@ -22,6 +22,7 @@ import '../../services/diagnostics/error_journal.dart';
 import '../../services/diagnostics/fix_actions.dart';
 import '../../services/diagnostics/upload_gate.dart';
 import '../financial_deep_check_screen.dart';
+import 'problem_report.dart';
 import '../../services/dropbox_backup_service.dart';
 import '../../widgets/dropbox_troubleshoot.dart';
 import '../../widgets/settings_kit.dart';
@@ -142,7 +143,36 @@ class ErrorDiagnosticsTile extends StatelessWidget {
 
 String _hm(DateTime t) => DateFormat('HH:mm').format(t);
 
-/// ينفّذ زر إصلاح: الفحص فوراً؛ وما يكتب في القاعدة بعد رفع ناجح ثم تأكيد.
+/// آخر فحص لكل زر إصلاح في هذه الجلسة: هل كان يوجد ما يُصلَح؟
+final Map<String, ({bool needed, DateTime at})> _lastNeed = {};
+
+/// إصلاح ← الفحص الذي يكشف الحاجة إليه (نتيجة الفحص السليمة تعني: لا حاجة للإصلاح).
+const _checkFor = {'chain_check': 'rechain', 'integrity': 'reindex'};
+
+Future<T> _withProgress<T>(BuildContext context, String label, Future<T> Function() job) async {
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => PopScope(
+      canPop: false,
+      child: AlertDialog(
+        content: Row(children: [
+          const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 3)),
+          const SizedBox(width: 16),
+          Expanded(child: Text(label)),
+        ]),
+      ),
+    ),
+  );
+  try {
+    return await job();
+  } finally {
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+  }
+}
+
+/// ينفّذ زر إصلاح: الفحص فوراً؛ وزر الإصلاح يفحص أولاً — إن لم يوجد خطأ لا يعمل —
+/// ثم لا ينفّذ إلا بعد رفع ناجح ثم تأكيد.
 Future<void> runFixAction(BuildContext context, FixAction a) async {
   if (a.opens) {
     if (a.key == 'deep_check') {
@@ -154,7 +184,25 @@ Future<void> runFixAction(BuildContext context, FixAction a) async {
     setToast(context, 'هذا الجهاز طرفية: الإصلاح والفحص من حاسبة السيرفر التي عليها القاعدة', error: true);
     return;
   }
+  var needMsg = '';
   if (a.writes) {
+    // 🔎 0) هل يوجد خطأ يصلحه هذا الزر؟ (قراءة فقط، بلا رفع) — إن لم يوجد لا يعمل
+    final n = await _withProgress(context, 'يفحص هل يوجد ما يُصلَح…', () => FixActions.need(a.key));
+    needMsg = n.message;
+    _lastNeed[a.key] = (needed: n.needed, at: DateTime.now());
+    if (!context.mounted) return;
+    if (!n.needed) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.verified_rounded, color: kSetGreen, size: 38),
+          title: const Text('لا يوجد خطأ يحتاج هذا الإصلاح'),
+          content: Text('${n.message}\n\nلم يُرفع شيء ولم يُنفَّذ شيء.', style: const TextStyle(height: 1.6)),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+        ),
+      );
+      return;
+    }
     // 🔐 1) رفع قاعدة البيانات أولاً (الوضع التجريبي: بيانات وهمية والرفع متوقف أصلاً)
     if (!DemoMode.isOn && !UploadGate.isOpen) {
       final go = await showDialog<bool>(
@@ -193,7 +241,7 @@ Future<void> runFixAction(BuildContext context, FixAction a) async {
       builder: (ctx) => AlertDialog(
         icon: Icon(a.icon, color: kSetGreen, size: 34),
         title: Text(a.title),
-        content: Text('${a.what}\n\n'
+        content: Text('$needMsg\n\n${a.what}\n\n'
             '${DemoMode.isOn ? 'الوضع التجريبي: بلا رفع (البيانات وهمية).' : 'نسخة القاعدة رُفعت ${UploadGate.lastOk == null ? '' : 'الساعة ${_hm(UploadGate.lastOk!)}'} ✓'}'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
@@ -223,6 +271,8 @@ Future<void> runFixAction(BuildContext context, FixAction a) async {
     ),
   );
   final r = await FixActions.run(a.key);
+  if (_checkFor.containsKey(a.key)) _lastNeed[_checkFor[a.key]!] = (needed: !r.ok, at: DateTime.now());
+  if (a.writes && r.ok) _lastNeed[a.key] = (needed: false, at: DateTime.now());
   if (!context.mounted) return;
   Navigator.of(context, rootNavigator: true).pop();
   await showDialog<void>(
@@ -245,7 +295,9 @@ class _FixActionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final a = action;
-    final c = a.writes ? kSetGreen : kSetBlue;
+    final last = _lastNeed[a.key];
+    final healthy = a.writes && last != null && !last.needed; // آخر فحص: لا شيء يُصلَح
+    final c = healthy ? kSetMuted : (a.writes ? kSetGreen : kSetBlue);
     return Semantics(
       button: true,
       label: a.title,
@@ -272,9 +324,12 @@ class _FixActionRow extends StatelessWidget {
                     child: Text(a.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: kSetText)),
                   ),
                   const SizedBox(width: 8),
-                  _Pill(a.writes ? 'يبدأ برفع القاعدة' : (a.opens ? 'يفتح شاشة' : 'قراءة فقط'),
-                      a.writes ? kSetOrange : kSetBlue,
-                      icon: a.writes ? Icons.cloud_upload_rounded : Icons.visibility_rounded),
+                  if (healthy)
+                    _Pill('سليم — فُحص ${_hm(last!.at)}', kSetGreen, icon: Icons.verified_rounded)
+                  else
+                    _Pill(a.writes ? 'يفحص ثم يبدأ برفع القاعدة' : (a.opens ? 'يفتح شاشة' : 'قراءة فقط'),
+                        a.writes ? kSetOrange : kSetBlue,
+                        icon: a.writes ? Icons.cloud_upload_rounded : Icons.visibility_rounded),
                 ]),
                 const SizedBox(height: 3),
                 Text(a.what, style: const TextStyle(fontSize: 12.5, height: 1.5, color: kSetMuted)),
@@ -314,7 +369,7 @@ class ErrorDiagnosticsScreen extends StatefulWidget {
 
 class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
   List<ErrorEntry> _native = const [];
-  String _filter = 'open'; // open | serious | all | <category>
+  String _filter = 'open'; // open | serious | closed | <category>
   String _query = '';
   final _search = TextEditingController();
 
@@ -345,11 +400,13 @@ class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
     ..sort((a, b) => b.entry.last.compareTo(a.entry.last));
 
   bool _keep(_Item it) {
+    // «عرفت الخطأ — أغلقه» يُخرج الخطأ من القائمة؛ لا يظهر إلا في «المغلقة»
+    final closed = it.entry.resolved;
     final ok = switch (_filter) {
-      'open' => !it.entry.resolved,
-      'serious' => it.serious && !it.entry.resolved,
-      'all' => true,
-      _ => it.fix.category == _filter,
+      'closed' => closed,
+      'open' => !closed,
+      'serious' => it.serious && !closed,
+      _ => it.fix.category == _filter && !closed,
     };
     if (!ok) return false;
     if (_query.isEmpty) return true;
@@ -389,15 +446,37 @@ class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
     if (mounted) setToast(context, 'نُسخ تقرير ${open.length > 40 ? 40 : open.length} خطأ — الصقه للمطوّر');
   }
 
+  Future<void> _closeAll(List<_Item> items) async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إغلاق كل الأخطاء المفتوحة؟'),
+        content: Text('${items.length} خطأ تختفي من القائمة. أي خطأ يتكرر بعدها يعود وحده.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('أغلقها')),
+        ],
+      ),
+    );
+    if (go != true) return;
+    for (final i in items) {
+      ErrorJournal.dismiss(i.entry);
+    }
+    _refresh();
+    if (mounted) setToast(context, 'أُغلقت ${items.length} خطأ');
+  }
+
   @override
   Widget build(BuildContext context) {
     final all = _all;
     final shown = all.where(_keep).toList();
     final open = all.where((i) => !i.entry.resolved).length;
+    final closed = all.length - open;
     final serious = all.where((i) => i.serious && !i.entry.resolved).length;
-    final lastAt = all.isEmpty ? null : all.first.entry.last;
+    final openItems = all.where((i) => !i.entry.resolved).toList();
+    final lastAt = openItems.isEmpty ? null : openItems.first.entry.last;
     final cats = <String, int>{};
-    for (final i in all) {
+    for (final i in openItems) {
       cats[i.fix.category] = (cats[i.fix.category] ?? 0) + 1;
     }
 
@@ -414,26 +493,36 @@ class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
             _refresh();
           },
         ),
-        IconButton(tooltip: 'نسخ تقرير كل الأخطاء غير المحلولة', icon: const Icon(Icons.copy_all_rounded), onPressed: () => _copyAll(all)),
+        IconButton(
+          tooltip: 'أبلغ عن مشكلة (أو Ctrl+Shift+E في أي شاشة)',
+          icon: const Icon(Icons.flag_rounded),
+          onPressed: () => showProblemReport(context),
+        ),
+        IconButton(
+          tooltip: 'عرفتها كلها — أغلق كل المفتوحة',
+          icon: const Icon(Icons.done_all_rounded),
+          onPressed: open == 0 ? null : () => _closeAll(openItems),
+        ),
+        IconButton(tooltip: 'نسخ تقرير كل الأخطاء المفتوحة', icon: const Icon(Icons.copy_all_rounded), onPressed: () => _copyAll(all)),
         IconButton(tooltip: 'مسح السجل', icon: const Icon(Icons.delete_sweep_rounded), onPressed: all.isEmpty ? null : _clear),
       ],
       children: [
         SetHero(
           icon: open == 0 ? Icons.verified_rounded : Icons.health_and_safety_rounded,
           color: serious > 0 ? kSetRed : (open > 0 ? kSetOrange : kSetGreen),
-          title: open == 0 ? 'لا أخطاء تحتاج حلاً' : '$open خطأ لم يُحل',
-          text: all.isEmpty
-              ? 'لم يُسجَّل أي خطأ منذ تفعيل الأداة. أي خطأ يحدث سيظهر هنا مع طريقة حلّه.'
-              : 'الأخطاء المتشابهة تُجمع في سطر واحد بعدد مرات حدوثها. اضغط أي خطأ لترى سببه وخطوات حلّه.',
+          title: open == 0 ? 'لا أخطاء مفتوحة' : '$open خطأ مفتوح',
+          text: 'كل خطأ في البرنامج يظهر هنا: الأعطال، فشل الرفع، نوافذ ورسائل الخطأ، تجمّد البرنامج. '
+              'اضغطه لترى سببه وحلّه، ثم «عرفت الخطأ — أغلقه» فيختفي ولا يعود إلا إن تكرّر.\n'
+              'زر لم يعمل أو رقم غريب؟ اضغط Ctrl+Shift+E وأنت في تلك الشاشة لتسجّل بلاغاً مع صورتها.',
           status: lastAt == null ? null : SetStatusPill('آخر خطأ ${_ago(lastAt)}', ok: open == 0, icon: Icons.schedule_rounded),
         ),
-        _StatsRow(serious: serious, open: open, total: all.length),
+        _StatsRow(serious: serious, open: open, closed: closed),
         const SizedBox(height: 12),
         _Filters(
           selected: _filter,
           open: open,
           serious: serious,
-          total: all.length,
+          closed: closed,
           cats: cats,
           onSelect: (f) => setState(() => _filter = f),
         ),
@@ -470,6 +559,16 @@ class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
                     for (final it in shown)
                       _ErrorCard(
                         item: it,
+                        onClose: () {
+                          final was = it.entry.resolved;
+                          if (was) {
+                            ErrorJournal.reopen(it.entry);
+                          } else {
+                            ErrorJournal.dismiss(it.entry);
+                          }
+                          _refresh();
+                          setToast(context, was ? 'أُعيد إلى القائمة' : 'أُغلق — يعود وحده إن تكرّر الخطأ');
+                        },
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(builder: (_) => ErrorDetailScreen(entry: it.entry)),
@@ -501,8 +600,8 @@ class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
 }
 
 class _StatsRow extends StatelessWidget {
-  const _StatsRow({required this.serious, required this.open, required this.total});
-  final int serious, open, total;
+  const _StatsRow({required this.serious, required this.open, required this.closed});
+  final int serious, open, closed;
 
   @override
   Widget build(BuildContext context) {
@@ -541,9 +640,9 @@ class _StatsRow extends StatelessWidget {
     return Row(children: [
       tile('خطيرة', serious, kSetRed, Icons.report_rounded),
       const SizedBox(width: 10),
-      tile('لم تُحل', open, kSetOrange, Icons.pending_actions_rounded),
+      tile('مفتوحة', open, kSetOrange, Icons.pending_actions_rounded),
       const SizedBox(width: 10),
-      tile('كل الأخطاء', total, kSetNavy, Icons.list_alt_rounded),
+      tile('أغلقتها', closed, kSetGreen, Icons.task_alt_rounded),
     ]);
   }
 }
@@ -553,12 +652,12 @@ class _Filters extends StatelessWidget {
     required this.selected,
     required this.open,
     required this.serious,
-    required this.total,
+    required this.closed,
     required this.cats,
     required this.onSelect,
   });
   final String selected;
-  final int open, serious, total;
+  final int open, serious, closed;
   final Map<String, int> cats;
   final ValueChanged<String> onSelect;
 
@@ -586,11 +685,11 @@ class _Filters extends StatelessWidget {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(children: [
-        chip('open', 'لم تُحل', open, kSetOrange, Icons.pending_actions_rounded),
+        chip('open', 'المفتوحة', open, kSetOrange, Icons.pending_actions_rounded),
         chip('serious', 'خطيرة', serious, kSetRed, Icons.report_rounded),
-        chip('all', 'الكل', total, kSetNavy, Icons.list_alt_rounded),
         for (final c in ErrorFixes.categories)
           if ((cats[c.key] ?? 0) > 0) chip(c.key, c.label, cats[c.key]!, c.color, c.icon),
+        if (closed > 0) chip('closed', 'المغلقة', closed, kSetGreen, Icons.task_alt_rounded),
       ]),
     );
   }
@@ -635,9 +734,10 @@ class _Empty extends StatelessWidget {
 }
 
 class _ErrorCard extends StatelessWidget {
-  const _ErrorCard({required this.item, required this.onTap});
+  const _ErrorCard({required this.item, required this.onTap, required this.onClose});
   final _Item item;
   final VoidCallback onTap;
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -698,10 +798,16 @@ class _ErrorCard extends StatelessWidget {
                             _Pill(_sevLabel(f.severity), sev),
                             if (e.count > 1) _Pill('×${e.count}', kSetNavy),
                             _Pill(_ago(e.last), kSetMuted, icon: Icons.schedule_rounded),
-                            if (e.resolved) const _Pill('تم الحل', kSetGreen, icon: Icons.check_rounded),
+                            if (e.resolved) const _Pill('مغلق', kSetGreen, icon: Icons.check_rounded),
                             if (f.harmless && !e.resolved) const _Pill('لا يضر البيانات', kSetGreen),
                           ]),
                         ]),
+                      ),
+                      IconButton(
+                        tooltip: e.resolved ? 'أعده إلى القائمة' : 'عرفت الخطأ — أغلقه',
+                        onPressed: onClose,
+                        icon: Icon(e.resolved ? Icons.undo_rounded : Icons.check_circle_outline_rounded,
+                            color: e.resolved ? kSetMuted : kSetGreen),
                       ),
                       Icon(Icons.chevron_left_rounded, color: Colors.grey[400]),
                     ]),
@@ -769,18 +875,24 @@ class _ErrorDetailScreenState extends State<ErrorDetailScreen> {
     if (mounted) setToast(context, 'نُسخ التقرير — الصقه للمطوّر في واتساب أو تيليجرام');
   }
 
-  void _toggleResolved() {
+  /// «عرفت الخطأ — أغلقه»: يختفي من القائمة ويعود وحده إن تكرّر.
+  void _close() {
     final e = _it.entry;
-    ErrorJournal.setResolved(e.id, !e.resolved);
-    setState(() {});
-    setToast(context, e.resolved ? 'عُلّم «تم الحل» — يعود إن تكرّر الخطأ' : 'أُعيد إلى «لم تُحل»');
+    if (e.resolved) {
+      ErrorJournal.reopen(e);
+      setState(() {});
+      setToast(context, 'أُعيد إلى القائمة');
+      return;
+    }
+    ErrorJournal.dismiss(e);
+    setToast(context, 'أُغلق — يعود وحده إن تكرّر الخطأ');
+    Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     final e = _it.entry, f = _it.fix, c = _it.cat;
     final sev = _sevColor(f.severity);
-    final native = e.source == ErrorSource.native;
     final steps = _dropbox?.steps ?? f.steps;
     final technical = e.detail == null ? e.message : '${e.message}\n\n${e.detail}';
     final lines = technical.split('\n');
@@ -807,18 +919,16 @@ class _ErrorDetailScreenState extends State<ErrorDetailScreen> {
                 label: const Text('نسخ التقرير'),
               ),
             ),
-            if (!native) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                      minimumSize: const Size(0, 48), backgroundColor: e.resolved ? kSetMuted : kSetGreen),
-                  onPressed: _toggleResolved,
-                  icon: Icon(e.resolved ? Icons.undo_rounded : Icons.check_circle_rounded),
-                  label: Text(e.resolved ? 'لم يُحل بعد' : 'تم الحل'),
-                ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 48), backgroundColor: e.resolved ? kSetMuted : kSetGreen),
+                onPressed: _close,
+                icon: Icon(e.resolved ? Icons.undo_rounded : Icons.check_circle_rounded),
+                label: Text(e.resolved ? 'أعده إلى القائمة' : 'عرفت الخطأ — أغلقه'),
               ),
-            ],
+            ),
           ]),
         ),
       ),
@@ -888,6 +998,20 @@ class _ErrorDetailScreenState extends State<ErrorDetailScreen> {
               'هذا خلل في البرنامج نفسه — لا تسببه أنت ولا يُحل نهائياً من عندك. الخطوات أدناه تقلّل أثره، '
               'و«نسخ التقرير» يعطي المطوّر مكانه بالضبط.',
               kind: SetBannerKind.warn,
+            ),
+          ),
+        if (!kIsWeb && e.attachment != null && File(e.attachment!).existsSync())
+          SetCard(
+            title: 'صورة الشاشة',
+            subtitle: 'لحظة تسجيل البلاغ — على هذا الجهاز فقط',
+            icon: Icons.image_rounded,
+            color: kSetOrange,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 420),
+                child: Image.file(File(e.attachment!), fit: BoxFit.contain),
+              ),
             ),
           ),
         SetCard(

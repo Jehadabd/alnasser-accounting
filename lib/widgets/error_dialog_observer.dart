@@ -1,0 +1,116 @@
+// lib/widgets/error_dialog_observer.dart
+//
+// 🩺 يراقب كل شاشة ونافذة تُفتح (navigatorObservers في main.dart) لأداة «تشخيص الأخطاء»:
+//   • النافذة (حوار/لوحة سفلية) التي عنوانها فشل — «لم يكتمل رفع البيانات»، «تعذّر حفظ النسخة
+//     الاحتياطية»… — أو فيها أيقونة خطأ: يقرأ نصها بعد رسمها ويسجّلها.
+//   • الشاشة المفتوحة: اسمها يُرفق بكل خطأ («الشاشات الأخيرة: …») ليُعرف أين وقع.
+// يقرأ فقط ولا يغيّر أي نافذة. أسئلة التأكيد (تنتهي بـ «؟») لا تُعدّ أخطاء.
+
+import 'package:flutter/material.dart';
+
+import '../services/diagnostics/error_journal.dart';
+import 'error_capture_messenger.dart';
+
+class ErrorDialogObserver extends NavigatorObserver {
+  static final _failure = RegExp(r'فشل|تعذّر|تعذر|خطأ|لم يكتمل|لم ينجح|لم يُحفظ|توقف|\bError\b|\bException\b|\bfailed\b',
+      caseSensitive: false);
+
+  /// نوافذ أداة التشخيص نفسها لا تُسجَّل.
+  static const _own = {'ارفع قاعدة البيانات أولاً', 'مسح سجل الأخطاء؟', 'أبلغ عن مشكلة'};
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => _seen(route);
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    if (newRoute != null) _seen(newRoute);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (previousRoute is PageRoute) _nameScreen(previousRoute);
+  }
+
+  void _seen(Route<dynamic> route) {
+    // المحتوى يُبنى في الإطار التالي
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        if (route is PopupRoute) {
+          _inspectDialog(route);
+        } else if (route is PageRoute) {
+          _nameScreen(route);
+        }
+      } catch (_) {
+        // المراقبة لا تُسقط البرنامج أبداً
+      }
+    });
+  }
+
+  void _nameScreen(PageRoute<dynamic> route) {
+    final name = route.settings.name;
+    final found = _screenWidget(route);
+    final label = found ?? (name != null && name != '/' ? name : null);
+    if (label != null) ErrorJournal.screenOpened(label);
+  }
+
+  /// أول عنصر اسمه «…Screen» أو «…Page» تحت الشاشة.
+  static String? _screenWidget(ModalRoute<dynamic> route) {
+    final ctx = route.subtreeContext;
+    if (ctx is! Element) return null;
+    String? found;
+    var seen = 0;
+    void visit(Element e) {
+      if (found != null || seen++ > 400) return;
+      final n = e.widget.runtimeType.toString();
+      if (n.endsWith('Screen') || n.endsWith('Page')) {
+        found = n;
+        return;
+      }
+      e.visitChildren(visit);
+    }
+
+    ctx.visitChildren(visit);
+    return found;
+  }
+
+  void _inspectDialog(PopupRoute<dynamic> route) {
+    final ctx = route.subtreeContext;
+    if (ctx is! Element) return;
+    final texts = <String>[];
+    var errorIcon = false;
+    var seen = 0;
+    void visit(Element e) {
+      if (seen++ > 3000) return;
+      final w = e.widget;
+      if (w is RichText) {
+        final t = w.text.toPlainText().trim();
+        if (t.isNotEmpty && (texts.isEmpty || texts.last != t)) texts.add(t);
+        return; // Text يبني RichText: لا نكرر
+      }
+      if (w is Icon && w.icon != null && ErrorCaptureMessenger.isErrorIcon(w.icon!)) errorIcon = true;
+      if (w is EditableText) return; // حقول الإدخال ليست رسالة
+      e.visitChildren(visit);
+    }
+
+    ctx.visitChildren(visit);
+    final hit = classify(texts, errorIcon: errorIcon);
+    if (hit == null) return;
+    ErrorJournal.recordText(ErrorSource.dialog, hit);
+  }
+
+  /// نص التسجيل إن كانت النافذة نافذة خطأ، وإلا null.
+  /// خطأ إن كان عنوانها (أول نصين) فشلاً ولا ينتهي بـ «؟»، أو فيها أيقونة خطأ ونص فشل.
+  @visibleForTesting
+  static String? classify(List<String> texts, {bool errorIcon = false}) {
+    if (texts.isEmpty) return null;
+    final title = texts.first;
+    if (_own.contains(title)) return null;
+    final head = texts.take(2).toList();
+    final titled = head.any((t) => _failure.hasMatch(t) && !t.trimRight().endsWith('؟') && !t.trimRight().endsWith('?'));
+    final iconed = errorIcon && texts.any(_failure.hasMatch);
+    if (!titled && !iconed) return null;
+    // السطر الأول: العنوان؛ ثم نص النافذة (بلا أزرارها القصيرة)
+    final body = texts.skip(1).where((t) => t.length > 12).take(6).join('\n');
+    return body.isEmpty ? title : '$title\n$body';
+  }
+}
