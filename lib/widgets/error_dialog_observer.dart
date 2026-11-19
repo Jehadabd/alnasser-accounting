@@ -16,7 +16,24 @@ class ErrorDialogObserver extends NavigatorObserver {
       caseSensitive: false);
 
   /// نوافذ أداة التشخيص نفسها لا تُسجَّل.
-  static const _own = {'ارفع قاعدة البيانات أولاً', 'مسح سجل الأخطاء؟', 'أبلغ عن مشكلة'};
+  static const _own = {
+    'ارفع قاعدة البيانات أولاً',
+    'مسح سجل الأخطاء؟',
+    'أبلغ عن مشكلة',
+    'لا يوجد خطأ يحتاج هذا الإصلاح',
+    'إغلاق كل الأخطاء المفتوحة؟',
+  };
+
+  /// نفي الخطأ («لا يوجد خطأ»، «بلا أخطاء») ليس خطأ.
+  static final _negated = RegExp(r'(لا|بلا|دون|ليس هناك) (يوجد |توجد )?(أي )?(خطأ|أخطاء)');
+
+  /// رمز أيقونة (حرف واحد من منطقة الاستخدام الخاص في الخطوط) ليس نصاً.
+  static bool _isGlyph(String t) {
+    final r = t.runes.toList();
+    if (r.length != 1) return false;
+    final c = r.first;
+    return (c >= 0xE000 && c <= 0xF8FF) || c >= 0xF0000;
+  }
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => _seen(route);
@@ -87,7 +104,11 @@ class ErrorDialogObserver extends NavigatorObserver {
         if (t.isNotEmpty && (texts.isEmpty || texts.last != t)) texts.add(t);
         return; // Text يبني RichText: لا نكرر
       }
-      if (w is Icon && w.icon != null && ErrorCaptureMessenger.isErrorIcon(w.icon!)) errorIcon = true;
+      if (w is Icon) {
+        // الأيقونة تُرسم RichText برمزها: لا ندخلها حتى لا يُقرأ الرمز نصاً
+        if (w.icon != null && ErrorCaptureMessenger.isErrorIcon(w.icon!)) errorIcon = true;
+        return;
+      }
       if (w is EditableText) return; // حقول الإدخال ليست رسالة
       e.visitChildren(visit);
     }
@@ -101,13 +122,15 @@ class ErrorDialogObserver extends NavigatorObserver {
   /// نص التسجيل إن كانت النافذة نافذة خطأ، وإلا null.
   /// خطأ إن كان عنوانها (أول نصين) فشلاً ولا ينتهي بـ «؟»، أو فيها أيقونة خطأ ونص فشل.
   @visibleForTesting
-  static String? classify(List<String> texts, {bool errorIcon = false}) {
+  static String? classify(List<String> raw, {bool errorIcon = false}) {
+    final texts = [for (final t in raw) if (!_isGlyph(t)) t];
     if (texts.isEmpty) return null;
     final title = texts.first;
-    if (_own.contains(title)) return null;
+    if (_own.contains(title) || _negated.hasMatch(title)) return null;
+    bool failing(String t) => _failure.hasMatch(t) && !_negated.hasMatch(t);
     final head = texts.take(2).toList();
-    final titled = head.any((t) => _failure.hasMatch(t) && !t.trimRight().endsWith('؟') && !t.trimRight().endsWith('?'));
-    final iconed = errorIcon && texts.any(_failure.hasMatch);
+    final titled = head.any((t) => failing(t) && !t.trimRight().endsWith('؟') && !t.trimRight().endsWith('?'));
+    final iconed = errorIcon && texts.any(failing);
     if (!titled && !iconed) return null;
     // السطر الأول: العنوان؛ ثم نص النافذة (بلا أزرارها القصيرة)
     final body = texts.skip(1).where((t) => t.length > 12).take(6).join('\n');

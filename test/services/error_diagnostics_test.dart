@@ -307,6 +307,11 @@ void main() {
       expect(ErrorDialogObserver.classify(['حذف الفاتورة؟', 'لا يمكن التراجع عن الحذف بعد تأكيده']), isNull);
       expect(ErrorDialogObserver.classify(['تم الحفظ', 'حُفظت الفاتورة رقم 15']), isNull);
       expect(ErrorDialogObserver.classify(['ارفع قاعدة البيانات أولاً', 'قبل أي إصلاح…']), isNull);
+      // نافذة أداة التشخيص نفسها، ورمز الأيقونة الذي يُقرأ نصاً (البلاغ: «الرسالة: 󰉮»)
+      expect(
+          ErrorDialogObserver.classify(['\u{F026E}', 'لا يوجد خطأ يحتاج هذا الإصلاح', 'كشوف 2 عميلاً سليمة', 'حسناً']), isNull);
+      expect(ErrorDialogObserver.classify(['\u{E000}', 'فحص', 'تمت المزامنة بلا أخطاء']), isNull);
+      expect(ErrorDialogObserver.classify(['\u{F026E}', 'تعذّر الحفظ', 'database is locked']), startsWith('تعذّر الحفظ'));
       expect(ErrorDialogObserver.classify(['الطابعة', 'تعذّر الاتصال بالطابعة الآن'], errorIcon: true), isNotNull);
       final save = ErrorDialogObserver.classify(['تعذّر حفظ النسخة الاحتياطية', 'النسخة المحفوظة ناقصة (100 من 200 بايت)']);
       expect(ErrorFixes.match(save!).key, 'backup_failed');
