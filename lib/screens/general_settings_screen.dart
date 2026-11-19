@@ -2174,8 +2174,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             child: _buildActionTile(
               icon: Icons.notifications,
               iconColor: Colors.orange,
-              title: 'تنبيهات المخزون والركود',
-              subtitle: 'تحديد متى تظهر تنبيهات نقص المخزون والمواد الراكدة',
+              title: 'تنبيهات المخزون والركود والاستحقاقات',
+              subtitle: 'تحديد متى تظهر تنبيهات الاستحقاقات ونقص المخزون والمواد الراكدة',
               onTap: () {
                 Navigator.push(
                   context,

@@ -86,8 +86,8 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return SettingsScaffold(
-      title: 'تنبيهات المخزون والركود',
-      subtitle: 'النواقص، المواد الراكدة، وقرب انتهاء الصلاحية',
+      title: 'تنبيهات المخزون والركود والاستحقاقات',
+      subtitle: 'الاستحقاقات، النواقص، المواد الراكدة، وقرب انتهاء الصلاحية',
       icon: Icons.notifications_active_rounded,
       loading: _isLoading,
       bottom: _isLoading ? null : _bottomBar(),
