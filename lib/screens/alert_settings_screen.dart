@@ -1,7 +1,7 @@
 // lib/screens/alert_settings_screen.dart
 //
 // 🔔 تنبيهات الاستحقاقات والمخزون والركود وانتهاء الصلاحية — بالشكل الموحّد لشاشات الإعدادات.
-// 📅 الاستحقاقات (قسط، شيك، كمبيالة حلّ موعدها) إعدادها في SharedPreferences (DueAlerts).
+// 📅 الاستحقاقات (قسط، شيك، كمبيالة): من يظهر، المتأخر، ومن وصلته رسالة واتساب (DueAlertSettings).
 // المنطق كما هو: تفعيل/إيقاف، تكرار الظهور، حدّ أشهر انتهاء الصلاحية، فحص فوري.
 
 import 'package:flutter/material.dart';
@@ -28,9 +28,10 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   bool _areAlertsEnabled = true;
   String _alertFrequency = 'startup';
   int _expiryAlertThresholdMonths = 3;
-  bool _dueAlerts = true; // 📅 الاستحقاقات التي حلّت
+  DueAlertSettings _due = const DueAlertSettings(); // 📅 المطالبة بالديون
 
   static const _orange = Color(0xFFEA580C);
+  static const _indigo = Color(0xFF4F46E5);
 
   // النصوص تطابق ما يفعله AlertService فعلاً: «أسبوعياً» = بعد 7 أيام من آخر ظهور،
   // و«شهرياً» = بعد 30 يوماً (وليس بداية الأسبوع/الشهر كما كان مكتوباً سابقاً).
@@ -49,10 +50,10 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
 
   Future<void> _loadSettings() async {
     _appSettings = await SettingsManager.getAppSettings();
-    final dues = await DueAlerts.enabled();
+    final due = await DueAlertSettings.load();
     if (!mounted) return;
     setState(() {
-      _dueAlerts = dues;
+      _due = due;
       _areAlertsEnabled = _appSettings.areAlertsEnabled;
       _alertFrequency = _appSettings.alertFrequency;
       _expiryAlertThresholdMonths = _appSettings.expiryAlertThresholdMonths.clamp(1, 12).toInt();
@@ -69,7 +70,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
         expiryAlertThresholdMonths: _expiryAlertThresholdMonths,
       );
       await SettingsManager.saveAppSettings(newSettings);
-      await DueAlerts.setEnabled(_dueAlerts);
+      await _due.save();
       if (!mounted) return;
       setToast(context, 'تم حفظ إعدادات التنبيهات');
       Navigator.pop(context);
@@ -132,23 +133,45 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
               _disabledWrap(
                 SetCard(
                   title: 'المطالبة بالديون — الاستحقاقات',
-                  subtitle: 'قسط أو شيك قبض أو كمبيالة حلّ موعده ولم يُسدَّد',
+                  subtitle: 'قسط أو شيك قبض أو كمبيالة من بطاقة العميل ← «استحقاق / تقسيط»',
                   icon: Icons.event_note_rounded,
-                  color: const Color(0xFF4F46E5),
+                  color: _indigo,
                   child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                     SetSwitch(
-                      title: 'نبّهني بالاستحقاقات التي حلّت',
-                      subtitle: 'تظهر أولاً في نافذة التنبيهات، الأقدم فالأحدث. الضغط على العميل يفتح بطاقته.',
+                      title: 'نبّهني بالاستحقاقات',
+                      subtitle: 'تظهر أولاً في نافذة التنبيهات. الضغط على العميل يفتح بطاقته.',
                       icon: Icons.notifications_active_rounded,
-                      color: const Color(0xFF4F46E5),
-                      value: _dueAlerts,
-                      onChanged: (v) => setState(() => _dueAlerts = v),
+                      color: _indigo,
+                      value: _due.enabled,
+                      onChanged: (v) => setState(() => _due = _due.copyWith(enabled: v)),
                     ),
-                    const SizedBox(height: 8),
-                    const SetBanner(
-                      'العميل الذي تصله رسالة واتساب التلقائية (قاعدة مفعّلة «تلقائي» تشمله ورقمه صالح) لا يظهر هنا — '
-                      'يُطالَب أصلاً، ويُذكر عددهم فقط. الاستحقاق يُضاف من بطاقة العميل ← «استحقاق / تقسيط».',
-                      icon: Icons.chat_rounded,
+                    AnimatedOpacity(
+                      duration: const Duration(milliseconds: 200),
+                      opacity: _due.enabled ? 1 : 0.45,
+                      child: IgnorePointer(
+                        ignoring: !_due.enabled,
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          _choices<DueScope>('① من يظهر', _due.scope, (v) => _due = _due.copyWith(scope: v), const [
+                            (DueScope.today, 'المستحق اليوم', 'من حلّ استحقاقه اليوم', Icons.today_rounded),
+                            (DueScope.month, 'اليوم وباقي هذا الشهر', 'ومن يستحق لاحقاً هذا الشهر', Icons.calendar_month_rounded),
+                          ]),
+                          _choices<DueOverdue>('② من تأخر ولم يسدّد', _due.overdue, (v) => _due = _due.copyWith(overdue: v), const [
+                            (DueOverdue.daily, 'يبقى يظهر يومياً حتى يسدّد', 'ولو تأخر 3 أشهر', Icons.repeat_rounded),
+                            (DueOverdue.dueDay, 'في يوم استحقاقه فقط', 'بعده لا يظهر', Icons.event_available_rounded),
+                          ]),
+                          _choices<DueWa>('③ من وصلته رسالة واتساب بعد حلول استحقاقه', _due.wa, (v) => _due = _due.copyWith(wa: v), const [
+                            (DueWa.hide, 'لا يظهر بعدها', 'يُطالَب بالرسالة — يُذكر عددهم فقط', Icons.visibility_off_rounded),
+                            (DueWa.dueDay, 'في يوم استحقاقه فقط', 'ثم لا يظهر', Icons.event_available_rounded),
+                            (DueWa.daily, 'يبقى يظهر يومياً', 'بعلامة «وصلته رسالة واتساب»', Icons.repeat_rounded),
+                          ]),
+                          const SizedBox(height: 10),
+                          const SetBanner(
+                            '«وصلته رسالة» تُعرف من سجل رسائل واتساب المرسلة فعلاً (أي قاعدة أو إرسال يدوي) بعد تاريخ الاستحقاق. '
+                            'كم مرة تُرسل الرسالة (مرة حتى يسدّد، أسبوعياً = كل 7 أيام، يومياً = كل يوم) يُحدَّد في قاعدة واتساب نفسها.',
+                            icon: Icons.chat_rounded,
+                          ),
+                        ]),
+                      ),
                     ),
                   ]),
                 ),
@@ -250,6 +273,33 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                 ),
               ),
             ],
+    );
+  }
+
+  /// مجموعة خيارات (واحد منها) لإعدادات الاستحقاقات.
+  Widget _choices<T>(String label, T value, void Function(T) set, List<(T, String, String, IconData)> opts) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: kSetText)),
+        const SizedBox(height: 8),
+        LayoutBuilder(builder: (context, c) {
+          final cols = c.maxWidth >= 620 ? opts.length : (c.maxWidth >= 420 ? 2 : 1);
+          final w = (c.maxWidth - (cols - 1) * 10) / cols;
+          return Wrap(spacing: 10, runSpacing: 10, children: [
+            for (final o in opts)
+              ChoiceTile(
+                width: w,
+                title: o.$2,
+                subtitle: o.$3,
+                icon: o.$4,
+                color: _indigo,
+                selected: value == o.$1,
+                onTap: () => setState(() => set(o.$1)),
+              ),
+          ]);
+        }),
+      ]),
     );
   }
 

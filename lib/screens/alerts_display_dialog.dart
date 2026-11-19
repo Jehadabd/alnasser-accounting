@@ -3,8 +3,8 @@
 // 🔔 نافذة التنبيهات (عند التشغيل حسب إعداد التكرار، أو «عرض الآن» من إعدادات
 // التنبيهات): استحقاقات العملاء التي حلّت (📅 DueAlerts)، ومواد أوشكت على النفاد،
 // ومواد صلاحيتها قريبة، ومواد راكدة.
-//   • الاستحقاقات: قسط أو شيك أو كمبيالة حلّ موعده — بلا من تصلهم رسالة واتساب التلقائية.
-//     الضغط على الاستحقاق يفتح بطاقة العميل.
+//   • الاستحقاقات: قسط أو شيك أو كمبيالة — اليوم، والمتأخر، وباقي الشهر — حسب إعدادات
+//     «المطالبة بالديون» (DueAlertSettings). الضغط على الاستحقاق يفتح بطاقة العميل.
 //   • الأرقام في رأس النافذة هي نفسها أزرار التبديل بين الأقسام.
 //   • الترتيب: الأخطر أولاً (الأقل نسبةً إلى حد التنبيه، الأقرب انتهاءً، الأكبر رصيداً راكداً).
 //   • بحث بالاسم داخل القسم.
@@ -34,11 +34,11 @@ class AlertsDisplayDialog extends StatefulWidget {
   final List<Product> stagnantProducts;
   final List<Product> expiryProducts;
 
-  /// 📅 استحقاقات حلّت (بلا من تصلهم رسالة واتساب التلقائية).
+  /// 📅 الاستحقاقات حسب إعدادات «المطالبة بالديون».
   final List<DueAlert> dueAlerts;
 
-  /// عدد المستثنين لأن رسالة واتساب التلقائية تصلهم.
-  final int dueWaCovered;
+  /// عدد من أُخفي لأن رسالة واتساب وصلته بعد حلول استحقاقه.
+  final int dueWaHidden;
 
   const AlertsDisplayDialog({
     super.key,
@@ -46,7 +46,7 @@ class AlertsDisplayDialog extends StatefulWidget {
     required this.stagnantProducts,
     required this.expiryProducts,
     this.dueAlerts = const [],
-    this.dueWaCovered = 0,
+    this.dueWaHidden = 0,
   });
 
   @override
@@ -123,7 +123,7 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> {
       headerExtra: Wrap(spacing: 8, runSpacing: 8, children: [
         HeaderStat(
           value: fmtMoney(widget.dueAlerts.length),
-          label: 'استحقاقات حلّت',
+          label: 'استحقاقات',
           icon: Icons.event_note_rounded,
           selected: _kind == _Kind.dues,
           onTap: () => setState(() => _kind = _Kind.dues),
@@ -169,14 +169,15 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> {
               ),
             ),
           ),
-          if (isDues && widget.dueWaCovered > 0)
+          if (isDues && widget.dueWaHidden > 0)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
               child: Row(children: [
                 const Icon(Icons.chat_rounded, size: 16, color: Color(0xFF16A34A)),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text('${widget.dueWaCovered} استحقاقاً آخر لا يظهر هنا: أصحابها تصلهم رسالة واتساب التلقائية.',
+                  child: Text('${widget.dueWaHidden} استحقاقاً آخر لا يظهر: أصحابها وصلتهم رسالة واتساب بعد حلوله '
+                      '(يُغيَّر من إعدادات التنبيهات).',
                       style: const TextStyle(fontSize: 12, color: _muted)),
                 ),
               ]),
@@ -221,7 +222,7 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> {
     final text = _q.trim().isNotEmpty
         ? (_kind == _Kind.dues ? 'لا عميل بهذا الاسم' : 'لا مادة بهذا الاسم في هذا القسم')
         : switch (_kind) {
-            _Kind.dues => 'لا استحقاقات حلّ موعدها',
+            _Kind.dues => 'لا استحقاقات تحتاج مطالبة',
             _Kind.low => 'لا مواد أوشكت على النفاد',
             _Kind.expiry => 'لا مواد صلاحيتها قريبة',
             _Kind.stagnant => 'لا مواد راكدة',
@@ -310,11 +311,12 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> {
 
   /// 📅 بطاقة استحقاق: العميل، نوعه ورقمه، المتبقي، والتأخر. الضغط يفتح بطاقة العميل.
   Widget _dueCard(DueAlert d) {
-    final c = d.daysLate >= 30 ? _red : (d.daysLate >= 7 ? _orange : _amber);
-    final when = d.daysLate == 0 ? 'اليوم' : 'متأخر ${d.daysLate} يوماً';
+    const teal = Color(0xFF0F766E);
+    final c = d.upcoming ? teal : (d.daysLate >= 30 ? _red : (d.daysLate >= 7 ? _orange : _amber));
+    final when = d.upcoming ? 'بعد ${d.daysUntil} يوماً' : (d.daysLate == 0 ? 'اليوم' : 'متأخر ${d.daysLate} يوماً');
     final inst = d.installmentNo != null && (d.installmentsTotal ?? 0) > 1 ? ' (${d.installmentNo}/${d.installmentsTotal})' : '';
     final cur = d.currency == 'IQD' ? 'دينار' : d.currency;
-    final line = '${d.kindLabel} رقم ${d.dueNo}$inst • استحق ${_date.format(d.dueDate)}'
+    final line = '${d.kindLabel} رقم ${d.dueNo}$inst • ${d.upcoming ? 'يستحق' : 'استحق'} ${_date.format(d.dueDate)}'
         '${d.phone.isEmpty ? '' : ' • ${d.phone}'}';
     return Semantics(
       button: true,
@@ -350,6 +352,10 @@ class _AlertsDisplayDialogState extends State<AlertsDisplayDialog> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: _text)),
                         ),
+                        if (d.waSentAt != null) ...[
+                          const SizedBox(width: 6),
+                          _badge('وصلته رسالة واتساب ${_date.format(d.waSentAt!)}', const Color(0xFF16A34A)),
+                        ],
                         const SizedBox(width: 8),
                         _badge(when, c),
                       ]),

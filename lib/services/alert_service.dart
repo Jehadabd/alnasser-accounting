@@ -26,13 +26,13 @@ class AlertService {
       final lowStockProducts = await _getLowStockProducts();
       final stagnantProducts = await _getStagnantProducts();
       final expiryProducts = await _getExpiringProducts(settings.expiryAlertThresholdMonths);
-      final dues = await DueAlerts.load(); // 📅 بلا من تصلهم رسالة واتساب التلقائية
+      final dues = await DueAlerts.load(); // 📅 حسب إعدادات «المطالبة بالديون»
 
       debugPrint('🔔 AlertService: نتائج الفحص:');
       debugPrint('   - نواقص: ${lowStockProducts.length}');
       debugPrint('   - راكدة: ${stagnantProducts.length}');
       debugPrint('   - منتهية الصلاحية: ${expiryProducts.length}');
-      debugPrint('   - استحقاقات حلّت: ${dues.items.length} (واتساب تلقائي: ${dues.waCovered})');
+      debugPrint('   - استحقاقات: ${dues.items.length} (أُخفي لوصول رسالة واتساب: ${dues.waHidden})');
 
       if (forceShow ||
           lowStockProducts.isNotEmpty ||
@@ -52,7 +52,7 @@ class AlertService {
               stagnantProducts: stagnantProducts,
               expiryProducts: expiryProducts,
               dueAlerts: dues.items,
-              dueWaCovered: dues.waCovered,
+              dueWaHidden: dues.waHidden,
             ),
           );
         } else {
