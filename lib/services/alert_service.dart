@@ -6,6 +6,7 @@ import 'database_service.dart';
 import 'settings_manager.dart';
 import '../screens/alerts_display_dialog.dart';
 import '../erp/inventory/product_batches.dart'; // 📦 صلاحية الدفعات
+import 'due_alerts.dart'; // 📅 الاستحقاقات التي حلّت
 
 class AlertService {
   final DatabaseService _databaseService = DatabaseService();
@@ -25,13 +26,19 @@ class AlertService {
       final lowStockProducts = await _getLowStockProducts();
       final stagnantProducts = await _getStagnantProducts();
       final expiryProducts = await _getExpiringProducts(settings.expiryAlertThresholdMonths);
+      final dues = await DueAlerts.load(); // 📅 بلا من تصلهم رسالة واتساب التلقائية
 
       debugPrint('🔔 AlertService: نتائج الفحص:');
       debugPrint('   - نواقص: ${lowStockProducts.length}');
       debugPrint('   - راكدة: ${stagnantProducts.length}');
       debugPrint('   - منتهية الصلاحية: ${expiryProducts.length}');
+      debugPrint('   - استحقاقات حلّت: ${dues.items.length} (واتساب تلقائي: ${dues.waCovered})');
 
-      if (forceShow || lowStockProducts.isNotEmpty || stagnantProducts.isNotEmpty || expiryProducts.isNotEmpty) {
+      if (forceShow ||
+          lowStockProducts.isNotEmpty ||
+          stagnantProducts.isNotEmpty ||
+          expiryProducts.isNotEmpty ||
+          dues.items.isNotEmpty) {
         if (context.mounted) {
           debugPrint('🔔 AlertService: جاري عرض شاشة التنبيهات ${forceShow ? '(عرض قسري يدوي)' : ''}...');
           await _updateLastShownDate(settings);
@@ -44,6 +51,8 @@ class AlertService {
               lowStockProducts: lowStockProducts,
               stagnantProducts: stagnantProducts,
               expiryProducts: expiryProducts,
+              dueAlerts: dues.items,
+              dueWaCovered: dues.waCovered,
             ),
           );
         } else {

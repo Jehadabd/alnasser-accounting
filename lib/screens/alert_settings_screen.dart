@@ -1,6 +1,7 @@
 // lib/screens/alert_settings_screen.dart
 //
-// 🔔 تنبيهات المخزون والركود وانتهاء الصلاحية — بالشكل الموحّد لشاشات الإعدادات.
+// 🔔 تنبيهات الاستحقاقات والمخزون والركود وانتهاء الصلاحية — بالشكل الموحّد لشاشات الإعدادات.
+// 📅 الاستحقاقات (قسط، شيك، كمبيالة حلّ موعدها) إعدادها في SharedPreferences (DueAlerts).
 // المنطق كما هو: تفعيل/إيقاف، تكرار الظهور، حدّ أشهر انتهاء الصلاحية، فحص فوري.
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../erp/erp_kit.dart' show ChoiceTile;
 import '../models/app_settings.dart';
 import '../services/alert_service.dart';
+import '../services/due_alerts.dart'; // 📅
 import '../services/settings_manager.dart';
 import '../widgets/settings_kit.dart';
 import 'debt_reminders_screen.dart'; // 📅
@@ -26,6 +28,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   bool _areAlertsEnabled = true;
   String _alertFrequency = 'startup';
   int _expiryAlertThresholdMonths = 3;
+  bool _dueAlerts = true; // 📅 الاستحقاقات التي حلّت
 
   static const _orange = Color(0xFFEA580C);
 
@@ -46,8 +49,10 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
 
   Future<void> _loadSettings() async {
     _appSettings = await SettingsManager.getAppSettings();
+    final dues = await DueAlerts.enabled();
     if (!mounted) return;
     setState(() {
+      _dueAlerts = dues;
       _areAlertsEnabled = _appSettings.areAlertsEnabled;
       _alertFrequency = _appSettings.alertFrequency;
       _expiryAlertThresholdMonths = _appSettings.expiryAlertThresholdMonths.clamp(1, 12).toInt();
@@ -64,6 +69,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
         expiryAlertThresholdMonths: _expiryAlertThresholdMonths,
       );
       await SettingsManager.saveAppSettings(newSettings);
+      await DueAlerts.setEnabled(_dueAlerts);
       if (!mounted) return;
       setToast(context, 'تم حفظ إعدادات التنبيهات');
       Navigator.pop(context);
@@ -116,11 +122,35 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                 color: _orange,
                 child: SetSwitch(
                   title: 'تفعيل التنبيهات',
-                  subtitle: 'نظام تنبيهات النواقص والمواد الراكدة وانتهاء الصلاحية',
+                  subtitle: 'نافذة التنبيهات: الاستحقاقات، النواقص، المواد الراكدة، وانتهاء الصلاحية',
                   icon: Icons.notifications_rounded,
                   color: _orange,
                   value: _areAlertsEnabled,
                   onChanged: (v) => setState(() => _areAlertsEnabled = v),
+                ),
+              ),
+              _disabledWrap(
+                SetCard(
+                  title: 'المطالبة بالديون — الاستحقاقات',
+                  subtitle: 'قسط أو شيك قبض أو كمبيالة حلّ موعده ولم يُسدَّد',
+                  icon: Icons.event_note_rounded,
+                  color: const Color(0xFF4F46E5),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    SetSwitch(
+                      title: 'نبّهني بالاستحقاقات التي حلّت',
+                      subtitle: 'تظهر أولاً في نافذة التنبيهات، الأقدم فالأحدث. الضغط على العميل يفتح بطاقته.',
+                      icon: Icons.notifications_active_rounded,
+                      color: const Color(0xFF4F46E5),
+                      value: _dueAlerts,
+                      onChanged: (v) => setState(() => _dueAlerts = v),
+                    ),
+                    const SizedBox(height: 8),
+                    const SetBanner(
+                      'العميل الذي تصله رسالة واتساب التلقائية (قاعدة مفعّلة «تلقائي» تشمله ورقمه صالح) لا يظهر هنا — '
+                      'يُطالَب أصلاً، ويُذكر عددهم فقط. الاستحقاق يُضاف من بطاقة العميل ← «استحقاق / تقسيط».',
+                      icon: Icons.chat_rounded,
+                    ),
+                  ]),
                 ),
               ),
               _disabledWrap(
