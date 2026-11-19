@@ -557,6 +557,20 @@ class MyApp extends StatelessWidget {
             centerTitle: true,
             elevation: 0,
           ),
+          // 💬 كل نوافذ الرسائل (AlertDialog) بشكل واحد حديث: أبيض بلا صبغة، زوايا 22،
+          // ظل ناعم، عنوان واضح، ونص مريح. النافذة التي تحدد شكلها بنفسها تبقى كما هي.
+          dialogTheme: const DialogThemeData(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            elevation: 14,
+            shadowColor: Color(0x400F172A),
+            barrierColor: Color(0x8C0F172A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(22))),
+            insetPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            titleTextStyle: TextStyle(fontFamily: 'Cairo', fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF0F172A)),
+            contentTextStyle: TextStyle(fontFamily: 'Cairo', fontSize: 14.5, height: 1.6, color: Color(0xFF334155)),
+            actionsPadding: EdgeInsets.fromLTRB(16, 4, 16, 14),
+          ),
           inputDecorationTheme: InputDecorationTheme(
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),

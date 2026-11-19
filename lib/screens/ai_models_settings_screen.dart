@@ -598,62 +598,303 @@ class _TestResultsDialog extends StatefulWidget {
 class _TestResultsDialogState extends State<_TestResultsDialog> {
   late final Set<String> _picked = {for (final r in widget.results) if (r.passed) r.model};
 
+  static Color _scoreColor(AiProbeResult r) => r.passed ? kSetGreen : (r.ok && r.score > 0 ? kSetOrange : kSetRed);
+  static String _secs(int ms) => '${(ms / 1000).toStringAsFixed(1)} ث';
+  static String _name(AiProbeResult r) => r.name.isEmpty ? r.model : r.name;
+
+  void _toggle(AiProbeResult r) {
+    if (!r.ok) return;
+    setState(() => _picked.contains(r.model) ? _picked.remove(r.model) : _picked.add(r.model));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = _providerColor(widget.provider);
     final best = widget.results.where((r) => r.passed).toList();
-    return AlertDialog(
-      title: Text('نتيجة اختبار ${widget.provider.label}'),
-      content: SizedBox(
-        width: 520,
-        child: SingleChildScrollView(
+    final h = MediaQuery.of(context).size.height;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      backgroundColor: kSetBg,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.96, end: 1),
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, child) => Opacity(opacity: ((v - 0.96) / 0.04).clamp(0.0, 1.0), child: Transform.scale(scale: v, child: child)),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 600, maxHeight: h * 0.88),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text(
-              best.isEmpty
-                  ? 'لم ينجح أي نموذج في قراءة الفاتورة التجريبية بدقة كافية بهذا المفتاح.'
-                  : 'الأفضل لك: ${best.first.name.isEmpty ? best.first.model : best.first.name} — قرأ ${best.first.score} من ${best.first.total} أرقام في ${(best.first.ms / 1000).toStringAsFixed(1)} ثانية.',
-              style: const TextStyle(fontWeight: FontWeight.w700, height: 1.5),
+            _header(c),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  if (best.isNotEmpty) _bestCard(best.first, c) else _noneCard(),
+                  const SizedBox(height: 18),
+                  Row(children: [
+                    const Expanded(child: _SectionLabel('كل النماذج المختبرة')),
+                    Text('${_picked.length} مختار', style: TextStyle(fontSize: 12.5, color: c, fontWeight: FontWeight.w700)),
+                  ]),
+                  const SizedBox(height: 8),
+                  for (var i = 0; i < widget.results.length; i++) _resultCard(i, widget.results[i], c),
+                  const SizedBox(height: 6),
+                  const _NoteCard(
+                    note: _GuideNote(Icons.info_outline_rounded,
+                        'الدرجة = كم رقماً قرأه النموذج صحيحاً من فاتورة تجريبية فيها 3 أسطر ومجموع (10 أرقام). '
+                        'المختارة تُضاف إلى «ترتيب النماذج» بهذا الترتيب، والفاشلة تُعطَّل.'),
+                  ),
+                ]),
+              ),
             ),
-            const SizedBox(height: 4),
-            const Text('الدرجة: كم رقماً قرأه صحيحاً من فاتورة تجريبية فيها 3 أسطر ومجموع.',
-                style: TextStyle(color: kSetMuted, fontSize: 12)),
-            const SizedBox(height: 10),
-            for (var i = 0; i < widget.results.length; i++) _row(i, widget.results[i]),
+            _footer(c),
           ]),
         ),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
-        FilledButton.icon(
-          onPressed: _picked.isEmpty
-              ? null
-              : () => Navigator.pop(context, [for (final r in widget.results) if (_picked.contains(r.model)) r]),
-          icon: const Icon(Icons.check_rounded),
-          label: Text('اعتماد ${_picked.length} بهذا الترتيب'),
-        ),
-      ],
     );
   }
 
-  Widget _row(int i, AiProbeResult r) {
-    final color = r.passed ? kSetGreen : (r.ok && r.score > 0 ? kSetOrange : kSetRed);
-    return CheckboxListTile(
-      value: _picked.contains(r.model),
-      onChanged: r.ok
-          ? (v) => setState(() {
-                if (v == true) {
-                  _picked.add(r.model);
-                } else {
-                  _picked.remove(r.model);
-                }
-              })
-          : null,
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      controlAffinity: ListTileControlAffinity.leading,
-      title: Text('${i + 1}. ${r.name.isEmpty ? r.model : r.name}', style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text(
-        r.ok ? '${r.score}/${r.total} • ${(r.ms / 1000).toStringAsFixed(1)} ث • ${r.note}' : r.note,
-        style: TextStyle(color: color),
+  Widget _header(Color c) {
+    final dark = Color.lerp(c, Colors.black, 0.28)!;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [c, dark], begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd),
+      ),
+      child: Row(children: [
+        Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.32)),
+          ),
+          child: const Icon(Icons.science_rounded, color: Colors.white, size: 28),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('نتيجة اختبار ${widget.provider.label}',
+                style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text('اختُبر ${widget.results.length} نموذج على قراءة فاتورة تجريبية',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.88))),
+          ]),
+        ),
+        IconButton(
+          tooltip: 'إغلاق',
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.close_rounded, color: Colors.white),
+        ),
+      ]),
+    );
+  }
+
+  /// بطاقة «الأفضل لك»: حلقة الدرجة، الاسم، الزمن.
+  Widget _bestCard(AiProbeResult r, Color c) {
+    const gold = Color(0xFFD97706);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: kSetGreen.withValues(alpha: 0.35), width: 1.4),
+        boxShadow: [BoxShadow(color: kSetGreen.withValues(alpha: 0.10), blurRadius: 24, offset: const Offset(0, 8))],
+      ),
+      child: Row(children: [
+        _ScoreRing(score: r.score, total: r.total, color: kSetGreen, size: 76),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.emoji_events_rounded, color: gold, size: 20),
+              const SizedBox(width: 6),
+              Text('الأفضل لك', style: TextStyle(color: gold.withValues(alpha: 0.95), fontWeight: FontWeight.w800)),
+            ]),
+            const SizedBox(height: 4),
+            Text(_name(r), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kSetText)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              _pill(Icons.timer_outlined, _secs(r.ms), c),
+              _pill(Icons.check_circle_outline_rounded, r.note, kSetGreen),
+            ]),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _noneCard() => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: kSetRed.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: kSetRed.withValues(alpha: 0.25)),
+        ),
+        child: const Row(children: [
+          Icon(Icons.report_gmailerrorred_rounded, color: kSetRed, size: 30),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text('لم ينجح أي نموذج في قراءة الفاتورة التجريبية بدقة كافية بهذا المفتاح. '
+                'جرّب مزوّداً آخر، أو أعد الاختبار لاحقاً إن كانت الحصة قد نفدت.',
+                style: TextStyle(color: kSetText, height: 1.55)),
+          ),
+        ]),
+      );
+
+  Widget _pill(IconData i, String t, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(color: c.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(20)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(i, size: 14, color: c),
+          const SizedBox(width: 4),
+          Flexible(child: Text(t, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c))),
+        ]),
+      );
+
+  /// نتيجة نموذج: الترتيب، الاسم، شريط الدرجة، الزمن، والاختيار.
+  Widget _resultCard(int i, AiProbeResult r, Color c) {
+    final picked = _picked.contains(r.model);
+    final sc = _scoreColor(r);
+    return Semantics(
+      button: r.ok,
+      selected: picked,
+      label: '${_name(r)}، ${r.score} من ${r.total}',
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: picked ? c.withValues(alpha: 0.06) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: picked ? c : kSetBorder, width: picked ? 1.6 : 1),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: r.ok ? () => _toggle(r) : null,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+              child: Row(children: [
+                CircleAvatar(
+                  radius: 15,
+                  backgroundColor: sc.withValues(alpha: 0.12),
+                  child: Text('${i + 1}', style: TextStyle(fontWeight: FontWeight.w800, color: sc, fontSize: 13)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(_name(r),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontWeight: FontWeight.w800, color: r.ok ? kSetText : kSetMuted)),
+                    if (r.name.isNotEmpty && r.name != r.model)
+                      Text(r.model,
+                          textDirection: TextDirection.ltr,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11, color: kSetMuted)),
+                    const SizedBox(height: 8),
+                    if (r.ok) ...[
+                      Row(children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: TweenAnimationBuilder<double>(
+                              tween: Tween(begin: 0, end: r.total == 0 ? 0 : r.score / r.total),
+                              duration: Duration(milliseconds: 500 + i * 120),
+                              curve: Curves.easeOutCubic,
+                              builder: (_, v, __) => LinearProgressIndicator(
+                                value: v,
+                                minHeight: 7,
+                                color: sc,
+                                backgroundColor: sc.withValues(alpha: 0.12),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text('${r.score}/${r.total}', style: TextStyle(fontWeight: FontWeight.w800, color: sc)),
+                        const SizedBox(width: 8),
+                        Text(_secs(r.ms), style: const TextStyle(fontSize: 12, color: kSetMuted)),
+                      ]),
+                      const SizedBox(height: 4),
+                    ],
+                    Text(r.note, style: TextStyle(fontSize: 12, color: r.ok ? kSetMuted : kSetRed, height: 1.4)),
+                  ]),
+                ),
+                Checkbox(
+                  value: picked,
+                  activeColor: c,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+                  onChanged: r.ok ? (_) => _toggle(r) : null,
+                ),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _footer(Color c) => Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+        decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: kSetBorder))),
+        child: Row(children: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
+          const Spacer(),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: c,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            onPressed: _picked.isEmpty
+                ? null
+                : () => Navigator.pop(context, [for (final r in widget.results) if (_picked.contains(r.model)) r]),
+            icon: const Icon(Icons.check_rounded, size: 18),
+            label: Text('اعتماد ${_picked.length} بهذا الترتيب', style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      );
+}
+
+/// حلقة الدرجة (تمتلئ بحركة).
+class _ScoreRing extends StatelessWidget {
+  const _ScoreRing({required this.score, required this.total, required this.color, this.size = 72});
+  final int score;
+  final int total;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final target = total == 0 ? 0.0 : score / total;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: target),
+      duration: const Duration(milliseconds: 700),
+      curve: Curves.easeOutCubic,
+      builder: (_, v, __) => SizedBox(
+        width: size,
+        height: size,
+        child: Stack(alignment: Alignment.center, children: [
+          SizedBox(
+            width: size,
+            height: size,
+            child: CircularProgressIndicator(
+              value: v,
+              strokeWidth: 7,
+              strokeCap: StrokeCap.round,
+              color: color,
+              backgroundColor: color.withValues(alpha: 0.12),
+            ),
+          ),
+          Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('$score', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: color, height: 1)),
+            Text('من $total', style: const TextStyle(fontSize: 11, color: kSetMuted)),
+          ]),
+        ]),
       ),
     );
   }
