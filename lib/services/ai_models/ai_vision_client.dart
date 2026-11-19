@@ -41,12 +41,15 @@ enum AiErrorKind {
 }
 
 class AiCallException implements Exception {
-  AiCallException(this.kind, this.message, {this.daily = false});
+  AiCallException(this.kind, this.message, {this.daily = false, this.retryAfter});
   final AiErrorKind kind;
   final String message;
 
   /// حصة اليوم انتهت (لا حصة الدقيقة).
   final bool daily;
+
+  /// كم ينتظر قبل الإعادة (من ترويسة retry-after أو «try again in 7.5s»).
+  final Duration? retryAfter;
 
   @override
   String toString() => message;
@@ -129,7 +132,9 @@ class AiVisionClient {
     } catch (e) {
       throw AiCallException(AiErrorKind.network, 'تعذّر الاتصال ($e)');
     }
-    if (res.statusCode != 200) throw classify(res.statusCode, utf8.decode(res.bodyBytes, allowMalformed: true));
+    if (res.statusCode != 200) {
+      throw classify(res.statusCode, utf8.decode(res.bodyBytes, allowMalformed: true), headers: res.headers);
+    }
     final body = utf8.decode(res.bodyBytes, allowMalformed: true);
     final text = provider == AiProvider.gemini ? geminiText(body) : openAiText(body);
     if (text.trim().isEmpty) {
@@ -227,7 +232,7 @@ class AiVisionClient {
   }
 
   /// تصنيف خطأ HTTP إلى ما يقرر الخطوة التالية.
-  static AiCallException classify(int code, String body) {
+  static AiCallException classify(int code, String body, {Map<String, String>? headers}) {
     final lower = body.toLowerCase();
     var msg = '';
     try {
@@ -242,7 +247,10 @@ class AiVisionClient {
     final visionWords = lower.contains('image') || lower.contains('vision') || lower.contains('modalit') || lower.contains('multimodal');
     final notSupported = lower.contains('not support') || lower.contains('unsupported') || lower.contains('does not accept') || lower.contains('no endpoints');
     if (code == 429) {
-      return AiCallException(AiErrorKind.quota, daily ? 'نفدت حصة اليوم لهذا المفتاح (429)' : 'تجاوزت حد الطلبات في الدقيقة (429)', daily: daily);
+      final wait = retryAfterOf(headers, body);
+      return AiCallException(
+          AiErrorKind.quota, daily ? 'نفدت حصة اليوم لهذا المفتاح (429)' : 'تجاوزت حد الطلبات في الدقيقة (429)',
+          daily: daily, retryAfter: wait);
     }
     if (code == 402) return AiCallException(AiErrorKind.quota, 'الرصيد غير كافٍ لهذا المفتاح (402)', daily: true);
     if (code == 401 || code == 403) {
@@ -269,6 +277,20 @@ class AiVisionClient {
     }
     if (code >= 500) return AiCallException(AiErrorKind.server, 'خادم المزوّد مشغول ($code) — أعد المحاولة');
     return AiCallException(AiErrorKind.badRequest, 'HTTP $code ${msg.isEmpty ? '' : msg}');
+  }
+
+  /// مدة الانتظار المطلوبة: ترويسة retry-after (ثوانٍ)، أو «try again in 7.5s / 640ms» في الرسالة.
+  @visibleForTesting
+  static Duration? retryAfterOf(Map<String, String>? headers, String body) {
+    final h = headers?['retry-after'] ?? headers?['Retry-After'];
+    final hs = double.tryParse('${h ?? ''}'.trim());
+    if (hs != null && hs >= 0) return Duration(milliseconds: (hs * 1000).round());
+    final m = RegExp(r'try again in\s*(?:(\d+)m)?\s*([\d.]+)\s*(ms|s)', caseSensitive: false).firstMatch(body);
+    if (m == null) return null;
+    final mins = int.tryParse(m.group(1) ?? '') ?? 0;
+    final v = double.tryParse(m.group(2) ?? '') ?? 0;
+    final ms = m.group(3)!.toLowerCase() == 'ms' ? v : v * 1000;
+    return Duration(milliseconds: mins * 60000 + ms.round());
   }
 
   // ───────────────────────── قائمة النماذج ─────────────────────────

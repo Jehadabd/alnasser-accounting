@@ -55,6 +55,7 @@ void main() {
   setUp(() {
     AiRouter.resetForTest();
     AiRouter.retryDelay = Duration.zero;
+    AiRouter.maxQuotaWait = Duration.zero; // لا انتظار لحد الدقيقة إلا في اختباره
     AiVisionClient.clientForTest = null;
   });
 
@@ -446,7 +447,118 @@ void main() {
       supplierId: null,
     );
     expect(r.lines.single.productId, 3); // الاسم نفسه
-    expect(r.engineNote, contains('طابقتُ محلياً'));
+    expect(r.engineNote, contains('طابقتُ الأسطر محلياً'));
+    expect(r.engineNote, contains('429'));
+  });
+
+  test('حد الدقيقة ولا بديل: ينتظر ما يطلبه المزوّد ويعيد مرة واحدة', () async {
+    AiRouter.maxQuotaWait = const Duration(seconds: 45);
+    expect(AiVisionClient.retryAfterOf({'retry-after': '7.5'}, '')!.inMilliseconds, 7500);
+    expect(AiVisionClient.retryAfterOf(null, 'Please try again in 1m2.5s.')!.inMilliseconds, 62500);
+    expect(AiVisionClient.retryAfterOf(null, 'try again in 640ms')!.inMilliseconds, 640);
+    final only = AiModelEntry(provider: AiProvider.groq, model: 'q');
+    final keys = {
+      AiProvider.groq: [_k('q1', AiProvider.groq)]
+    };
+    var n = 0;
+    final waits = <String>[];
+    final r = await AiRouter.run(
+      chain: [only],
+      keys: keys,
+      onWait: waits.add,
+      send: (e, k) async {
+        n++;
+        if (n == 1) throw AiCallException(AiErrorKind.quota, 'دقيقة', retryAfter: const Duration(milliseconds: 10));
+        return 'ok';
+      },
+    );
+    expect(r.text, 'ok');
+    expect(n, 2);
+    expect(waits.single, contains('انتظار حد الدقيقة'));
+  });
+
+  test('كل الأسطر بلا مرشح ⇒ لا طلب مطابقة ولا ملاحظة', () async {
+    SharedPreferences.setMockInitialValues({});
+    AiModelsStore.memorySecureForTest = {};
+    AiModelsStore.resetForTest();
+    await AiModelsStore.saveConfig(AiModelsConfig(models: [AiModelEntry(provider: AiProvider.groq, model: 'q')]));
+    await AiModelsStore.addKey(AiProvider.groq, 'gsk_test_0123456789');
+    var calls = 0;
+    AiVisionClient.clientForTest = MockClient((req) async {
+      calls++;
+      return http.Response(
+          jsonEncode({
+            'choices': [
+              {
+                'message': {
+                  'content': jsonEncode({
+                    'line_items': [
+                      {'original_name': 'XYZ-998', 'qty': 1, 'price': 1000, 'amount': 1000}
+                    ]
+                  })
+                }
+              }
+            ]
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'});
+    });
+    final r = await AiInvoiceEngine.run(
+      bytes: Uint8List.fromList([1]),
+      mimeType: 'image/png',
+      products: [_p(3, 'مصباح ليد 12 واط')],
+      aliases: const [],
+      supplierId: null,
+    );
+    expect(calls, 1);
+    expect(r.lines.single.productId, isNull);
+    expect(r.engineNote, isEmpty);
+  });
+
+  group('الدفع', () {
+    test('دين بمدفوع مكتوب، أو باقٍ مكتوب فيُحسب المدفوع', () {
+      final a = AiInvoiceService.paymentOf({
+        'payment': {'status': 'partial', 'paid': '250,000', 'evidence': 'الواصل: 250,000'}
+      }, 1000000);
+      expect(a.cash, isFalse);
+      expect(a.paid, 250000);
+      expect(a.remaining, 750000);
+      final b = AiInvoiceService.paymentOf({
+        'payment': {'status': 'credit', 'remaining': 600000}
+      }, 1000000);
+      expect(b.paid, 400000);
+      expect(b.cash, isFalse);
+    });
+
+    test('مدفوع بالكامل ⇒ نقد؛ لا شيء مكتوب ⇒ دين بلا مدفوع؛ الرصيد السابق ليس دفعاً', () {
+      expect(AiInvoiceService.paymentOf({'payment': {'paid': 500000}}, 500000).cash, isTrue);
+      final none = AiInvoiceService.paymentOf({}, 500000);
+      expect(none.cash, isFalse);
+      expect(none.paid, 0);
+      final prev = AiInvoiceService.paymentOf({
+        'payment': {'status': 'credit', 'previous_balance': 3000000}
+      }, 500000);
+      expect(prev.paid, 0);
+      expect(prev.previous, 3000000);
+      // نص القالب منسوخاً حرفياً لا يُعدّ نقداً
+      expect(AiInvoiceService.paymentOf({'status': 'نقد أو دين'}, 500000).cash, isFalse);
+      // الصيغة القديمة
+      expect(AiInvoiceService.paymentOf({'status': 'نقد'}, 500000).cash, isTrue);
+    });
+
+    test('القراءة تحمل الدفع إلى النتيجة', () {
+      final r = AiInvoiceService.parse({
+        'line_items': [
+          {'name': 'a', 'qty': 1, 'price': 1000000, 'amount': 1000000}
+        ],
+        'totals': {'grand_total': 1000000},
+        'payment': {'status': 'partial', 'paid': 300000, 'evidence': 'المدفوع 300,000'},
+      });
+      expect(r.isCash, isFalse);
+      expect(r.amountPaid, 300000);
+      expect(r.remaining, 700000);
+      expect(r.paymentEvidence, 'المدفوع 300,000');
+    });
   });
 
   test('درجة الفاتورة التجريبية', () {

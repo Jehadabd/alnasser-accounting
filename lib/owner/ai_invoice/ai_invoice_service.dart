@@ -75,6 +75,9 @@ class AiInvoiceResult {
     this.shipping = 0,
     this.amountPaid = 0,
     this.isCash = false,
+    this.remaining = 0,
+    this.previousBalance = 0,
+    this.paymentEvidence = '',
     this.model = '',
     this.engineNote = '',
   });
@@ -88,6 +91,15 @@ class AiInvoiceResult {
   final double shipping;
   final double amountPaid;
   final bool isCash;
+
+  /// الباقي من هذه الفاتورة ديناً (إن كُتب أو حُسب: الإجمالي − المدفوع).
+  final double remaining;
+
+  /// رصيد المورد السابق إن ظهر في الفاتورة (للعرض فقط — ليس دفعاً).
+  final double previousBalance;
+
+  /// النص الذي استُدلّ منه على الدفع («الواصل: 250,000»).
+  final String paymentEvidence;
 
   /// النموذج (أو النموذجان) الذي قرأ وطابق.
   final String model;
@@ -281,21 +293,68 @@ class AiInvoiceService {
     }
     final totals = (j['totals'] is Map) ? Map<String, dynamic>.from(j['totals']) : const <String, dynamic>{};
     final cur = (j['currency'] ?? '').toString().toUpperCase();
-    final status = (j['status'] ?? '').toString();
+    final grand = _num(totals['grand_total']);
+    final pay = paymentOf(j, grand);
     return AiInvoiceResult(
       lines: lines,
       invoiceNumber: (j['invoice_number'] ?? '').toString().trim(),
       date: DateTime.tryParse((j['invoice_date'] ?? '').toString().trim()),
       currency: (cur.contains('USD') || cur.contains(r'$') || cur.contains('دولار')) ? 'USD' : 'IQD',
       supplierName: (j['supplier_name'] ?? '').toString().trim(),
-      grandTotal: _num(totals['grand_total']),
+      grandTotal: grand,
       discount: _num(totals['discount']),
       shipping: _num(totals['shipping']),
-      amountPaid: _num(j['amount_paid']),
-      isCash: status.trim() == 'نقد',
+      amountPaid: pay.paid,
+      isCash: pay.cash,
+      remaining: pay.remaining,
+      previousBalance: pay.previous,
+      paymentEvidence: pay.evidence,
       model: 'gemini-flash-latest',
     );
   }
+
+  /// الدفع من رد النموذج: «payment» الجديد، أو amount_paid/status القديمان.
+  ///   • المدفوع غير مكتوب والباقي مكتوب ⇒ المدفوع = الإجمالي − الباقي (والعكس).
+  ///   • المدفوع ≥ الإجمالي ⇒ نقد. باقٍ > 0 أو «دين/آجل» ⇒ دين. لا شيء مكتوب ⇒ دين بلا مدفوع.
+  static ({double paid, bool cash, double remaining, double previous, String evidence}) paymentOf(
+      Map<String, dynamic> j, double total) {
+    final pay = j['payment'] is Map ? Map<String, dynamic>.from(j['payment'] as Map) : const <String, dynamic>{};
+    final st = '${pay['status'] ?? j['status'] ?? ''}'.trim().toLowerCase();
+    var paid = _num(pay['paid'] ?? j['amount_paid']);
+    var remaining = _num(pay['remaining'] ?? j['remaining']);
+    final previous = _num(pay['previous_balance'] ?? j['previous_balance']);
+    final evidence = '${pay['evidence'] ?? ''}'.trim();
+    if (total > 0) {
+      if (paid <= 0 && remaining > 0 && remaining < total) paid = total - remaining;
+      if (remaining <= 0 && paid > 0 && paid < total) remaining = total - paid;
+      if (paid > total) paid = total;
+    }
+    final saysCredit = st == 'credit' || st == 'partial' || st.contains('دين') || st.contains('اجل') || st.contains('آجل') || st.contains('جزئي');
+    final saysCash = st == 'cash' || (st.contains('نقد') && !st.contains('دين'));
+    var cash = saysCash && !saysCredit;
+    if (total > 0 && paid >= total - 0.5) cash = true;
+    if (remaining > 0.5) cash = false;
+    if (cash) {
+      remaining = 0;
+      if (total > 0) paid = total;
+    }
+    return (paid: paid, cash: cash, remaining: remaining, previous: previous, evidence: evidence);
+  }
+
+  /// قواعد قراءة الدفع والإجمالي (مشتركة بين التعليمات).
+  static const paymentRules = '''## الإجمالي والدفع (مهم جداً — ابحث في أسفل الفاتورة وأعلاها، وفي الختم والكتابة اليدوية):
+- grand_total: صافي مبلغ هذه الفاتورة وحدها بعد الخصم وقبل أي رصيد سابق. إن وُجد «المجموع» و«الخصم» و«الصافي» فالصافي هو grand_total.
+  تحقّق: مجموع مبالغ الأسطر − الخصم + النقل ≈ grand_total. إن اختلف فأعد قراءة الإجمالي والأسطر.
+- payment.paid: المدفوع الآن من هذه الفاتورة. كلماته: المدفوع، الواصل، المسدد، المستلم، دفعة، عربون، «نقداً» مع مبلغ.
+- payment.remaining: الباقي منها ديناً. كلماته: المتبقي، الباقي، الآجل، المطلوب، دين، بالدين، على الحساب.
+- payment.status: "cash" إن دُفعت كاملة (نقداً، مدفوعة، واصل بالكامل، المتبقي صفر)؛ "credit" إن لم يُدفع منها شيء (آجل، دين، على الحساب)؛ "partial" إن دُفع جزء.
+- لم يُكتب شيء عن الدفع ⇒ status "credit" و paid 0.
+- لا تخلط: «الرصيد السابق» و«الرصيد الحالي/الكلي» و«مجموع الحساب» حساب المورد كله — ليست دفعاً ولا باقياً من هذه الفاتورة. ضعها في payment.previous_balance فقط.
+- payment.evidence: النص كما في الفاتورة الذي استدللت منه على الدفع (مثلاً «الواصل: 250,000») أو "".''';
+
+  /// حقل الدفع في بنية JSON المطلوبة.
+  static const paymentJson =
+      '"payment": {"status": "credit", "paid": 0, "remaining": 0, "previous_balance": 0, "evidence": ""}';
 
   // ───────────────────────── المطابقة ─────────────────────────
 
@@ -543,9 +602,10 @@ $learnedJson
     }
   ],
   "totals": {"subtotal": 0, "discount": 0, "shipping": 0, "grand_total": 0},
-  "amount_paid": 0,
-  "status": "نقد أو دين"
+  $paymentJson
 }
+
+$paymentRules
 
 ## قواعد الحقول:
 
@@ -560,10 +620,6 @@ $learnedJson
 - "تطابق: Berly=بيرلي، سيمس=سيمنس، 1.5*2=2×1.5"
 - "منتج جديد: لم أجد ماركة X في القاعدة"
 - "تعبئة الكرتون في الفاتورة 24 وعندنا 20"
-
-### status و amount_paid:
-- "نقد" فقط إذا كُتب نقداً/مدفوعة/واصل بالكامل، وإلا "دين"
-- amount_paid: المبلغ الواصل/المدفوع إن كُتب، وإلا 0
 
 ## تنبيهات:
 - أرجع JSON object فقط (ليس مصفوفة!) بدون أي نص إضافي

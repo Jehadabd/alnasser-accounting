@@ -775,11 +775,14 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                     controller: _paidCtl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     decoration: _dec('المدفوع', Icons.payments_rounded, dense: true),
+                    onChanged: (_) => setState(() {}),
                   ),
                 ),
             ]),
           ]),
         ),
+        const SizedBox(height: 12),
+        _totalsCard(r, sum, expected),
         const SizedBox(height: 12),
         // ملخص
         Wrap(spacing: 8, runSpacing: 8, children: [
@@ -801,6 +804,95 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         if (_rows.isEmpty) _banner('لم يُستخرج أي سطر من الفاتورة — جرّب صورة أوضح', _cLow, Icons.search_off_rounded),
         for (var i = 0; i < _rows.length; i++) _lineCard(i, _rows[i]),
       ],
+    );
+  }
+
+  /// 💰 مبلغ الفاتورة كبيراً، مع مجموع الأسطر والمدفوع والباقي.
+  Widget _totalsCard(AiInvoiceResult r, double sum, double expected) {
+    final total = expected > 0 ? expected : sum;
+    final paid = _cash ? total : _Row._parse(_paidCtl.text).clamp(0, total).toDouble();
+    final rest = (total - paid).clamp(0, double.infinity).toDouble();
+    final match = expected <= 0 || (sum - expected).abs() <= (expected * 0.005 > 1 ? expected * 0.005 : 1);
+    final cur = _currency == 'USD' ? 'دولار' : 'دينار';
+    Widget metric(String label, String value, Color c, {IconData? icon, String? hint}) => Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: c.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(14)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                if (icon != null) ...[Icon(icon, size: 15, color: c), const SizedBox(width: 4)],
+                Flexible(child: Text(label, style: const TextStyle(fontSize: 12, color: _muted), overflow: TextOverflow.ellipsis)),
+              ]),
+              const SizedBox(height: 4),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(value, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: c)),
+              ),
+              if (hint != null)
+                Text(hint, style: const TextStyle(fontSize: 11, color: _muted), maxLines: 2, overflow: TextOverflow.ellipsis),
+            ]),
+          ),
+        );
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _aiA.withValues(alpha: 0.25)),
+        boxShadow: [BoxShadow(color: _aiA.withValues(alpha: 0.08), blurRadius: 22, offset: const Offset(0, 8))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(gradient: const LinearGradient(colors: [_aiA, _aiB]), borderRadius: BorderRadius.circular(14)),
+            child: const Icon(Icons.receipt_long_rounded, color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(expected > 0 ? 'مبلغ الفاتورة (كما في فاتورة المورد)' : 'مبلغ الفاتورة (مجموع الأسطر)',
+                  style: const TextStyle(fontSize: 12.5, color: _muted)),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerStart,
+                child: Text.rich(TextSpan(children: [
+                  TextSpan(text: _fmt.format(total), style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900, color: _ink, letterSpacing: 0.3)),
+                  TextSpan(text: '  $cur', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _muted)),
+                ])),
+              ),
+            ]),
+          ),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: (_cash ? _cGood : _cNew).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(_cash ? 'نقد' : (paid > 0 ? 'دين — مدفوع جزء' : 'دين'),
+                style: TextStyle(fontWeight: FontWeight.w800, color: _cash ? _cGood : _cNew)),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          metric('مجموع الأسطر', _fmt.format(sum), match ? _cGood : _cMid,
+              icon: match ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+              hint: match ? 'يطابق الإجمالي' : 'يختلف عن الإجمالي'),
+          const SizedBox(width: 8),
+          metric('المدفوع', _fmt.format(paid), _cGood,
+              icon: Icons.payments_rounded, hint: r.paymentEvidence.isEmpty ? null : 'من الفاتورة: ${r.paymentEvidence}'),
+          const SizedBox(width: 8),
+          metric('الباقي ديناً', _fmt.format(rest), rest > 0 ? _cNew : _muted, icon: Icons.account_balance_wallet_rounded),
+        ]),
+        if (r.previousBalance > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('رصيد المورد السابق المكتوب في الفاتورة: ${_fmt.format(r.previousBalance)} — للعلم فقط، لا يدخل هذه الفاتورة.',
+                style: const TextStyle(fontSize: 12, color: _muted)),
+          ),
+      ]),
     );
   }
 

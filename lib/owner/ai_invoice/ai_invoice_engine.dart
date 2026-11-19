@@ -80,6 +80,7 @@ class AiInvoiceEngine {
         chain: ordered(chain, cfg.readerId),
         keys: keys,
         onTry: (e) => onStatus?.call('يقرأ الفاتورة ويطابقها: ${e.shownName}…'),
+        onWait: onStatus,
         send: (e, k) async => _readAll(e, k, prompt, await filesFor(e)),
       );
       final result = AiInvoiceService.parse(AiInvoiceService.decodeJson(r.text));
@@ -93,6 +94,7 @@ class AiInvoiceEngine {
       chain: ordered(chain, cfg.readerId),
       keys: keys,
       onTry: (e) => onStatus?.call('يقرأ الفاتورة: ${e.shownName}…'),
+      onWait: onStatus,
       send: (e, k) async => _readAll(e, k, readerPrompt, await filesFor(e)),
     );
     final result = AiInvoiceService.parse(AiInvoiceService.decodeJson(read.text));
@@ -106,10 +108,10 @@ class AiInvoiceEngine {
     // ── 2) المرشحون محلياً
     final cands = [for (final l in result.lines) candidatesFor(l, products, aliases, supplierId)];
 
-    // ── 3) المطابِق
+    // ── 3) المطابِق — لا داعي له إن لم يكن لأي سطر مرشح (كلها مواد جديدة)
     var note = '';
     var matcherName = '';
-    if (result.lines.isNotEmpty) {
+    if (result.lines.isNotEmpty && cands.any((c) => c.isNotEmpty)) {
       final mChain = cfg.matcherId.isNotEmpty ? ordered(chain, cfg.matcherId) : preferOther(chain, read.entry);
       final prompt = buildMatcherPrompt(
         lines: result.lines,
@@ -122,6 +124,7 @@ class AiInvoiceEngine {
           chain: mChain,
           keys: keys,
           onTry: (e) => onStatus?.call('يطابق المواد: ${e.shownName}…'),
+          onWait: onStatus,
           send: (e, k) async {
             final files = await filesFor(e);
             final text = await AiVisionClient.complete(
@@ -137,8 +140,11 @@ class AiInvoiceEngine {
         );
         matcherName = m.entry.shownName;
         applyMatcher(result.lines, AiInvoiceService.decodeJson(m.text), cands);
+      } on AiRouterException catch (e) {
+        final why = e.attempts.isEmpty ? e.message : e.attempts.last.result;
+        note = 'لم يردّ النموذج المطابِق ($why) — طابقتُ الأسطر محلياً، راجعها.';
       } catch (e) {
-        note = 'لم تكتمل المطابقة الذكية — طابقتُ محلياً، راجع الأسطر.\n$e';
+        note = 'تعذّرت المطابقة الذكية ($e) — طابقتُ الأسطر محلياً، راجعها.';
       }
     }
 
@@ -193,6 +199,11 @@ class AiInvoiceEngine {
       if (t is Map && n(t['grand_total']) > 0) out['totals'] = t;
       if (n(p['amount_paid']) > 0) out['amount_paid'] = p['amount_paid'];
       if ('${p['status'] ?? ''}'.trim().isNotEmpty) out['status'] = p['status'];
+      // الدفع يُكتب غالباً في آخر صفحة: آخر دفعة فيها دفع مكتوب هي المعتمدة
+      final pay = p['payment'];
+      if (pay is Map && (n(pay['paid']) > 0 || n(pay['remaining']) > 0 || '${pay['evidence'] ?? ''}'.trim().isNotEmpty || out['payment'] == null)) {
+        out['payment'] = pay;
+      }
     }
     return out;
   }
@@ -220,6 +231,9 @@ class AiInvoiceEngine {
         shipping: r.shipping,
         amountPaid: r.amountPaid,
         isCash: r.isCash,
+        remaining: r.remaining,
+        previousBalance: r.previousBalance,
+        paymentEvidence: r.paymentEvidence,
         model: model,
         engineNote: note,
       );
@@ -368,10 +382,12 @@ $names
     {"original_name": "", "name": "", "qty": 0, "price": 0, "amount": 0, "sale_unit": "", "units_count": 1, "unit_type": "piece", "is_free": false}
   ],
   "totals": {"subtotal": 0, "discount": 0, "shipping": 0, "grand_total": 0},
-  "amount_paid": 0,
-  "status": "نقد أو دين"
+  ${AiInvoiceService.paymentJson}
 }
-- «نقد» فقط إن كُتب نقداً/مدفوعة/واصل بالكامل، وإلا «دين». التاريخ 18/10/2026 ⇒ 2026-10-18''';
+
+${AiInvoiceService.paymentRules}
+
+- التاريخ 18/10/2026 ⇒ 2026-10-18''';
   }
 
   static String buildMatcherPrompt({

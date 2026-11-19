@@ -5,6 +5,8 @@
 // حسب سبب الفشل:
 //   • نفدت الحصة (429/402)      ⇒ المفتاح التالي للنموذج نفسه. المفتاح يُستراح: دقيقة
 //                                 (حد الدقيقة) أو 6 ساعات (حصة اليوم) — لا يُجرَّب خلالها.
+//                                 حد الدقيقة ولا بديل (آخر مفتاح لآخر نموذج) ⇒ انتظار ما يطلبه
+//                                 المزوّد (حتى 45 ثانية) ثم إعادة مرة واحدة (Groq: 8 آلاف توكن/دقيقة).
 //   • المفتاح مرفوض (401/403)   ⇒ المفتاح التالي، ويُستراح المفتاح حتى إعادة التشغيل.
 //   • خادم مشغول/مهلة/اتصال     ⇒ إعادة بالمفتاح نفسه مرة واحدة بعد ثانيتين، ثم التالي.
 //   • الطلب مرفوض/لا يقرأ الصور/
@@ -59,6 +61,10 @@ class AiRouter {
   @visibleForTesting
   static Duration retryDelay = const Duration(seconds: 2);
 
+  /// أطول انتظار لحد الدقيقة قبل الإعادة.
+  @visibleForTesting
+  static Duration maxQuotaWait = const Duration(seconds: 45);
+
   @visibleForTesting
   static DateTime Function() now = DateTime.now;
 
@@ -80,6 +86,7 @@ class AiRouter {
     int maxAttempts = 8,
     Duration budget = const Duration(minutes: 3),
     void Function(AiModelEntry entry)? onTry,
+    void Function(String status)? onWait,
   }) async {
     final attempts = <AiAttempt>[];
     final started = now();
@@ -100,10 +107,13 @@ class AiRouter {
       var nextModel = false;
       for (final key in usable) {
         if (nextModel || outOfBudget()) break;
+        final lastOption = identical(entry, chain.last) && identical(key, usable.last);
         var retried = false;
+        var waitedQuota = false;
         while (true) {
           if (outOfBudget()) break;
           var again = false;
+          var wait = retryDelay;
           try {
             final text = await send(entry, key);
             attempts.add(AiAttempt(entry.shownName, key.masked, 'نجح'));
@@ -113,9 +123,18 @@ class AiRouter {
             nextModel = true;
           } on AiCallException catch (e) {
             attempts.add(AiAttempt(entry.shownName, key.masked, e.message));
+            final w = e.retryAfter ?? const Duration(seconds: 20);
             switch (e.kind) {
               case AiErrorKind.quota:
-                _restKey(key, e.daily ? const Duration(hours: 6) : const Duration(seconds: 70));
+                if (!e.daily && lastOption && !waitedQuota && w <= maxQuotaWait) {
+                  // لا بديل: ننتظر حد الدقيقة ونعيد مرة واحدة بدل أن نفشل
+                  waitedQuota = true;
+                  again = true;
+                  wait = w + const Duration(milliseconds: 800);
+                  onWait?.call('انتظار حد الدقيقة في ${entry.provider.label} (${(wait.inMilliseconds / 1000).ceil()} ثانية)…');
+                } else {
+                  _restKey(key, e.daily ? const Duration(hours: 6) : const Duration(seconds: 70));
+                }
               case AiErrorKind.auth:
                 _restKey(key, const Duration(days: 1));
               case AiErrorKind.server:
@@ -138,7 +157,7 @@ class AiRouter {
             nextModel = true;
           }
           if (!again) break;
-          await Future<void>.delayed(retryDelay);
+          await Future<void>.delayed(wait);
         }
       }
     }
