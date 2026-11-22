@@ -82,9 +82,49 @@ class HrStore {
 
   Future<List<HrEmployee>> employees({bool activeOnly = false}) async {
     final db = await _db();
+    await linkAppUsers(db);
     return (await db.query('hr_employees', where: activeOnly ? 'active = 1' : null, orderBy: 'active DESC, name'))
         .map(HrEmployee.fromMap)
         .toList();
+  }
+
+  /// 👥 موظفو «الإعدادات ← إدارة الموظفين» (جدول users) يظهرون هنا.
+  /// كل مستخدم (غير المدير) ليس له بطاقة موظف بنفس اسم الدخول تُنشأ له بطاقة:
+  /// الاسم الظاهر (أو اسم الدخول)، المسمى الوظيفي، والراتب الشهري المسجّل له هناك.
+  /// إضافة فقط — لا تعدّل بطاقة موجودة ولا سلفة ولا راتباً مصروفاً. يعيد عدد المضافين.
+  Future<int> linkAppUsers([Database? given]) async {
+    final db = given ?? await _db();
+    try {
+      final cols = {for (final r in await db.rawQuery('PRAGMA table_info(users)')) '${r['name']}'};
+      if (!cols.contains('username')) return 0;
+      String col(String c) => cols.contains(c) ? 'u.$c' : 'NULL';
+      final rows = await db.rawQuery('''
+        SELECT u.username, ${col('display_name')} AS dn, ${col('job_title')} AS job,
+               ${col('monthly_salary')} AS sal, ${col('created_at')} AS created
+        FROM users u
+        WHERE COALESCE(u.role, '') != 'admin' AND TRIM(COALESCE(u.username, '')) != ''
+          AND NOT EXISTS (SELECT 1 FROM hr_employees e
+                          WHERE LOWER(TRIM(COALESCE(e.username, ''))) = LOWER(TRIM(u.username)))''');
+      var n = 0;
+      for (final r in rows) {
+        final user = '${r['username']}'.trim();
+        final dn = '${r['dn'] ?? ''}'.trim();
+        final sal = (r['sal'] as num?)?.toDouble() ?? 0;
+        await db.insert(
+            'hr_employees',
+            HrEmployee(
+              name: dn.isEmpty ? user : dn,
+              job: '${r['job'] ?? ''}'.trim(),
+              salaryFils: sal > 0 ? (sal * 100).round() : 0,
+              username: user,
+              startDate: DateTime.tryParse('${r['created'] ?? ''}'),
+            ).toMap());
+        n++;
+      }
+      return n;
+    } catch (_) {
+      return 0; // قاعدة قديمة بلا جدول مستخدمين: لا شيء يُربط
+    }
   }
 
   Future<int> saveEmployee(HrEmployee e) async {

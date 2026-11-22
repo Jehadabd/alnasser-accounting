@@ -28,6 +28,12 @@ import '../erp/inventory/margin_alert.dart'; // 📉 مواد نزل ربحها
 import '../erp/inventory/margin_review.dart';
 import '../org/warehouse_scope.dart'; // 🔐 نطاق الموظف
 import '../erp/inventory/batch_details_dialog.dart'; // 📦 صلاحية الدفعة وضمانها
+import '../erp/inventory/price_tools.dart' show PriceTools; // 🏷️ تغيير الأسعار مع سجلها
+import '../erp/inventory/usd_cost_service.dart' show UsdCostService;
+import '../inventory/item_card_screen.dart' show ItemCardService; // باركود إضافي مع فحص التكرار
+import '../models/app_user.dart' show AppPermissions;
+import '../services/auth_service.dart';
+import 'purchase_sale_extras.dart'; // 🏷️ سعر بيع المفرد + ✱ الأسعار والباركودات
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
@@ -78,6 +84,14 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
   final Map<String, Future<PurchasePriceRow?>> _lastBuy = {};
   double _alertPct = PurchasePriceHistory.defaultAlertPct;
 
+  // 🏷️ سعر بيع المفرد والأسعار الأخرى والباركودات لكل سطر — لا تُكتب إلا بعد
+  //    نجاح حفظ الفاتورة (purchase_sale_extras.dart). المفتاح = كائن السطر نفسه.
+  final Map<PurchaseInvoiceItem, PurchaseSaleExtras> _extras = Map.identity();
+  final Set<int> _createdHere = {}; // مواد عُرّفت من هذه الشاشة
+  double _usdRate = 0; // لكلفة فاتورة الدولار بالدينار
+  final bool _canPrice = AuthService().hasPermission(AppPermissions.editProducts);
+  final bool _canBarcodes = AuthService().hasPermission(AppPermissions.itemCard);
+
   static String _normCurrency(String? c) => c == 'USD' ? 'USD' : 'IQD';
 
   static final intl.NumberFormat _moneyFmt = intl.NumberFormat('#,##0.##', 'en_US');
@@ -97,6 +111,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       if (mounted) setState(() => _alertPct = v);
     });
     _selectedSupplier = widget.preselectedSupplier;
+    _loadUsdRate();
     
     if (widget.existingInvoice != null) {
       final inv = widget.existingInvoice!;
@@ -131,7 +146,229 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     _notesController.dispose();
     _paidAmountController.dispose();
     _delegateNameController.dispose();
+    for (final e in _extras.values) {
+      e.dispose();
+    }
     super.dispose();
+  }
+
+  Future<void> _loadUsdRate() async {
+    try {
+      final r = await UsdCostService.currentRate(await DatabaseService().database);
+      if (mounted) setState(() => _usdRate = r);
+    } catch (_) {}
+  }
+
+  // ───────────── 🏷️ سعر بيع المفرد ─────────────
+
+  Product? _productOf(PurchaseInvoiceItem it) {
+    if (it.productId <= 0) return null;
+    for (final p in _products) {
+      if (p.id == it.productId) return p;
+    }
+    return null;
+  }
+
+  String _baseUnitOf(Product? p) =>
+      p == null ? 'قطعة' : (p.unit == 'piece' ? 'قطعة' : (p.unit == 'meter' ? 'متر' : p.unit));
+
+  /// كلفة الوحدة الأساسية بالدينار (الدولار بسعر الصرف الحالي؛ 0 = غير معروفة).
+  double _baseCostIqd(PurchaseInvoiceItem it) {
+    final f = it.conversionFactor > 0 ? it.conversionFactor : 1.0;
+    final c = it.unitPrice / f;
+    if (_currency == 'USD') return _usdRate > 1 ? c * _usdRate : 0;
+    return c;
+  }
+
+  /// مادة جديدة: غير معرّفة، أو عُرّفت هنا، أو بلا سعر مفرد.
+  bool _isNewRow(PurchaseInvoiceItem it) {
+    if (it.productId <= 0 || _createdHere.contains(it.productId)) return true;
+    final p = _productOf(it);
+    return p == null || p.price1 <= 0;
+  }
+
+  PurchaseSaleExtras _extraFor(PurchaseInvoiceItem it) => _extras.putIfAbsent(it, () {
+        final cur = _productOf(it)?.price1 ?? 0;
+        return PurchaseSaleExtras(initialRetail: cur > 0 ? cur : _baseCostIqd(it), originalRetail: cur);
+      });
+
+  /// استبدال سطر مع إبقاء ما أدخلته له.
+  void _replaceItem(int index, PurchaseInvoiceItem next) {
+    final ex = _extras.remove(_items[index]);
+    _items[index] = next;
+    if (ex == null) return;
+    _extras[next] = ex;
+    if (!ex.touched) {
+      // لم تكتب سعراً: نعرض سعر المادة بعد تعريفها (أو كلفتها)
+      final cur = _productOf(next)?.price1 ?? 0;
+      ex.originalRetail = cur;
+      ex.retail.text = fmtSale(cur > 0 ? cur : _baseCostIqd(next));
+    }
+  }
+
+  Future<void> _quickPrice() async {
+    final newRows = _items.where(_isNewRow).toList();
+    final usdNoRate = _currency == 'USD' && _usdRate <= 1;
+    double? sample;
+    for (final it in (newRows.isNotEmpty ? newRows : _items)) {
+      final c = _baseCostIqd(it);
+      if (c > 0) {
+        sample = c;
+        break;
+      }
+    }
+    final rule = await showQuickPriceDialog(context,
+        newCount: newRows.length,
+        allCount: _items.length,
+        sampleCost: sample,
+        note: usdNoRate ? 'فاتورة بالدولار ولا يوجد سعر صرف محفوظ — لا يمكن الحساب من الكلفة.' : null);
+    if (rule == null || !mounted || usdNoRate) return;
+    var n = 0, skipped = 0;
+    setState(() {
+      for (final it in (rule.allRows ? _items : newRows)) {
+        final cost = _baseCostIqd(it);
+        if (cost <= 0) {
+          skipped++;
+          continue;
+        }
+        _extraFor(it).setRetail(SalePriceMath.fromCost(cost,
+            percent: rule.percent, value: rule.value, step: rule.round ? SalePriceMath.iqdStep : 1));
+        n++;
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('سُعّرت $n مادة${skipped > 0 ? ' — $skipped بلا كلفة' : ''}. تُحفظ مع الفاتورة.'),
+      backgroundColor: const Color(0xFF0D9488),
+    ));
+  }
+
+  Future<void> _openExtras(PurchaseInvoiceItem item, Product p) async {
+    final ex = _extraFor(item);
+    final elsewhere = <String>{
+      for (final e in _extras.entries)
+        if (!identical(e.key, item))
+          for (final b in e.value.newBarcodes) b.$1,
+    };
+    final ok = await showSaleExtrasDialog(context,
+        product: p,
+        extras: ex,
+        baseCost: _baseCostIqd(item),
+        baseUnit: _baseUnitOf(p),
+        canPrice: _canPrice,
+        canBarcodes: _canBarcodes,
+        pendingElsewhere: elsewhere);
+    if (ok == true && mounted) setState(() {});
+  }
+
+  /// بعد نجاح حفظ الفاتورة فقط: ما غيّرته من أسعار وباركودات، عبر المسارات الأصلية.
+  /// يعيد الأخطاء (الفاتورة محفوظة مهما حدث هنا).
+  Future<List<String>> _applySaleExtras() async {
+    final errors = <String>[];
+    final prices = <int, Map<int, double>>{};
+    final codes = <int, List<(String, String?)>>{};
+    final names = <int, String>{};
+    for (final it in _items) {
+      final ex = _extras[it];
+      if (ex == null || it.productId <= 0) continue;
+      names[it.productId] = it.productName ?? '#${it.productId}';
+      if (_canPrice) {
+        final m = prices.putIfAbsent(it.productId, () => <int, double>{});
+        final r = ex.retailValue;
+        if (ex.touched && r != null && r > 0) m[1] = r;
+        m.addAll(ex.otherPrices);
+      }
+      if (_canBarcodes && ex.newBarcodes.isNotEmpty) {
+        codes.putIfAbsent(it.productId, () => []).addAll(ex.newBarcodes);
+      }
+    }
+    final tools = PriceTools();
+    final priced = <int>{};
+    for (final e in prices.entries) {
+      if (e.value.isEmpty) continue;
+      try {
+        if (await tools.applyPrices(e.key, e.value) > 0) priced.add(e.key);
+      } catch (err) {
+        errors.add('أسعار «${names[e.key]}»: $err');
+      }
+    }
+    final cards = ItemCardService();
+    final dbs = DatabaseService();
+    for (final e in codes.entries) {
+      var added = false;
+      for (final c in e.value) {
+        try {
+          await cards.addBarcode(e.key, c.$1, c.$2);
+          added = true;
+        } catch (err) {
+          errors.add('باركود ${c.$1}: $err');
+        }
+      }
+      // 🔄 لتُرفع المادة للفروع إن لم يلمسها تغيير السعر (لا يغيّر الكمية)
+      if (added && !priced.contains(e.key)) {
+        try {
+          final prod = await dbs.getProductById(e.key);
+          if (prod != null) await dbs.updateProduct(prod.copyWith(lastModifiedAt: DateTime.now()));
+        } catch (_) {}
+      }
+    }
+    return errors;
+  }
+
+  Widget _retailCell(PurchaseInvoiceItem item) {
+    final ex = _extraFor(item);
+    final cost = _baseCostIqd(item);
+    final h = marginHint(ex.retailValue, cost);
+    final p = _productOf(item);
+    final pending = ex.otherPrices.isNotEmpty || ex.newBarcodes.isNotEmpty;
+    final border = OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _pLine));
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(children: [
+        Expanded(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: ex.retail,
+              enabled: _canPrice,
+              textAlign: TextAlign.center,
+              textDirection: TextDirection.ltr,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+              onChanged: (_) => setState(() => ex.touched = true),
+              style: TextStyle(fontWeight: FontWeight.w800, color: ex.touched ? const Color(0xFF0F766E) : const Color(0xFF1B2433)),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: ex.touched ? const Color(0xFFECFDF5) : Colors.white,
+                hintText: 'السعر',
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                border: border,
+                enabledBorder: border,
+                focusedBorder: border.copyWith(borderSide: const BorderSide(color: _pNavy, width: 1.6)),
+              ),
+            ),
+            if (h.text.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Text(h.text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 10.5, color: h.color, fontWeight: FontWeight.w600)),
+              ),
+          ]),
+        ),
+        IconButton(
+          tooltip: p == null ? 'عرّف المادة أولاً' : 'الأسعار الأخرى والباركودات',
+          visualDensity: VisualDensity.compact,
+          onPressed: p == null ? null : () => _openExtras(item, p),
+          icon: Badge(
+            isLabelVisible: pending,
+            smallSize: 8,
+            backgroundColor: const Color(0xFF0D9488),
+            child: Icon(Icons.stars_rounded, size: 22, color: p == null ? _pMuted : const Color(0xFFF59E0B)),
+          ),
+        ),
+      ]),
+    );
   }
 
   Future<void> _loadData() async {
@@ -772,6 +1009,18 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             child: Text('${_items.length}', style: const TextStyle(fontWeight: FontWeight.w800, color: _pNavy)),
           ),
           const Spacer(),
+          OutlinedButton.icon(
+            onPressed: _items.isEmpty || !_canPrice ? null : _quickPrice,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _pNavy,
+              side: const BorderSide(color: _pLine),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.auto_awesome_rounded, color: Color(0xFFF59E0B)),
+            label: const Text('تسعير سريع', style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(width: 10),
           FilledButton.icon(
             onPressed: _showAddProductDialog,
             style: FilledButton.styleFrom(
@@ -918,6 +1167,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               style: const TextStyle(fontWeight: FontWeight.w800, color: _pNavy),
             ),
           ),
+
+          // 🏷️ سعر بيع المفرد + ✱
+          Expanded(flex: 2, child: _retailCell(item)),
           
           // Actions
           SizedBox(
@@ -927,7 +1179,8 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               tooltip: 'حذف المادة',
               onPressed: () {
                 setState(() {
-                  _items.removeAt(index);
+                  final ex = _extras.remove(_items.removeAt(index));
+                  if (ex != null) WidgetsBinding.instance.addPostFrameCallback((_) => ex.dispose());
                   _syncCashPaid();
                 });
               },
@@ -1035,7 +1288,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     final r = await BatchDetailsDialog.edit(context,
         item: _items[index], product: product, purchaseDate: _invoiceDate, isNewProduct: isNew);
     if (r == null || !mounted || index >= _items.length) return;
-    setState(() => _items[index] = r.item);
+    setState(() => _replaceItem(index, r.item));
     // ⚖️ الوزن صفة للمادة؛ وأول ضمان/صلاحية تُدخل لمادة تصير إعدادها الافتراضي (فتقترحها
     //    فواتير الشراء التالية ويسأل عنها). الدفعات السابقة لا تتغير.
     final kg = r.weightKg;
@@ -1105,8 +1358,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                   productName: product.name,
                 ).catchError((_) {});
               }
+              if (!wasKnown && newId != null && newId > 0) _createdHere.add(newId);
               if (index < _items.length) {
-                _items[index] = PurchaseInvoiceItem(
+                _replaceItem(index, PurchaseInvoiceItem(
                   productId: product.id ?? -1,
                   productName: product.name,
                   quantity: quantity,
@@ -1114,7 +1368,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                   totalPrice: quantity * price,
                   unitName: unit,
                   conversionFactor: _conversionFactorFor(product, unit),
-                );
+                ));
               }
               _syncCashPaid();
            });
@@ -1147,6 +1401,7 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                if (!mounted) return;
                setState(() {
                  _products.add(product);
+                 _createdHere.add(newId);
                });
              } catch (e) {
                if (!mounted) return;
@@ -1381,6 +1636,9 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             confirm: confirm, warehouseId: _warehouseId, cashBoxId: _cashBoxId);
       }
 
+      // 🏷️ الفاتورة حُفظت: الآن فقط أسعار البيع والباركودات التي غيّرتها في السطور
+      final extraErrors = await _applySaleExtras();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1388,6 +1646,13 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             backgroundColor: Colors.green,
           ),
         );
+        if (extraErrors.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('الفاتورة محفوظة، لكن لم يُحفظ ${extraErrors.length} من الأسعار/الباركودات:\n${extraErrors.take(3).join('\n')}'),
+            backgroundColor: Colors.orange.shade800,
+            duration: const Duration(seconds: 8),
+          ));
+        }
         // 📉 مواد ارتفعت كلفتها وسعر بيعها كما هو: عرضها مع سعر مقترح (لا يتغير شيء بلا ضغطة)
         if (costBefore.isNotEmpty) {
           try {
@@ -1568,6 +1833,7 @@ class _TableHeadersDelegate extends SliverPersistentHeaderDelegate {
           Expanded(flex: 1, child: Text('الكمية', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold))),
           Expanded(flex: 1, child: Text('الوحدة', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold))),
           Expanded(flex: 1, child: Text('الإجمالي', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold))),
+          Expanded(flex: 2, child: Text('سعر بيع المفرد ✱', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold))),
           SizedBox(width: 40), // Actions
         ],
       ),

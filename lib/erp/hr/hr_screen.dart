@@ -90,9 +90,6 @@ class _HrScreenState extends State<HrScreen> {
             icon: const Icon(Icons.power_settings_new_rounded),
           ),
       ],
-      floatingActionButton: on == true && _tab == 0
-          ? FloatingActionButton.extended(onPressed: _editEmployee, icon: const Icon(Icons.person_add_rounded), label: const Text('موظف'))
-          : null,
       children: [
         if (on == null)
           const LinearProgressIndicator()
@@ -121,7 +118,7 @@ class _HrScreenState extends State<HrScreen> {
           ),
           const SizedBox(height: 12),
           switch (_tab) {
-            0 => _EmployeesTab(emps: _emps, onEdit: _editEmployee),
+            0 => _EmployeesTab(emps: _emps, onEdit: _editEmployee, onAdd: _editEmployee),
             1 => _AttendanceTab(store: _store, emps: _emps.where((e) => e.active).toList()),
             2 => _AdvancesTab(store: _store, emps: _emps),
             3 => _PayrollTab(store: _store, emps: _emps.where((e) => e.active).toList()),
@@ -172,13 +169,22 @@ Future<({int box, int account})?> _pickPayment(BuildContext context) async {
 // ═════════════════════ التبويبات ═════════════════════
 
 class _EmployeesTab extends StatelessWidget {
-  const _EmployeesTab({required this.emps, required this.onEdit});
+  const _EmployeesTab({required this.emps, required this.onEdit, required this.onAdd});
   final List<HrEmployee> emps;
   final void Function(HrEmployee) onEdit;
+  final VoidCallback onAdd;
   @override
-  Widget build(BuildContext context) => emps.isEmpty
-      ? const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('لا موظفون — اضغط «موظف»')))
-      : Column(children: [
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            const Expanded(
+              child: Text('موظفو «الإعدادات ← إدارة الموظفين» يظهرون هنا تلقائياً، ويمكنك إضافة موظف بلا حساب دخول.',
+                  style: TextStyle(color: kSetMuted, fontSize: 12.5)),
+            ),
+            const SizedBox(width: 10),
+            FilledButton.icon(onPressed: onAdd, icon: const Icon(Icons.person_add_rounded), label: const Text('إضافة موظف')),
+          ]),
+          const SizedBox(height: 10),
+          if (emps.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('لا موظفون بعد'))),
           for (final e in emps)
             Card(
               elevation: 0,
