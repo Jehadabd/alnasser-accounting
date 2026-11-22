@@ -63,6 +63,7 @@ import '../models/account_statement_item.dart';
 import 'data_import_screen.dart'; // 📥 استيراد من Excel
 import 'diagnostics/error_diagnostics_screen.dart'; // 🩺 تشخيص الأخطاء
 import 'ai_models_settings_screen.dart'; // 🤖 نماذج الذكاء الاصطناعي
+import 'duplicate_customers_screen.dart'; // 🔗 دمج العملاء المكررين
 import '../services/sync_perks.dart';
 import 'financial_deep_check_screen.dart'; // 🔬
 import '../services/smart_search/smart_search.dart' as smart_search; // 🧠 البحث الذكي
@@ -2367,7 +2368,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'النظام والأدوات',
           Icons.build_circle_outlined,
           'تشخيص الأخطاء، نماذج الذكاء الاصطناعي، الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
-          keywords: 'ذكاء اصطناعي نماذج مفتاح api gemini groq openrouter تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
+          keywords: 'دمج عملاء مكرر تكرار ذكاء اصطناعي نماذج مفتاح api gemini groq openrouter تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
           [
           // 🩺 تشخيص الأخطاء — أول ما في الشاشة
           _buildSettingsCard(
@@ -2434,6 +2435,18 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                   onTap: () {
                     if (requirePermission(context, AppPermissions.manageUsers)) {
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const DataImportScreen()));
+                    }
+                  },
+                ),
+                // 🔗 دمج حسابات العميل المكررة (نسخة احتياطية قبل كل دمج، ويُلغى إن لم يطابق الرصيد)
+                _buildActionTile(
+                  icon: Icons.merge_type_rounded,
+                  iconColor: Colors.deepOrange,
+                  title: 'دمج العملاء المكررين',
+                  subtitle: 'اسم واحد بأكثر من حساب: تختار الحساب الباقي، والرصيد بعد الدمج = مجموع الأرصدة',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.manageUsers)) {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const DuplicateCustomersScreen()));
                     }
                   },
                 ),

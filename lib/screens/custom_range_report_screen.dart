@@ -19,6 +19,7 @@ import '../services/reports_service.dart';
 import '../widgets/currency_impact_card.dart';
 import '../widgets/report_kit.dart';
 import 'period_extras.dart';
+import 'period_vouchers_card.dart'; // 🧾 السندات المسحوبة في الفترة
 import 'product_report_details_screen.dart';
 import 'report_channels.dart';
 import 'report_parts.dart';
@@ -338,6 +339,13 @@ class _CustomRangeReportScreenState extends State<CustomRangeReportScreen> {
     if (_error != null || d == null) {
       return [EmptyReport(title: 'تعذّر تحميل التقرير', text: _error, icon: Icons.error_outline_rounded)];
     }
+    // 🧾 السندات تُعرض حتى في فترة بلا فواتير (مصاريف، مسحوبات المالك…)
+    final vouchers = PeriodVouchersCard(
+      key: ValueKey('vouchers-$_from-$_naturalEnd'),
+      from: _from,
+      to: _naturalEnd,
+      salesProfit: canProfit && !d.isEmpty ? ((d.summary['netProfit'] as num?)?.toDouble() ?? 0) : null,
+    );
     if (d.isEmpty) {
       return [
         EmptyReport(
@@ -345,6 +353,7 @@ class _CustomRangeReportScreenState extends State<CustomRangeReportScreen> {
           text: 'لا فواتير ولا مرتجعات ولا ديون أو تسديدات يدوية. استخدم ◀ أو اختر فترة أخرى.',
           icon: Icons.event_busy_rounded,
         ),
+        vouchers,
       ];
     }
     final p = _prev();
@@ -360,6 +369,7 @@ class _CustomRangeReportScreenState extends State<CustomRangeReportScreen> {
           to: _naturalEnd,
           title: _label,
           source: _source),
+      vouchers,
       SalesChannelsCard(from: _from, to: _to, facts: d.facts, canProfit: canProfit, onReturns: openReturns),
       // 📈 تحليل التوجهات (منحنى التقرير السنوي أو أعمدة)
       ReportTrendCard(

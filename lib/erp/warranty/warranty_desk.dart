@@ -10,8 +10,12 @@
 //                    «مصروف الضمان والاستبدال»، والمعطوبة تبقى طلب ضمان مفتوحاً
 //                    (تُرسل للمورد من شاشة الطلب).
 //        • استرجاع — يفتح «مرتجع المبيعات» الموجود على هذه المادة بالوحدة والكمية
-//                    المختارتين، والقطعة تعود إلى «مخزن التالف والضمان» لا مخزن البيع.
-//                    الردّ نقداً من صندوق أو من دين العميل يُختار هناك، وسنده يُطبع هناك.
+//                    المختارتين (الردّ نقداً أو من دين العميل وسنده يُختاران ويُطبعان هناك).
+//                    بعده — كما في Odoo/SAP (إرجاع ثم شطب): القطعة المعيبة تُشطب فوراً
+//                    بسند إخراج بكلفتها نفسها على «مصروف الضمان والاستبدال»، فلا تدخل
+//                    الرصيد القابل للبيع إطلاقاً. إلا إن اخترت «سليمة تعود للبيع».
+//   القطعة المعيبة (في الاستبدال والاسترجاع) تبقى ماديًا لدى المحل كطلب ضمان يُرسل
+//   للمورد؛ إن عوّضك المورد بقطعة فهي فاتورة شراء، وإن عوّضك مالاً فسند قبض على الحساب نفسه.
 //   الوحدة: أي وحدة من هرم المادة (كرتون/باكيت/قطعة) والكمية بها، والحد الأعلى
 //   = المبيع في الفاتورة − ما أُرجع منها − ما استُبدل منها.
 //   ضمان منتهٍ: تحذير ثم السماح، ويُسجَّل الطلب «خارج الضمان».
@@ -87,7 +91,6 @@ class DeskLine {
 class WarrantyDesk {
   WarrantyDesk._();
 
-  static const _whKey = 'warranty_damaged_warehouse';
   static const _accKey = 'warranty_expense';
 
   /// أعمدة مضافة على طلبات الضمان: نوع العملية من المكتب ومرجعها والكمية بالأساسية.
@@ -201,22 +204,6 @@ class WarrantyDesk {
     return out;
   }
 
-  /// «مخزن التالف والضمان» — يُنشأ أول مرة ويُحفظ معرّفه.
-  static Future<int> damagedWarehouse() async {
-    final d = await erpDb();
-    final saved = int.tryParse((await Ledger.getSetting(d, _whKey)) ?? '');
-    if (saved != null) {
-      final w = await d.query('warehouses', columns: ['id'], where: 'id = ?', whereArgs: [saved], limit: 1);
-      if (w.isNotEmpty) return saved;
-    }
-    final byName = await d.query('warehouses', columns: ['id'], where: 'name = ?', whereArgs: ['مخزن التالف والضمان'], limit: 1);
-    final id = byName.isNotEmpty
-        ? byName.first['id'] as int
-        : await OrgService().saveWarehouse(name: 'مخزن التالف والضمان', notes: 'قطع مرتجعة بالضمان — لا يُباع منه');
-    await Ledger.setSetting(d, _whKey, '$id');
-    return id;
-  }
-
   /// حساب «مصروف الضمان والاستبدال» تحت «فروقات وتسويات» (أو المصاريف) — يُنشأ أول مرة.
   static Future<int> expenseAccount() async {
     final d = await erpDb();
@@ -320,21 +307,53 @@ class WarrantyDesk {
     }
   }
 
-  /// بعد حفظ «مرتجع المبيعات»: طلب ضمان مُغلق بحلّ «استرجاع المبلغ».
-  static Future<int> recordRefund(DeskInvoice inv, DeskLine l, int returnId, String problem, {String? notes}) async {
+  /// بعد حفظ «مرتجع المبيعات»: شطب القطعة المعيبة (ما لم تكن سليمة) ثم طلب ضمان
+  /// بحلّ «استرجاع المبلغ». الشطب بكلفة المرتجع نفسها ومن مخزنه ⇒ قيمة المخزون لا تتغير
+  /// والكلفة تنتقل إلى «مصروف الضمان والاستبدال». يعيد (الطلب، سند الشطب أو null، خطأ الشطب).
+  static Future<({int claimId, int? scrapDoc, String? scrapError})> recordRefund(
+      DeskInvoice inv, DeskLine l, int returnId, String problem,
+      {String? notes, bool restock = false}) async {
     final d = await erpDb();
-    final r = await d.rawQuery(
-        'SELECT r.return_no, COALESCE(SUM(i.base_qty), 0) AS q FROM sales_returns r JOIN sales_return_items i ON i.return_id = r.id '
-        'WHERE r.id = ? AND i.product_id = ?',
-        [returnId, l.productId]);
-    final base = r.isEmpty ? 0.0 : d0(r.first['q']);
-    final no = r.isEmpty ? '$returnId' : '${r.first['return_no'] ?? returnId}';
+    final head = await d.query('sales_returns', columns: ['return_no', 'warehouse_id'], where: 'id = ?', whereArgs: [returnId], limit: 1);
+    final items = await d.query('sales_return_items',
+        columns: ['base_qty', 'unit_cost', 'product_name'], where: 'return_id = ? AND product_id = ?', whereArgs: [returnId, l.productId]);
+    var base = 0.0, cost = 0.0;
+    for (final i in items) {
+      base += d0(i['base_qty']);
+      cost += d0(i['base_qty']) * d0(i['unit_cost']);
+    }
+    final no = head.isEmpty ? '$returnId' : '${head.first['return_no'] ?? returnId}';
+    int? scrap;
+    String? scrapErr;
+    if (!restock && base > 1e-9) {
+      try {
+        final wh = (head.isEmpty ? null : head.first['warehouse_id'] as int?) ?? await OrgService().defaultWarehouseId(d);
+        scrap = await StockDocsService().create(
+          docType: 'out',
+          date: DateTime.now(),
+          warehouseId: wh,
+          counterAccountId: await expenseAccount(),
+          reason: 'شطب قطعة معيبة مرتجعة بالضمان — مرتجع مبيعات رقم $no — فاتورة ${inv.number}',
+          notes: 'العطل: ${problem.trim()}',
+          lines: [StockDocLine(productId: l.productId, name: l.name, baseQty: -base, unitCost: cost / base)],
+        );
+      } catch (e) {
+        scrapErr = '$e';
+      }
+    }
     final id = await WarrantyService.save(_claim(inv, l, base > 0 ? base : 1, problem,
-        notes: ['استرجاع المبلغ — مرتجع مبيعات رقم $no', if ((notes ?? '').trim().isNotEmpty) notes!.trim()].join(' — ')));
+        notes: [
+          'استرجاع المبلغ — مرتجع مبيعات رقم $no',
+          if (restock) 'القطعة سليمة وأُعيدت للبيع',
+          if (scrap != null) 'شُطبت المعيبة بسند إخراج #$scrap',
+          if (scrapErr != null) 'لم تُشطب المعيبة ($scrapErr) — اشطبها بسند إخراج',
+          if ((notes ?? '').trim().isNotEmpty) notes!.trim(),
+        ].join(' — ')));
     await _mark(id, 'refund', returnId, base);
     await WarrantyService.setStatus(id, WStatus.ready, resolution: WResolution.refunded, note: 'مرتجع مبيعات رقم $no');
-    await WarrantyService.setStatus(id, WStatus.delivered);
-    return id;
+    // المعيبة لدى المحل ⇒ يبقى الطلب مفتوحاً لإرسالها للمورد؛ السليمة ⇒ يُغلق
+    if (restock) await WarrantyService.setStatus(id, WStatus.delivered);
+    return (claimId: id, scrapDoc: scrap, scrapError: scrapErr);
   }
 }
 
@@ -440,7 +459,7 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
           final res = await WarrantyDesk.replace(inv, l, r.unit, r.qty, r.problem, serial: r.serial, notes: r.notes);
           if (mounted) showOk(context, 'تم الاستبدال — سند إخراج #${res.docId}، طلب ضمان #${res.claimId}');
         case 'refund':
-          final wh = await WarrantyDesk.damagedWarehouse();
+          final wh = await OrgService().defaultWarehouseId(await erpDb());
           if (!mounted) return;
           int? rid;
           await Navigator.push(
@@ -459,8 +478,15 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
           );
           final saved = rid;
           if (saved == null) return; // لم يُحفظ المرتجع ⇒ لا طلب
-          final refundId = await WarrantyDesk.recordRefund(inv, l, saved, r.problem, notes: r.notes);
-          if (mounted) showOk(context, 'سُجّل الاسترجاع في الضمان (#$refundId)');
+          final res = await WarrantyDesk.recordRefund(inv, l, saved, r.problem, notes: r.notes, restock: r.restock);
+          if (!mounted) return;
+          if (res.scrapError != null) {
+            showError(context, 'حُفظ المرتجع وطلب الضمان #${res.claimId}، لكن لم تُشطب القطعة المعيبة: ${res.scrapError}\nاشطبها من المخزون ← سند إخراج.');
+          } else {
+            showOk(context, res.scrapDoc == null
+                ? 'سُجّل الاسترجاع (#${res.claimId}) — القطعة أُعيدت للبيع'
+                : 'سُجّل الاسترجاع (#${res.claimId}) — شُطبت المعيبة بسند إخراج #${res.scrapDoc}');
+          }
       }
     } catch (e) {
       if (mounted) showError(context, e);
@@ -644,10 +670,13 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
 // ───────────────────────────── نافذة العملية ─────────────────────────────
 
 class _DeskInput {
-  _DeskInput(this.unit, this.qty, this.problem, this.serial, this.accessories, this.notes);
+  _DeskInput(this.unit, this.qty, this.problem, this.serial, this.accessories, this.notes, this.restock);
   final UnitOption unit;
   final double qty;
   final String problem, serial, accessories, notes;
+
+  /// الاسترجاع: القطعة سليمة وتعود للبيع (لا شطب).
+  final bool restock;
 }
 
 class _DeskActionDialog extends StatefulWidget {
@@ -666,6 +695,7 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
   final _serial = TextEditingController();
   final _acc = TextEditingController();
   final _notes = TextEditingController();
+  bool _restock = false;
   String? _err;
 
   @override
@@ -701,7 +731,7 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
       return;
     }
     Navigator.pop(context,
-        _DeskInput(_unit, q, _problem.text.trim(), _serial.text.trim(), _acc.text.trim(), _notes.text.trim()));
+        _DeskInput(_unit, q, _problem.text.trim(), _serial.text.trim(), _acc.text.trim(), _notes.text.trim(), _restock));
   }
 
   @override
@@ -802,6 +832,16 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
                   const SizedBox(height: 10),
                 ],
                 TextField(controller: _notes, maxLines: 2, decoration: _dec('ملاحظة')),
+                if (widget.mode == 'refund')
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _restock,
+                    onChanged: (v) => setState(() => _restock = v),
+                    title: const Text('القطعة سليمة وتعود للبيع', style: TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text(_restock
+                        ? 'تعود إلى المخزون القابل للبيع بكلفتها'
+                        : 'معيبة: تُشطب فوراً على «مصروف الضمان والاستبدال» ولا تدخل الرصيد'),
+                  ),
                 const SizedBox(height: 12),
                 _banner(
                   Icons.info_outline_rounded,
@@ -810,7 +850,7 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
                     'replace' => 'تخرج القطعة البديلة من المخزن الرئيسي بسند إخراج على «مصروف الضمان والاستبدال»، '
                         'وتبقى المعطوبة طلب ضمان مفتوحاً يمكن إرساله للمورد.',
                     'refund' => 'يُفتح «مرتجع المبيعات» على هذه المادة: تختار هناك الردّ نقداً من صندوق أو من دين العميل، '
-                        'ويُطبع سنده. القطعة تدخل «مخزن التالف والضمان».',
+                        'ويُطبع سنده. بعد الحفظ تُشطب القطعة المعيبة بكلفتها، فلا تُحسب في الرصيد القابل للبيع.',
                     _ => 'طلب متابعة فقط — لا يتغير مخزون ولا مال.',
                   },
                 ),

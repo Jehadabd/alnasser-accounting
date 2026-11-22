@@ -20,9 +20,14 @@ import '../../accounting/vouchers_service.dart' show VoucherType, voucherTypeLab
 import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../report_export.dart';
+import 'voucher_details_sheet.dart';
 
 class VouchersSummaryScreen extends StatefulWidget {
-  const VouchersSummaryScreen({super.key});
+  const VouchersSummaryScreen({super.key, this.from, this.to});
+
+  /// الفترة (من التقرير الدوري مثلاً)؛ بدونها: هذا الشهر.
+  final DateTime? from;
+  final DateTime? to;
 
   @override
   State<VouchersSummaryScreen> createState() => _VouchersSummaryScreenState();
@@ -87,8 +92,8 @@ class _VouchersSummaryScreenState extends State<VouchersSummaryScreen> {
   void initState() {
     super.initState();
     final now = DateTime.now();
-    _from = DateTime(now.year, now.month, 1);
-    _to = now;
+    _from = widget.from ?? DateTime(now.year, now.month, 1);
+    _to = widget.to ?? now;
     _load();
   }
 
@@ -297,20 +302,33 @@ class _VouchersSummaryScreenState extends State<VouchersSummaryScreen> {
               ]),
             ),
             children: [
-              SimpleTable(
-                headers: const ['التاريخ', 'الرقم', 'المبلغ', 'الصندوق', 'البيان'],
-                numericColumns: const {2},
-                rows: [
-                  for (final r in g.rows)
-                    [
-                      fmtDate(parseDate(r['voucher_date'])),
-                      '${r['voucher_number'] ?? ''}',
-                      _amountText(r),
-                      '${r['box_name'] ?? ''}',
-                      '${r['description'] ?? ''}',
-                    ],
-                ],
-              ),
+              // كل سند بسطر — اضغط لتفاصيله كاملة (من أين، من أنشأه، قيده) وطباعته
+              for (final r in g.rows)
+                InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => showVoucherDetails(context, r['id'] as int),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                    child: Row(children: [
+                      SizedBox(
+                        width: 86,
+                        child: Text(fmtDate(parseDate(r['voucher_date'])), style: const TextStyle(fontSize: 12.5, color: ErpColors.muted)),
+                      ),
+                      SizedBox(width: 54, child: Text('#${r['voucher_number'] ?? ''}', style: const TextStyle(fontSize: 12.5))),
+                      Expanded(
+                        child: Text(
+                          ['${r['description'] ?? ''}'.trim(), '${r['box_name'] ?? ''}'.trim()].where((x) => x.isNotEmpty).join(' — '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(_amountText(r), style: TextStyle(fontWeight: FontWeight.w800, color: c)),
+                      const Icon(Icons.chevron_left_rounded, color: ErpColors.muted),
+                    ]),
+                  ),
+                ),
             ],
           ),
         ),
