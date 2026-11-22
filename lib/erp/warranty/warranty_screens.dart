@@ -17,6 +17,7 @@ import '../report_export.dart';
 import '../sales/doc_pdf.dart';
 import '../sales/sales_return_screen.dart';
 import 'item_warranty.dart';
+import 'warranty_desk.dart';
 import 'warranty_service.dart';
 
 String _day(DateTime? d) => d == null ? '—' : fmtDate(d);
@@ -111,7 +112,8 @@ class _WarrantyHubScreenState extends State<WarrantyHubScreen> {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _open(const WarrantyClaimEditor()),
+        // 🛠️ الاستلام يبدأ من الفاتورة (بحث بالعميل/الرقم/الهاتف)؛ «بلا فاتورة» داخلها
+        onPressed: () => _open(const WarrantyDeskScreen()),
         backgroundColor: ErpColors.navy,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add_rounded),

@@ -24,8 +24,28 @@ import '../../services/settings_manager.dart';
 import '../../services/invoice_edit_log.dart';
 
 class SalesReturnScreen extends StatefulWidget {
-  const SalesReturnScreen({super.key, this.invoiceId});
+  const SalesReturnScreen({
+    super.key,
+    this.invoiceId,
+    this.presetProductId,
+    this.presetUnit,
+    this.presetQty,
+    this.presetWarehouseId,
+    this.presetNotes,
+    this.onSaved,
+  });
   final int? invoiceId;
+
+  // 🛠️ من «مكتب الضمان»: مادة واحدة من الفاتورة بوحدتها وكميتها، ومخزن الإرجاع والملاحظة.
+  //    كل شيء يبقى قابلاً للتعديل هنا قبل الحفظ.
+  final int? presetProductId;
+  final String? presetUnit;
+  final double? presetQty;
+  final int? presetWarehouseId;
+  final String? presetNotes;
+
+  /// يُستدعى برقم المرتجع بعد نجاح حفظه (قبل الطباعة والإغلاق).
+  final ValueChanged<int>? onSaved;
   @override
   State<SalesReturnScreen> createState() => _SalesReturnScreenState();
 }
@@ -58,6 +78,8 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
   @override
   void initState() {
     super.initState();
+    _warehouseId = widget.presetWarehouseId;
+    if (widget.presetNotes != null) _notes.text = widget.presetNotes!;
     if (widget.invoiceId != null) {
       _presetId = widget.invoiceId;
       _loadInvoice();
@@ -112,6 +134,19 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
       if (p == null) continue;
       final u = p.unitNamed(it['sale_type'] as String?);
       lines.add(DocLine(product: p, unit: u, quantity: 0, price: d0(it['applied_price'])));
+    }
+    // 🛠️ من مكتب الضمان: المادة المختارة وحدها، بالوحدة والكمية المختارتين
+    final pp = widget.presetProductId;
+    if (pp != null && preset != null) {
+      final keep = lines.where((l) => l.product.id == pp).toList();
+      if (keep.isNotEmpty) {
+        final l = keep.first;
+        final u = l.product.unitNamed(widget.presetUnit ?? l.unit.name);
+        final perBase = l.unit.factor > 0 ? l.price / l.unit.factor : l.price;
+        lines
+          ..clear()
+          ..add(DocLine(product: l.product, unit: u, quantity: widget.presetQty ?? 0, price: roundMoney(perBase * u.factor)));
+      }
     }
     if (!mounted) return;
     final rem = d0(h['total_amount']) - d0(h['amount_paid_on_invoice']);
@@ -220,6 +255,7 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
       );
       // 🤖 زبون في «الإرسال التلقائي»؟ يصله مستند المرتجع في الخلفية
       if (_customer != null) WaAutoDocs.salesReturnSaved(id);
+      widget.onSaved?.call(id);
       if (!mounted) return;
       showOk(context, 'حُفظ المرتجع (#$id)');
       // رسالة الطباعة حسب الإعداد: اسأل / اطبع دائماً / لا تطبع
