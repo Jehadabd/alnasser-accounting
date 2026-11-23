@@ -726,9 +726,15 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
           ),
         ]),
         if (none)
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: Text('لا كمية متبقية للاستبدال أو الاسترجاع في هذه الفاتورة', style: TextStyle(color: ErpColors.muted, fontSize: 12)),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+                l.returnableBase <= 1e-6
+                    ? '✔ أُرجعت كلها بمرتجع مبيعات — الاسترجاع مسجَّل وحساب العميل والمخزون مصحَّحان. '
+                        'الفاتورة تبقى كما بيعت والمرتجع مستند مستقل مربوط بها.'
+                    : 'لا كمية متبقية للاستبدال أو الاسترجاع في هذه الفاتورة',
+                style: TextStyle(
+                    color: l.returnableBase <= 1e-6 ? ErpColors.green : ErpColors.muted, fontSize: 12, fontWeight: FontWeight.w600)),
           ),
       ]),
     );

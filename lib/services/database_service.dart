@@ -4,6 +4,7 @@
 
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import '../erp/sales/invoice_returns.dart' show InvoiceReturns; // ↩️ حارس حذف الفاتورة التي عليها مرتجع
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint; // 🌐 حراسة الويب
 import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1959,6 +1960,9 @@ class DatabaseService {
       throw Exception('لا يمكن حذف هذه الفاتورة لأنها مستوردة من جهاز آخر.');
     }
     await assertNotRestoredLocked('invoices', id);
+    // ↩️ عليها مرتجع مبيعات مُرحَّل ⇒ يُلغى المرتجع أولاً (لا تعود البضاعة ولا ينزل الدين مرتين)
+    final returnsBlock = await InvoiceReturns.deleteBlockReason(db, id);
+    if (returnsBlock != null) throw Exception(returnsBlock);
 
     final res = await db.transaction((txn) async {
       // 1. الكميات تعود للمخزن تلقائياً: الفاتورة المحذوفة لا تُحسب مبيعاً

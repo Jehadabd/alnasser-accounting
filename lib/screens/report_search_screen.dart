@@ -1,6 +1,9 @@
 // lib/screens/report_search_screen.dart
 //
-// 🔎 «البحث في التقارير» — اكتب أي شيء فتظهر تقاريره:
+// 🔎 «البحث في التقارير» — في الشاشة نفسها (مثل بحث الشاشة الرئيسية): تكتب فتحلّ النتائج مكان
+// الأزرار، وتمسح (أو Esc) فتعود. المضيف: مركز التقارير ومركز المبيعات.
+//   ReportSearchController (الحالة) + ReportSearchField (الحقل) + ReportSearchResults (النتائج).
+// اكتب أي شيء فتظهر تقاريره:
 //   • اسم مادة ← تقرير بضاعتها، اسم عميل ← تقاريره، موظف ← مبيعاته، مؤسس ← نقاطه (حساب المالك)،
 //     مورد ← كشف حسابه، رقم فاتورة أو باركود ← الفاتورة أو المادة.
 //   • كلام بالمعنى: «الربح»، «كم بعت»، «سند قبض»، «الضمان»، «أثر الدولار»، «مقارنة»، «مسحوبات»…
@@ -20,11 +23,22 @@ import '../accounting/screens/income_statement_screen.dart';
 import '../accounting/screens/trial_balance_screen.dart';
 import '../accounting/vouchers_service.dart' show VoucherType;
 import '../erp/control/control_screens.dart' show ControlHubScreen;
-import '../erp/debts/debt_reports_screen.dart' show AgingScreen, CollectionReportScreen;
+import '../erp/debts/customer_card_screen.dart' show CustomersDirectoryScreen;
+import '../erp/debts/customer_statement_screen.dart' show CustomerStatementScreen;
+import '../erp/debts/debt_reports_screen.dart' show AgingScreen, CollectionReportScreen, OpenInvoicesScreen, OverLimitScreen;
+import '../erp/debts/due_items_screen.dart' show DueItemsScreen;
+import '../erp/delivery/delivery_screens.dart' show DeliveryHubScreen;
+import '../erp/loyalty/loyalty_screen.dart' show LoyaltyScreen;
+import '../erp/pos/price_checker_screen.dart' show PriceCheckerScreen;
+import '../erp/purchases/purchase_return_screen.dart' show PurchaseReturnsListScreen;
+import '../erp/sales/invoice_extras.dart' show SellersScreen;
+import '../erp/sales/quotes_orders_screen.dart' show QuotationsScreen, OrdersScreen;
+import '../erp/sales/sales_return_screen.dart' show SalesReturnsListScreen;
 import '../erp/debts/receipt_screen.dart' show ReceiptsListScreen;
-import '../erp/hr/hr_screen.dart';
-import '../erp/inventory/inventory_reports_screen.dart';
-import '../erp/purchases/supplier_statement_screen.dart';
+import '../erp/hr/hr_screen.dart' show HrScreen;
+import '../erp/inventory/inventory_reports_screen.dart' show InventoryReportsScreen;
+import '../erp/purchases/supplier_statement_screen.dart' show SupplierStatementScreen;
+import 'suppliers/suppliers_dashboard_screen.dart' show SuppliersDashboardScreen;
 import '../erp/reports/finance_reports.dart';
 import '../erp/reports/vouchers_summary_report.dart';
 import '../erp/warranty/warranty_screens.dart' show WarrantyHubScreen;
@@ -37,6 +51,7 @@ import '../services/database_service.dart';
 import '../services/report_search_engine.dart';
 import '../widgets/report_kit.dart';
 import 'custom_range_report_screen.dart';
+import 'day_close_quick_screen.dart' show DayCloseQuickScreen;
 import 'day_close_screen.dart';
 import 'employee_sales_screen.dart';
 import 'invoice_details_screen.dart';
@@ -166,6 +181,43 @@ final Map<String, _Target> _targets = {
       (p) => const AgingScreen(), perm: AppPermissions.debtReports),
   'collection': _Target('نسب التحصيل', 'كم حصّلت مما عليهم', Icons.percent_rounded, kRepPurple,
       (p) => const CollectionReportScreen(), perm: AppPermissions.debtReports),
+  'supplier_aging': _Target('ديون الموردين', 'ما عليك لكل مورد ومنذ متى', Icons.hourglass_bottom_rounded, kSetOrange,
+      (p) => const AgingScreen(suppliers: true), perm: AppPermissions.debtReports),
+  'open_invoices': _Target('الفواتير غير المسددة', 'الفواتير الآجلة وما بقي منها', Icons.receipt_outlined, kSetRed,
+      (p) => const OpenInvoicesScreen(), perm: AppPermissions.debtReports),
+  'over_limit': _Target('المتجاوزون للسقف', 'عملاء تجاوزت ديونهم الحد المسموح', Icons.block_rounded, kSetRed,
+      (p) => const OverLimitScreen(), perm: AppPermissions.debtReports),
+  'due_items': _Target('الاستحقاقات', 'شيكات، كمبيالات، أقساط ومواعيدها', Icons.event_note_rounded, kRepAmber,
+      (p) => const DueItemsScreen(), perm: AppPermissions.collection),
+  'customer_statement': _Target('كشف حساب عميل', 'فترة، شهري، موضّح، مطابقة', Icons.list_alt_rounded, kSetBlue,
+      (p) => const CustomerStatementScreen(),
+      allowed: () => AuthService().hasPermission(AppPermissions.drStatement) || AuthService().hasPermission(AppPermissions.debtReports)),
+  'customers_directory': _Target('دليل العملاء', 'البطاقات، المجموعات، المناطق', Icons.contacts_rounded, const Color(0xFF0891B2),
+      (p) => const CustomersDirectoryScreen(), perm: AppPermissions.customerCard),
+  'day_close_quick': _Target('إقفال اليوم في دقيقة', 'سجّل ما دفعته نقداً اليوم ثم عدّ الدرج', Icons.timer_rounded,
+      const Color(0xFF0F766E), (p) => const DayCloseQuickScreen(), allowed: () => DayCloseQuickScreen.allowed),
+  'movements': _Target('حركة المواد', 'ما دخل وما خرج من كل مادة ومتى', Icons.swap_vert_rounded, kSetBlue,
+      (p) => const InventoryReportsScreen(initial: 'movements'), perm: AppPermissions.inventoryReports),
+  'stock_at': _Target('المخزون بتاريخ', 'كم كان عندك من كل مادة في تاريخ سابق', Icons.history_toggle_off_rounded, kSetNavy,
+      (p) => const InventoryReportsScreen(initial: 'stock_at'), perm: AppPermissions.inventoryReports),
+  'sellers': _Target('المندوبون والعمولات', 'مبيعات كل مندوب وعمولته', Icons.badge_rounded, kRepAmber,
+      (p) => const SellersScreen(), perm: AppPermissions.salesDocs),
+  'suppliers': _Target('الموردون والمشتريات', 'فواتير الشراء والموردون وأرصدتهم', Icons.local_shipping_rounded, kSetOrange,
+      (p) => const SuppliersDashboardScreen(), perm: AppPermissions.suppliers),
+  'purchase_returns': _Target('مرتجعات المشتريات', 'ما أرجعته للموردين', Icons.assignment_return_rounded, kSetOrange,
+      (p) => const PurchaseReturnsListScreen(), perm: AppPermissions.suppliers),
+  'sales_returns_list': _Target('سجل المرتجعات', 'كل مستند مرتجع: طباعة وإلغاء', Icons.history_rounded, kSetMuted,
+      (p) => const SalesReturnsListScreen(), perm: AppPermissions.salesDocs),
+  'quotes': _Target('عروض الأسعار', 'طباعة وتحويل إلى فاتورة', Icons.request_quote_rounded, const Color(0xFF0891B2),
+      (p) => const QuotationsScreen(), perm: AppPermissions.salesDocs),
+  'orders': _Target('طلبات المبيعات', 'حجز كميات وتسليم جزئي', Icons.assignment_rounded, kSetBlue,
+      (p) => const OrdersScreen(), perm: AppPermissions.salesDocs),
+  'delivery': _Target('شركات التوصيل', 'الطلبات وحالتها، وحساب كل شركة', Icons.delivery_dining_rounded, kSetBlue,
+      (p) => const DeliveryHubScreen(), perm: AppPermissions.delivery),
+  'loyalty': _Target('برنامج الولاء', 'نقاط الزبائن ومكافآتهم', Icons.loyalty_rounded, kSetGreen,
+      (p) => const LoyaltyScreen(), perm: AppPermissions.loyalty),
+  'price_checker': _Target('قارئ الأسعار', 'اعرف سعر أي مادة بالباركود أو الاسم', Icons.qr_code_scanner_rounded,
+      const Color(0xFF0891B2), (p) => const PriceCheckerScreen()),
 };
 
 /// عند كتابة فترة فقط («2025»، «الشهر الماضي») — أهم تقارير تلك الفترة.
@@ -277,19 +329,7 @@ class _Index {
   }
 }
 
-// ═══════════════════════════ الشاشة ═══════════════════════════
-
-class ReportSearchScreen extends StatefulWidget {
-  const ReportSearchScreen({super.key, this.initialQuery});
-  final String? initialQuery;
-
-  /// فتح البحث من أي شاشة (مع انتقال ناعم).
-  static Future<void> open(BuildContext context, {String? query}) =>
-      Navigator.push(context, accRoute(ReportSearchScreen(initialQuery: query)));
-
-  @override
-  State<ReportSearchScreen> createState() => _ReportSearchScreenState();
-}
+// ═══════════════════════════ المتحكّم (حالة البحث) ═══════════════════════════
 
 class _Hits {
   const _Hits({this.query, this.intents = const [], this.ents = const {}, this.invoices = const []});
@@ -300,81 +340,118 @@ class _Hits {
   bool get isEmpty => intents.isEmpty && invoices.isEmpty && ents.values.every((l) => l.isEmpty);
 }
 
-class _ReportSearchScreenState extends State<ReportSearchScreen> {
+/// حالة البحث — تملكها الشاشة المضيفة (مركز التقارير أو المبيعات) فيبقى البحث في الشاشة نفسها
+/// مثل بحث الشاشة الرئيسية: تكتب فتحلّ النتائج مكان الأزرار، وتمسح فتعود الأزرار.
+class ReportSearchController extends ChangeNotifier {
+  ReportSearchController() {
+    _loadRecent();
+  }
+
   static const _recentKey = 'report_search_recent';
-  final _ctrl = TextEditingController();
-  final _focus = FocusNode();
+  final text = TextEditingController();
+  final focus = FocusNode();
   Timer? _debounce;
   _Index? _index;
+  bool _indexing = false;
   _Hits _hits = const _Hits();
   List<String> _recent = const [];
   final Set<_Kind> _expanded = {};
   int _token = 0;
+  bool _disposed = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _ctrl.text = widget.initialQuery ?? '';
-    _loadRecent();
-    _Index.load().then((i) {
-      if (!mounted) return;
-      _index = i;
-      _run();
-    }).catchError((_) {
-      if (mounted) setState(() => _index = _Index({for (final k in _Kind.values) k: <_Ent>[]}, const {}));
-    });
+  /// في البحث (نص مكتوب) ← النتائج بدل محتوى الشاشة.
+  bool get active => text.text.trim().isNotEmpty;
+  bool get loading => active && _index == null;
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _debounce?.cancel();
-    _ctrl.dispose();
-    _focus.dispose();
+    text.dispose();
+    focus.dispose();
     super.dispose();
   }
 
   Future<void> _loadRecent() async {
     try {
       final p = await SharedPreferences.getInstance();
-      final r = p.getStringList(_recentKey) ?? const [];
-      if (mounted) setState(() => _recent = r);
+      _recent = p.getStringList(_recentKey) ?? const [];
+      _notify();
     } catch (_) {}
   }
 
   Future<void> _remember() async {
-    final t = _ctrl.text.trim();
+    final t = text.text.trim();
     if (t.isEmpty) return;
-    final list = [t, ..._recent.where((x) => x != t)].take(8).toList();
-    _recent = list;
+    _recent = [t, ..._recent.where((x) => x != t)].take(8).toList();
     try {
       final p = await SharedPreferences.getInstance();
-      await p.setStringList(_recentKey, list);
+      await p.setStringList(_recentKey, _recent);
     } catch (_) {}
   }
 
-  void _onChanged(String _) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 160), _run);
-    setState(() {}); // زر المسح
+  Future<void> _forget(String r) async {
+    _recent = [..._recent]..remove(r);
+    _notify();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setStringList(_recentKey, _recent);
+    } catch (_) {}
   }
 
-  void _set(String text) {
-    _ctrl.text = text;
-    _ctrl.selection = TextSelection.collapsed(offset: text.length);
-    _expanded.clear();
+  /// فهرس الأسماء يُحمَّل عند أول كتابة فقط (لا كلفة على فتح الشاشة).
+  Future<void> _ensureIndex() async {
+    if (_index != null || _indexing) return;
+    _indexing = true;
+    try {
+      _index = await _Index.load();
+    } catch (_) {
+      _index = _Index({for (final k in _Kind.values) k: <_Ent>[]}, const {});
+    }
+    _indexing = false;
     _run();
   }
 
-  // ───────────────────────── البحث ─────────────────────────
+  void onChanged(String _) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 160), _run);
+    _ensureIndex();
+    _notify();
+  }
+
+  void set(String t) {
+    text.text = t;
+    text.selection = TextSelection.collapsed(offset: t.length);
+    _expanded.clear();
+    _ensureIndex();
+    _run();
+  }
+
+  void clear() {
+    text.clear();
+    _expanded.clear();
+    _hits = const _Hits();
+    _notify();
+  }
+
+  void toggle(_Kind k) {
+    _expanded.contains(k) ? _expanded.remove(k) : _expanded.add(k);
+    _notify();
+  }
 
   void _run() {
-    final text = _ctrl.text.trim();
+    final raw = text.text.trim();
     final idx = _index;
-    if (text.isEmpty || idx == null) {
-      setState(() => _hits = const _Hits());
+    if (raw.isEmpty || idx == null) {
+      _hits = const _Hits();
+      _notify();
       return;
     }
-    final q = ReportQuery.parse(text);
+    final q = ReportQuery.parse(raw);
     var intents = [
       for (final h in ReportCatalog.match(q, limit: 10))
         if (_targets[h.id]?.ok ?? false) h.id,
@@ -382,7 +459,7 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
     if (q.words.isEmpty && q.period != null) {
       intents = [for (final id in _periodDefaults) if (_targets[id]!.ok) id];
     }
-    // «الأكثر مبيعاً» و«أكبر العملاء» نفس البطاقة — لا تكرار
+    // «الأكثر مبيعاً» و«أكبر العملاء» البطاقة نفسها — لا تكرار
     if (intents.contains('top_products') && intents.contains('top_customers')) intents.remove('top_customers');
 
     // كلمات الاسم: بلا كلمات المعنى («ربح أحمد» ← أحمد)، وإن لم يبقَ شيء فكلها
@@ -393,10 +470,10 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
       final scored = <(double, _Ent)>[];
       for (final e in idx.byKind[k]!) {
         var sc = words.isEmpty ? 0.0 : ReportCatalog.normalizedNameScore(words, e.norm);
-        // رقم هاتف أو باركود
         for (final n in q.numbers) {
+          // رقم هاتف أو باركود
           if (n.length >= 5 && (e.phone ?? '').replaceAll(RegExp(r'\D'), '').contains(n)) sc = sc < 2.5 ? 2.5 : sc;
-          if (k == _Kind.product && n.length >= 4 && e.sub == n) sc = 4;
+          if (k == _Kind.product && n.length >= 4 && e.sub == n) sc = 4.0;
         }
         if (sc > 0) scored.add((sc, e));
       }
@@ -410,15 +487,15 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
         }
       }
       scored.sort((a, b) => b.$1.compareTo(a.$1));
-      // اسم الدخول والاسم المعروض للموظف نفسه ← مرة واحدة
-      final keys = <String>{};
+      final keys = <String>{}; // اسم الدخول والاسم المعروض للموظف نفسه ← مرة واحدة
       ents[k] = [
         for (final x in scored)
           if (k != _Kind.employee || x.$2.key == null || keys.add(x.$2.key!)) x.$2,
       ].take(40).toList();
     }
     final t = ++_token;
-    setState(() => _hits = _Hits(query: q, intents: intents, ents: ents));
+    _hits = _Hits(query: q, intents: intents, ents: ents);
+    _notify();
     _findInvoices(q, t);
   }
 
@@ -440,12 +517,11 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
           if (!out.any((x) => x['id'] == r['id'])) out.add(r);
         }
       }
-      if (!mounted || t != _token || out.isEmpty) return;
-      setState(() => _hits = _Hits(query: _hits.query, intents: _hits.intents, ents: _hits.ents, invoices: out));
+      if (t != _token || out.isEmpty) return;
+      _hits = _Hits(query: _hits.query, intents: _hits.intents, ents: _hits.ents, invoices: out);
+      _notify();
     } catch (_) {}
   }
-
-  // ───────────────────────── الفتح ─────────────────────────
 
   int? get _year {
     final p = _hits.query?.period;
@@ -453,285 +529,261 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
     return p.year ?? (p.from.year == p.to.year ? p.from.year : null);
   }
 
-  Future<void> _push(Widget page) async {
+  // ───────────────────────── الفتح ─────────────────────────
+
+  Future<void> _push(BuildContext context, Widget page) async {
     _remember();
     await Navigator.push(context, accRoute(page));
   }
 
-  void _openTarget(String id) {
+  void _openTarget(BuildContext context, String id) {
     final t = _targets[id]!;
     if (t.route != null) {
       _remember();
       Navigator.of(context).pushNamed(t.route!);
       return;
     }
-    _push(t.page!(_hits.query?.period));
+    _push(context, t.page!(_hits.query?.period));
   }
 
-  void _openEnt(_Ent e) {
+  void _openEnt(BuildContext context, _Ent e) {
     final p = _hits.query?.period;
+    final auth = AuthService();
     switch (e.kind) {
       case _Kind.product:
-        _push(ProductReportDetailsScreen(productId: e.id, productName: e.name, initialYear: _year));
+        _push(context, ProductReportDetailsScreen(productId: e.id, productName: e.name, initialYear: _year));
         break;
       case _Kind.customer:
-        _push(PersonDetailsScreen.fromReport(customerId: e.id, name: e.name, phone: e.phone, initialYear: _year));
+        _push(context, PersonDetailsScreen.fromReport(customerId: e.id, name: e.name, phone: e.phone, initialYear: _year));
         break;
       case _Kind.supplier:
-        _push(SupplierStatementScreen(supplierId: e.id!, supplierName: e.name));
+        _push(context, SupplierStatementScreen(supplierId: e.id!, supplierName: e.name));
         break;
       case _Kind.employee:
-        if (e.key != null && AuthService().hasPermission(AppPermissions.repEmployees)) {
+        if (e.key != null && auth.hasPermission(AppPermissions.repEmployees)) {
           final now = DateTime.now();
-          _push(EmployeeSalesScreen(from: p?.from ?? DateTime(now.year, 1, 1), to: p?.to ?? now, focusUser: e.key));
-        } else if (AuthService().hasPermission(AppPermissions.manageUsers)) {
-          _push(const HrScreen());
+          _push(context, EmployeeSalesScreen(from: p?.from ?? DateTime(now.year, 1, 1), to: p?.to ?? now, focusUser: e.key));
+        } else if (auth.hasPermission(AppPermissions.manageUsers)) {
+          _push(context, const HrScreen());
         } else {
           setToast(context, 'لا صلاحية لتقارير الموظفين', error: true);
         }
         break;
       case _Kind.founder:
-        _push(FounderDetailsScreen(founderName: e.name));
+        _push(context, FounderDetailsScreen(founderName: e.name));
         break;
     }
   }
 
-  void _openInvoice(Map<String, Object?> r) => _push(InvoiceDetailsScreen(invoiceId: r['id'] as int));
+  void _openInvoice(BuildContext context, Map<String, Object?> r) =>
+      _push(context, InvoiceDetailsScreen(invoiceId: r['id'] as int));
 
   /// Enter: أول نتيجة.
-  void _openFirst() {
+  void openFirst(BuildContext context) {
     final h = _hits;
-    if (h.intents.isNotEmpty) return _openTarget(h.intents.first);
+    if (h.intents.isNotEmpty) return _openTarget(context, h.intents.first);
     for (final k in _Kind.values) {
       final l = h.ents[k] ?? const [];
-      if (l.isNotEmpty) return _openEnt(l.first);
+      if (l.isNotEmpty) return _openEnt(context, l.first);
     }
-    if (h.invoices.isNotEmpty) _openInvoice(h.invoices.first);
+    if (h.invoices.isNotEmpty) _openInvoice(context, h.invoices.first);
   }
+}
 
-  // ───────────────────────── الواجهة ─────────────────────────
+// ═══════════════════════════ حقل البحث ═══════════════════════════
+
+/// حقل البحث الملوّن — يوضع أعلى الشاشة المضيفة. Esc يمسح، Enter يفتح أول نتيجة.
+/// وتحته (عند التركيز بلا كتابة) اقتراحات وآخر عمليات البحث.
+class ReportSearchField extends StatelessWidget {
+  const ReportSearchField({super.key, required this.controller, this.padding = const EdgeInsets.only(bottom: 16)});
+  final ReportSearchController controller;
+  final EdgeInsetsGeometry padding;
+
+  static const _ideas = <(String, IconData)>[
+    ('الربح هذه السنة', Icons.trending_up_rounded),
+    ('كم بعت الشهر الماضي', Icons.insights_rounded),
+    ('سند قبض', Icons.move_to_inbox_rounded),
+    ('مرتجعات الضمان', Icons.verified_user_rounded),
+    ('أثر الدولار', Icons.currency_exchange_rounded),
+    ('مقارنة', Icons.compare_arrows_rounded),
+    ('مسحوبات المالك', Icons.person_rounded),
+    ('وين راحت الفلوس', Icons.pie_chart_rounded),
+    ('شنو ناقص', Icons.warning_amber_rounded),
+    ('بضاعة راكدة', Icons.hourglass_bottom_rounded),
+    ('أعمار الديون', Icons.hourglass_top_rounded),
+  ];
 
   @override
   Widget build(BuildContext context) {
-    return CallbackShortcuts(
-      bindings: {const SingleActivator(LogicalKeyboardKey.escape): () => Navigator.maybePop(context)},
-      child: Scaffold(
-        backgroundColor: kSetBg,
-        body: Column(children: [
-          _header(),
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              switchInCurve: Curves.easeOutCubic,
-              child: _index == null
-                  ? const Center(key: ValueKey('loading'), child: CircularProgressIndicator())
-                  : _ctrl.text.trim().isEmpty
-                      ? _idle()
-                      : _results(),
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-
-  Widget _header() {
-    final period = _hits.query?.period;
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF0F3460), Color(0xFF4F46E5), Color(0xFF6D28D9)],
-          begin: AlignmentDirectional.topStart,
-          end: AlignmentDirectional.bottomEnd,
-        ),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
-        boxShadow: [BoxShadow(color: Color(0x332E1065), blurRadius: 24, offset: Offset(0, 8))],
-      ),
-      child: SafeArea(
-        bottom: false,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 920),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 16, 18),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                Row(children: [
-                  IconButton(
-                    tooltip: 'رجوع',
-                    onPressed: () => Navigator.maybePop(context),
-                    icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+    final c = controller;
+    return ListenableBuilder(
+      listenable: Listenable.merge([c, c.focus]),
+      builder: (context, _) {
+        final focused = c.focus.hasFocus;
+        final period = c._hits.query?.period;
+        return Padding(
+          padding: padding,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            CallbackShortcuts(
+              bindings: {const SingleActivator(LogicalKeyboardKey.escape): c.clear},
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                      color: focused ? kRepPurple.withValues(alpha: 0.7) : kRepPurple.withValues(alpha: 0.22),
+                      width: focused ? 1.6 : 1),
+                  boxShadow: [
+                    BoxShadow(
+                        color: kRepPurple.withValues(alpha: focused ? 0.16 : 0.07),
+                        blurRadius: focused ? 22 : 14,
+                        offset: const Offset(0, 5)),
+                  ],
+                ),
+                child: Row(children: [
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(start: 10),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(colors: [Color(0xFF4F46E5), kRepPurple]),
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: c.loading
+                          ? const Padding(
+                              padding: EdgeInsets.all(9),
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.manage_search_rounded, color: Colors.white, size: 21),
+                    ),
                   ),
-                  const SizedBox(width: 4),
-                  const Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('البحث في التقارير',
-                          style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w900)),
-                      SizedBox(height: 2),
-                      Text('اكتب بكلامك: مادة، عميل، موظف، الربح، سند قبض، الضمان، أثر الدولار، 2025…',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 12.5)),
-                    ]),
-                  ),
-                ]),
-                const SizedBox(height: 12),
-                Material(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(18),
+                  Expanded(
                     child: TextField(
-                      controller: _ctrl,
-                      focusNode: _focus,
-                      autofocus: true,
+                      controller: c.text,
+                      focusNode: c.focus,
                       textInputAction: TextInputAction.search,
-                      onChanged: _onChanged,
-                      onSubmitted: (_) => _openFirst(),
-                      style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w600, color: kSetText),
-                      decoration: InputDecoration(
-                        hintText: 'ماذا تريد أن ترى؟',
-                        hintStyle: const TextStyle(color: kSetMuted, fontWeight: FontWeight.w500),
-                        prefixIcon: const Icon(Icons.manage_search_rounded, color: kRepPurple, size: 26),
-                        suffixIcon: _ctrl.text.isEmpty
-                            ? null
-                            : IconButton(
-                                tooltip: 'مسح',
-                                onPressed: () {
-                                  _set('');
-                                  _focus.requestFocus();
-                                },
-                                icon: const Icon(Icons.close_rounded, color: kSetMuted),
-                              ),
+                      onChanged: c.onChanged,
+                      onSubmitted: (_) => c.openFirst(context),
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: kSetText),
+                      decoration: const InputDecoration(
+                        hintText: 'ابحث في التقارير بكلامك: مادة، عميل، موظف، الربح، سند قبض، الضمان، 2025…',
+                        hintStyle: TextStyle(color: kSetMuted, fontWeight: FontWeight.w500, fontSize: 14),
                         border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 17),
                       ),
                     ),
-                ),
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOutCubic,
-                  child: period == null
-                      ? const SizedBox(width: double.infinity)
-                      : Padding(
-                          padding: const EdgeInsets.only(top: 10),
-                          child: Align(
-                            alignment: AlignmentDirectional.centerStart,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.16),
-                                borderRadius: BorderRadius.circular(30),
-                                border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
-                              ),
-                              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                const Icon(Icons.event_rounded, size: 16, color: Colors.white),
-                                const SizedBox(width: 6),
-                                Text('الفترة: ${period.label}',
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
-                                Text('  ${repDate(period.from)} — ${repDate(period.to)}',
-                                    style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 11.5)),
-                              ]),
-                            ),
-                          ),
-                        ),
-                ),
-              ]),
+                  ),
+                  if (c.active)
+                    IconButton(
+                      tooltip: 'مسح (Esc)',
+                      onPressed: () {
+                        c.clear();
+                        c.focus.requestFocus();
+                      },
+                      icon: const Icon(Icons.close_rounded, color: kSetMuted),
+                    ),
+                  const SizedBox(width: 4),
+                ]),
+              ),
             ),
-          ),
-        ),
+            // الفترة المفهومة من الكلام
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              child: (c.active && period != null)
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(colors: [
+                              const Color(0xFF4F46E5).withValues(alpha: 0.1),
+                              kRepPurple.withValues(alpha: 0.1),
+                            ]),
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Icon(Icons.event_rounded, size: 16, color: kRepPurple),
+                            const SizedBox(width: 6),
+                            Text('الفترة: ${period.label}',
+                                style: const TextStyle(color: kRepPurple, fontWeight: FontWeight.w800, fontSize: 12.5)),
+                            Text('  ${repDate(period.from)} — ${repDate(period.to)}',
+                                style: const TextStyle(color: kSetMuted, fontSize: 11.5)),
+                          ]),
+                        ),
+                      ),
+                    )
+                  : const SizedBox(width: double.infinity),
+            ),
+            // اقتراحات عند التركيز بلا كتابة
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              child: (focused && !c.active) ? _suggestions(c) : const SizedBox(width: double.infinity),
+            ),
+          ]),
+        );
+      },
+    );
+  }
+
+  Widget _suggestions(ReportSearchController c) {
+    final visible = [
+      for (final i in _ideas)
+        if (ReportCatalog.match(ReportQuery.parse(i.$1), limit: 1).any((h) => _targets[h.id]?.ok ?? false)) i,
+    ];
+    Widget chip(String label, IconData icon, VoidCallback onTap, {VoidCallback? onDelete}) => InputChip(
+          avatar: Icon(icon, size: 16, color: kRepPurple),
+          label: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+          onPressed: onTap,
+          onDeleted: onDelete,
+          backgroundColor: Colors.white,
+          side: BorderSide(color: kRepPurple.withValues(alpha: 0.22)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        );
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final r in c._recent) chip(r, Icons.history_rounded, () => c.set(r), onDelete: () => c._forget(r)),
+        for (final i in visible)
+          if (!c._recent.contains(i.$1)) chip(i.$1, i.$2, () => c.set(i.$1)),
+      ]),
+    );
+  }
+}
+
+// ═══════════════════════════ النتائج ═══════════════════════════
+
+/// نتائج البحث (عمود عادي) — تضعها الشاشة المضيفة مكان محتواها أثناء البحث.
+class ReportSearchResults extends StatelessWidget {
+  const ReportSearchResults({super.key, required this.controller});
+  final ReportSearchController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) => AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        switchInCurve: Curves.easeOutCubic,
+        child: controller.loading
+            ? const Padding(
+                key: ValueKey('loading'),
+                padding: EdgeInsets.all(40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : _body(context),
       ),
     );
   }
 
-  // ── قبل الكتابة: اقتراحات وآخر عمليات البحث ──
-  Widget _idle() {
-    const ideas = <(String, IconData)>[
-      ('الربح هذه السنة', Icons.trending_up_rounded),
-      ('كم بعت الشهر الماضي', Icons.insights_rounded),
-      ('سند قبض', Icons.move_to_inbox_rounded),
-      ('مرتجعات الضمان', Icons.verified_user_rounded),
-      ('أثر الدولار', Icons.currency_exchange_rounded),
-      ('مقارنة', Icons.compare_arrows_rounded),
-      ('مسحوبات المالك', Icons.person_rounded),
-      ('المصاريف', Icons.pie_chart_rounded),
-      ('المواد الراكدة', Icons.hourglass_bottom_rounded),
-      ('أعمار الديون', Icons.hourglass_top_rounded),
-    ];
-    final visible = [
-      for (final i in ideas)
-        if (ReportCatalog.match(ReportQuery.parse(i.$1), limit: 1).any((h) => _targets[h.id]?.ok ?? false)) i,
-    ];
-    return ListView(
-      key: const ValueKey('idle'),
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
-      children: [
-        _Constrain(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            if (_recent.isNotEmpty) ...[
-              _sectionTitle('بحثت مؤخراً', Icons.history_rounded, kSetMuted),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final r in _recent)
-                  InputChip(
-                    label: Text(r),
-                    avatar: const Icon(Icons.history_rounded, size: 16),
-                    onPressed: () => _set(r),
-                    onDeleted: () async {
-                      setState(() => _recent = [..._recent]..remove(r));
-                      try {
-                        final p = await SharedPreferences.getInstance();
-                        await p.setStringList(_recentKey, _recent);
-                      } catch (_) {}
-                    },
-                    backgroundColor: Colors.white,
-                    side: const BorderSide(color: kSetBorder),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-              ]),
-              const SizedBox(height: 22),
-            ],
-            _sectionTitle('جرّب', Icons.auto_awesome_rounded, kRepPurple),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final i in visible)
-                ActionChip(
-                  avatar: Icon(i.$2, size: 17, color: kRepPurple),
-                  label: Text(i.$1, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  onPressed: () => _set(i.$1),
-                  backgroundColor: Colors.white,
-                  side: BorderSide(color: kRepPurple.withValues(alpha: 0.25)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-            ]),
-            const SizedBox(height: 26),
-            _tip(),
-          ]),
-        ),
-      ],
-    );
-  }
-
-  Widget _tip() => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: kSetBorder),
-        ),
-        child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Icon(Icons.tips_and_updates_rounded, color: kRepAmber, size: 20),
-            SizedBox(width: 8),
-            Text('كيف يفهمك البحث؟', style: TextStyle(fontWeight: FontWeight.w900, color: kSetText)),
-          ]),
-          SizedBox(height: 10),
-          _TipLine('اسم مادة أو عميل أو موظف أو مورد', 'يفتح تقاريره مباشرة — ولو كتبت جزءاً من الاسم أو أخطأت بحرف'),
-          _TipLine('كلام بالمعنى', '«الأرباح» و«كم ربحت» و«الفائدة» توصل إلى التقرير نفسه'),
-          _TipLine('أضف الفترة', '«2025»، «هذه السنة»، «الشهر الماضي»، «شباط 2024»، «أمس»'),
-          _TipLine('اجمعها', '«ربح أحمد 2024» ← تقرير أحمد على سنة 2024'),
-          _TipLine('رقم', 'رقم فاتورة، باركود مادة، أو رقم هاتف عميل'),
-        ]),
-      );
-
-  // ── النتائج ──
-  Widget _results() {
-    final h = _hits;
+  Widget _body(BuildContext context) {
+    final c = controller;
+    final h = c._hits;
     final q = h.query;
     if (q == null) return const SizedBox.shrink(key: ValueKey('none'));
     if (h.isEmpty) return _empty(q);
@@ -749,7 +801,7 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
             title: t.title,
             subtitle: t.subtitle,
             badge: t.usesPeriod && q.period != null ? q.period!.label : null,
-            onTap: () => _openTarget(id),
+            onTap: () => c._openTarget(context, id),
           ),
         ));
       }
@@ -765,7 +817,7 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
             color: kSetNavy,
             title: 'فاتورة ${r['invoice_number'] ?? '#${r['id']}'} — ${r['customer_name'] ?? ''}',
             subtitle: [if (date != null) repDate(date), repMoney((r['total'] as num?) ?? 0)].join(' • '),
-            onTap: () => _openInvoice(r),
+            onTap: () => c._openInvoice(context, r),
           ),
         ));
       }
@@ -781,7 +833,7 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
       final list = h.ents[k] ?? const <_Ent>[];
       if (list.isEmpty) continue;
       final m = meta[k]!;
-      final open = _expanded.contains(k);
+      final open = c._expanded.contains(k);
       final shown = open ? list : list.take(5).toList();
       children.add(_sectionTitle(m.$1, m.$2, m.$3, count: list.length));
       for (final e in shown) {
@@ -793,7 +845,7 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
             title: e.name,
             subtitle: e.sub.isEmpty ? m.$4 : e.sub,
             badge: _badgeFor(k, m.$4),
-            onTap: () => _openEnt(e),
+            onTap: () => c._openEnt(context, e),
           ),
         ));
       }
@@ -801,56 +853,54 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
         children.add(Align(
           alignment: AlignmentDirectional.centerStart,
           child: TextButton.icon(
-            onPressed: () => setState(() => open ? _expanded.remove(k) : _expanded.add(k)),
+            onPressed: () => c.toggle(k),
             icon: Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded),
             label: Text(open ? 'أقل' : 'عرض ${list.length - 5} أكثر'),
           ),
         ));
       }
     }
-    return ListView(
+    return Column(
       key: ValueKey('r-${q.normalized}'),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
-      children: [_Constrain(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children))],
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
     );
   }
 
   String? _badgeFor(_Kind k, String what) {
-    final y = _year;
+    final y = controller._year;
     if (y == null) return null;
     if (k == _Kind.product || k == _Kind.customer) return '$what • $y';
-    if (k == _Kind.employee) return _hits.query?.period?.label;
+    if (k == _Kind.employee) return controller._hits.query?.period?.label;
     return null;
   }
 
-  Widget _empty(ReportQuery q) => ListView(
+  Widget _empty(ReportQuery q) => Padding(
         key: ValueKey('empty-${q.normalized}'),
-        padding: const EdgeInsets.fromLTRB(16, 40, 16, 32),
-        children: [
-          _Constrain(
-            child: Column(children: [
-              Container(
-                width: 84,
-                height: 84,
-                decoration: BoxDecoration(color: kRepPurple.withValues(alpha: 0.08), shape: BoxShape.circle),
-                child: const Icon(Icons.search_off_rounded, size: 42, color: kRepPurple),
-              ),
-              const SizedBox(height: 14),
-              Text('لم أجد شيئاً لـ «${q.raw.trim()}»',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kSetText)),
-              const SizedBox(height: 6),
-              const Text('جرّب كلمة أخرى بنفس المعنى، أو جزءاً من الاسم، أو امسح الفترة.',
-                  textAlign: TextAlign.center, style: TextStyle(color: kSetMuted)),
-              const SizedBox(height: 22),
-              _tip(),
-            ]),
+        padding: const EdgeInsets.fromLTRB(0, 28, 0, 20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Center(
+            child: Container(
+              width: 84,
+              height: 84,
+              decoration: BoxDecoration(color: kRepPurple.withValues(alpha: 0.08), shape: BoxShape.circle),
+              child: const Icon(Icons.search_off_rounded, size: 42, color: kRepPurple),
+            ),
           ),
-        ],
+          const SizedBox(height: 14),
+          Text('لم أجد شيئاً لـ «${q.raw.trim()}»',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kSetText)),
+          const SizedBox(height: 6),
+          const Text('جرّب كلمة أخرى بنفس المعنى، أو جزءاً من الاسم، أو امسح الفترة.',
+              textAlign: TextAlign.center, style: TextStyle(color: kSetMuted)),
+          const SizedBox(height: 22),
+          const _Tip(),
+        ]),
       );
 
   Widget _sectionTitle(String t, IconData icon, Color c, {int? count}) => Padding(
-        padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
+        padding: const EdgeInsets.fromLTRB(4, 10, 4, 8),
         child: Row(children: [
           Icon(icon, size: 18, color: c),
           const SizedBox(width: 8),
@@ -867,15 +917,33 @@ class _ReportSearchScreenState extends State<ReportSearchScreen> {
       );
 }
 
-// ═══════════════════════════ قطع الواجهة ═══════════════════════════
-
-class _Constrain extends StatelessWidget {
-  const _Constrain({required this.child});
-  final Widget child;
+class _Tip extends StatelessWidget {
+  const _Tip();
   @override
-  Widget build(BuildContext context) =>
-      Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 920), child: child));
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: kSetBorder),
+        ),
+        child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.tips_and_updates_rounded, color: kRepAmber, size: 20),
+            SizedBox(width: 8),
+            Text('كيف يفهمك البحث؟', style: TextStyle(fontWeight: FontWeight.w900, color: kSetText)),
+          ]),
+          SizedBox(height: 10),
+          _TipLine('اسم مادة أو عميل أو موظف أو مورد', 'يفتح تقاريره مباشرة — ولو كتبت جزءاً من الاسم أو أخطأت بحرف'),
+          _TipLine('كلامك العادي', '«الأرباح» و«شكد ربحت» و«الفائدة» توصل إلى التقرير نفسه'),
+          _TipLine('أضف الفترة', '«2025»، «هذه السنة»، «الشهر الماضي»، «شباط 2024»، «أمس»'),
+          _TipLine('اجمعها', '«ربح أحمد 2024» ← تقرير أحمد على سنة 2024'),
+          _TipLine('رقم', 'رقم فاتورة، باركود مادة، أو رقم هاتف عميل'),
+        ]),
+      );
 }
+
+// ═══════════════════════════ قطع الواجهة ═══════════════════════════
 
 class _TipLine extends StatelessWidget {
   const _TipLine(this.title, this.text);
@@ -1042,56 +1110,6 @@ class _ResultTileState extends State<_ResultTile> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// شريط بحث مضغوط يُوضع أعلى مركز التقارير — يفتح شاشة البحث.
-class ReportSearchBar extends StatelessWidget {
-  const ReportSearchBar({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(18),
-            onTap: () => ReportSearchScreen.open(context),
-            child: Ink(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: kRepPurple.withValues(alpha: 0.22)),
-                boxShadow: [BoxShadow(color: kRepPurple.withValues(alpha: 0.07), blurRadius: 16, offset: const Offset(0, 5))],
-              ),
-              child: Row(children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFF4F46E5), kRepPurple]),
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: const Icon(Icons.manage_search_rounded, color: Colors.white, size: 21),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('ابحث في التقارير',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: kSetText)),
-                    SizedBox(height: 2),
-                    Text('مادة، عميل، موظف، الربح، سند قبض، الضمان، أثر الدولار، مقارنة، 2025…',
-                        maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.3, color: kSetMuted)),
-                  ]),
-                ),
-                const Icon(Icons.keyboard_return_rounded, color: Color(0xFFB8C2CF), size: 18),
-              ]),
-            ),
-          ),
       ),
     );
   }

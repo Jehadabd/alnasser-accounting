@@ -2,6 +2,7 @@
 // screens/create_invoice_screen.dart
 import 'package:flutter/foundation.dart' show kIsWeb; // 🌐 حراسة الويب
 import 'package:flutter/material.dart';
+import '../erp/sales/invoice_returns_card.dart' show InvoiceReturnsStrip; // ↩️ ما رجع من الفاتورة
 import '../models/product.dart';
 import '../services/database_service.dart';
 import '../services/database/business/customer_name_rule.dart'; // 📞 هاتف العميل من بطاقته
@@ -5318,6 +5319,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                   flex: 3,
                   child: Column(
                     children: [
+                  // ↩️ فاتورة عليها مرتجع: يظهر ما رجع منها (الفاتورة تبقى كما بيعت)
+                  if (invoiceToManage?.id != null) InvoiceReturnsStrip(key: ValueKey('ret-${invoiceToManage!.id}'), invoiceId: invoiceToManage!.id!),
                   // شريط إدخال المواد (أفقي) - يظهر فقط إذا لم يكن للعرض، ويمكن إخفاؤه من الإعدادات
                   if (InvoiceEntryLayout.current.showEntryBar) _buildProductEntryBar(context),
                   

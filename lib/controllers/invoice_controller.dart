@@ -26,6 +26,7 @@ import '../services/invoice_edit_events.dart'; // ✏️ التعديل عملي
 import '../services/settings_manager.dart';
 import '../accounting/posting_engine.dart' show PostingEngine;
 import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر يُثبَّت عند الحفظ
+import '../erp/sales/invoice_returns.dart'; // ↩️ حارس الفاتورة التي عليها مرتجع
 import '../services/fifo_cost.dart'; // 📦 كلفة FIFO عند البيع
 
 
@@ -365,6 +366,34 @@ class InvoiceController {
       if (!data.isNewInvoice && orig != null) await PeriodLock.assertOpen(orig);
     } catch (e) {
       return InvoiceSaveResult(success: false, errorMessage: e.toString());
+    }
+
+    // ↩️ فاتورة عليها مرتجع مبيعات مُرحَّل: لا يتغيّر عميلها ولا تُنقص مادة تحت ما أُرجع منها
+    //    (وإلا عادت البضاعة للمخزن مرتين ونزل دين العميل مرتين) — lib/erp/sales/invoice_returns.dart
+    if (!data.isNewInvoice && data.invoiceToManage?.id != null) {
+      try {
+        final d = await _db.database;
+        final lines = await InvoiceReturns.baseOfLines(d, [
+          for (final it in data.invoiceItems.where(_isInvoiceItemComplete))
+            (
+              syncUuid: it.productSyncUuid,
+              name: it.productName,
+              large: it.quantityLargeUnit,
+              single: it.quantityIndividual,
+              per: it.unitsInLargeUnit,
+            ),
+        ]);
+        final why = await InvoiceReturns.editBlockReason(
+          d,
+          data.invoiceToManage!.id!,
+          newBase: lines.base,
+          names: lines.names,
+          customerChanged: data.customerName.trim() != data.invoiceToManage!.customerName.trim(),
+        );
+        if (why != null) return InvoiceSaveResult(success: false, errorMessage: why);
+      } catch (e) {
+        debugPrint('تحذير: فحص مرتجعات الفاتورة: $e');
+      }
     }
 
     // Re-run standard validation to be safe

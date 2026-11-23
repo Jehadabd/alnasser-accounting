@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:flutter/material.dart';
+import 'invoice_returns_card.dart' show InvoiceReturnsCard; // ↩️ ما أُرجع سابقاً
 
 import '../../accounting/ledger.dart' show roundMoney;
 import '../debts/customer_money.dart' show CustomerMoney;
@@ -402,6 +403,30 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
           icon: Icons.inventory_2_outlined,
           color: ErpColors.orange,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            // ↩️ أُرجع من هذه الفاتورة سابقاً (مثلاً من مكتب الضمان): لا يُرجع مرتين
+            if (_invoiceId != null && _returnable.isNotEmpty && _returnable.values.every((q) => q <= 1e-9))
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: ErpColors.green.withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: ErpColors.green.withValues(alpha: 0.3)),
+                ),
+                child: const Row(children: [
+                  Icon(Icons.check_circle_rounded, color: ErpColors.green),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'كل مواد هذه الفاتورة أُرجعت سابقاً — لا شيء متاح لمرتجع جديد. '
+                      'المرتجع السابق مسجَّل وحساب العميل والمخزون مصحَّحان (التفاصيل تحت).',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ]),
+              ),
+            if (_invoiceId != null)
+              InvoiceReturnsCard(key: ValueKey('prev-ret-$_invoiceId'), invoiceId: _invoiceId!),
             if (_invoiceId != null && _returnable.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),

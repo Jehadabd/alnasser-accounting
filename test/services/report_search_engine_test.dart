@@ -77,6 +77,33 @@ void main() {
     test('الموظفين', () => expect(top('الموظفين'), 'employees'));
   });
 
+  group('اللهجات والإنجليزية (كأنه ذكاء اصطناعي)', () {
+    test('عراقي/شامي/خليجي', () {
+      expect(top('شكد ربحت'), 'profit');
+      expect(top('شلون البيع'), 'sales');
+      expect(top('وين راحت الفلوس'), 'expenses');
+      expect(top('قديش صرفت'), 'expenses');
+      expect(top('شنو ناقص'), 'limits');
+      expect(top('بضاعة نايمة'), 'stagnant');
+      expect(top('منو سدد'), 'receipts_list');
+      expect(top('عطلان'), 'warranty_returns');
+    });
+    test('خدمات أخرى', () {
+      expect(top('كشف حساب'), 'customer_statement');
+      expect(top('شيكات'), 'due_items');
+      expect(top('ديون الموردين'), 'supplier_aging');
+      expect(top('فواتير غير مسددة'), 'open_invoices');
+      expect(top('مرتجع مشتريات'), 'purchase_returns');
+      expect(top('حركة مادة'), 'movements');
+      expect(top('الصندوق'), 'cash');
+    });
+    test('English', () {
+      expect(top('profit'), 'profit');
+      expect(top('dollar'), 'usd');
+      expect(top('warranty'), 'warranty_returns');
+    });
+  });
+
   group('الأسماء', () {
     test('جزء من الاسم وخطأ حرف', () {
       expect(ReportCatalog.nameScore(['احمد'], 'أحمد علي') > 0, isTrue);
@@ -86,6 +113,10 @@ void main() {
     test('كلمة المعنى تُفصل عن الاسم', () {
       expect(ReportCatalog.isConcept('الربح'), isTrue);
       expect(ReportCatalog.isConcept('احمد'), isFalse);
+      // أسماء شائعة تشبه كلمات التقارير تبقى أسماءً («ربح علي» ← العميل علي)
+      expect(ReportCatalog.isConcept('علي'), isFalse);
+      expect(ReportCatalog.isConcept('مالك'), isFalse);
+      expect(ReportCatalog.isConcept('عمر'), isFalse);
     });
   });
 }

@@ -85,10 +85,25 @@ class _SalesHubScreenState extends State<SalesHubScreen> {
   int _openOrders = 0;
   double _monthReturns = 0;
 
+  final _search = ReportSearchController();
+  bool _wasSearching = false;
+
+  void _onSearch() {
+    if (_search.active != _wasSearching && mounted) setState(() => _wasSearching = _search.active);
+  }
+
   @override
   void initState() {
     super.initState();
+    _search.addListener(_onSearch);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _search.removeListener(_onSearch);
+    _search.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -120,14 +135,7 @@ class _SalesHubScreenState extends State<SalesHubScreen> {
       title: 'المبيعات',
       subtitle: 'مرتجعات • عروض أسعار • طلبات • مندوبون',
       icon: Icons.storefront,
-      actions: [
-        // 🔎 البحث في التقارير: مادة، عميل، موظف، الربح، سند قبض، الضمان…
-        IconButton(
-            tooltip: 'البحث في التقارير',
-            onPressed: () => ReportSearchScreen.open(context),
-            icon: const Icon(Icons.manage_search_rounded)),
-        IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
-      ],
+      actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh))],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
         StatCard(label: 'مبيعات اليوم', value: fmtMoney(_today), hint: '$_todayCount فاتورة', icon: Icons.today, color: ErpColors.green,
             onTap: () => _go(CustomRangeReportScreen(from: DateTime.now(), to: DateTime.now()))),
@@ -141,7 +149,21 @@ class _SalesHubScreenState extends State<SalesHubScreen> {
               _go(ReturnsReportScreen(from: DateTime(n.year, n.month, 1), to: n));
             }),
       ]),
-      body: HubSections(sections: SalesHubScreen.menu(context, _go)),
+      // 🔎 البحث في التقارير داخل الشاشة نفسها: النتائج تحلّ مكان الأزرار، والمسح يعيدها
+      body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: ReportSearchField(controller: _search, padding: EdgeInsets.zero),
+        ),
+        Expanded(
+          child: _search.active
+              ? ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                  children: [ReportSearchResults(controller: _search)],
+                )
+              : HubSections(sections: SalesHubScreen.menu(context, _go)),
+        ),
+      ]),
     );
   }
 }

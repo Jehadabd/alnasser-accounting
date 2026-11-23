@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../erp/sales/invoice_returns_card.dart'; // ↩️
 import '../models/invoice.dart';
 import '../models/invoice_adjustment.dart';
 import '../services/database_service.dart';
@@ -82,6 +83,8 @@ class _InvoiceDetailsScreenState extends State<InvoiceDetailsScreen> {
                           kind: SetBannerKind.warn),
                     ),
                   _itemsCard(inv, f, profit),
+                  // ↩️ ما رجع منها (مستندات مرتجع مستقلة مربوطة بها)
+                  if (inv.id != null) InvoiceReturnsCard(invoiceId: inv.id!, invoiceTotal: inv.totalAmount),
                   if (_adjustments.isNotEmpty) _adjustmentsCard(),
                   _summaryCard(inv, f, profit),
                 ],

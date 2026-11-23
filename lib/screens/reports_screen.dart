@@ -120,9 +120,26 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Map<String, dynamic>? _today;
   Map<String, dynamic>? _month;
 
+  /// 🔎 البحث في التقارير (داخل هذه الشاشة)
+  final _search = ReportSearchController();
+  bool _wasSearching = false;
+
+  void _onSearch() {
+    // نعيد البناء فقط عند الدخول/الخروج من البحث — النتائج تحدّث نفسها
+    if (_search.active != _wasSearching && mounted) setState(() => _wasSearching = _search.active);
+  }
+
+  @override
+  void dispose() {
+    _search.removeListener(_onSearch);
+    _search.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    _search.addListener(_onSearch);
     SettingsManager.getAppSettings().then((s) {
       if (mounted) setState(() => _settings = s);
     });
@@ -159,11 +176,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
       icon: Icons.insights_rounded,
       actions: [
         IconButton(
-          tooltip: 'البحث في التقارير',
-          onPressed: () => ReportSearchScreen.open(context),
-          icon: const Icon(Icons.manage_search_rounded),
-        ),
-        IconButton(
           tooltip: 'تحديث الأرقام',
           onPressed: _loadGlance,
           icon: const Icon(Icons.refresh_rounded),
@@ -172,10 +184,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
       onRefresh: _loadGlance,
       children: [
         // 🔎 ابحث بكلامك: مادة، عميل، موظف، الربح، سند قبض، الضمان، 2025…
-        const ReportSearchBar(),
-        _glance(profit),
+        //    في الشاشة نفسها: النتائج تحلّ مكان الأزرار، والمسح يعيدها.
+        ReportSearchField(controller: _search),
+        if (_search.active) ReportSearchResults(controller: _search),
+        if (!_search.active) _glance(profit),
         // 🧭 الأزرار من ReportsScreen.menu — نفس ما في اللوحة الجانبية
         // 🔐 التقارير غير المسموحة لا تظهر أصلاً (ولا قسمها إن فرغ)
+        if (!_search.active)
         for (final g in ReportsScreen.menu(context, _open))
           if (g.tiles.any(_allowed))
           _group(g.title, g.subtitle ?? '', [

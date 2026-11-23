@@ -16,6 +16,7 @@ import '../pickers.dart';
 import '../report_export.dart';
 import '../sales/doc_pdf.dart';
 import '../sales/sales_return_screen.dart';
+import '../sales/invoice_returns.dart';
 import 'item_warranty.dart';
 import 'warranty_desk.dart';
 import 'warranty_service.dart';
@@ -632,6 +633,9 @@ class _WarrantyClaimScreenState extends State<WarrantyClaimScreen> {
   List<WarrantyEvent> _events = [];
   bool _busy = false;
 
+  /// مرتجعات المبيعات المُرحَّلة لهذه المادة على فاتورة الطلب (منها مرتجع «مكتب الضمان»).
+  List<InvoiceReturnDoc> _returns = const [];
+
   @override
   void initState() {
     super.initState();
@@ -641,10 +645,17 @@ class _WarrantyClaimScreenState extends State<WarrantyClaimScreen> {
   Future<void> _load() async {
     final c = await WarrantyService.get(widget.claimId);
     final ev = c == null ? <WarrantyEvent>[] : await WarrantyService.events(widget.claimId);
+    var rets = const <InvoiceReturnDoc>[];
+    if (c?.invoiceId != null) {
+      try {
+        rets = await InvoiceReturns.forInvoice(await erpDb(), c!.invoiceId!, productId: c.productId);
+      } catch (_) {}
+    }
     if (!mounted) return;
     setState(() {
       _c = c;
       _events = ev;
+      _returns = rets;
     });
   }
 
@@ -658,6 +669,60 @@ class _WarrantyClaimScreenState extends State<WarrantyClaimScreen> {
     }
     if (mounted) setState(() => _busy = false);
     await _load();
+  }
+
+  /// بطاقة «سُجّل الاسترجاع»: المرتجع رقمه وتاريخه ومبلغه وطريقته — ولا حاجة لمرتجع آخر.
+  Widget _refundDone(List<InvoiceReturnDoc> docs) {
+    String q(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ErpColors.green.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: ErpColors.green.withValues(alpha: 0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Row(children: [
+          Icon(Icons.check_circle_rounded, color: ErpColors.green),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text('الاسترجاع مسجَّل — حساب العميل والمخزون مصحَّحان',
+                style: TextStyle(fontWeight: FontWeight.w900, color: ErpColors.green)),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        for (final d in docs)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(start: 32, bottom: 4),
+            child: Row(children: [
+              Expanded(
+                child: Text(
+                  [
+                    'مرتجع مبيعات رقم ${d.no}',
+                    if (d.date != null) fmtDate(d.date!),
+                    for (final l in d.lines) '${q(l.qty)} ${l.saleType} ${l.name}',
+                    '${fmtMoney(d.total)} — ${d.modeArabic}',
+                  ].join(' • '),
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => printSalesReturn(context, d.id),
+                icon: const Icon(Icons.print_rounded, size: 18),
+                label: const Text('طباعة'),
+              ),
+            ]),
+          ),
+        const Padding(
+          padding: EdgeInsetsDirectional.only(start: 32),
+          child: Text(
+            'الفاتورة الأصلية تبقى كما بيعت (قطعة تبقى قطعة) والمرتجع مستند مستقل مربوط بها — '
+            'لذلك «مرتجع مبيعات» من الفاتورة نفسها يُظهر الآن 0 متاح.',
+            style: TextStyle(fontSize: 12, color: ErpColors.muted, height: 1.5),
+          ),
+        ),
+      ]),
+    );
   }
 
   Future<void> _sendToSupplier() async {
@@ -867,7 +932,12 @@ class _WarrantyClaimScreenState extends State<WarrantyClaimScreen> {
                   ]),
                   const SizedBox(height: 12),
                   Wrap(spacing: 10, runSpacing: 10, children: _actions(c)),
-                  if (c.resolution == WResolution.refunded) ...[
+                  // ✔ الاسترجاع مسجَّل فعلاً بمرتجع مبيعات (من مكتب الضمان أو يدوياً)
+                  if (c.resolution == WResolution.refunded && _returns.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    _refundDone(_returns),
+                  ],
+                  if (c.resolution == WResolution.refunded && _returns.isEmpty) ...[
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -884,7 +954,7 @@ class _WarrantyClaimScreenState extends State<WarrantyClaimScreen> {
                         ),
                         TextButton.icon(
                           onPressed: () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => SalesReturnScreen(invoiceId: c.invoiceId))),
+                              MaterialPageRoute(builder: (_) => SalesReturnScreen(invoiceId: c.invoiceId))).then((_) => _load()),
                           icon: const Icon(Icons.assignment_return_rounded),
                           label: const Text('مرتجع مبيعات'),
                         ),
