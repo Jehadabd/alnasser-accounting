@@ -1816,7 +1816,30 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                         value: 'avco',
                         activeColor: Colors.blue,
                       ),
+
+                      // الخيار الثالث: اسألني لكل مادة عند تغيّر كلفتها
+                      RadioListTile<String>(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('اسألني لكل مادة', style: TextStyle(fontWeight: FontWeight.w500)),
+                        subtitle: Text(
+                          'عند «تأكيد واستلام» لمادة لها رصيد وكلفتها الجديدة مختلفة: تظهر نافذة بالأرقام '
+                          '(المتوسط أو آخر سعر) لكل مادة، ويمكنك «تذكّر» الطريقة لها.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                        value: 'ask',
+                        activeColor: Colors.deepPurple,
+                      ),
                     ],
+                  ),
+                ),
+                Container(
+                  margin: const EdgeInsets.only(top: 6),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(color: Colors.blueGrey.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(12)),
+                  child: Text(
+                    'هذه الطريقة الافتراضية. كل مادة يمكن أن تأخذ طريقة خاصة من بطاقتها ← الكلفة. '
+                    '«الأعلى» و«الأدنى» و«إبقاء القديمة» ليست طرق كلفة محاسبية: تجعل قيمة المخزون والأرباح غير حقيقية.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey[700], height: 1.5),
                   ),
                 ),
               ],

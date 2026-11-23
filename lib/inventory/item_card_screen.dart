@@ -9,6 +9,7 @@
 //   • الكمية لا تُعدَّل من هنا أبداً — مكانها المستندات المخزنية/الجرد.
 //   • باقي الحقول في product_details (محلية، لا تمس المزامنة).
 
+import '../services/cost_method_policy.dart'; // 💰 طريقة الكلفة
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -755,7 +756,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
   final _price = List.generate(6, (_) => TextEditingController());
   bool _trackExpiry = false, _trackSerial = false, _scale = false, _active = true, _hideFromStaff = false;
   int? _supplierId, _warehouseId, _categoryId;
-  String _costMethod = 'last';
+  String _costMethod = CostMethodPolicy.itemDefault;
   String _itemType = 'trade';
   String _pricingMode = 'fixed';
   String? _defaultUnit;
@@ -828,7 +829,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
       _supplierId = d['default_supplier_id'] as int?;
       _warehouseId = d['default_warehouse_id'] as int?;
       _categoryId = p['category_id'] as int?;
-      _costMethod = (d['cost_method'] as String?) ?? 'last';
+      _costMethod = CostMethodPolicy.itemValue(d['cost_method'] as String?);
       _itemType = (d['item_type'] as String?) ?? 'trade';
       _pricingMode = (d['pricing_mode'] as String?) ?? 'fixed';
       _defaultUnit = d['default_unit'] as String?;
@@ -1270,12 +1271,13 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
               label: 'طريقة الكلفة',
               value: _costMethod,
               items: const [
-                DropdownMenuItem(value: 'last', child: Text('آخر سعر شراء')),
-                DropdownMenuItem(value: 'average', child: Text('المتوسط المرجّح')),
-                DropdownMenuItem(value: 'fixed', child: Text('كلفة ثابتة')),
+                DropdownMenuItem(value: CostMethodPolicy.itemDefault, child: Text('حسب الإعدادات العامة')),
+                DropdownMenuItem(value: CostMethodPolicy.itemAverage, child: Text('المتوسط المرجّح')),
+                DropdownMenuItem(value: CostMethodPolicy.itemLast, child: Text('آخر سعر شراء')),
+                DropdownMenuItem(value: CostMethodPolicy.itemAsk, child: Text('اسألني عند كل شراء')),
               ],
               onChanged: (v) => setState(() {
-                _costMethod = v ?? 'last';
+                _costMethod = v ?? CostMethodPolicy.itemDefault;
                 _dirty = true;
               }),
             ),

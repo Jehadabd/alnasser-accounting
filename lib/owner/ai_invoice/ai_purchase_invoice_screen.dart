@@ -33,7 +33,6 @@ import '../../screens/ai_models_settings_screen.dart';
 import 'ai_alias_store.dart';
 import 'ai_invoice_service.dart';
 import 'ai_supplier_picker.dart'; // 🏪 اختيار المورد
-import 'ai_new_units_dialog.dart';
 import 'ai_purchase_prefill.dart';
 
 // ───────────────────────── ألوان ─────────────────────────
@@ -345,36 +344,6 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   String _baseLabel(_Row row, Product? prod) =>
       prod != null ? AiInvoiceService.baseUnitName(prod) : (row.plan?.baseUnit ?? 'قطعة');
 
-  /// خطة وحدات افتراضية لمادة جديدة لم تُعرَّف وحداتها يدوياً.
-  AiUnitPlan _autoPlan(_Row r) {
-    final f = r.f;
-    if (f > 1 && r.unit.trim() != 'قطعة') {
-      return AiUnitPlan(baseUnit: 'قطعة', levels: [
-        {'unit_name': r.unit, 'quantity': f},
-      ], baseCost: r.pr / f);
-    }
-    return AiUnitPlan(baseUnit: r.unit, levels: const [], baseCost: r.pr);
-  }
-
-  /// 📦 تعريف وحدات المادة الجديدة: هل وحدة الفاتورة أصغر وحدة؟ وما الذي في داخلها؟
-  Future<void> _defineUnits(_Row row) async {
-    final plan = await showNewUnitsDialog(
-      context,
-      productName: row.line.cleanName,
-      buyUnit: row.plan != null ? row.plan!.units.last : row.unit,
-      buyPrice: row.pr,
-      qty: row.q,
-      current: row.plan,
-    );
-    if (plan == null || !mounted) return;
-    setState(() {
-      row.plan = plan;
-      row.unit = plan.units.last; // وحدة الشراء = الأكبر
-      _setupUnits(row, keepFactor: false);
-    });
-    _snack('حُفظت وحدات «${row.line.cleanName}»: ${plan.describe()}', _cLearned);
-  }
-
   // ───────────────────────── المتابعة ─────────────────────────
 
   Future<void> _continue() async {
@@ -410,9 +379,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       ));
       if (prod == null) {
         originals[name] = l.originalName;
-        // 📦 كل مادة جديدة تصل ببطاقة جاهزة: ما عرّفته بـ«حدّد وحدتها»، وإلا ما قرأه
-        //    النموذج (كرتون فيه 10 ⇒ قطعة + كرتون=10، وكلفة القطعة = سعر الكرتون ÷ 10)
-        plans[name] = r.plan ?? _autoPlan(r);
+        // 📦 الوحدات تُعرَّف كاملة في بطاقة المادة من فاتورة الشراء (تفتح بالاسم ووحدة
+        //    الفاتورة وسعرها) — لا تعريف وحدات هنا
         continue;
       }
       // 🧠 نتعلّم ما صحّحتَه، وما أكّدتَه بمطابقة قوية (لا نتعلّم التقريبي غير المؤكد)
@@ -1114,10 +1082,6 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                       ]),
                     ),
                   ),
-                  if (prod == null) ...[
-                    const SizedBox(height: 8),
-                    _unitsButton(row),
-                  ],
                   for (final n in notes)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
@@ -1164,61 +1128,6 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
               ),
             ),
           ]),
-        ),
-      ),
-    );
-  }
-
-  /// زر «وحدات المادة» لسطر مادة جديدة: يلفت النظر قبل التعريف، ويلخّصها بعده.
-  Widget _unitsButton(_Row row) {
-    final plan = row.plan;
-    final done = plan != null;
-    final c = done ? _cLearned : _cNew;
-    return Semantics(
-      button: true,
-      label: done ? 'تعديل وحدات المادة' : 'تعريف وحدات المادة',
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        decoration: BoxDecoration(
-          gradient: done
-              ? null
-              : LinearGradient(colors: [_cNew.withValues(alpha: 0.10), _aiB.withValues(alpha: 0.08)]),
-          color: done ? _cLearned.withValues(alpha: 0.06) : null,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: c.withValues(alpha: done ? 0.30 : 0.45), width: done ? 1 : 1.3),
-        ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: () => _defineUnits(row),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(color: c.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(9)),
-                  child: Icon(done ? Icons.account_tree_rounded : Icons.straighten_rounded, size: 18, color: c),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(done ? 'وحدات المادة' : 'حدّد وحداتها — هل «${row.unit.isEmpty ? 'الوحدة' : row.unit}» أصغر وحدة؟',
-                        style: TextStyle(fontWeight: FontWeight.w800, color: c, fontSize: 13)),
-                    Text(
-                      plan != null
-                          ? '${plan.describe()} • كلفة «${plan.baseUnit}» ${_fmt.format(plan.baseCost)}'
-                          : 'إن لم تضغط: ${_autoPlan(row).describe()} • كلفة «${_autoPlan(row).baseUnit}» ${_fmt.format(_autoPlan(row).baseCost)} — اضغط للتعديل',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11.5, color: _muted),
-                    ),
-                  ]),
-                ),
-                Icon(done ? Icons.edit_rounded : Icons.chevron_left_rounded, color: c, size: 20),
-              ]),
-            ),
-          ),
         ),
       ),
     );

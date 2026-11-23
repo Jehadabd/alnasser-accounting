@@ -34,6 +34,9 @@ import '../inventory/item_card_screen.dart' show ItemCardService; // باركو�
 import '../models/app_user.dart' show AppPermissions;
 import '../services/auth_service.dart';
 import 'purchase_sale_extras.dart'; // 🏷️ سعر بيع المفرد + ✱ الأسعار والباركودات
+import 'cost_method_dialog.dart'; // 💰 اسألني عن طريقة الكلفة
+import '../services/cost_method_policy.dart';
+import '../services/settings_manager.dart';
 import '../owner/ai_invoice/ai_supplier_picker.dart'; // 🏪 اختيار المورد
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
@@ -313,6 +316,56 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
       }
     }
     return errors;
+  }
+
+  /// مواد طريقتها «اسألني» ولها رصيد وكلفة شرائها تختلف عن كلفتها (قراءة فقط).
+  /// تعديل فاتورة مؤكدة: كميتها القديمة تُطرح من الرصيد (تُعكس قبل الحساب).
+  Future<List<CostCase>> _costCases(int? existingId) async {
+    final out = <CostCase>[];
+    final ps = context.read<PurchaseService>();
+    try {
+      final db = await DatabaseService().database;
+      final global = (await SettingsManager.getAppSettings()).costingMethod;
+      final old = <int, double>{};
+      if (existingId != null) {
+        final st = await db.query('purchase_invoices', columns: ['status'], where: 'id = ?', whereArgs: [existingId], limit: 1);
+        if (st.isNotEmpty && st.first['status'] == 'confirmed') {
+          for (final i in await ps.getInvoiceItems(existingId)) {
+            old[i.productId] = (old[i.productId] ?? 0) + i.baseQuantity;
+          }
+        }
+      }
+      final qty = <int, double>{}, value = <int, double>{};
+      for (final it in _items) {
+        if (it.productId <= 0) continue;
+        final rate = _currency == 'USD' ? (_usdRate > 1 ? _usdRate : 0.0) : 1.0;
+        if (rate == 0) continue; // دولار بلا سعر صرف: لا أرقام دقيقة للمقارنة
+        qty[it.productId] = (qty[it.productId] ?? 0) + it.baseQuantity;
+        value[it.productId] = (value[it.productId] ?? 0) + it.baseQuantity * it.baseUnitCost * rate;
+      }
+      for (final id in qty.keys) {
+        if (await CostMethodPolicy.effective(db, id, global) != CostMethodPolicy.ask) continue;
+        final fresh = await DatabaseService().getProductById(id);
+        if (fresh == null) continue;
+        final stock = fresh.stockQuantity - (old[id] ?? 0);
+        final q = qty[id]!;
+        final newCost = q > 0 ? value[id]! / q : 0.0;
+        final cost = fresh.costPrice ?? 0;
+        if (stock <= 0 || (newCost - cost).abs() < 0.5) continue; // لا رصيد أو الكلفة نفسها ⇒ لا سؤال
+        out.add(CostCase(
+          productId: id,
+          name: fresh.name,
+          baseUnit: _baseUnitOf(fresh),
+          stock: stock,
+          cost: cost,
+          qty: q,
+          newCost: newCost,
+        ));
+      }
+    } catch (e) {
+      debugPrint('⚠️ طريقة الكلفة: $e');
+    }
+    return out;
   }
 
   Widget _retailCell(PurchaseInvoiceItem item) {
@@ -1628,6 +1681,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         }
       }
 
+      // 💰 «اسألني»: مواد تغيّرت كلفتها ولها رصيد ⇒ تختار الطريقة لكل مادة قبل الحفظ
+      CostChoice? costChoice;
+      if (confirm) {
+        final cases = await _costCases(existing?.id);
+        if (cases.isNotEmpty) {
+          if (!mounted) return;
+          costChoice = await showCostMethodDialog(context, cases);
+          if (costChoice == null) return; // ألغيت ⇒ لا حفظ
+        }
+      }
+
       if (existing != null && existing.id != null) {
         final oldItems = await purchaseService.getInvoiceItems(existing.id!);
         await purchaseService.updatePurchaseInvoiceWithReversal(
@@ -1637,10 +1701,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
           _items,
           warehouseId: _warehouseId,
           cashBoxId: _cashBoxId,
+          costMethods: costChoice?.methods,
         );
       } else {
         await purchaseService.savePurchaseInvoice(invoice, _items,
-            confirm: confirm, warehouseId: _warehouseId, cashBoxId: _cashBoxId);
+            confirm: confirm, warehouseId: _warehouseId, cashBoxId: _cashBoxId, costMethods: costChoice?.methods);
+      }
+
+      // 💰 «تذكّر لهذه المادة»: تُحفظ طريقتها في بطاقتها (بعد نجاح الحفظ فقط)
+      for (final id in costChoice?.remember ?? const <int>{}) {
+        final m = costChoice!.methods[id];
+        if (m != null) await CostMethodPolicy.remember(id, m).catchError((_) {});
       }
 
       // 🏷️ الفاتورة حُفظت: الآن فقط أسعار البيع والباركودات التي غيّرتها في السطور

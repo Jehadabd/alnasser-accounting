@@ -19,6 +19,7 @@
 //     PriceTools.applyPrices (تُسجَّل في سجل تغييرات الأسعار).
 //   • الكمية لا تُعدَّل من هنا — مكانها المستندات المخزنية والجرد.
 
+import '../services/cost_method_policy.dart'; // 💰 طريقة الكلفة
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'dart:convert';
 
@@ -204,7 +205,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   };
   bool _trackSerial = false, _scale = false, _active = true, _hideFromStaff = false;
   int? _supplierId, _warehouseId;
-  String _costMethod = 'last', _itemType = 'trade', _pricingMode = 'fixed';
+  String _costMethod = CostMethodPolicy.itemDefault, _itemType = 'trade', _pricingMode = 'fixed';
   String? _defaultUnit;
 
   // ── قوائم ومعلومات ──
@@ -347,7 +348,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _hideFromStaff = false;
     _supplierId = null;
     _warehouseId = null;
-    _costMethod = 'last';
+    _costMethod = CostMethodPolicy.itemDefault;
     _itemType = 'trade';
     _pricingMode = 'fixed';
     _defaultUnit = null;
@@ -419,7 +420,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     _hideFromStaff = d['min_role'] == 'admin';
     _supplierId = d['default_supplier_id'] as int?;
     _warehouseId = d['default_warehouse_id'] as int?;
-    _costMethod = (d['cost_method'] as String?) ?? 'last';
+    _costMethod = CostMethodPolicy.itemValue(d['cost_method'] as String?);
     _itemType = (d['item_type'] as String?) ?? (p.productType == 'service' ? 'service' : 'trade');
     _pricingMode = (d['pricing_mode'] as String?) ?? 'fixed';
     final du = d['default_unit'] as String?;
@@ -1698,7 +1699,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
     if (_hideFromStaff) n++;
     if (_supplierId != null) n++;
     if (_warehouseId != null) n++;
-    if (_costMethod != 'last') n++;
+    if (_costMethod != CostMethodPolicy.itemDefault) n++;
     if (_defaultUnit != null) n++;
     n += _barcodesList.length + _pendingBarcodes.where((b) => b.code.text.trim().isNotEmpty).length;
     return n;
@@ -2300,7 +2301,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       case 2:
         return nz(['max_discount_percent', 'bonus_buy', 'bonus_free']) + (_defaultUnit != null ? 1 : 0);
       case 3:
-        return nz(['fixed_cost', 'opening_cost']) + (_costMethod != 'last' ? 1 : 0);
+        return nz(['fixed_cost', 'opening_cost']) + (_costMethod != CostMethodPolicy.itemDefault ? 1 : 0);
       case 4:
         return nz(['min_qty', 'reorder_qty', 'max_qty', 'shelf_location']) +
             (_supplierId != null ? 1 : 0) +
@@ -2673,12 +2674,14 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             _drop<String>(
               'طريقة الكلفة',
               _costMethod,
+              // 💰 تُطبَّق عند «تأكيد واستلام» فاتورة شراء (cost_method_policy.dart)
               const [
-                DropdownMenuItem(value: 'last', child: Text('آخر سعر شراء')),
-                DropdownMenuItem(value: 'average', child: Text('المتوسط المرجّح')),
-                DropdownMenuItem(value: 'fixed', child: Text('كلفة ثابتة')),
+                DropdownMenuItem(value: CostMethodPolicy.itemDefault, child: Text('حسب الإعدادات العامة')),
+                DropdownMenuItem(value: CostMethodPolicy.itemAverage, child: Text('المتوسط المرجّح')),
+                DropdownMenuItem(value: CostMethodPolicy.itemLast, child: Text('آخر سعر شراء')),
+                DropdownMenuItem(value: CostMethodPolicy.itemAsk, child: Text('اسألني عند كل شراء')),
               ],
-              (v) => upd(() => _costMethod = v ?? 'last'),
+              (v) => upd(() => _costMethod = v ?? CostMethodPolicy.itemDefault),
             ),
             _field('سعر كلفة ثابت (للأرباح)', _dc['fixed_cost']!, number: true, hint: '0', suffixText: 'د.ع'),
             _field('الكلفة الافتتاحية', _dc['opening_cost']!, number: true, hint: '0', suffixText: 'د.ع'),

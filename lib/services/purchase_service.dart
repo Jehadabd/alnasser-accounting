@@ -1,3 +1,4 @@
+import 'cost_method_policy.dart'; // 💰 طريقة الكلفة لكل مادة
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart'; // For Transaction
 import 'package:flutter/foundation.dart';
@@ -318,7 +319,7 @@ class PurchaseService with ChangeNotifier {
   
   /// تعديل فاتورة مشتريات موجودة مع إرجاع التأثيرات السابقة وتطبيق التأثيرات الجديدة
   Future<void> updatePurchaseInvoiceWithReversal(PurchaseInvoice oldInvoice, PurchaseInvoice newInvoice, List<PurchaseInvoiceItem> oldItems, List<PurchaseInvoiceItem> newItems,
-      {int? warehouseId, int? cashBoxId}) async {
+      {int? warehouseId, int? cashBoxId, Map<int, String>? costMethods}) async {
     final db = await _db.database;
     // 💵 فاتورة بالدينار: أسطرها وإجماليها ومدفوعها دنانير صحيحة (الدولار كما هو)
     (newInvoice, newItems) = IqdNormalize.purchase(newInvoice, newItems);
@@ -375,7 +376,9 @@ class PurchaseService with ChangeNotifier {
       // 5. Apply New Effects (if new invoice is confirmed)
       if (newInvoice.status == 'confirmed') {
         for (var item in newItems) {
-          await _updateProductStockAndCost(txn, item, costingMethod,
+          // 💰 طريقة الكلفة لكل مادة: اختيارك ← بطاقة المادة ← الإعداد العام
+          final method = await CostMethodPolicy.resolve(txn, item.productId, costingMethod, costMethods);
+          await _updateProductStockAndCost(txn, item, method,
               warehouseId: warehouseId, currency: newInvoice.currency, batchDate: newInvoice.date);
         }
       }
@@ -390,8 +393,9 @@ class PurchaseService with ChangeNotifier {
     notifyListeners();
   }
 
+  /// [costMethods]: طريقة الكلفة التي اخترتها لكل مادة في نافذة «اسألني» (رقم المادة ← avco/last_purchase).
   Future<void> savePurchaseInvoice(PurchaseInvoice invoice, List<PurchaseInvoiceItem> items,
-      {bool confirm = false, int? warehouseId, int? cashBoxId}) async {
+      {bool confirm = false, int? warehouseId, int? cashBoxId, Map<int, String>? costMethods}) async {
     final db = await _db.database;
     // 💵 فاتورة بالدينار: أسطرها وإجماليها ومدفوعها دنانير صحيحة (الدولار كما هو)
     (invoice, items) = IqdNormalize.purchase(invoice, items);
@@ -461,7 +465,9 @@ class PurchaseService with ChangeNotifier {
       // 3. If Confirmed, Update Stock and Cost
       if (nowConfirmed) {
         for (var item in items) {
-          await _updateProductStockAndCost(txn, item, costingMethod,
+          // 💰 طريقة الكلفة لكل مادة: اختيارك ← بطاقة المادة ← الإعداد العام
+          final method = await CostMethodPolicy.resolve(txn, item.productId, costingMethod, costMethods);
+          await _updateProductStockAndCost(txn, item, method,
               warehouseId: warehouseId, currency: invoice.currency, batchDate: invoice.date);
         }
       }

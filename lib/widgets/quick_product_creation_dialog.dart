@@ -277,7 +277,8 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
     if (widget.initialName != null) {
       // 🧾 مادة جديدة من سطر فاتورة: تُفتح بطاقة المادة الحالية مختصرة فوراً
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _openItemCard(name: widget.initialName);
+        // ↩️ فُتحت البطاقة مباشرة من سطر الفاتورة ⇒ «رجوع» منها يعود إلى الفاتورة لا إلى البحث
+        if (mounted) _openItemCard(name: widget.initialName, fromInvoiceRow: true);
       });
       _nameController.text = widget.initialName!;
       
@@ -422,7 +423,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
 
   /// 🧾 «منتج جديد»: بطاقة المادة الحالية (نفس شاشة إدخال البضاعة) مختصرة. بعد
   /// حفظها تعود هنا مختارة، فتُحدَّد الوحدة والكمية وسعر الشراء ثم «إضافة».
-  Future<void> _openItemCard({String? name, String? barcode}) async {
+  Future<void> _openItemCard({String? name, String? barcode, bool fromInvoiceRow = false}) async {
     final res = await Navigator.of(context).push<Object?>(MaterialPageRoute(
       builder: (_) => ItemCardEditorScreen(
         quickForPurchase: true,
@@ -435,7 +436,12 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         initialPrice: widget.initialSalePrice,
       ),
     ));
-    if (res is! int || !mounted) return;
+    if (!mounted) return;
+    if (res is! int) {
+      // رجوع بلا حفظ: من سطر الفاتورة ⇒ نغلق هذه النافذة أيضاً؛ من البحث ⇒ نبقى في البحث
+      if (fromInvoiceRow) Navigator.of(context).pop();
+      return;
+    }
     final p = await DatabaseService().getProductById(res);
     if (p == null || !mounted) return;
     // ⚡ من سطر فاتورة: الوحدة والكمية والسعر معروفة ⇒ تُضاف فوراً بلا خطوة «إضافة» ثانية
