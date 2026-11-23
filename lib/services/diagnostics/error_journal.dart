@@ -162,7 +162,68 @@ class ErrorJournal {
     }
     _hookDebugPrint();
     startFreezeWatch();
+    await _markSession();
   }
+
+  // ─────────────────────────── جلسة التطوير وتاريخ البناء ───────────────────────────
+
+  /// البرنامج يعمل من «flutter run» (نسخة تطوير لا نسخة الزبائن).
+  static bool get devSession => kDebugMode;
+
+  /// وقت بناء البرنامج الحالي (تاريخ تعديل ملف البرنامج) — الخطأ الأقدم منه حدث في نسخة سابقة
+  /// وقد يكون أُصلح. null إن تعذّر معرفته.
+  static DateTime? buildTime;
+
+  /// أرقام العمليات (pid) التي عملت كجلسة تطوير — خروجها المفاجئ غالباً إيقاف من الطرفية
+  /// أو أثر Hot Restart، لا عطل عند الزبائن.
+  static final Set<int> _devPids = {};
+
+  static Future<void> _markSession() async {
+    if (kIsWeb) return;
+    try {
+      final exe = File(Platform.resolvedExecutable);
+      if (await exe.exists()) buildTime = await exe.lastModified();
+    } catch (_) {}
+    final dir = _dir;
+    if (dir == null) return;
+    final f = File('${dir.path}${Platform.pathSeparator}dev_sessions.txt');
+    try {
+      if (await f.exists()) {
+        for (final l in await f.readAsLines()) {
+          final n = int.tryParse(l.split(' ').first.trim());
+          if (n != null) _devPids.add(n);
+        }
+      }
+      if (devSession && !_devPids.contains(pid)) {
+        _devPids.add(pid);
+        // آخر 200 جلسة فقط
+        final keep = (_devPids.toList()..sort()).reversed.take(200).toList();
+        await f.writeAsString('${keep.map((x) => '$x').join('\n')}\n', flush: true);
+      }
+    } catch (_) {}
+  }
+
+  /// هل الخطأ حدث قبل بناء النسخة الحالية؟ (قد يكون أُصلح في التحديث)
+  static bool beforeThisBuild(ErrorEntry e) {
+    final b = buildTime;
+    return b != null && e.last.isBefore(b.subtract(const Duration(seconds: 5)));
+  }
+
+  // ─────────────────────────── آخر ما فعله البرنامج ───────────────────────────
+
+  /// آخر أسطر السجل (debugPrint) قبل الخطأ — تُرفق بالتجمّد والأخطاء غير المعالَجة وأخطاء
+  /// الشاشة لتدلّ على ما كان البرنامج يفعله لحظتها.
+  static final List<String> _recent = [];
+
+  static void _remember(String line) {
+    final t = line.trim();
+    if (t.isEmpty) return;
+    final now = DateTime.now().toIso8601String().substring(11, 19);
+    _recent.add('$now  ${t.length > 220 ? '${t.substring(0, 220)}…' : t}');
+    if (_recent.length > 12) _recent.removeAt(0);
+  }
+
+  static String? get _recentBlock => _recent.isEmpty ? null : 'آخر ما سجّله البرنامج قبلها:\n${_recent.join('\n')}';
 
   static void _hookDebugPrint() {
     if (_hooked) return;
@@ -173,6 +234,7 @@ class ErrorJournal {
       if (message != null && !_busy && looksLikeError(message)) {
         recordText(ErrorSource.logged, message);
       }
+      if (message != null && !_busy) _remember(message.split('\n').first);
     };
   }
 
@@ -231,7 +293,11 @@ class ErrorJournal {
       _tick = now;
       final sec = freezeSeconds(gap);
       if (sec != null) {
-        recordText(ErrorSource.freeze, 'تجمّد البرنامج $sec ثانية — لم يستجب للضغط ولا للرسم');
+        recordText(
+            ErrorSource.freeze,
+            devSession
+                ? 'تجمّد البرنامج $sec ثانية — لم يستجب للضغط ولا للرسم (جلسة تطوير: قد يكون توقفاً عند نقطة توقف أو Hot Reload)'
+                : 'تجمّد البرنامج $sec ثانية — لم يستجب للضغط ولا للرسم');
       }
     });
   }
@@ -317,7 +383,14 @@ class ErrorJournal {
       final m = _cut(sanitize(_stripMarkers(message)), _maxMessage);
       if (m.trim().isEmpty) return;
       final trail = _trail;
-      final raw = [if (detail != null && detail.trim().isNotEmpty) detail, if (trail != null) trail].join('\n');
+      final ctx = const {ErrorSource.freeze, ErrorSource.uncaught, ErrorSource.flutter, ErrorSource.background}.contains(source)
+          ? _recentBlock
+          : null;
+      final raw = [
+        if (detail != null && detail.trim().isNotEmpty) detail,
+        if (trail != null) trail,
+        if (ctx != null) ctx,
+      ].join('\n');
       final d = raw.isEmpty ? null : _cut(sanitize(raw), _maxDetail);
       final id = fingerprint(source, m);
       final now = DateTime.now();
@@ -449,7 +522,11 @@ class ErrorJournal {
         final start = len > 512 * 1024 ? len - 512 * 1024 : 0;
         await raf.setPosition(start);
         final bytes = await raf.read(len - start);
-        final list = parseNative(utf8.decode(bytes, allowMalformed: true));
+        final text = utf8.decode(bytes, allowMalformed: true);
+        // جلسات قديمة قبل تسجيل dev_sessions.txt: إعادة تشغيل Dart داخل العملية نفسها
+        // (Hot Restart) لا تحدث إلا في «flutter run» ⇒ جلسة تطوير.
+        final hot = hotRestartPids(text, await _tailOf(File('${dir.path}${Platform.pathSeparator}dart_errors.log')));
+        final list = parseNative(text, devPids: {..._devPids, ...hot});
         for (final e in list) {
           final ack = _nativeAck[e.id];
           if (ack != null && !e.last.isAfter(ack)) e.resolved = true; // أُغلق ولم يتكرر بعدها
@@ -467,14 +544,77 @@ class ErrorJournal {
       r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d{3}\] (UNHANDLED - the app is closing|FATAL-TYPE exception \(first chance\)) '
       r'code=0x([0-9A-Fa-f]{8}) at (\S+?)\+0x');
 
+  static Future<String> _tailOf(File f, [int max = 512 * 1024]) async {
+    try {
+      if (!await f.exists()) return '';
+      final len = await f.length();
+      final raf = await f.open();
+      try {
+        final start = len > max ? len - max : 0;
+        await raf.setPosition(start);
+        return utf8.decode(await raf.read(len - start), allowMalformed: true);
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static final _dartStart = RegExp(r'^\[(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})[^\]]*\] ===== start');
+
+  /// العمليات التي بدأ فيها Dart أكثر من مرة (Hot Restart) — من native_errors.log (بدء العملية)
+  /// وdart_errors.log (بدء Dart). لا تحدث إعادة التشغيل هذه في نسخة الزبائن.
+  @visibleForTesting
+  static Set<int> hotRestartPids(String nativeText, String dartText) {
+    final starts = <(DateTime, int)>[];
+    for (final l in nativeText.split('\n')) {
+      final m = _nativeStartAt.firstMatch(l.trimRight());
+      if (m == null) continue;
+      final t = DateTime.tryParse('${m.group(1)}T${m.group(2)}');
+      final id = int.tryParse(m.group(3)!);
+      if (t != null && id != null) starts.add((t, id));
+    }
+    if (starts.isEmpty) return const {};
+    starts.sort((a, b) => a.$1.compareTo(b.$1));
+    final dartStarts = <DateTime>[];
+    for (final l in dartText.split('\n')) {
+      final m = _dartStart.firstMatch(l);
+      final t = m == null ? null : DateTime.tryParse('${m.group(1)}T${m.group(2)}');
+      if (t != null) dartStarts.add(t);
+    }
+    final out = <int>{};
+    for (var i = 0; i < starts.length; i++) {
+      final from = starts[i].$1.subtract(const Duration(seconds: 5));
+      final to = i + 1 < starts.length ? starts[i + 1].$1.subtract(const Duration(seconds: 5)) : DateTime(9999);
+      final n = dartStarts.where((t) => !t.isBefore(from) && t.isBefore(to)).length;
+      if (n >= 2) out.add(starts[i].$2);
+    }
+    return out;
+  }
+
+  static final _nativeStartAt = RegExp(r'^===== (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) start \(pid (\d+)\) =====');
+
+  static final _nativeStart = RegExp(r'^===== .* start \(pid (\d+)\) =====');
+
+  /// بادئة الخروج المفاجئ في جلسة تطوير (يطابقها دليل الحلول «crash_dev»).
+  static const msgPrefixDev = 'أثناء جلسة تطوير — ';
+
   /// يقرأ نص native_errors.log ويعيد الخروج المفاجئ فقط، مجمّعاً (النوع + الرمز + الوحدة).
   /// استثناءات C++ «first chance» العادية لا تُعرض: كثير منها يعالجه البرنامج.
+  /// [devPids] للاختبار: عمليات التطوير (وإلا المسجّلة في dev_sessions.txt).
   @visibleForTesting
-  static List<ErrorEntry> parseNative(String text) {
+  static List<ErrorEntry> parseNative(String text, {Set<int>? devPids}) {
     final out = <String, ErrorEntry>{};
     final lines = text.split('\n');
+    int? curPid; // العملية التي يخصّها ما يلي من أسطر («===== … start (pid N) =====»)
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i].trimRight();
+      final st = _nativeStart.firstMatch(line);
+      if (st != null) {
+        curPid = int.tryParse(st.group(1)!);
+        continue;
+      }
       String? msg;
       DateTime? at;
       final m = _nativeHead.firstMatch(line);
@@ -486,6 +626,9 @@ class ErrorJournal {
         msg = 'خروج البرنامج — abort() / std::terminate';
       }
       if (msg == null) continue;
+      // 🧑‍💻 العملية كانت جلسة تطوير (flutter run): إيقافها من الطرفية أو بعد Hot Restart يظهر
+      //    هنا كخروج مفاجئ — يُفصل عن أعطال نسخة الزبائن الحقيقية.
+      if (curPid != null && (devPids ?? _devPids).contains(curPid)) msg = '$msgPrefixDev$msg';
       final detail = lines.skip(i + 1).take(14).takeWhile((l) => !l.startsWith('[') && !l.startsWith('=====')).join('\n');
       final id = fingerprint(ErrorSource.native, msg);
       final when = at ?? DateTime.now();
@@ -555,6 +698,9 @@ class ErrorJournal {
 
   @visibleForTesting
   static void resetForTest() {
+    _devPids.clear();
+    _recent.clear();
+    buildTime = null;
     _byId.clear();
     _file = null;
     _dir = null;

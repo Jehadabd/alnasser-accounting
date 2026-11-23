@@ -93,6 +93,24 @@ class ErrorFixes {
 
   static const all = <ErrorFix>[
     // ───────────── خروج مفاجئ (ويندوز) ─────────────
+    // 🧑‍💻 أولاً: خروج محرّك Flutter في جلسة تطوير (flutter run) — إيقاف من الطرفية أو أثر Hot Restart.
+    //    أعطال المكتبات الأخرى في جلسة التطوير (pdfium، tdjson…) تبقى أعطالاً حقيقية وتُطابَق بعده.
+    ErrorFix(
+      key: 'crash_dev',
+      title: 'أُغلق أثناء التطوير (flutter run)',
+      category: 'crash',
+      severity: FixSeverity.info,
+      what: 'البرنامج كان يعمل من «flutter run» وأُغلق داخل محرّك Flutter نفسه (flutter_windows.dll).',
+      cause: 'إيقاف التشغيل من الطرفية (q أو Ctrl+C أو إغلاق الطرفية)، أو بعد Hot Restart: نوافذ ويندوز '
+          'ترسل رسائلها لمحرك أُغلق. لا يحدث في نسخة الزبائن (Release) ولا يمسّ البيانات.',
+      needles: [r'أثناء جلسة تطوير — .*flutter_windows\.dll'],
+      who: FixWho.developer,
+      harmless: true,
+      steps: [
+        GuideStep('لا شيء مطلوب: أعد التشغيل بـ flutter run.'),
+        GuideStep('إن ظهر الخروج نفسه بلا «أثناء جلسة تطوير» (في نسخة Release) فهو عطل حقيقي — انسخ تقريره.'),
+      ],
+    ),
     ErrorFix(
       key: 'crash_tdlib',
       title: 'أُغلق البرنامج بسبب مكتبة تيليجرام (MTProto)',
@@ -380,6 +398,37 @@ class ErrorFixes {
       ],
     ),
     ErrorFix(
+      key: 'tor_stuck',
+      title: 'Tor لم يبدأ (لم يقرأ إعداده)',
+      category: 'backup',
+      severity: FixSeverity.warning,
+      what: 'Tor توقف فور تشغيله: «Reading config failed» — فلم يُرفع شيء عبره.',
+      cause: 'الأرجح نسخة Tor سابقة ما زالت تعمل وتمسك مجلد بياناته (بعد Hot Restart أو إغلاق غير نظيف). '
+          'البرنامج صار يغلقها ويعيد المحاولة وحده؛ وسطر Tor الذي سبق الخطأ في «التفاصيل التقنية» يبيّن السبب الدقيق.',
+      needles: [r'Reading config failed', r'توقف Tor قبل أن يتصل', r'another Tor process', r"No, it's still there"],
+      actions: ['tor_reset'],
+      steps: [
+        GuideStep('اضغط «إعادة تشغيل Tor من الصفر» أدناه — يغلق أي نسخة عالقة ويشغّل Tor ويخبرك بالنتيجة.'),
+        GuideStep('إن بقي: أعد تشغيل البرنامج، ثم من «عند حظر تيليجرام» اضغط «تثبيت Tor» مرة أخرى.'),
+        _report,
+      ],
+    ),
+    ErrorFix(
+      key: 'tor_bridges',
+      title: 'جسور Tor لم تعمل على هذه الشبكة',
+      category: 'backup',
+      severity: FixSeverity.warning,
+      what: 'Tor يعمل لكن جسوره (meek/Snowflake/obfs4) لم تصل — الشبكة تحجبها أو تمنع اسم الموقع الوسيط.',
+      cause: 'حجب على مستوى مزوّد الإنترنت (مثل «no such host» أو «status code 570» أو قطع الاتصال). ليس خللاً في البرنامج.',
+      needles: [r'Managed proxy', r'lyrebird', r'snowflake-client', r'جسور Tor المدمجة لم تعمل'],
+      harmless: true,
+      actions: ['net_check'],
+      steps: [
+        GuideStep('أعد المحاولة لاحقاً أو من شبكة أخرى (بيانات الهاتف غالباً تعمل).'),
+        GuideStep('بديل: MTProto أو بروكسي من «عند حظر تيليجرام».'),
+      ],
+    ),
+    ErrorFix(
       key: 'tor',
       title: 'مشكلة في Tor',
       category: 'backup',
@@ -464,6 +513,21 @@ class ErrorFixes {
       ],
     ),
     ErrorFix(
+      key: 'sync_start',
+      title: 'المزامنة لم تبدأ عند فتح البرنامج',
+      category: 'sync',
+      severity: FixSeverity.warning,
+      what: 'محاولة بدء المزامنة تلقائياً عند الإقلاع لم تنجح؛ البرنامج يعيد المحاولة وحده.',
+      cause: 'الحالة مكتوبة في الرسالة: «offline» = لا إنترنت أو تعذّرت المصادقة، «error» = خطأ من Firebase.',
+      needles: [r'تعذّر بدء المزامنة التلقائية', r'خطأ في بدء المزامنة التلقائية'],
+      actions: ['sync_retry', 'net_check'],
+      harmless: true,
+      steps: [
+        GuideStep('اضغط «إعادة بدء المزامنة» أدناه — يبدأها الآن ويخبرك بحالتها.'),
+        GuideStep('إن قال «لا إنترنت»: تأكد من الاتصال؛ ما لم يُرفع يُرفع وحده عند عودته.'),
+      ],
+    ),
+    ErrorFix(
       key: 'sync_state',
       title: 'المزامنة غير جاهزة',
       category: 'sync',
@@ -497,6 +561,20 @@ class ErrorFixes {
 
     // ───────────── الإنترنت ─────────────
     ErrorFix(
+      key: 'net_proxy',
+      title: 'البروكسي لم يوصل الاتصال',
+      category: 'net',
+      severity: FixSeverity.warning,
+      what: 'الاتصال مرّ عبر بروكسي (أو جسر SOCKS لتيليجرام) فرفض البروكسي أو انتهت مهلته.',
+      cause: 'البروكسي المكتوب في «عند حظر تيليجرام» متوقف أو محجوب أو بياناته خطأ (502 = البروكسي لم يصل للخادم).',
+      needles: [r'Proxy failed to establish tunnel', r'Bad Gateway', r'\bSOCKS', r'proxy bridge', r'407 Proxy'],
+      actions: ['net_check'],
+      steps: [
+        GuideStep('من «إعدادات تيليجرام» ← «عند حظر تيليجرام» اضغط «اختبار» على البروكسي.'),
+        GuideStep('جرّب بروكسي آخر، أو Tor بدل البروكسي.'),
+      ],
+    ),
+    ErrorFix(
       key: 'net_tls',
       title: 'فشل الاتصال الآمن (شهادة الموقع)',
       category: 'net',
@@ -511,6 +589,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'net_timeout',
+      actions: ['net_check'],
       title: 'انتهت مهلة الاتصال',
       category: 'net',
       severity: FixSeverity.warning,
@@ -525,6 +604,7 @@ class ErrorFixes {
     ),
     ErrorFix(
       key: 'net_offline',
+      actions: ['net_check'],
       title: 'لا يوجد اتصال بالإنترنت',
       category: 'net',
       severity: FixSeverity.warning,
@@ -662,6 +742,22 @@ class ErrorFixes {
 
     // ───────────── الشاشة ─────────────
     ErrorFix(
+      key: 'ui_freeze_dev',
+      title: 'توقف أثناء التطوير (نقطة توقف أو Hot Reload)',
+      category: 'ui',
+      severity: FixSeverity.info,
+      what: 'البرنامج لم يستجب ثوانٍ وهو يعمل من «flutter run».',
+      cause: 'في جلسة التطوير يتوقف البرنامج عند نقطة توقف (Breakpoint) أو أثناء Hot Reload/Restart، فيُحسب تجمّداً. '
+          'إن لم تكن أوقفته أنت فانظر «آخر ما سجّله البرنامج قبلها» في التفاصيل التقنية.',
+      needles: [r'جلسة تطوير: قد يكون توقفاً'],
+      who: FixWho.developer,
+      harmless: true,
+      steps: [
+        GuideStep('إن كنت أوقفته (Breakpoint/Hot Reload): لا شيء مطلوب.'),
+        GuideStep('وإلا: «آخر ما سجّله البرنامج قبلها» يدل على العملية التي جمّدته.'),
+      ],
+    ),
+    ErrorFix(
       key: 'ui_freeze',
       title: 'البرنامج تجمّد ولم يستجب',
       category: 'ui',
@@ -672,7 +768,7 @@ class ErrorFixes {
       who: FixWho.both,
       steps: [
         GuideStep('إن تجمّد أثناء ضغط زر: لا تضغطه مرة ثانية — انتظر حتى يستجيب، فقد تكون العملية تعمل.'),
-        GuideStep('انظر «الشاشات الأخيرة» في التفاصيل التقنية لتعرف أين حدث.'),
+        GuideStep('انظر «الشاشات الأخيرة» و«آخر ما سجّله البرنامج قبلها» في التفاصيل التقنية لتعرف أين حدث وماذا كان يعمل.'),
         GuideStep('إن تكرّر في الشاشة نفسها: استثنِ مجلد البرنامج من برنامج الحماية، وتأكد أن في القرص مساحة.'),
         _report,
       ],
@@ -691,6 +787,22 @@ class ErrorFixes {
         GuideStep('كبّر نافذة البرنامج أو اجعلها ملء الشاشة.'),
         GuideStep('إن بقي: إعدادات ويندوز ← العرض ← «المقياس» إلى 100%.'),
         GuideStep('أرسل صورة للشاشة للمطوّر مع «نسخ التقرير» ليصلحها.'),
+      ],
+    ),
+    ErrorFix(
+      key: 'ui_scroll',
+      title: 'خلل في شريط التمرير',
+      category: 'code',
+      severity: FixSeverity.error,
+      what: 'شريط تمرير رُسم بلا قائمة مربوطة به (ScrollController بلا ScrollPosition).',
+      cause: 'خلل برمجي في شاشة: على الحاسبة لا «متحكم أساسي» للقوائم، والشريط لم يُعطَ متحكم قائمته. '
+          'لا يمسّ البيانات؛ الشاشة في «الشاشات الأخيرة».',
+      needles: [r"Scrollbar's ScrollController has no ScrollPosition", r'Scrollbar cannot be painted without a ScrollPosition'],
+      who: FixWho.developer,
+      harmless: true,
+      steps: [
+        GuideStep('تابع عملك — الشاشة تعمل والتمرير بالفأرة سليم.'),
+        GuideStep('إن حدث بعد آخر تحديث: انسخ التقرير للمطوّر (فيه اسم الشاشة).'),
       ],
     ),
     ErrorFix(
@@ -815,6 +927,23 @@ class ErrorFixes {
     ],
   );
 
+  /// رسالة تحقق ظهرت للمستخدم (حقل ناقص) — ليست عطلاً.
+  static const userInput = ErrorFix(
+    key: 'user_input',
+    title: 'بيانات ناقصة في النموذج',
+    category: 'other',
+    severity: FixSeverity.info,
+    what: 'البرنامج رفض الحفظ لأن حقلاً مطلوباً فارغ أو غير صحيح، وأخبر المستخدم بذلك.',
+    cause: 'حماية تعمل كما يجب — الرسالة نفسها تقول ما الناقص.',
+    harmless: true,
+    steps: [
+      GuideStep('أكمل الحقل المذكور في الرسالة ثم احفظ.'),
+    ],
+  );
+
+  static final _validation = RegExp(
+      r'(مطلوب|مطلوبة)\s*[.!]?$|^(أدخل|اختر|حدّد|حدد|اكتب) |يجب (أن )?(تختار|تدخل|تكتب|إدخال|اختيار)|غير صالح(ة)?\s*[.!]?$');
+
   /// حل عام لاستثناء تقني لم يطابق شيئاً.
   static const genericCode = ErrorFix(
     key: 'generic_code',
@@ -857,6 +986,11 @@ class ErrorFixes {
   /// الحل المناسب لنص الخطأ. [source] مصدر الخطأ (الخروج المفاجئ يُطابَق في قسمه فقط).
   static ErrorFix match(String text, {String? source}) {
     if (source == 'report') return userReport;
+    // رسالة تحقق ظهرت للمستخدم (لا استثناء معها) ⇒ ليست عطلاً
+    if (source == 'shown' || source == 'dialog') {
+      final first = text.split('\n').first.replaceFirst(RegExp(r'^خطأ في البيانات:\s*'), '').trim();
+      if (_validation.hasMatch(first) && !_technical.hasMatch(first)) return userInput;
+    }
     final native = source == 'native';
     for (final f in all) {
       if (native != (f.category == 'crash')) continue;

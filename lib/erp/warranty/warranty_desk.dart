@@ -360,6 +360,9 @@ class WarrantyDesk {
           reason: 'شطب قطعة معيبة مرتجعة بالضمان — مرتجع مبيعات رقم $no — فاتورة ${inv.number}',
           notes: 'العطل: ${problem.trim()}',
           lines: [StockDocLine(productId: l.productId, name: l.name, baseQty: -base, unitCost: cost / base)],
+          // 🧾 القطعة دخلت المخزن للتو بالمرتجع نفسه (بين يديك فعلاً) ⇒ شطبها لا يُرفض بسبب رصيد
+          //    دفتري سالب من بيع سابق بالسالب (كان: «المطلوب إخراجه 1 والمتوفر 0»). صافي الأثر صفر.
+          allowNegative: true,
         );
       } catch (e) {
         scrapErr = '$e';

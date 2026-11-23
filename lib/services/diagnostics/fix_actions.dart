@@ -18,6 +18,8 @@ import 'package:flutter/material.dart';
 import '../database/dao/transaction_dao.dart';
 import '../database_service.dart';
 import '../error_log.dart';
+import '../firebase_sync/firebase_sync_service.dart';
+import '../telegram_net/tor_engine.dart';
 
 class FixResult {
   const FixResult(this.ok, this.message);
@@ -40,6 +42,7 @@ class FixAction {
     required this.icon,
     required this.writes,
     this.opens = false,
+    this.local = false,
   });
 
   final String key;
@@ -54,6 +57,9 @@ class FixAction {
 
   /// يفتح شاشة بدل أن ينفّذ شيئاً (الفحص العميق).
   final bool opens;
+
+  /// لا يمسّ قاعدة البيانات (شبكة/Tor/المزامنة) ⇒ يعمل على الطرفية أيضاً.
+  final bool local;
 }
 
 class FixActions {
@@ -97,6 +103,31 @@ class FixActions {
           'وبعد إغلاق مفاجئ. لا يغيّر أي بيانات.',
       icon: Icons.compress_rounded,
       writes: true,
+    ),
+    FixAction(
+      key: 'net_check',
+      title: 'فحص الاتصال',
+      what: 'يجرّب الوصول إلى الإنترنت وخوادم Google وتيليجرام وDropbox ويقول أيها يعمل وأيها محجوب. لا يغيّر شيئاً.',
+      icon: Icons.network_check_rounded,
+      writes: false,
+      local: true,
+    ),
+    FixAction(
+      key: 'tor_reset',
+      title: 'إعادة تشغيل Tor من الصفر',
+      what: 'يوقف Tor، ويغلق أي نسخة Tor عالقة خاصة بالبرنامج (لا يمسّ Tor Browser)، ثم يشغّله ويخبرك هل اتصل. '
+          'قد يستغرق حتى 3 دقائق. لا يمسّ البيانات.',
+      icon: Icons.restart_alt_rounded,
+      writes: false,
+      local: true,
+    ),
+    FixAction(
+      key: 'sync_retry',
+      title: 'إعادة بدء المزامنة',
+      what: 'يحاول بدء المزامنة الآن ويخبرك بحالتها (تعمل، لا إنترنت، غير مُعدّة…). لا يغيّر بيانات.',
+      icon: Icons.sync_rounded,
+      writes: false,
+      local: true,
     ),
     FixAction(
       key: 'reindex',
@@ -156,7 +187,71 @@ class FixActions {
     }
   }
 
+  /// إجراءات لا تمسّ القاعدة.
+  static Future<FixResult?> _runLocal(String key) async {
+    switch (key) {
+      case 'net_check':
+        const targets = <(String, String)>[
+          ('الإنترنت', 'one.one.one.one'),
+          ('Google/Firebase', 'firestore.googleapis.com'),
+          ('الترخيص', 'script.google.com'),
+          ('تيليجرام', 'api.telegram.org'),
+          ('Dropbox', 'content.dropboxapi.com'),
+        ];
+        final lines = <String>[];
+        var anyOk = false;
+        for (final (label, host) in targets) {
+          try {
+            final s = await Socket.connect(host, 443, timeout: const Duration(seconds: 6));
+            s.destroy();
+            anyOk = true;
+            lines.add('✔ $label: يعمل');
+          } on SocketException catch (e) {
+            final dns = '${e.osError?.errorCode}' == '11001' || e.message.contains('host lookup');
+            lines.add(dns ? '✖ $label: الاسم لا يُحلّ (DNS أو حجب)' : '✖ $label: لا يصل (${e.osError?.message ?? e.message})');
+          } catch (e) {
+            lines.add('✖ $label: $e');
+          }
+        }
+        return FixResult(anyOk && lines.first.startsWith('✔'),
+            '${lines.join('\n')}\n\n${anyOk ? 'ما عليه ✖ محجوب أو متوقف من هذه الشبكة — جرّب «عند حظر تيليجرام» أو شبكة أخرى.' : 'لا اتصال بالإنترنت من هذه الحاسبة.'}');
+
+      case 'tor_reset':
+        if (!TorEngine.supported) return const FixResult(false, 'Tor متاح على Windows فقط.');
+        if (!await TorEngine.isInstalled()) {
+          return const FixResult(false, 'Tor غير مثبّت — من «إعدادات تيليجرام» ← «عند حظر تيليجرام» اضغط «تثبيت Tor».');
+        }
+        await TorEngine.stop();
+        final killed = await TorEngine.killStray();
+        try {
+          final port = await TorEngine.ensureRunning(timeout: const Duration(minutes: 3));
+          return FixResult(true,
+              '${killed > 0 ? 'أُغلقت $killed نسخة عالقة. ' : ''}Tor يعمل الآن ومتصل (127.0.0.1:$port). أعد الرفع.');
+        } catch (e) {
+          return FixResult(false, '${killed > 0 ? 'أُغلقت $killed نسخة عالقة، لكن ' : ''}Tor لم يتصل: $e');
+        }
+
+      case 'sync_retry':
+        final svc = FirebaseSyncService();
+        final ok = await svc.initialize().timeout(const Duration(seconds: 60), onTimeout: () => false);
+        final st = svc.status;
+        final label = switch (st) {
+          FirebaseSyncStatus.online => 'تعمل ومتصلة',
+          FirebaseSyncStatus.syncing => 'تعمل (تزامن الآن)',
+          FirebaseSyncStatus.idle => 'تعمل (في الانتظار)',
+          FirebaseSyncStatus.offline => 'لا إنترنت أو تعذّرت المصادقة — ستعيد المحاولة وحدها',
+          FirebaseSyncStatus.error => 'خطأ من Firebase — انظر «صحة المزامنة»',
+          FirebaseSyncStatus.disabled => 'معطّلة (غير مشمولة في الترخيص أو تعمل في الشاشة الأولى)',
+          FirebaseSyncStatus.notConfigured => 'غير مُعدّة على هذا الجهاز — من «إعدادات المزامنة»',
+        };
+        return FixResult(ok, 'المزامنة: $label.');
+    }
+    return null;
+  }
+
   static Future<FixResult> _run(String key) async {
+    final local = await _runLocal(key);
+    if (local != null) return local;
     final db = await DatabaseService().database;
     switch (key) {
       case 'integrity':

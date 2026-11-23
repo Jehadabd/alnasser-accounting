@@ -94,6 +94,14 @@ class TdlibClient {
   Future<void> _loadFrom() async {
     if (_lib != null) return;
     final bin = await TdlibEngine.binDir();
+    // ❄️ التحميل الأول لمكتبة tdjson الكبيرة (عشرات الميغابايت) قد يطول جداً حين يفحصها
+    //    برنامج الحماية — كان يحدث على خيط الواجهة فيتجمّد البرنامج (سُجّل تجمّد 84 ثانية في
+    //    شاشة «عند حظر تيليجرام»). نحمّلها أولاً في Isolate جانبي؛ بعده التحميل هنا فوري
+    //    (الوحدة محمّلة في العملية نفسها).
+    await Isolate.run(() {
+      _open(bin);
+      return true;
+    }, debugName: 'tdlib_preload');
     final lib = _open(bin);
     _send = lib.lookupFunction<_SendC, _SendD>('td_send');
     _create = lib.lookupFunction<_CreateC, _CreateD>('td_create_client_id');

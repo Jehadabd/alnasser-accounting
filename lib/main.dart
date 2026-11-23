@@ -493,7 +493,13 @@ void main(List<String> args) async {
         if (ok) {
           debugPrint('✅ [main.dart] بدأت المزامنة تلقائياً عند الإقلاع');
         } else {
-          debugPrint('⚠️ [main.dart] تعذّر بدء المزامنة التلقائية (ستُحاول لاحقاً)');
+          // 🩺 الحالة تُكتب مع الرسالة: «غير مُعدّة/معطّلة» اختيار لا خطأ؛ غيرها يستحق التشخيص
+          final st = FirebaseSyncService().status;
+          if (st == FirebaseSyncStatus.notConfigured || st == FirebaseSyncStatus.disabled) {
+            debugPrint('ℹ️ [main.dart] المزامنة لا تعمل على هذا الجهاز (${st == FirebaseSyncStatus.notConfigured ? 'غير مُعدّة' : 'معطّلة'})');
+          } else {
+            debugPrint('⚠️ [main.dart] تعذّر بدء المزامنة التلقائية (الحالة: ${st.name}) — ستُحاول لاحقاً');
+          }
         }
       }).catchError((e) {
         debugPrint('⚠️ [main.dart] خطأ في بدء المزامنة التلقائية: $e');

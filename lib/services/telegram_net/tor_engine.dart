@@ -22,6 +22,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../diagnostics/error_journal.dart'; // 🩺 خطأ Tor يُسجَّل مع ما سبقه من أسطره
 import '../simplex/simplex_engine.dart' show SimplexEngine, SimplexException;
 
 enum TorStartMode { onUpload, onAppStart }
@@ -208,10 +209,57 @@ class TorEngine {
   /// منفذ SOCKS إن كان Tor متصلاً الآن (بلا تشغيل).
   static int? get readyPort => (_ready?.isCompleted ?? false) && _proc != null ? _socks : null;
 
+  /// آخر أسطر Tor كما خرجت (كل المستويات) — تُرفق بالخطأ في «تشخيص الأخطاء».
+  static final List<String> _tail = [];
+  static String? _lastErr;
+
+  /// tor.exe خاصتنا ما زال يعمل بلا أن نملكه (بعد Hot Restart أثناء التطوير، أو تشغيل سابق
+  /// لم يُغلق): يمسك مجلد البيانات فيفشل كل تشغيل جديد بـ «Reading config failed».
+  /// يُغلق فقط ما مساره هو tor.exe الخاص بالبرنامج — لا يمسّ Tor Browser أو غيره.
+  static Future<int> killStray() async {
+    if (!supported) return 0;
+    try {
+      final r = await Process.run(
+        'powershell',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          r'$p = Get-Process tor -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:ALNASER_TOR_EXE }; '
+              r'$p | Stop-Process -Force -ErrorAction SilentlyContinue; ($p | Measure-Object).Count',
+        ],
+        environment: {'ALNASER_TOR_EXE': await _exe()},
+      ).timeout(const Duration(seconds: 15));
+      final n = int.tryParse('${r.stdout}'.trim()) ?? 0;
+      if (n > 0) _add('أُغلقت $n نسخة Tor عالقة من تشغيل سابق');
+      return n;
+    } catch (e) {
+      _add('تعذّر فحص نسخ Tor العالقة: $e');
+      return 0;
+    }
+  }
+
   /// يشغّل Tor (إن لم يكن يعمل) وينتظر اكتمال الاتصال، ويعيد منفذ SOCKS.
+  /// 🛠️ إصلاح ذاتي: إن رفض Tor الإعداد لأن نسخة عالقة تمسك مجلد البيانات، تُغلق ويُعاد مرة.
   static Future<int> ensureRunning({Duration timeout = const Duration(minutes: 4)}) async {
+    try {
+      return await _ensureRunningOnce(timeout: timeout);
+    } on SimplexException {
+      final err = _lastErr ?? '';
+      if (!err.contains('Reading config failed') && !err.contains('still there')) rethrow;
+      _add('Tor لم يقرأ إعداده — غالباً نسخة عالقة تمسك مجلد البيانات. إغلاقها وإعادة المحاولة…');
+      await killStray();
+      await Future<void>.delayed(const Duration(seconds: 1));
+      return _ensureRunningOnce(timeout: timeout);
+    }
+  }
+
+  static Future<int> _ensureRunningOnce({required Duration timeout}) async {
     final r = _ready;
-    if (r != null && _proc != null) return r.future.timeout(timeout, onTimeout: () => throw _timeoutError());
+    // تشغيل جارٍ (لم يكتمل بعد) أو يعمل ⇒ ننتظره؛ لا نشغّل نسخة ثانية على المجلد نفسه
+    if (r != null && (_proc != null || !r.isCompleted)) {
+      return r.future.timeout(timeout, onTimeout: () => throw _timeoutError());
+    }
     if (!await isInstalled()) throw SimplexException('Tor غير مثبّت — من «عند حظر تيليجرام» اضغط «تثبيت Tor»');
     final bridges = await builtinBridges();
     if (bridges.isEmpty) throw SimplexException('إعداد الجسور المدمجة مفقود — أعد تثبيت Tor');
@@ -219,10 +267,14 @@ class TorEngine {
 
     final ready = Completer<int>();
     _ready = ready;
+    _lastErr = null;
+    _tail.clear();
     try {
       final rootDir = await root();
       final data = Directory(p.join(rootDir, 'data'));
       await data.create(recursive: true);
+      // ملف القفل موجود ولا Tor نملكه ⇒ نسخة عالقة على الأرجح (أو قفل قديم): أغلقها أولاً
+      if (await File(p.join(data.path, 'lock')).exists()) await killStray();
       final s = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       final port = s.port;
       await s.close();
@@ -243,6 +295,8 @@ class TorEngine {
       _socks = port;
       final re = RegExp(r'Bootstrapped (\d+)%');
       void onLine(String line) {
+        _tail.add(line.length > 240 ? line.substring(0, 240) : line);
+        if (_tail.length > 30) _tail.removeAt(0);
         final m = re.firstMatch(line);
         if (m != null) {
           bootstrap.value = int.parse(m.group(1)!);
@@ -250,6 +304,13 @@ class TorEngine {
           if (bootstrap.value >= 100 && !ready.isCompleted) ready.complete(port);
         } else if (line.contains('[err]') || line.contains('[warn]')) {
           _add(line.length > 200 ? line.substring(0, 200) : line);
+          if (line.contains('[err]')) {
+            _lastErr = line;
+            // 🩺 «see warnings above»: الأسطر التي سبقت الخطأ هي السبب الحقيقي — تُرفق به
+            final before = _tail.where((l) => !l.contains('[err]')).toList();
+            ErrorJournal.recordText(ErrorSource.logged,
+                '🧅 Tor: $line\nما سبقه من Tor:\n${before.skip(before.length > 12 ? before.length - 12 : 0).join('\n')}');
+          }
         }
       }
 

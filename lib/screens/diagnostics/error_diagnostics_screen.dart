@@ -82,6 +82,9 @@ String _report(_Item it) {
     ..writeln('المصدر: ${ErrorSource.label(e.source)}')
     ..writeln('المرات: ${e.count} — أول مرة ${_when(e.first)} — آخر مرة ${_when(e.last)}')
     ..writeln(kIsWeb ? 'النظام: ويب' : 'النظام: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}')
+    ..writeln('النسخة: ${ErrorJournal.devSession ? 'تطوير (flutter run)' : 'Release'}'
+        '${ErrorJournal.buildTime == null ? '' : ' — بُنيت ${_when(ErrorJournal.buildTime!)}'}'
+        '${ErrorJournal.beforeThisBuild(e) ? ' — ⚠️ الخطأ حدث قبل هذا البناء (قد يكون أُصلح)' : ''}')
     ..writeln('الرسالة: ${e.message}');
   if (e.detail != null) b..writeln('التفاصيل:')..writeln(e.detail);
   return ErrorJournal.sanitize(b.toString());
@@ -180,7 +183,7 @@ Future<void> runFixAction(BuildContext context, FixAction a) async {
     }
     return;
   }
-  if (AppNetworkMode.isClient) {
+  if (AppNetworkMode.isClient && !a.local) {
     setToast(context, 'هذا الجهاز طرفية: الإصلاح والفحص من حاسبة السيرفر التي عليها القاعدة', error: true);
     return;
   }
@@ -499,6 +502,13 @@ class _ErrorDiagnosticsScreenState extends State<ErrorDiagnosticsScreen> {
           onPressed: () => showProblemReport(context),
         ),
         IconButton(
+          tooltip: 'أغلق ما حدث قبل آخر تحديث (يعود وحده إن تكرّر)',
+          icon: const Icon(Icons.update_disabled_rounded),
+          onPressed: openItems.any((i) => ErrorJournal.beforeThisBuild(i.entry))
+              ? () => _closeAll(openItems.where((i) => ErrorJournal.beforeThisBuild(i.entry)).toList())
+              : null,
+        ),
+        IconButton(
           tooltip: 'عرفتها كلها — أغلق كل المفتوحة',
           icon: const Icon(Icons.done_all_rounded),
           onPressed: open == 0 ? null : () => _closeAll(openItems),
@@ -800,6 +810,8 @@ class _ErrorCard extends StatelessWidget {
                             _Pill(_ago(e.last), kSetMuted, icon: Icons.schedule_rounded),
                             if (e.resolved) const _Pill('مغلق', kSetGreen, icon: Icons.check_rounded),
                             if (f.harmless && !e.resolved) const _Pill('لا يضر البيانات', kSetGreen),
+                            if (ErrorJournal.beforeThisBuild(e) && !e.resolved)
+                              const _Pill('قبل آخر تحديث', kSetMuted, icon: Icons.update_rounded),
                           ]),
                         ]),
                       ),
@@ -986,6 +998,15 @@ class _ErrorDetailScreenState extends State<ErrorDetailScreen> {
             ]),
           ]),
         ),
+        if (ErrorJournal.beforeThisBuild(e))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: SetBanner(
+              'حدث آخر مرة قبل بناء هذه النسخة من البرنامج (${_when(ErrorJournal.buildTime!)}). إن كان خللاً برمجياً '
+              'فقد يكون أُصلح في التحديث — أغلقه، ويعود وحده إن تكرّر.',
+              icon: Icons.update_rounded,
+            ),
+          ),
         if (f.harmless)
           const Padding(
             padding: EdgeInsets.only(bottom: 14),

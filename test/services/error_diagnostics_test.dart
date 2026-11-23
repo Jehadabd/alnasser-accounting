@@ -351,4 +351,62 @@ void main() {
       expect(ErrorJournal.currentScreen, 'CreateInvoiceScreen');
     });
   });
+
+  group('دقة التشخيص (p228)', () {
+    test('رسائل السجل الحقيقية ⇒ تصنيف دقيق', () {
+      expect(_fix('🧅 Tor: Nov 24 01:05:35.000 [err] Reading config failed--see warnings above.'), 'tor_stuck');
+      expect(_fix('خطأ في إرسال الرسالة: توقف Tor قبل أن يتصل — راجع «سجل Tor»'), 'tor_stuck');
+      expect(
+          _fix('🧅 Tor: [warn] Managed proxy "lyrebird.exe": Failed to connect to https://x.cdn77.org using front www.phpmyadmin.net: no such host'),
+          'tor_bridges');
+      expect(_fix('خطأ في إرسال الرسالة: HttpException: Proxy failed to establish tunnel (502 Bad Gateway), uri = //api.telegram.org:443'),
+          'net_proxy');
+      expect(_fix("The Scrollbar's ScrollController has no ScrollPosition attached.", source: ErrorSource.flutter), 'ui_scroll');
+      expect(_fix('[main.dart] تعذّر بدء المزامنة التلقائية (الحالة: offline) — ستُحاول لاحقاً'), 'sync_start');
+      expect(_fix('تجمّد البرنامج 84 ثانية — لم يستجب للضغط ولا للرسم (جلسة تطوير: قد يكون توقفاً عند نقطة توقف أو Hot Reload)',
+          source: ErrorSource.freeze), 'ui_freeze_dev');
+    });
+
+    test('رسالة تحقق ظهرت للمستخدم ليست عطلاً', () {
+      expect(_fix('خطأ في البيانات: اسم العميل مطلوب', source: ErrorSource.shown), 'user_input');
+      // الرسالة نفسها من السجل (لا من الواجهة) تبقى بلا هذا التصنيف
+      expect(_fix('اسم العميل مطلوب'), isNot('user_input'));
+      // خطأ تقني ظهر للمستخدم يبقى خطأً تقنياً
+      expect(_fix('FooException: مطلوب', source: ErrorSource.shown), isNot('user_input'));
+    });
+
+    test('خروج محرك Flutter في جلسة تطوير يُفصل عن أعطال الزبائن', () {
+      const log = '''
+===== 2026-11-16 11:06:37 start (pid 371392) =====
+[2026-11-16 16:46:25.893] UNHANDLED - the app is closing code=0xC0000005 at flutter_windows.dll+0x1d7d0 thread=1 (main/platform thread)
+  stack:
+===== 2026-11-19 12:30:35 start (pid 556484) =====
+[2026-11-19 13:06:15.389] UNHANDLED - the app is closing code=0xC0000005 at pdfium.dll+0x27623 thread=2
+  stack:
+===== 2026-11-20 09:00:00 start (pid 900) =====
+[2026-11-20 10:00:00.000] UNHANDLED - the app is closing code=0xC0000005 at flutter_windows.dll+0x1d7d0 thread=3
+  stack:
+''';
+      const dart = '''
+[2026-11-16T11:06:37.880402] ===== start 2026-11-16T11:06:37.878406 (windows) =====
+[2026-11-16T16:14:52.738024] ===== start 2026-11-16T16:14:52.731279 (windows) =====
+[2026-11-19T12:30:35.843737] ===== start 2026-11-19T12:30:35.842221 (windows) =====
+[2026-11-19T12:34:55.237507] ===== start 2026-11-19T12:34:55.237507 (windows) =====
+[2026-11-20T09:00:01.000000] ===== start 2026-11-20T09:00:01.000000 (windows) =====
+''';
+      final hot = ErrorJournal.hotRestartPids(log, dart);
+      expect(hot, {371392, 556484}); // عمليتان فيهما Hot Restart، والثالثة لا
+      final list = ErrorJournal.parseNative(log, devPids: hot);
+      String keyOf(String module) =>
+          ErrorFixes.match(list.firstWhere((e) => e.message.contains(module) && e.last.day == (module == 'pdfium' ? 19 : 16)).text,
+                  source: ErrorSource.native)
+              .key;
+      expect(keyOf('flutter_windows'), 'crash_dev');
+      expect(keyOf('pdfium'), 'crash_printer'); // عطل مكتبة حقيقي يبقى حقيقياً ولو في التطوير
+      final real = list.firstWhere((e) => e.last.day == 20);
+      expect(real.message, isNot(contains('تطوير')));
+      expect(ErrorFixes.match(real.text, source: ErrorSource.native).key, 'crash_generic');
+    });
+
+  });
 }

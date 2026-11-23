@@ -107,6 +107,10 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   String? _savedPath;
   Future<List<Uint8List>>? _pdfView; // صور صفحات الـ PDF للعرض (لا pdfrx — انظر pdf_raster.dart)
   double _pdfZoom = 1;
+
+  /// شريط تمرير صفحات الـ PDF مربوط بقائمتها صراحة (على الحاسبة لا «متحكم أساسي»
+  /// للقوائم، فكان الشريط يرسم بلا قائمة: «Scrollbar's ScrollController has no ScrollPosition»).
+  final _pdfScroll = ScrollController();
   String? _error;
   AiInvoiceResult? _result;
   final List<_Row> _rows = [];
@@ -133,6 +137,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     }
     _numberCtl.dispose();
     _paidCtl.dispose();
+    _pdfScroll.dispose();
     super.dispose();
   }
 
@@ -720,7 +725,9 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           final w = (c.maxWidth - 24) * _pdfZoom;
           return Stack(children: [
             Scrollbar(
+              controller: _pdfScroll,
               child: ListView.separated(
+                controller: _pdfScroll,
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 64),
                 itemCount: pages.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 10),
