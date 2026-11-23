@@ -2679,6 +2679,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
                 DropdownMenuItem(value: CostMethodPolicy.itemDefault, child: Text('حسب الإعدادات العامة')),
                 DropdownMenuItem(value: CostMethodPolicy.itemAverage, child: Text('المتوسط المرجّح')),
                 DropdownMenuItem(value: CostMethodPolicy.itemLast, child: Text('آخر سعر شراء')),
+                DropdownMenuItem(value: CostMethodPolicy.itemFifo, child: Text('الوارد أولاً يُباع أولاً (FIFO)')),
                 DropdownMenuItem(value: CostMethodPolicy.itemAsk, child: Text('اسألني عند كل شراء')),
               ],
               (v) => upd(() => _costMethod = v ?? CostMethodPolicy.itemDefault),

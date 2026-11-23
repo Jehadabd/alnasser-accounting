@@ -7,8 +7,10 @@
 //       معتمد في المعيار الدولي IAS 2، ويوزّع فرق السعر على كل القطع.
 //     • آخر سعر شراء: الكلفة = كلفة الشراء الأخير. شائعة في المحلات للتسعير،
 //       لكنها ترفع/تخفض كلفة القطع القديمة الباقية فجأة.
+//     • FIFO (الوارد أولاً يُباع أولاً): كل كمية تُباع بكلفة أقدم دفعة باقية
+//       (fifo_cost.dart). معتمد في IAS 2. عند الشراء تصير كلفة المادة = قيمة الباقي ÷ الرصيد.
 //   لا نعرض «الأعلى» أو «الأدنى» أو «إبقاء القديمة» كطرق كلفة: تجعل قيمة المخزون
-//   والأرباح غير حقيقية (لا يقبلها IAS 2). وFIFO يحتاج كلفة لكل دفعة عند البيع (غير متاح الآن).
+//   والأرباح غير حقيقية (لا يقبلها IAS 2).
 //
 //   الترتيب: اختيارك في نافذة الشراء ← طريقة المادة في بطاقتها ← الإعداد العام.
 //   «اسألني» تُحسم في الشاشة قبل الحفظ؛ إن لم تُحسم (حفظ بلا شاشة) ⇒ المتوسط المرجّح.
@@ -23,6 +25,7 @@ class CostMethodPolicy {
   static const avco = 'avco';
   static const last = 'last_purchase';
   static const ask = 'ask';
+  static const fifo = 'fifo';
 
   /// قيم بطاقة المادة (product_details.cost_method). 'last' القديمة كانت القيمة
   /// الافتراضية للعمود ولم تكن تُطبَّق ⇒ تعني «اتبع الإعدادات» حتى لا يتغير شيء.
@@ -30,18 +33,21 @@ class CostMethodPolicy {
   static const itemAverage = 'average';
   static const itemLast = 'last_purchase';
   static const itemAsk = 'ask';
+  static const itemFifo = 'fifo';
 
   static String? _fromItem(String? v) => switch (v) {
         itemAverage => avco,
         itemLast => last,
         itemAsk => ask,
+        itemFifo => fifo,
         _ => null,
       };
 
   /// قيمة صالحة لقائمة بطاقة المادة (ما ليس منها ⇒ «اتبع الإعدادات»).
-  static String itemValue(String? v) => (v == itemAverage || v == itemLast || v == itemAsk) ? v! : itemDefault;
+  static String itemValue(String? v) =>
+      (v == itemAverage || v == itemLast || v == itemAsk || v == itemFifo) ? v! : itemDefault;
 
-  static String _global(String? g) => g == avco ? avco : (g == ask ? ask : last);
+  static String _global(String? g) => switch (g) { avco => avco, ask => ask, fifo => fifo, _ => last };
 
   static Future<String?> itemMethod(DatabaseExecutor db, int productId) async {
     try {
@@ -56,7 +62,8 @@ class CostMethodPolicy {
   static Future<String> effective(DatabaseExecutor db, int productId, String? global) async =>
       await itemMethod(db, productId) ?? _global(global);
 
-  /// الطريقة النهائية للحفظ (لا تعيد «اسألني» أبداً).
+  /// الطريقة النهائية لتحديث الكلفة عند الشراء (لا تعيد «اسألني» أبداً).
+  /// FIFO ⇒ المتوسط هنا: بعد الشراء قيمة الباقي ÷ الرصيد هي نفسها؛ الفرق يظهر عند البيع.
   static Future<String> resolve(DatabaseExecutor db, int productId, String? global, Map<int, String>? chosen) async {
     final c = chosen?[productId];
     if (c == avco || c == last) return c!;

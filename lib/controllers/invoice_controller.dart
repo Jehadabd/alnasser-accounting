@@ -26,6 +26,7 @@ import '../services/invoice_edit_events.dart'; // ✏️ التعديل عملي
 import '../services/settings_manager.dart';
 import '../accounting/posting_engine.dart' show PostingEngine;
 import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر يُثبَّت عند الحفظ
+import '../services/fifo_cost.dart'; // 📦 كلفة FIFO عند البيع
 
 
 class InvoiceValidationResult {
@@ -770,7 +771,10 @@ class InvoiceController {
         }
 
         await txn.delete('invoice_items', where: 'invoice_id = ?', whereArgs: [invoiceId]);
-        
+
+        // 📦 FIFO: كلفة كل سطر من أقدم الكميات الباقية (الرصيد هنا بعد إرجاع البنود القديمة)
+        final fifoTouched = await FifoCost.applyToSaleLines(txn, itemsToInsert);
+
         // 2. Insert new items (stock follows automatically)
         final batch = txn.batch();
         int savedItemsCount = 0;
@@ -779,6 +783,8 @@ class InvoiceController {
           savedItemsCount++;
         }
         await batch.commit(noResult: true);
+        // 📦 FIFO: كلفة المادة الآن = قيمة الباقي ÷ الرصيد
+        if (fifoTouched.isNotEmpty) await FifoCost.refreshProducts(txn, fifoTouched);
 
 
         if (savedItemsCount == 0 && !data.isNewInvoice) {

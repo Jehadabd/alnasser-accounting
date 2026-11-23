@@ -1,4 +1,5 @@
 import 'cost_method_policy.dart'; // 💰 طريقة الكلفة لكل مادة
+import 'fifo_cost.dart'; // 📦 طبقات FIFO
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart'; // For Transaction
 import 'package:flutter/foundation.dart';
@@ -379,7 +380,7 @@ class PurchaseService with ChangeNotifier {
           // 💰 طريقة الكلفة لكل مادة: اختيارك ← بطاقة المادة ← الإعداد العام
           final method = await CostMethodPolicy.resolve(txn, item.productId, costingMethod, costMethods);
           await _updateProductStockAndCost(txn, item, method,
-              warehouseId: warehouseId, currency: newInvoice.currency, batchDate: newInvoice.date);
+              warehouseId: warehouseId, currency: newInvoice.currency, batchDate: newInvoice.date, invoiceId: oldInvoice.id);
         }
       }
 
@@ -468,7 +469,7 @@ class PurchaseService with ChangeNotifier {
           // 💰 طريقة الكلفة لكل مادة: اختيارك ← بطاقة المادة ← الإعداد العام
           final method = await CostMethodPolicy.resolve(txn, item.productId, costingMethod, costMethods);
           await _updateProductStockAndCost(txn, item, method,
-              warehouseId: warehouseId, currency: invoice.currency, batchDate: invoice.date);
+              warehouseId: warehouseId, currency: invoice.currency, batchDate: invoice.date, invoiceId: invoiceId);
         }
       }
 
@@ -489,7 +490,7 @@ class PurchaseService with ChangeNotifier {
   /// (UsdCostService). كانت فاتورة الدولار تكتب السعر الدولاري كما هو (5$ ← كلفة
   /// 5 دنانير) فيتضخم الربح في التقارير. وقبل تغيير الكلفة تُثبَّت كلفة ما بيع سابقاً.
   Future<void> _updateProductStockAndCost(Transaction txn, PurchaseInvoiceItem item, String costingMethod,
-      {int? warehouseId, String currency = 'IQD', DateTime? batchDate}) async {
+      {int? warehouseId, String currency = 'IQD', DateTime? batchDate, int? invoiceId}) async {
     debugPrint('💾 DB_UPDATE: Starting stock/cost update for product ID: ${item.productId}');
     debugPrint('💾 DB_UPDATE: Item baseQuantity: ${item.baseQuantity}, baseUnitCost: ${item.baseUnitCost}');
     debugPrint('💾 DB_UPDATE: Costing method: $costingMethod');
@@ -606,6 +607,21 @@ class PurchaseService with ChangeNotifier {
       debugPrint('⚠️ تعذّر حفظ عملة الكلفة: $e');
     }
 
+    // 📦 طبقة كلفة لهذا الشراء (FIFO): الكمية بالأساسية وكلفتها بالدينار
+    try {
+      final rate = isUsd ? await UsdCostService.currentRate(txn) : 1.0;
+      await FifoCost.recordPurchase(txn,
+          productId: item.productId,
+          invoiceId: invoiceId ?? item.invoiceId,
+          date: batchDate ?? DateTime.now(),
+          qty: newQty,
+          unitCostIqd: isUsd && rate > 1 ? roundMoney(newUnitCost * rate) : newUnitCost,
+          stockBefore: currentStock,
+          costBefore: currentCost);
+    } catch (e) {
+      debugPrint('⚠️ تعذّر تسجيل طبقة الكلفة: $e');
+    }
+
     // 📦 الكمية: حركة شراء في دفتر المخزون المشترك (تصل لكل الأجهزة؛ بيانات
     //    المورد نفسها تبقى محلية). كانت تُكتب رقماً مطلقاً على هذا الجهاز وحده.
     final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
@@ -630,6 +646,12 @@ class PurchaseService with ChangeNotifier {
     
     // 📦 إلغاء أثر فاتورة شراء (تعديلها أو حذفها): حركة عكسية في الدفتر.
     //    لا حدّ عند الصفر — كان يجعل الكمية تتوقف على ترتيب العمليات.
+    // 📦 طبقات FIFO لهذه الفاتورة تُحذف (تُسجَّل من جديد إن أُعيد تأكيدها)
+    if (item.invoiceId != null) {
+      try {
+        await FifoCost.removePurchase(txn, item.invoiceId!, item.productId);
+      } catch (_) {}
+    }
     final productUuid = await StockLedger.productSyncUuidForId(txn, item.productId);
     if (productUuid == null) return;
     final mv = await StockLedger.addMovement(txn,

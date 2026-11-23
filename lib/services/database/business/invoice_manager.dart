@@ -16,6 +16,7 @@ import 'tx_author.dart';
 import 'financial_integrity_guard.dart';
 import '../../invoice_safety/iqd_normalize.dart'; // 💵
 import '../../../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر يُثبَّت عند البيع
+import '../../fifo_cost.dart'; // 📦 كلفة FIFO عند البيع
 
 class InvoiceManager {
   final Future<Database> Function() getDatabase;
@@ -143,6 +144,7 @@ class InvoiceManager {
         final invoiceId = await InvoiceNumbering.insertNew(txn, invoiceMap);
         
         // ج. حفظ الأصناف مع معالجة التكلفة
+        final fifoTouched = <int>{};
         for (final item in items) {
           final itemMap = item.toMap();
           itemMap['invoice_id'] = invoiceId;
@@ -180,9 +182,14 @@ class InvoiceManager {
           // 🛡️ فاتورة جديدة: ضمان السطر يُحسب ويُثبَّت الآن
           await ItemWarranty.stampLines(txn, [itemMap], invoice.invoiceDate);
 
+          // 📦 FIFO: كلفة السطر من أقدم الكميات الباقية (الرصيد ينقص بعد كل سطر)
+          fifoTouched.addAll(await FifoCost.applyToSaleLines(txn, [itemMap], sequential: true));
+
           await txn.insert('invoice_items', itemMap);
 
         }
+        // 📦 FIFO: كلفة المادة الآن = قيمة الباقي ÷ الرصيد
+        if (fifoTouched.isNotEmpty) await FifoCost.refreshProducts(txn, fifoTouched);
         
         // 📦 الكمية تتبع البنود تلقائياً (دفتر المخزون — مشغّلات SQLite)
 

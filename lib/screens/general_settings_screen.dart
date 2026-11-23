@@ -1817,6 +1817,19 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                         activeColor: Colors.blue,
                       ),
 
+                      // FIFO: كل كمية تُباع بكلفة أقدم دفعة باقية
+                      RadioListTile<String>(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('الوارد أولاً يُباع أولاً (FIFO)', style: TextStyle(fontWeight: FontWeight.w500)),
+                        subtitle: Text(
+                          'لكل دفعة كلفتها: 10 بـ1000 ثم 10 بـ1100 ⇒ أول 10 تُباع بكلفة 1000 والتالية بـ1100. '
+                          'يبدأ من أول شراء بعد هذا التحديث (الرصيد قبله دفعة واحدة بكلفته).',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                        value: 'fifo',
+                        activeColor: Colors.teal,
+                      ),
+
                       // الخيار الثالث: اسألني لكل مادة عند تغيّر كلفتها
                       RadioListTile<String>(
                         contentPadding: EdgeInsets.zero,
