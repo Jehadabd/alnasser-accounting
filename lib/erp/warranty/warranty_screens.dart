@@ -782,39 +782,7 @@ class _WarrantyClaimScreenState extends State<WarrantyClaimScreen> {
     }
   }
 
-  Future<void> _print() async {
-    final c = _c!;
-    try {
-      final bytes = await DocPdf.build(
-        title: 'إيصال استلام ضمان وصيانة',
-        number: '${c.claimNo}',
-        date: c.claimDate,
-        partyLabel: 'العميل',
-        partyName: c.customerName,
-        partyExtra: (c.phone ?? '').isEmpty ? null : c.phone,
-        infos: [
-          MapEntry('الحالة', WStatus.label(c.status)),
-          MapEntry('الضمان', c.withinWarranty == null ? 'غير معروف' : (c.withinWarranty! ? 'داخل الضمان' : 'خارج الضمان')),
-          if (c.saleDate != null) MapEntry('تاريخ البيع', _day(c.saleDate)),
-          if (c.warrantyEnd != null) MapEntry('نهاية الضمان', _day(c.warrantyEnd)),
-          if (c.invoiceId != null) MapEntry('فاتورة البيع', '${c.invoiceId}'),
-        ],
-        headers: const ['المادة', 'الكمية', 'الرقم التسلسلي', 'العطل'],
-        rows: [
-          [c.productName, fmtQty(c.qty), c.serialNo ?? '—', c.problem ?? '—'],
-        ],
-        total: 0,
-        showTotals: false,
-        showWords: false,
-        notes: (c.accessories ?? '').isEmpty ? null : 'استُلم معها: ${c.accessories}',
-        terms: 'يُرجى إحضار هذا الإيصال عند استلام القطعة.',
-      );
-      if (!mounted) return;
-      await ReportExport.openPdf(context, bytes, 'ضمان_${c.claimNo}');
-    } catch (e) {
-      if (mounted) showError(context, 'تعذّرت الطباعة: $e');
-    }
-  }
+  Future<void> _print() => printWarrantyReceipt(context, _c!);
 
   List<Widget> _actions(WarrantyClaim c) {
     Widget btn(String t, IconData i, Color col, VoidCallback f) => FilledButton.icon(
@@ -1173,5 +1141,43 @@ class _WarrantyStatsScreenState extends State<WarrantyStatsScreen> {
                   ),
                 ]),
     );
+  }
+}
+
+/// 🖨️ إيصال استلام ضمان وصيانة لطلب — من شاشة الطلب ومن «استلام قطعة».
+Future<void> printWarrantyReceipt(BuildContext context, WarrantyClaim c) async {
+  final extra = [
+    if ((c.accessories ?? '').isNotEmpty) 'استُلم معها: ${c.accessories}',
+    if ((c.notes ?? '').isNotEmpty) c.notes!,
+  ].join('\n');
+  try {
+    final bytes = await DocPdf.build(
+      title: 'إيصال استلام ضمان وصيانة',
+      number: '${c.claimNo}',
+      date: c.claimDate,
+      partyLabel: 'العميل',
+      partyName: c.customerName,
+      partyExtra: (c.phone ?? '').isEmpty ? null : c.phone,
+      infos: [
+        MapEntry('الحالة', WStatus.label(c.status)),
+        MapEntry('الضمان', c.withinWarranty == null ? 'غير معروف' : (c.withinWarranty! ? 'داخل الضمان' : 'خارج الضمان')),
+        if (c.saleDate != null) MapEntry('تاريخ البيع', _day(c.saleDate)),
+        if (c.warrantyEnd != null) MapEntry('نهاية الضمان', _day(c.warrantyEnd)),
+        if (c.invoiceId != null) MapEntry('فاتورة البيع', '${c.invoiceId}'),
+      ],
+      headers: const ['المادة', 'الكمية', 'الرقم التسلسلي', 'العطل'],
+      rows: [
+        [c.productName, fmtQty(c.qty), c.serialNo ?? '—', c.problem ?? '—'],
+      ],
+      total: 0,
+      showTotals: false,
+      showWords: false,
+      notes: extra.isEmpty ? null : extra,
+      terms: 'يُرجى إحضار هذا الإيصال عند استلام القطعة.',
+    );
+    if (!context.mounted) return;
+    await ReportExport.openPdf(context, bytes, 'ضمان_${c.claimNo}');
+  } catch (e) {
+    if (context.mounted) showError(context, 'تعذّرت الطباعة: $e');
   }
 }

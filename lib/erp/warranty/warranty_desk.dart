@@ -37,11 +37,11 @@ import '../debts/customer_money.dart' show CustomerMoney;
 import '../pickers.dart' show CashBoxDropdown;
 import '../sales/sales_return_screen.dart' show printSalesReturn;
 import '../sales/sales_return_service.dart';
-import '../../services/settings_manager.dart';
+import '../../services/voucher_print.dart' show VoucherPrint;
 import '../../wa_messages/wa_auto_docs.dart';
 import '../stock_helpers.dart';
 import 'item_warranty.dart';
-import 'warranty_screens.dart' show WarrantyClaimEditor;
+import 'warranty_screens.dart' show WarrantyClaimEditor, printWarrantyReceipt;
 import 'warranty_service.dart';
 
 // ───────────────────────────── البيانات ─────────────────────────────
@@ -483,6 +483,10 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
           final repairId = await WarrantyDesk.repair(inv, l, r.qty * r.unit.factor, r.problem,
               serial: r.serial, accessories: r.accessories, notes: r.notes);
           if (mounted) showOk(context, 'سُجّل طلب الصيانة (#$repairId)');
+          await _maybePrint('warranty_receipt', 'طباعة إيصال الاستلام للعميل؟', () async {
+            final c = await WarrantyService.get(repairId);
+            if (c != null && mounted) await printWarrantyReceipt(context, c);
+          });
         case 'replace':
           final base = r.qty * r.unit.factor;
           final ok = await confirmDialog(
@@ -496,6 +500,10 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
           if (!ok || !mounted) return;
           final res = await WarrantyDesk.replace(inv, l, r.unit, r.qty, r.problem, serial: r.serial, notes: r.notes);
           if (mounted) showOk(context, 'تم الاستبدال — سند إخراج #${res.docId}، طلب ضمان #${res.claimId}');
+          await _maybePrint('warranty_receipt', 'طباعة إيصال الاستبدال للعميل؟', () async {
+            final c = await WarrantyService.get(res.claimId);
+            if (c != null && mounted) await printWarrantyReceipt(context, c);
+          });
         case 'refund':
           final price = roundMoney((info?.perBase ?? 0) * r.unit.factor);
           final amount = roundMoney(price * r.qty);
@@ -543,20 +551,21 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
                 ? 'سُجّل الاسترجاع (#${refundRes.claimId}) — ${fmtMoney(amount)} ${r.refundMode == 'cash' ? 'نقداً' : 'من دين العميل'} — القطعة أُعيدت للبيع'
                 : 'سُجّل الاسترجاع (#${refundRes.claimId}) — ${fmtMoney(amount)} ${r.refundMode == 'cash' ? 'نقداً' : 'من دين العميل'} — شُطبت المعيبة');
           }
-          // 🖨️ سند المرتجع حسب الإعداد: اسأل / اطبع دائماً / لا تطبع
-          final pm = (await SettingsManager.getAppSettings()).adjustmentVoucherMode;
-          if (!mounted) return;
-          final pr = pm == 'always'
-              ? true
-              : pm == 'never'
-                  ? false
-                  : await confirmDialog(context, 'طباعة', 'طباعة سند المرتجع؟', ok: 'طباعة');
-          if (pr && mounted) await printSalesReturn(context, saved);
+          await _maybePrint('sales_return', 'طباعة سند المرتجع للعميل؟', () => printSalesReturn(context, saved));
       }
     } catch (e) {
       if (mounted) showError(context, e);
     }
     if (mounted) await _openInvoice(inv);
+  }
+
+  /// 🖨️ حسب «الإعدادات ← السندات ← طباعة السندات بعد الحفظ» (أو إعداد هذا النوع في مصمم
+  /// السندات): اسألني ⇒ سؤال، اطبع دائماً ⇒ يطبع، لا تُظهر ⇒ لا شيء.
+  Future<void> _maybePrint(String kind, String question, Future<void> Function() doPrint) async {
+    final mode = await VoucherPrint.modeFor(kind);
+    if (!mounted || mode == 'never') return;
+    final go = mode == 'always' || await confirmDialog(context, 'طباعة', question, ok: 'طباعة');
+    if (go && mounted) await doPrint();
   }
 
   @override
