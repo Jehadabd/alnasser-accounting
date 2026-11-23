@@ -184,9 +184,13 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
           sumArgs.addAll([from, to]);
         }
         final sums = await db.rawQuery('''
+          -- 💵 المقبوض فعلاً = النقدي كله + المدفوع مقدماً من الآجل؛ والآجل = الباقي ديناً فقط
+          --    (كان الآجل يُحسب بإجماليه فيضيع المدفوع مقدماً من «نقداً»)
           SELECT COUNT(*) AS c,
-                 COALESCE(SUM(CASE WHEN i.payment_type = 'نقد' THEN i.total_amount ELSE 0 END), 0) AS cash,
-                 COALESCE(SUM(CASE WHEN i.payment_type != 'نقد' THEN i.total_amount ELSE 0 END), 0) AS credit
+                 COALESCE(SUM(CASE WHEN i.payment_type = 'نقد' THEN i.total_amount
+                                   ELSE MIN(MAX(COALESCE(i.amount_paid_on_invoice, 0), 0), i.total_amount) END), 0) AS cash,
+                 COALESCE(SUM(CASE WHEN i.payment_type = 'نقد' THEN 0
+                                   ELSE MAX(i.total_amount - COALESCE(i.amount_paid_on_invoice, 0), 0) END), 0) AS credit
           FROM invoices i WHERE ${sumWhere.join(' AND ')}
         ''', sumArgs);
         count = (sums.first['c'] as num?)?.toInt() ?? 0;
@@ -285,7 +289,27 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
     );
   }
 
+  Widget _searchField() => TextField(
+        controller: _search,
+        onSubmitted: (_) => _load(),
+        onChanged: (v) {
+          if (v.isEmpty) _load();
+        },
+        style: const TextStyle(fontSize: 14),
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: 'رقم الإيصال أو اسم العميل ثم Enter',
+          prefixIcon: const Icon(Icons.search_rounded, size: 20),
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding: const EdgeInsets.symmetric(vertical: 11),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+        ),
+      );
+
   Widget _header() {
+    // 📱 شاشة ضيقة (هاتف): حقل البحث في سطر خاص — كان عرضه الثابت 300 يفيض عن الهاتف
+    final narrow = MediaQuery.sizeOf(context).width < 640;
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(colors: [_navyDeep, _navy], begin: Alignment.topCenter, end: Alignment.bottomCenter),
@@ -294,7 +318,8 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
         bottom: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 16, 14),
-          child: Row(children: [
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+           Row(children: [
             const BackButton(color: Colors.white),
             Container(
               width: 42,
@@ -305,36 +330,25 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
             const SizedBox(width: 12),
             const Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                Text('إيصالات الكاشير', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
-                Text('إعادة طباعة، مرتجع، وعرض كامل', style: TextStyle(color: Color(0xFFB8C7DC), fontSize: 12.5)),
+                Text('إيصالات الكاشير',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                Text('إعادة طباعة، مرتجع، وعرض كامل',
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Color(0xFFB8C7DC), fontSize: 12.5)),
               ]),
             ),
-            SizedBox(
-              width: 300,
-              child: TextField(
-                controller: _search,
-                onSubmitted: (_) => _load(),
-                onChanged: (v) {
-                  if (v.isEmpty) _load();
-                },
-                style: const TextStyle(fontSize: 14),
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: 'رقم الإيصال أو اسم العميل ثم Enter',
-                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 11),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
+            if (!narrow) ...[
+              SizedBox(width: 300, child: _searchField()),
+              const SizedBox(width: 6),
+            ],
             IconButton(
               tooltip: 'تحديث',
               onPressed: _load,
               icon: const Icon(Icons.refresh_rounded, color: Colors.white),
             ),
+           ]),
+           if (narrow) Padding(padding: const EdgeInsetsDirectional.only(start: 8, top: 8), child: _searchField()),
           ]),
         ),
       ),
@@ -388,8 +402,8 @@ class _PosReceiptsScreenState extends State<PosReceiptsScreen> {
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
       child: Wrap(spacing: 10, runSpacing: 10, children: [
         kpi('المبيعات', _cash + _credit, _blue, Icons.point_of_sale_rounded, hint: '$_count إيصال'),
-        kpi('نقداً', _cash, _green, Icons.payments_rounded),
-        kpi('آجل (دين)', _credit, _orange, Icons.schedule_rounded),
+        kpi('المقبوض نقداً', _cash, _green, Icons.payments_rounded, hint: 'مع المدفوع مقدماً من الآجل'),
+        kpi('الباقي ديناً', _credit, _orange, Icons.schedule_rounded),
         kpi('المرتجعات', _returns, _red, Icons.assignment_return_rounded),
         kpi('الصافي', _cash + _credit - _returns, _navy, Icons.account_balance_wallet_rounded),
       ]),

@@ -2329,13 +2329,24 @@ class DatabaseService {
     // 📦 نفس اصطلاح شاشة «إنشاء فاتورة»: البيع بوحدة كبيرة (كرتون/باكيت...) يُحفظ
     //    بعدد الوحدات الكبيرة وسعرها، لا بعدد القطع × سعر الكرتون (كان يضخّم
     //    مجموع السطر والأرباح في فواتير الكاشير). الكمية الواردة بالوحدة الأساسية.
+    // 💰 الكلفة من القاعدة لحظة البيع — لا من نسخة الكاشير المحمّلة عند فتحه
+    //    (شراء جديد أثناء فتح الكاشير كان يُسجَّل البيع بكلفة قديمة فيخطئ الربح).
+    final freshCost = <int, double>{};
+    for (final i in items) {
+      final pid = i['product_id'] as int?;
+      if (pid == null || freshCost.containsKey(pid)) continue;
+      final r = await db.query('products', columns: ['cost_price'], where: 'id = ?', whereArgs: [pid], limit: 1);
+      final c = r.isEmpty ? null : (r.first['cost_price'] as num?)?.toDouble();
+      if (c != null) freshCost[pid] = c;
+    }
+
     List<InvoiceItem> invoiceItems = items.map((i) {
       final baseQty = (i['quantity'] as num).toDouble();
       final price = (i['price'] as num).toDouble();
       final units = (i['units_in_large_unit'] as num?)?.toDouble() ?? 1.0;
       final isLarge = units > 1;
       final soldQty = isLarge ? baseQty / units : baseQty;
-      final baseCost = (i['cost_price'] as num?)?.toDouble();
+      final baseCost = freshCost[i['product_id'] as int?] ?? (i['cost_price'] as num?)?.toDouble();
       return InvoiceItem(
         invoiceId: 0,
         productId: i['product_id'],

@@ -192,7 +192,9 @@ class InvoiceDao {
       where: 'invoice_id = ?',
       whereArgs: [invoiceId],
     );
-    return List.generate(maps.length, (i) => InvoiceItem.fromMap(maps[i]));
+    // 🔑 إيصالات قديمة حُفظت أسطرها بمفتاح واحد ⇒ مفتاح فريد لكل سطر عند القراءة
+    final rows = InvoiceItem.uniqueRowIds(maps);
+    return List.generate(rows.length, (i) => InvoiceItem.fromMap(rows[i]));
   }
   
   // 🔧 تعديلات الفاتورة (Adjustments): قراءة فقط. إضافتها (insertInvoiceAdjustment) حُذفت في p159 —

@@ -205,7 +205,10 @@ class _POSScreenState extends State<POSScreen> {
       _toast('نفذت كمية «${p.name}»', PosColors.danger, ms: 1800);
       return false;
     }
-    pos.addToCart(p);
+    if (!pos.addToCart(p)) {
+      _toast(pos.lastErrorMessage ?? 'تعذّرت إضافة «${p.name}»', PosColors.danger, ms: 2200);
+      return false;
+    }
     if (pos.basePriceOf(p) <= 0) {
       _toast('«${p.name}» بلا سعر — اكتب السعر في السلة', PosColors.warn, ms: 2200);
     }

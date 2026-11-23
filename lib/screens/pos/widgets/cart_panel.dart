@@ -613,11 +613,23 @@ class _CartLineState extends State<_CartLine> {
     super.dispose();
   }
 
+  /// رفض الزيادة (البيع بالسالب ممنوع) ⇒ رسالة واضحة بدل تجاهل صامت
+  void _guard(bool ok) {
+    if (ok || !mounted) return;
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      content: Text(widget.pos.lastErrorMessage ?? 'تعذّر التعديل'),
+      backgroundColor: PosColors.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
   void _commitPrice() {
     final it = widget.item;
     final v = double.tryParse(_price.text.replaceAll(',', ''));
     if (v != null && v >= 0 && (v - it.price).abs() > 1e-9) {
-      widget.pos.updateCartItemUnit(it.id, it.selectedUnit, v, it.unitsInLargeUnit);
+      _guard(widget.pos.updateCartItemUnit(it.id, it.selectedUnit, v, it.unitsInLargeUnit));
     } else {
       _price.text = posMoney(it.price);
     }
@@ -647,7 +659,7 @@ class _CartLineState extends State<_CartLine> {
     );
     c.dispose();
     if (q == null || !mounted) return;
-    widget.pos.updateQuantity(it.id, q - it.quantity); // صفر ⇒ يُحذف السطر
+    _guard(widget.pos.updateQuantity(it.id, q - it.quantity)); // صفر ⇒ يُحذف السطر
   }
 
   @override
@@ -725,12 +737,12 @@ class _CartLineState extends State<_CartLine> {
                             onChanged: (name) {
                               if (name == null) return;
                               final u = units.firstWhere((x) => x['name'] == name);
-                              widget.pos.updateCartItemUnit(
+                              _guard(widget.pos.updateCartItemUnit(
                                 it.id,
                                 name,
                                 (u['price'] as num).toDouble(),
                                 (u['quantity'] as num).toInt(),
-                              );
+                              ));
                             },
                           ),
                         ),
@@ -774,7 +786,7 @@ class _CartLineState extends State<_CartLine> {
               _QtyStepper(
                 qty: it.quantity,
                 onMinus: () => widget.pos.updateQuantity(it.id, -1),
-                onPlus: () => widget.pos.updateQuantity(it.id, 1),
+                onPlus: () => _guard(widget.pos.updateQuantity(it.id, 1)),
                 onEdit: _editQty,
               ),
             ],

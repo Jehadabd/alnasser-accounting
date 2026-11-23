@@ -269,11 +269,38 @@ class POSProvider extends ChangeNotifier {
     return units;
   }
 
-  void addToCart(Product product, {String? unitName, double? price, int? unitsInLargeUnit}) {
+  /// كم في السلة من هذه المادة بالوحدة الأساسية (كل الوحدات معاً)
+  double _cartBaseQty(int? productId, {String? exceptId}) => _cartItems
+      .where((i) => i.product.id == productId && i.id != exceptId)
+      .fold(0.0, (s, i) => s + i.quantity * i.unitsInLargeUnit);
+
+  /// 📦 البيع بالسالب ممنوع ⇒ لا تتجاوز السلة رصيد المادة (لا الإضافة الأولى فقط:
+  /// الزيادة بـ«+» وتكرار المسح وتغيير الوحدة إلى كرتون كانت تتجاوزه).
+  bool _fits(Product p, double baseQtyAfter) {
+    if (_allowNegativeStock || baseQtyAfter <= p.stockQuantity + 1e-9) return true;
+    _lastErrorMessage =
+        'الكمية تتجاوز الموجود من «${p.name}» (${_fmtQty(p.stockQuantity)}) — البيع بالسالب ممنوع من الإعدادات';
+    notifyListeners();
+    return false;
+  }
+
+  static String _fmtQty(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+  /// الخصم والمدفوع لا يتجاوزان الإجمالي بعد أي تغيير في السلة
+  /// (حذف سطر بعد خصم كان يحفظ خصماً أكبر من المجموع، ومدفوعاً أكبر من الإجمالي في الآجل).
+  void _reclamp() {
+    if (_discount > subtotal) _discount = subtotal;
+    if (_paidAmount > total) _paidAmount = total;
+  }
+
+  /// يضيف للسلة. false = لم يُضف (السبب في lastErrorMessage).
+  bool addToCart(Product product, {String? unitName, double? price, int? unitsInLargeUnit}) {
     final units = getProductUnits(product);
     final selectedUnitName = unitName ?? units.first['name'] as String;
     final selectedPrice = price ?? units.first['price'] as double;
     final selectedUnitsQty = unitsInLargeUnit ?? units.first['quantity'] as int;
+    _lastErrorMessage = null;
+    if (!_fits(product, _cartBaseQty(product.id) + selectedUnitsQty)) return false;
     
     // Check if same product with same unit exists
     final existingIndex = _cartItems.indexWhere(
@@ -293,6 +320,7 @@ class POSProvider extends ChangeNotifier {
       ));
     }
     notifyListeners();
+    return true;
   }
 
   /// إضافة منتج بالباركود مباشرة
@@ -334,8 +362,7 @@ class POSProvider extends ChangeNotifier {
         if (sp != null && sp > 0) customPrice = sp.toDouble();
       } catch (_) {}
 
-      addToCart(product, price: customPrice);
-      return product;
+      return addToCart(product, price: customPrice) ? product : null;
     }
 
     // 3. ⚖️ باركود ميزان (بادئة + رمز المادة + الوزن/العدد)
@@ -355,7 +382,8 @@ class POSProvider extends ChangeNotifier {
             _allProducts.add(scaled);
             _applyFilter();
           }
-          addToCart(scaled);
+          if (!_fits(scaled, _cartBaseQty(scaled.id) + qty)) return null;
+          if (!addToCart(scaled)) return null;
           final idx = _cartItems.indexWhere((i) => i.product.id == scaled.id && i.unitsInLargeUnit == 1);
           if (idx >= 0) {
             // addToCart أضاف 1 (أو زاد 1) ⇒ نضيف الباقي
@@ -371,10 +399,22 @@ class POSProvider extends ChangeNotifier {
     return null;
   }
 
-  void updateCartItemUnit(String cartItemId, String newUnit, double newPrice, int unitsQty) {
+  /// تغيير وحدة السطر أو سعره. false = رُفض (السبب في lastErrorMessage).
+  bool updateCartItemUnit(String cartItemId, String newUnit, double newPrice, int unitsQty) {
     final index = _cartItems.indexWhere((item) => item.id == cartItemId);
     if (index >= 0) {
       final item = _cartItems[index];
+      _lastErrorMessage = null;
+      if (!_fits(item.product, _cartBaseQty(item.product.id, exceptId: item.id) + item.quantity * unitsQty)) return false;
+      // سطر آخر للمادة نفسها بالوحدة الجديدة ⇒ دمج (كان يتكرر المعرّف فيحذف «حذف» السطرين معاً)
+      final twin = _cartItems.indexWhere((x) => x.id != item.id && x.product.id == item.product.id && x.selectedUnit == newUnit);
+      if (twin >= 0) {
+        _cartItems[twin].quantity += item.quantity;
+        _cartItems.removeAt(index);
+        _reclamp();
+        notifyListeners();
+        return true;
+      }
       // Create new item with updated unit
       _cartItems[index] = CartItem(
         id: '${item.product.id}_$newUnit',
@@ -384,24 +424,33 @@ class POSProvider extends ChangeNotifier {
         selectedUnit: newUnit,
         unitsInLargeUnit: unitsQty,
       );
+      _reclamp();
       notifyListeners();
     }
+    return true;
   }
 
   void removeFromCart(String cartItemId) {
     _cartItems.removeWhere((item) => item.id == cartItemId);
+    _reclamp();
     notifyListeners();
   }
 
-  void updateQuantity(String cartItemId, int delta) {
+  /// false = رُفضت الزيادة (السبب في lastErrorMessage).
+  bool updateQuantity(String cartItemId, int delta) {
     final index = _cartItems.indexWhere((item) => item.id == cartItemId);
     if (index >= 0) {
-      _cartItems[index].quantity += delta;
-      if (_cartItems[index].quantity <= 0) {
+      final it = _cartItems[index];
+      _lastErrorMessage = null;
+      if (delta > 0 && !_fits(it.product, _cartBaseQty(it.product.id) + delta * it.unitsInLargeUnit)) return false;
+      it.quantity += delta;
+      if (it.quantity <= 0) {
         _cartItems.removeAt(index);
       }
+      _reclamp();
       notifyListeners();
     }
+    return true;
   }
 
   void clearCart() {
@@ -423,11 +472,31 @@ class POSProvider extends ChangeNotifier {
   Future<bool> _processCheckoutUnlocked() async {
     _lastErrorMessage = null;
     if (_cartItems.isEmpty) return false;
+    _reclamp();
 
     _isLoading = true;
     notifyListeners();
 
     try {
+        // 📦 البيع بالسالب ممنوع ⇒ فحص أخير بالرصيد الحالي من القاعدة (قد يكون بيع من جهاز/نافذة أخرى)
+        if (!_allowNegativeStock) {
+          final need = <int, double>{};
+          for (final it in _cartItems) {
+            if (it.product.id != null) need[it.product.id!] = (need[it.product.id!] ?? 0) + it.quantity * it.unitsInLargeUnit;
+          }
+          final db = await DatabaseService().database;
+          for (final e in need.entries) {
+            final r = await db.query('products', columns: ['name', 'stock_quantity'], where: 'id = ?', whereArgs: [e.key], limit: 1);
+            if (r.isEmpty) continue;
+            final have = (r.first['stock_quantity'] as num?)?.toDouble() ?? 0;
+            if (e.value > have + 1e-9) {
+              _lastErrorMessage = 'لم يُحفظ البيع: «${r.first['name']}» المطلوب ${_fmtQty(e.value)} والموجود ${_fmtQty(have)}'
+                  ' — البيع بالسالب ممنوع من الإعدادات';
+              return false;
+            }
+          }
+        }
+
         final items = _cartItems.map((item) => {
             'product_id': item.product.id,
             'product_name': item.product.name,

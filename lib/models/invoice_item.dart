@@ -57,6 +57,29 @@ class InvoiceItem {
   // --- أضف هذا الحقل ---
   final String uniqueId;
 
+  /// 🔑 مفتاح سطر فريد فعلاً. «الوقت بالميكروثانية» وحده يتكرر على Windows (دقّة الساعة
+  /// أخشن)، فكانت أسطر إيصال الكاشير كلها تأخذ المفتاح نفسه ⇒ صفوف مكررة المفتاح في
+  /// شاشة الفاتورة (تعديل سطر يصيب سطراً آخر). العدّاد يضمن التفرّد داخل الجلسة.
+  static int _uidSeq = 0;
+  static String newUid([String prefix = 'item']) => '${prefix}_${DateTime.now().microsecondsSinceEpoch}_${_uidSeq++}';
+
+  /// صفوف مقروءة من القاعدة قد تحمل مفتاحاً مكرراً (إيصالات قديمة) ⇒ مفتاح جديد للمكرر.
+  /// على مستوى الصف (قبل fromMap) فلا يتغيّر أي مبلغ. المفتاح للواجهة فقط
+  /// (لا يُبحث به في القاعدة ولا في المزامنة).
+  static List<Map<String, dynamic>> uniqueRowIds(List<Map<String, dynamic>> rows) {
+    final seen = <String>{};
+    return [
+      for (final r in rows)
+        () {
+          final id = (r['unique_id'] ?? '').toString();
+          if (id.isNotEmpty && seen.add(id)) return r;
+          final fresh = newUid();
+          seen.add(fresh);
+          return {...r, 'unique_id': fresh};
+        }(),
+    ];
+  }
+
   // 🔄 ربط ذري للمنتج عبر sync_uuid (لمزامنة المخزون بين الأجهزة)
   String? productSyncUuid;
 
@@ -162,7 +185,7 @@ class InvoiceItem {
             quantityLargeUnit,
             _iqdLineCents(itemTotalCents, itemTotal)),
         itemTotalCents = _iqdLineCents(itemTotalCents, itemTotal),
-        uniqueId = uniqueId ?? 'item_${DateTime.now().microsecondsSinceEpoch}' {
+        uniqueId = uniqueId ?? newUid() {
     // Initialize controllers with initial values - مع تنسيق الأرقام بفواصل
     productNameController = TextEditingController(text: productName);
     quantityIndividualController =
@@ -292,7 +315,7 @@ class InvoiceItem {
       itemTotalCents: finalItemTotalCents,
       saleType: saleType,
       unitsInLargeUnit: (map['units_in_large_unit'] as num?)?.toDouble(),
-      uniqueId: map['unique_id'] ?? 'item_${DateTime.now().microsecondsSinceEpoch}',
+      uniqueId: map['unique_id'] ?? newUid(),
       productSyncUuid: map['product_sync_uuid'] as String?,
       priceBeforeDiscount: (map['price_before_discount'] as num?)?.toDouble(),
       discountType: map['discount_type'] as String?,

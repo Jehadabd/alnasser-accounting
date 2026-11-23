@@ -428,7 +428,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           unitPrice: 0.0,
           appliedPrice: 0.0,
           itemTotal: 0.0,
-          uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+          uniqueId: InvoiceItem.newUid('placeholder'),
         ));
         focusNodesList.add(LineItemFocusNodes());
       });
@@ -500,7 +500,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           unitPrice: 0.0,
           appliedPrice: 0.0,
           itemTotal: 0.0,
-          uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+          uniqueId: InvoiceItem.newUid('placeholder'),
         ));
         focusNodesList.add(LineItemFocusNodes());
       });
@@ -523,7 +523,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           unitPrice: 0,
           appliedPrice: 0,
           itemTotal: 0,
-          uniqueId: 'row_${DateTime.now().microsecondsSinceEpoch}',
+          uniqueId: InvoiceItem.newUid('row'),
         ));
       });
     }
@@ -1777,7 +1777,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           unitPrice: 0.0,
           appliedPrice: 0.0,
           itemTotal: 0.0,
-          uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+          uniqueId: InvoiceItem.newUid('placeholder'),
         ));
       }
       loadingFeeController = TextEditingController();
@@ -1931,7 +1931,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         unitPrice: 0.0,
         appliedPrice: 0.0,
         itemTotal: 0.0,
-        uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+        uniqueId: InvoiceItem.newUid('placeholder'),
       ));
     }
   }
@@ -1993,7 +1993,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             itemTotal: item['itemTotal'],
             saleType: item['saleType'],
             unitsInLargeUnit: item['unitsInLargeUnit'],
-            uniqueId: item['uniqueId'] ?? 'item_${DateTime.now().microsecondsSinceEpoch}',
+            uniqueId: item['uniqueId'] ?? InvoiceItem.newUid('item'),
           );
         }).toList();
 
@@ -2710,7 +2710,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
               unitPrice: 0.0,
               appliedPrice: 0.0,
               itemTotal: 0.0,
-              uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+              uniqueId: InvoiceItem.newUid('placeholder'),
             ));
           }
         });
@@ -3312,7 +3312,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
               unitPrice: 0.0,
               appliedPrice: 0.0,
               itemTotal: 0.0,
-              uniqueId: 'placeholder_${DateTime.now().microsecondsSinceEpoch}',
+              uniqueId: InvoiceItem.newUid('placeholder'),
             ));
             focusNodesList.add(LineItemFocusNodes());
           });
