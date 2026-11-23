@@ -46,6 +46,8 @@ class MainActivity : FlutterActivity() {
 
         // 📱 خادم واتساب على هذا الهاتف (WaNode.kt)
         WaNodeChannel(this).register(flutterEngine.dartExecutor.binaryMessenger)
+        // 📶 شبكة المتجر بلا راوتر (ShopHotspot.kt)
+        ShopHotspotChannel(this).register(flutterEngine.dartExecutor.binaryMessenger)
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
 

@@ -20,6 +20,7 @@ import 'lan_codec.dart';
 import 'lan_server.dart';
 import 'lan_settings.dart';
 import 'windows_autostart.dart';
+import 'shop_hotspot_card.dart';
 import '../services/firebase_sync/firebase_custom_config.dart';
 import '../services/license_service.dart';
 import '../widgets/settings_kit.dart';
@@ -770,10 +771,21 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
         if (_mode == LanMode.server) ...[
           _secretCard(),
           _addressCard(),
+          // 📶 بلا راوتر: هذا الجهاز يبث شبكة المتجر ويعرض رمز الربط
+          ShopHotspotServerCard(port: int.tryParse(_port.text.trim()) ?? lanDefaultPort, secret: _secret.text.trim()),
           _clientsCard(running),
           _serverOptionsCard(),
         ],
         if (_mode == LanMode.client) ...[
+          // 📶 بلا راوتر: امسح رمز شبكة المتجر ⇒ انضمام + تعبئة بيانات الاتصال
+          ShopHotspotJoinCard(
+            onJoined: (n) => setState(() {
+              if ((n.host ?? '').isNotEmpty) _host.text = n.host!;
+              if (n.port != null) _port.text = '${n.port}';
+              if ((n.secret ?? '').isNotEmpty) _secret.text = n.secret!;
+              _testResult = null;
+            }),
+          ),
           _findCard(),
           _connectCard(),
           _testCard(),

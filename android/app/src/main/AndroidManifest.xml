@@ -14,6 +14,9 @@
     <!-- Wi-Fi permissions -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+    <!-- 📶 شبكة المتجر بلا راوتر: الانضمام لشبكة (WifiNetworkSpecifier) وشبكة التطبيق على Android 13+ -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation"/>
     <!-- 📱 خادم واتساب على الهاتف: خدمة أمامية بإشعار ثابت (WaNode.kt) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
