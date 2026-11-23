@@ -32,6 +32,7 @@ import '../../services/sync_perks.dart';
 import '../../screens/ai_models_settings_screen.dart';
 import 'ai_alias_store.dart';
 import 'ai_invoice_service.dart';
+import 'ai_supplier_picker.dart'; // 🏪 اختيار المورد
 import 'ai_new_units_dialog.dart';
 import 'ai_purchase_prefill.dart';
 
@@ -344,6 +345,17 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   String _baseLabel(_Row row, Product? prod) =>
       prod != null ? AiInvoiceService.baseUnitName(prod) : (row.plan?.baseUnit ?? 'قطعة');
 
+  /// خطة وحدات افتراضية لمادة جديدة لم تُعرَّف وحداتها يدوياً.
+  AiUnitPlan _autoPlan(_Row r) {
+    final f = r.f;
+    if (f > 1 && r.unit.trim() != 'قطعة') {
+      return AiUnitPlan(baseUnit: 'قطعة', levels: [
+        {'unit_name': r.unit, 'quantity': f},
+      ], baseCost: r.pr / f);
+    }
+    return AiUnitPlan(baseUnit: r.unit, levels: const [], baseCost: r.pr);
+  }
+
   /// 📦 تعريف وحدات المادة الجديدة: هل وحدة الفاتورة أصغر وحدة؟ وما الذي في داخلها؟
   Future<void> _defineUnits(_Row row) async {
     final plan = await showNewUnitsDialog(
@@ -398,7 +410,9 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       ));
       if (prod == null) {
         originals[name] = l.originalName;
-        if (r.plan != null) plans[name] = r.plan!;
+        // 📦 كل مادة جديدة تصل ببطاقة جاهزة: ما عرّفته بـ«حدّد وحدتها»، وإلا ما قرأه
+        //    النموذج (كرتون فيه 10 ⇒ قطعة + كرتون=10، وكلفة القطعة = سعر الكرتون ÷ 10)
+        plans[name] = r.plan ?? _autoPlan(r);
         continue;
       }
       // 🧠 نتعلّم ما صحّحتَه، وما أكّدتَه بمطابقة قوية (لا نتعلّم التقريبي غير المؤكد)
@@ -515,13 +529,15 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         ],
       );
 
+  // 🏪 نافذة بحث جميلة بدل القائمة المنسدلة الطويلة
   Widget _supplierField({bool dense = false}) {
-    return DropdownButtonFormField<int>(
-      initialValue: _suppliers.any((s) => s.id == _supplier?.id) ? _supplier?.id : null,
-      isExpanded: true,
-      decoration: _dec('المورد', Icons.storefront_rounded, dense: dense),
-      items: [for (final s in _suppliers) if (s.id != null) DropdownMenuItem(value: s.id, child: Text(s.name, overflow: TextOverflow.ellipsis))],
-      onChanged: (id) => _changeSupplier(_suppliers.firstWhere((s) => s.id == id)),
+    return SupplierPickField(
+      supplier: _supplier,
+      dense: dense,
+      onTap: () async {
+        final s = await showSupplierPicker(context, suppliers: _suppliers, selected: _supplier);
+        if (s != null && mounted) await _changeSupplier(s);
+      },
     );
   }
 
@@ -1192,7 +1208,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                     Text(
                       plan != null
                           ? '${plan.describe()} • كلفة «${plan.baseUnit}» ${_fmt.format(plan.baseCost)}'
-                          : 'اضغط لتعريف الوحدات الأصغر (باكيت، قطعة…) فتتوزع الكلفة عليها',
+                          : 'إن لم تضغط: ${_autoPlan(row).describe()} • كلفة «${_autoPlan(row).baseUnit}» ${_fmt.format(_autoPlan(row).baseCost)} — اضغط للتعديل',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 11.5, color: _muted),

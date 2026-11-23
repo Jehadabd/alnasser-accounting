@@ -34,6 +34,7 @@ import '../inventory/item_card_screen.dart' show ItemCardService; // باركو�
 import '../models/app_user.dart' show AppPermissions;
 import '../services/auth_service.dart';
 import 'purchase_sale_extras.dart'; // 🏷️ سعر بيع المفرد + ✱ الأسعار والباركودات
+import '../owner/ai_invoice/ai_supplier_picker.dart'; // 🏪 اختيار المورد
 
 /// شاشة إنشاء فاتورة شراء (Odoo-Style مع Unit Conversion)
 class CreatePurchaseInvoiceScreen extends StatefulWidget {
@@ -757,30 +758,34 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
             children: [
               Expanded(
                 flex: 2,
-                child: DropdownButtonFormField<Supplier>(
-                  initialValue: _selectedSupplier,
-                  decoration: const InputDecoration(
-                    labelText: 'المورد *',
-                    prefixIcon: Icon(Icons.store),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
-                  items: _suppliers.map((s) => DropdownMenuItem(
-                    value: s,
-                    child: Text(s.name, overflow: TextOverflow.ellipsis),
-                  )).toList(),
-                  onChanged: _supplierLocked
-                      ? null
-                      : (val) {
-                          setState(() {
-                            _selectedSupplier = val;
-                            _currency = _normCurrency(val?.currency);
-                            // 🛡️ مندوبو المورد السابق لا يُربطون بفاتورة المورد الجديد
-                            _delegates = [];
-                          });
-                          final id = val?.id;
-                          if (id != null) _loadDelegatesForSupplier(id);
-                        },
-                  validator: (val) => val == null ? 'اختر المورد' : null,
+                // 🏪 نافذة بحث بالموردين بدل القائمة المنسدلة الطويلة
+                child: FormField<Supplier>(
+                  validator: (_) => _selectedSupplier == null ? 'اختر المورد' : null,
+                  builder: (field) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+                    SupplierPickField(
+                      supplier: _selectedSupplier,
+                      dense: true,
+                      onTap: () async {
+                        if (_supplierLocked) return;
+                        final val = await showSupplierPicker(context, suppliers: _suppliers, selected: _selectedSupplier);
+                        if (val == null || !mounted) return;
+                        setState(() {
+                          _selectedSupplier = val;
+                          _currency = _normCurrency(val.currency);
+                          // 🛡️ مندوبو المورد السابق لا يُربطون بفاتورة المورد الجديد
+                          _delegates = [];
+                        });
+                        field.didChange(val);
+                        final id = val.id;
+                        if (id != null) _loadDelegatesForSupplier(id);
+                      },
+                    ),
+                    if (field.hasError)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, right: 12),
+                        child: Text(field.errorText!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+                      ),
+                  ]),
                 ),
               ),
               const SizedBox(width: 12),
@@ -1332,6 +1337,8 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         initialUnit: item.unitName,
         initialQty: item.quantity,
         initialUnitPlan: widget.aiPrefill?.unitPlans[item.productName ?? ''],
+        // 🏷️ ما كتبته في «سعر بيع المفرد» لهذا السطر يدخل بطاقة المادة مباشرة
+        initialSalePrice: (_extras[item]?.touched ?? false) ? _extras[item]!.retailValue : null,
         onProductSelected: (product, quantity, price, unit) {
            // This callback is called when user clicks "Add" in the dialog
            final wasKnown = _products.any((p) => p.id == product.id && (p.id ?? -1) > 0);

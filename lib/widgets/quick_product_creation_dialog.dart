@@ -195,6 +195,9 @@ class QuickProductCreationDialog extends StatefulWidget {
   /// (الأصغر، والأكبر منها، وكلفة الأصغر) — تُعبّأ بها بطاقة المادة.
   final AiUnitPlan? initialUnitPlan;
 
+  /// 🏷️ سعر بيع المفرد (للوحدة الأصغر) إن كتبته في سطر الفاتورة.
+  final double? initialSalePrice;
+
   const QuickProductCreationDialog({
     super.key,
     required this.existingProducts,
@@ -204,6 +207,7 @@ class QuickProductCreationDialog extends StatefulWidget {
     this.initialUnit,
     this.initialQty,
     this.initialUnitPlan,
+    this.initialSalePrice,
   });
 
   @override
@@ -424,14 +428,24 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         quickForPurchase: true,
         initialName: (name ?? '').trim().isEmpty ? null : name,
         initialBarcode: barcode,
-        initialBaseUnit: widget.initialUnitPlan?.baseUnit,
+        // بلا تعريف وحدات: وحدة الفاتورة هي الأصغر وكلفتها كلفتها (لا بطاقة فارغة)
+        initialBaseUnit: widget.initialUnitPlan?.baseUnit ?? _nonEmpty(widget.initialUnit),
         initialLevels: widget.initialUnitPlan?.levels ?? const [],
-        initialCost: widget.initialUnitPlan?.baseCost,
+        initialCost: widget.initialUnitPlan?.baseCost ?? widget.initialCost,
+        initialPrice: widget.initialSalePrice,
       ),
     ));
     if (res is! int || !mounted) return;
     final p = await DatabaseService().getProductById(res);
     if (p == null || !mounted) return;
+    // ⚡ من سطر فاتورة: الوحدة والكمية والسعر معروفة ⇒ تُضاف فوراً بلا خطوة «إضافة» ثانية
+    final unit = (widget.initialUnit ?? '').trim();
+    final qty = widget.initialQty ?? 0;
+    if (widget.initialName != null && unit.isNotEmpty && qty > 0 && widget.initialCost != null && _hasUnit(p, unit)) {
+      widget.onProductSelected(p, qty, widget.initialCost!, unit);
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
     final fmt = NumberFormat('#,##0.##', 'en_US');
     setState(() {
       _mode = 'search';
@@ -444,6 +458,15 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
       content: Text('عُرّفت «${p.name}» — حدّد الوحدة والكمية وسعر الشراء ثم «إضافة»'),
       backgroundColor: Colors.green.shade700,
     ));
+  }
+
+  static String? _nonEmpty(String? s) => (s ?? '').trim().isEmpty ? null : s!.trim();
+
+  /// هل [unit] من وحدات المادة (الأساسية أو هرمها)؟ — وإلا نترك المستخدم يختار.
+  static bool _hasUnit(Product p, String unit) {
+    final base = p.unit == 'piece' ? 'قطعة' : (p.unit == 'meter' ? 'متر' : p.unit);
+    if (unit == base || unit == p.unit) return true;
+    return p.getUnitHierarchyList().any((l) => '${l['unit_name'] ?? ''}'.trim() == unit);
   }
 
   /// Called when the base unit changes. If different from invoice unit, auto-creates hierarchy.

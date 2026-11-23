@@ -120,6 +120,7 @@ class ItemCardEditorScreen extends StatefulWidget {
     this.initialBaseUnit,
     this.initialLevels = const [],
     this.initialCost,
+    this.initialPrice,
   });
 
   /// null = مادة جديدة
@@ -137,6 +138,9 @@ class ItemCardEditorScreen extends StatefulWidget {
   final String? initialBaseUnit;
   final List<Map<String, dynamic>> initialLevels;
   final double? initialCost;
+
+  /// 🏷️ سعر بيع المفرد للوحدة الأصغر (من عمود «سعر بيع المفرد» في فاتورة الشراء).
+  final double? initialPrice;
 
   @override
   State<ItemCardEditorScreen> createState() => _ItemCardEditorScreenState();
@@ -495,6 +499,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             }
           }
           if ((widget.initialCost ?? 0) > 0 && _canSeeCost) _cost.text = _fmt(widget.initialCost);
+          if ((widget.initialPrice ?? 0) > 0) _price[0].text = _fmt(widget.initialPrice);
         }
       }
       _id = id;
