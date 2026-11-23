@@ -9,6 +9,7 @@ import '../../models/app_user.dart';
 import '../../screens/day_close_screen.dart';
 import '../../screens/custom_range_report_screen.dart';
 import '../../screens/returns_report_screen.dart';
+import '../../screens/report_search_screen.dart'; // 🔎
 import '../../services/reports_service.dart';
 import '../debts/debt_reports_screen.dart';
 import '../erp_common.dart';
@@ -119,7 +120,14 @@ class _SalesHubScreenState extends State<SalesHubScreen> {
       title: 'المبيعات',
       subtitle: 'مرتجعات • عروض أسعار • طلبات • مندوبون',
       icon: Icons.storefront,
-      actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh))],
+      actions: [
+        // 🔎 البحث في التقارير: مادة، عميل، موظف، الربح، سند قبض، الضمان…
+        IconButton(
+            tooltip: 'البحث في التقارير',
+            onPressed: () => ReportSearchScreen.open(context),
+            icon: const Icon(Icons.manage_search_rounded)),
+        IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+      ],
       headerExtra: Wrap(spacing: 10, runSpacing: 10, children: [
         StatCard(label: 'مبيعات اليوم', value: fmtMoney(_today), hint: '$_todayCount فاتورة', icon: Icons.today, color: ErpColors.green,
             onTap: () => _go(CustomRangeReportScreen(from: DateTime.now(), to: DateTime.now()))),

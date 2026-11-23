@@ -17,9 +17,12 @@ import 'invoice_history_screen.dart';
 import 'report_parts.dart' show openReport, repTime;
 
 class ReturnsReportScreen extends StatefulWidget {
-  const ReturnsReportScreen({super.key, this.from, this.to});
+  const ReturnsReportScreen({super.key, this.from, this.to, this.warrantyOnly = false});
   final DateTime? from;
   final DateTime? to;
+
+  /// 🔎 من البحث الذكي («الضمان»): بطاقة «مرتجعات الضمان» أولاً — المواد التي رجعت بسبب الضمان.
+  final bool warrantyOnly;
 
   @override
   State<ReturnsReportScreen> createState() => _ReturnsReportScreenState();
@@ -114,7 +117,9 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> {
     final editsTotal = _edits.fold<double>(0, (s, e) => s + _n(e['amount_returned']));
     final all = t.invoiceReturns + t.salesReturns + editsTotal;
     final profitHit = t.invoiceReturns + (t.salesReturns - t.salesReturnsCost);
+    final warranty = [for (final r in docs) if ((r.notes ?? '').startsWith('ضمان')) r];
     return [
+      if (widget.warrantyOnly) _warrantyCard(warranty, canProfit),
       _helpCard(),
       SetCard(
         title: 'الملخص',
@@ -228,8 +233,57 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> {
     );
   }
 
-  Widget _docsCard(List<SalesReturnFact> docs, bool canProfit) => SetCard(
-        title: 'مستندات مرتجع المبيعات',
+  /// 🛡️ مرتجعات الضمان: ملخص المواد (كم قطعة من كل مادة وكم رُدّ) ثم المستندات نفسها.
+  Widget _warrantyCard(List<SalesReturnFact> docs, bool canProfit) {
+    final byItem = <String, ({double qty, double amount, int times})>{};
+    for (final r in docs) {
+      for (final it in r.items) {
+        final o = byItem[it.productName] ?? (qty: 0.0, amount: 0.0, times: 0);
+        byItem[it.productName] = (qty: o.qty + it.soldQty.abs(), amount: o.amount + it.revenue.abs(), times: o.times + 1);
+      }
+    }
+    final items = byItem.entries.toList()..sort((a, b) => b.value.amount.compareTo(a.value.amount));
+    final total = docs.fold<double>(0, (s, r) => s + r.total);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SetCard(
+        title: 'مرتجعات الضمان',
+        subtitle: docs.isEmpty
+            ? 'لا مواد رجعت بسبب الضمان في الفترة — غيّر الفترة من الأعلى'
+            : '${docs.length} مستند • ${items.length} مادة • ${repMoney(total)}',
+        icon: Icons.verified_user_rounded,
+        color: kRepPurple,
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        child: items.isEmpty
+            ? const EmptyReport(title: 'لا مرتجعات ضمان', icon: Icons.verified_user_outlined)
+            : Column(children: [
+                for (final e in items)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(children: [
+                      CircleAvatar(
+                        radius: 15,
+                        backgroundColor: kRepPurple.withValues(alpha: 0.12),
+                        child: const Icon(Icons.build_circle_rounded, size: 16, color: kRepPurple),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(e.key, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          Text('الكمية ${repQty(e.value.qty)} • رجعت ${e.value.times} مرة',
+                              style: const TextStyle(fontSize: 12, color: kSetMuted)),
+                        ]),
+                      ),
+                      MoneyLabel(e.value.amount),
+                    ]),
+                  ),
+              ]),
+      ),
+      if (docs.isNotEmpty) _docsCard(docs, canProfit, title: 'مستندات مرتجع الضمان'),
+    ]);
+  }
+
+  Widget _docsCard(List<SalesReturnFact> docs, bool canProfit, {String title = 'مستندات مرتجع المبيعات'}) => SetCard(
+        title: title,
         subtitle: '${docs.length} مستند',
         icon: Icons.assignment_return_rounded,
         color: kRepPurple,

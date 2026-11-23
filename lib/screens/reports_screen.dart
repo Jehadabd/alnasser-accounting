@@ -31,6 +31,7 @@ import 'people_reports_screen.dart';
 import 'product_reports_screen.dart';
 import 'returns_report_screen.dart';
 import 'employee_sales_screen.dart'; // 👷
+import 'report_search_screen.dart'; // 🔎 البحث في التقارير
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -158,6 +159,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
       icon: Icons.insights_rounded,
       actions: [
         IconButton(
+          tooltip: 'البحث في التقارير',
+          onPressed: () => ReportSearchScreen.open(context),
+          icon: const Icon(Icons.manage_search_rounded),
+        ),
+        IconButton(
           tooltip: 'تحديث الأرقام',
           onPressed: _loadGlance,
           icon: const Icon(Icons.refresh_rounded),
@@ -165,6 +171,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ],
       onRefresh: _loadGlance,
       children: [
+        // 🔎 ابحث بكلامك: مادة، عميل، موظف، الربح، سند قبض، الضمان، 2025…
+        const ReportSearchBar(),
         _glance(profit),
         // 🧭 الأزرار من ReportsScreen.menu — نفس ما في اللوحة الجانبية
         // 🔐 التقارير غير المسموحة لا تظهر أصلاً (ولا قسمها إن فرغ)

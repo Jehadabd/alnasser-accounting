@@ -23,11 +23,15 @@ import '../report_export.dart';
 import 'voucher_details_sheet.dart';
 
 class VouchersSummaryScreen extends StatefulWidget {
-  const VouchersSummaryScreen({super.key, this.from, this.to});
+  const VouchersSummaryScreen({super.key, this.from, this.to, this.onlyType, this.drawingsOnly = false});
 
   /// الفترة (من التقرير الدوري مثلاً)؛ بدونها: هذا الشهر.
   final DateTime? from;
   final DateTime? to;
+
+  /// 🔎 من البحث الذكي: نوع واحد (سند قبض مثلاً) أو مسحوبات المالك فقط — يُلغى بزر «كل السندات».
+  final VoucherType? onlyType;
+  final bool drawingsOnly;
 
   @override
   State<VouchersSummaryScreen> createState() => _VouchersSummaryScreenState();
@@ -59,6 +63,8 @@ class _VouchersSummaryScreenState extends State<VouchersSummaryScreen> {
   final Map<VoucherType, _TypeBlock> _blocks = {};
   double _drawings = 0;
   int _drawingsCount = 0;
+  VoucherType? _only;
+  bool _drawingsOnly = false;
 
   // ترتيب العرض: ما خرج أولاً ثم ما دخل
   static const _order = [
@@ -94,8 +100,12 @@ class _VouchersSummaryScreenState extends State<VouchersSummaryScreen> {
     final now = DateTime.now();
     _from = widget.from ?? DateTime(now.year, now.month, 1);
     _to = widget.to ?? now;
+    _drawingsOnly = widget.drawingsOnly;
+    _only = widget.drawingsOnly ? VoucherType.payment : widget.onlyType;
     _load();
   }
+
+  bool _shown(VoucherType t) => _only == null || _only == t;
 
   void _setRange(DateTime from, DateTime to) {
     _from = from;
@@ -220,6 +230,7 @@ class _VouchersSummaryScreenState extends State<VouchersSummaryScreen> {
               ? Center(child: Text('تعذّر التحميل: $_error', style: const TextStyle(color: ErpColors.red)))
               : ListView(padding: const EdgeInsets.only(bottom: 24), children: [
                   _periodBar(),
+                  if (_only != null) _filterBar(),
                   if (_rows.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(32),
@@ -227,8 +238,63 @@ class _VouchersSummaryScreenState extends State<VouchersSummaryScreen> {
                           child: Text('لا توجد سندات في هذه الفترة', style: TextStyle(color: ErpColors.muted))),
                     ),
                   for (final t in _order)
-                    if (_blocks[t] != null) _typeSection(_blocks[t]!),
+                    if (_blocks[t] != null && _shown(t)) _typeSection(_visible(_blocks[t]!)),
+                  if (_only != null && (_blocks[_only!] == null || _visible(_blocks[_only!]!).count == 0) && _rows.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Center(
+                        child: Text(
+                            'لا ${_drawingsOnly ? 'مسحوبات للمالك' : voucherTypeLabels[_only!]} في هذه الفترة',
+                            style: const TextStyle(color: ErpColors.muted)),
+                      ),
+                    ),
                 ]),
+    );
+  }
+
+  /// المسحوبات فقط: نفس كتلة «سند صرف» لكن بحساب مسحوبات المالك وحده.
+  _TypeBlock _visible(_TypeBlock b) {
+    if (!_drawingsOnly || b.type != VoucherType.payment) return b;
+    final x = _TypeBlock(b.type);
+    for (final g in b.groups.entries) {
+      final rows = g.value.rows.where((r) => r['account_key'] == 'owner_drawings').toList();
+      if (rows.isEmpty) continue;
+      final ng = _Group(g.key)..rows.addAll(rows);
+      ng.total = roundMoney(rows.fold(0.0, (s, r) => s + d0(r['amount'])));
+      x.groups[g.key] = ng;
+      x.total = roundMoney(x.total + ng.total);
+      x.count += rows.length;
+    }
+    return x;
+  }
+
+  /// شريط الفلتر القادم من البحث: ماذا يُعرض الآن + زر لعرض كل الأنواع.
+  Widget _filterBar() {
+    final c = _colors[_only] ?? ErpColors.navy;
+    final label = _drawingsOnly ? 'مسحوبات المالك فقط' : '${voucherTypeLabels[_only]} فقط';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: c.withValues(alpha: 0.35)),
+        ),
+        child: Row(children: [
+          Icon(Icons.filter_alt_rounded, color: c, size: 20),
+          const SizedBox(width: 8),
+          Expanded(child: Text('يُعرض: $label', style: TextStyle(fontWeight: FontWeight.w800, color: c))),
+          TextButton.icon(
+            onPressed: () => setState(() {
+              _only = null;
+              _drawingsOnly = false;
+            }),
+            icon: const Icon(Icons.clear_all_rounded, size: 18),
+            label: const Text('كل السندات'),
+          ),
+        ]),
+      ),
     );
   }
 

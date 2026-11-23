@@ -15,7 +15,12 @@ import 'invoice_details_screen.dart';
 import 'report_parts.dart' show openReport;
 
 class EmployeeSalesScreen extends StatefulWidget {
-  const EmployeeSalesScreen({super.key});
+  const EmployeeSalesScreen({super.key, this.from, this.to, this.focusUser});
+
+  /// 🔎 من البحث الذكي: الفترة (بدونها هذا الشهر) وموظف تُفتح فواتيره مباشرة.
+  final DateTime? from;
+  final DateTime? to;
+  final String? focusUser;
   @override
   State<EmployeeSalesScreen> createState() => _EmployeeSalesScreenState();
 }
@@ -37,9 +42,27 @@ class _EmployeeSalesScreenState extends State<EmployeeSalesScreen> {
   void initState() {
     super.initState();
     final now = DateTime.now();
-    _from = DateTime(now.year, now.month, 1);
-    _to = now;
-    _load();
+    _from = widget.from ?? DateTime(now.year, now.month, 1);
+    _to = widget.to ?? now;
+    _load().then((_) => _openFocus());
+  }
+
+  /// يفتح فواتير الموظف المطلوب مرة واحدة بعد أول تحميل.
+  void _openFocus() {
+    final u = widget.focusUser?.trim() ?? '';
+    final r = _report;
+    if (u.isEmpty || r == null || !mounted) return;
+    for (final e in r.rows) {
+      if (e.username.toLowerCase() == u.toLowerCase()) {
+        _showInvoices(e);
+        return;
+      }
+    }
+    _notice('لا مبيعات لـ «$u» في هذه الفترة — غيّر الفترة من الأعلى');
+  }
+
+  void _notice(String msg) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
   }
 
   Future<void> _load() async {

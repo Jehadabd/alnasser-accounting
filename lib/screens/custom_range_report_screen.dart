@@ -28,9 +28,13 @@ import 'report_trend_card.dart';
 import 'returns_report_screen.dart';
 
 class CustomRangeReportScreen extends StatefulWidget {
-  const CustomRangeReportScreen({super.key, this.from, this.to});
+  const CustomRangeReportScreen({super.key, this.from, this.to, this.focus});
   final DateTime? from;
   final DateTime? to;
+
+  /// 🔎 من البحث الذكي: بطاقة تُرفع إلى الأعلى مميّزة —
+  /// extras | vouchers | returns | channels | trend | manual | usd | compare | top
+  final String? focus;
 
   /// هل يملك المستخدم أي صلاحية تقارير مبيعات؟
   static bool allowed() {
@@ -360,49 +364,107 @@ class _CustomRangeReportScreenState extends State<CustomRangeReportScreen> {
     final p = _prev();
     void openReturns() => openReport(context, ReturnsReportScreen(from: _from, to: _to));
     final impact = _impact;
-    return [
-      periodKpis(d, prevLabel: p.pLabel, canProfit: canProfit, onReturns: openReturns),
+    // البطاقات التي يمكن للبحث الذكي رفعها إلى الأعلى
+    final cards = <String, Widget>{
       // 💡 ماذا حدث؟ + المال الفعلي (المقبوض وتغيّر الديون)
-      PeriodExtras(
+      'extras': PeriodExtras(
           key: ValueKey('extras-$_from-$_to-$_source'),
           kind: _kind,
           from: _from,
           to: _naturalEnd,
           title: _label,
           source: _source),
-      vouchers,
+      'vouchers': vouchers,
       // ↩️ مرتجعات الفواتير (ومنها مرتجعات الضمان) — ظاهرة، وتفتح تقريرها المفصّل
-      PeriodReturnsCard(from: _from, to: _naturalEnd, facts: d.facts),
-      SalesChannelsCard(from: _from, to: _to, facts: d.facts, canProfit: canProfit, onReturns: openReturns),
+      'returns': PeriodReturnsCard(from: _from, to: _naturalEnd, facts: d.facts),
+      'channels': SalesChannelsCard(from: _from, to: _to, facts: d.facts, canProfit: canProfit, onReturns: openReturns),
       // 📈 تحليل التوجهات (منحنى التقرير السنوي أو أعمدة)
-      ReportTrendCard(
+      'trend': ReportTrendCard(
         facts: d.facts,
         from: _from,
         to: _to,
         canProfit: canProfit,
         onOpenRange: _set,
       ),
-      distributionCard(d),
-      manualCard(context, d, periodTitle: _label, source: _source, canProfit: canProfit),
+      'manual': manualCard(context, d, periodTitle: _label, source: _source, canProfit: canProfit),
       // 💱 أثر سعر الدولار في الفترة
-      if (impact != null)
-        CurrencyImpactCard(
-          impact: impact,
-          showProfit: canProfit,
-          onProductTap: (id, name) =>
-              Navigator.push(context, accRoute(ProductReportDetailsScreen(productId: id, productName: name))),
-        ),
-      compareCard(d,
+      'usd': impact != null
+          ? CurrencyImpactCard(
+              impact: impact,
+              showProfit: canProfit,
+              onProductTap: (id, name) =>
+                  Navigator.push(context, accRoute(ProductReportDetailsScreen(productId: id, productName: name))),
+            )
+          : (widget.focus == 'usd'
+              ? const EmptyReport(
+                  title: 'لا أثر لسعر الدولار في هذه الفترة',
+                  text: 'لا مواد بكلفة دولارية بيعت فيها، أو لم يتغيّر السعر. جرّب فترة أخرى.',
+                  icon: Icons.currency_exchange_rounded)
+              : const SizedBox.shrink()),
+      'compare': compareCard(d,
           title: 'المقارنة',
           prevLabel: p.pLabel,
           prev2Label: p.p2Label,
           canProfit: canProfit,
           subtitle: _inProgress ? 'الفترة لم تنتهِ — المقارنة بنفس عدد الأيام' : null),
-      twoCols(
+      'top': twoCols(
         TopProductsCard(facts: d.facts, canProfit: canProfit),
         TopCustomersCard(facts: d.facts, canProfit: canProfit, monthOf: _from),
       ),
+    };
+    final list = <Widget>[
+      periodKpis(d, prevLabel: p.pLabel, canProfit: canProfit, onReturns: openReturns),
+      cards['extras']!,
+      cards['vouchers']!,
+      cards['returns']!,
+      cards['channels']!,
+      cards['trend']!,
+      distributionCard(d),
+      cards['manual']!,
+      cards['usd']!,
+      cards['compare']!,
+      cards['top']!,
       InvoicesListCard(facts: d.facts, canProfit: canProfit, showDay: _kind != ExtrasKind.day),
     ];
+    // 🔎 ما بحثت عنه: تحت المؤشرات مباشرة، بإطار ملوّن
+    final f = cards[widget.focus];
+    if (f != null && list.remove(f)) list.insert(1, _SearchFocus(child: f));
+    return list;
+  }
+}
+
+/// إطار «ما بحثت عنه» حول البطاقة التي رفعها البحث الذكي.
+class _SearchFocus extends StatelessWidget {
+  const _SearchFocus({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 650),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, c) => Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: kRepPurple.withValues(alpha: 0.55 * t), width: 1.6),
+          boxShadow: [BoxShadow(color: kRepPurple.withValues(alpha: 0.12 * t), blurRadius: 22, offset: const Offset(0, 6))],
+        ),
+        child: c,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(10, 6, 10, 6),
+          child: Row(children: const [
+            Icon(Icons.manage_search_rounded, size: 18, color: kRepPurple),
+            SizedBox(width: 6),
+            Text('ما بحثت عنه', style: TextStyle(fontWeight: FontWeight.w900, color: kRepPurple, fontSize: 12.5)),
+          ]),
+        ),
+        child,
+      ]),
+    );
   }
 }

@@ -18,13 +18,17 @@ class PersonDetailsScreen extends StatefulWidget {
   PersonDetailsScreen({super.key, required Customer customer})
       : customerId = customer.id,
         name = customer.name,
-        phone = customer.phone;
+        phone = customer.phone,
+        initialYear = null;
 
-  const PersonDetailsScreen.fromReport({super.key, required this.customerId, required this.name, this.phone});
+  const PersonDetailsScreen.fromReport({super.key, required this.customerId, required this.name, this.phone, this.initialYear});
 
   final int? customerId;
   final String name;
   final String? phone;
+
+  /// 🔎 من البحث الذكي: افتح على هذه السنة إن كان له فيها حركة.
+  final int? initialYear;
 
   @override
   State<PersonDetailsScreen> createState() => _PersonDetailsScreenState();
@@ -60,7 +64,9 @@ class _PersonDetailsScreenState extends State<PersonDetailsScreen> {
       setState(() {
         _facts = facts;
         _customer = customer;
-        _year ??= years.isEmpty ? null : years.first;
+        _year ??= (widget.initialYear != null && years.contains(widget.initialYear))
+            ? widget.initialYear
+            : (years.isEmpty ? null : years.first);
         _loading = false;
       });
     } catch (e) {

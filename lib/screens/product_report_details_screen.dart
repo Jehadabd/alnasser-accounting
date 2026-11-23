@@ -17,8 +17,17 @@ import 'invoice_details_screen.dart';
 
 class ProductReportDetailsScreen extends StatefulWidget {
   const ProductReportDetailsScreen(
-      {super.key, required this.productId, required this.productName, this.categoryName, this.customerId, this.customerName});
+      {super.key,
+      required this.productId,
+      required this.productName,
+      this.categoryName,
+      this.customerId,
+      this.customerName,
+      this.initialYear});
   final int? productId;
+
+  /// 🔎 من البحث الذكي: افتح على هذه السنة إن كان للمادة فيها حركة.
+  final int? initialYear;
   final String productName;
   final String? categoryName;
 
@@ -69,7 +78,9 @@ class _ProductReportDetailsScreenState extends State<ProductReportDetailsScreen>
       setState(() {
         _facts = facts;
         _product = product;
-        _year ??= years.isEmpty ? DateTime.now().year : years.first;
+        _year ??= (widget.initialYear != null && years.contains(widget.initialYear))
+            ? widget.initialYear
+            : (years.isEmpty ? DateTime.now().year : years.first);
         _loading = false;
       });
     } catch (e) {
