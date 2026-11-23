@@ -12,6 +12,7 @@ import '../accounting/screens/acc_ui.dart' show PeriodBar;
 import '../services/reports_service.dart';
 import '../widgets/report_kit.dart';
 import 'invoice_details_screen.dart';
+import '../erp/sales/sales_return_screen.dart' show printSalesReturn;
 import 'invoice_history_screen.dart';
 import 'report_parts.dart' show openReport, repTime;
 
@@ -78,8 +79,8 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> {
   Widget build(BuildContext context) {
     final canProfit = repCanSeeProfit();
     return ReportScaffold(
-      title: 'المرتجعات',
-      subtitle: 'كل ما رجع من المبيعات: مستندات المرتجع، الراجع على الفواتير، والتخفيض بعد الحفظ',
+      title: 'مرتجعات الفواتير',
+      subtitle: 'كل ما رجع من المبيعات: مستندات المرتجع (ومنها الضمان)، الراجع على الفواتير، والتخفيض بعد الحفظ',
       icon: Icons.keyboard_return_rounded,
       actions: [
         SourceMenu(value: _source, onChanged: (v) {
@@ -274,15 +275,20 @@ class _ReturnsReportScreenState extends State<ReturnsReportScreen> {
                           alignment: AlignmentDirectional.centerStart,
                           child: Text('ملاحظة: ${r.notes}', style: const TextStyle(fontSize: 12, color: kSetMuted)),
                         ),
-                      if (r.originalInvoiceId != null)
-                        Align(
-                          alignment: AlignmentDirectional.centerStart,
-                          child: TextButton.icon(
+                      Wrap(spacing: 4, children: [
+                        if (r.originalInvoiceId != null)
+                          TextButton.icon(
                             onPressed: () => openReport(context, InvoiceDetailsScreen(invoiceId: r.originalInvoiceId!)),
                             icon: const Icon(Icons.receipt_long_rounded, size: 18),
                             label: const Text('فتح الفاتورة الأصلية'),
                           ),
+                        // 🖨️ سند المرتجع نفسه
+                        TextButton.icon(
+                          onPressed: () => printSalesReturn(context, r.id),
+                          icon: const Icon(Icons.print_rounded, size: 18),
+                          label: const Text('طباعة سند المرتجع'),
                         ),
+                      ]),
                     ],
                   ),
               ]),

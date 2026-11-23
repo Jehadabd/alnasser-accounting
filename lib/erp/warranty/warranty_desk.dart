@@ -9,8 +9,9 @@
 //        • استبدال — قطعة جديدة تخرج من المخزن الرئيسي بـ«سند إخراج» على حساب
 //                    «مصروف الضمان والاستبدال»، والمعطوبة تبقى طلب ضمان مفتوحاً
 //                    (تُرسل للمورد من شاشة الطلب).
-//        • استرجاع — يفتح «مرتجع المبيعات» الموجود على هذه المادة بالوحدة والكمية
-//                    المختارتين (الردّ نقداً أو من دين العميل وسنده يُختاران ويُطبعان هناك).
+//        • استرجاع — يُحفظ «مرتجع مبيعات» في الخلفية عبر SalesReturnService نفسها
+//                    (لا انتقال لشاشة المرتجع): الردّ نقداً من صندوق أو من دين العميل
+//                    يُختار في نافذة الضمان، والسعر من سطر الفاتورة، والطباعة حسب الإعداد.
 //                    بعده — كما في Odoo/SAP (إرجاع ثم شطب): القطعة المعيبة تُشطب فوراً
 //                    بسند إخراج بكلفتها نفسها على «مصروف الضمان والاستبدال»، فلا تدخل
 //                    الرصيد القابل للبيع إطلاقاً. إلا إن اخترت «سليمة تعود للبيع».
@@ -32,7 +33,12 @@ import '../../org/org_service.dart';
 import '../erp_common.dart';
 import '../erp_ui.dart';
 import '../inventory/stock_docs_service.dart';
-import '../sales/sales_return_screen.dart';
+import '../debts/customer_money.dart' show CustomerMoney;
+import '../pickers.dart' show CashBoxDropdown;
+import '../sales/sales_return_screen.dart' show printSalesReturn;
+import '../sales/sales_return_service.dart';
+import '../../services/settings_manager.dart';
+import '../../wa_messages/wa_auto_docs.dart';
 import '../stock_helpers.dart';
 import 'item_warranty.dart';
 import 'warranty_screens.dart' show WarrantyClaimEditor;
@@ -92,6 +98,24 @@ class WarrantyDesk {
   WarrantyDesk._();
 
   static const _accKey = 'warranty_expense';
+
+  /// سعر الوحدة الأساسية في الفاتورة، والباقي ديناً عليها (لطريقة الردّ الافتراضية).
+  static Future<({double perBase, double remaining})> refundInfo(DeskInvoice inv, DeskLine l, ProductLite p) async {
+    final d = await erpDb();
+    final it = await d.rawQuery('''
+      SELECT ii.applied_price, ii.sale_type FROM invoice_items ii
+      JOIN products pr ON (pr.sync_uuid = ii.product_sync_uuid OR (ii.product_sync_uuid IS NULL AND pr.name = ii.product_name))
+      WHERE ii.invoice_id = ? AND pr.id = ? ORDER BY ii.id LIMIT 1''', [inv.id, l.productId]);
+    var perBase = 0.0;
+    if (it.isNotEmpty) {
+      final u = p.unitNamed(it.first['sale_type'] as String?);
+      final price = d0(it.first['applied_price']);
+      perBase = u.factor > 0 ? price / u.factor : price;
+    }
+    final h = await d.query('invoices', columns: ['total_amount', 'amount_paid_on_invoice'], where: 'id = ?', whereArgs: [inv.id], limit: 1);
+    final rem = h.isEmpty ? 0.0 : d0(h.first['total_amount']) - d0(h.first['amount_paid_on_invoice']);
+    return (perBase: perBase, remaining: rem > 0 ? rem : 0.0);
+  }
 
   /// أعمدة مضافة على طلبات الضمان: نوع العملية من المكتب ومرجعها والكمية بالأساسية.
   static Future<void> _ensure(DatabaseExecutor d) async {
@@ -437,7 +461,21 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
       );
       if (!ok || !mounted) return;
     }
-    final r = await showDialog<_DeskInput>(context: context, builder: (_) => _DeskActionDialog(mode: mode, line: l, product: p));
+    ({double perBase, double remaining})? info;
+    if (mode == 'refund') info = await WarrantyDesk.refundInfo(inv, l, p);
+    if (!mounted) return;
+    final r = await showDialog<_DeskInput>(
+      context: context,
+      builder: (_) => _DeskActionDialog(
+        mode: mode,
+        line: l,
+        product: p,
+        perBase: info?.perBase ?? 0,
+        // فاتورة عليها دين ⇒ الافتراضي تنزيله؛ مدفوعة ⇒ نقداً (كما في شاشة المرتجع)
+        defaultRefund: inv.customerId != null && (info?.remaining ?? 0) > 0 ? 'credit' : 'cash',
+        hasCustomer: inv.customerId != null,
+      ),
+    );
     if (r == null || !mounted) return;
     try {
       switch (mode) {
@@ -459,34 +497,61 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
           final res = await WarrantyDesk.replace(inv, l, r.unit, r.qty, r.problem, serial: r.serial, notes: r.notes);
           if (mounted) showOk(context, 'تم الاستبدال — سند إخراج #${res.docId}، طلب ضمان #${res.claimId}');
         case 'refund':
+          final price = roundMoney((info?.perBase ?? 0) * r.unit.factor);
+          final amount = roundMoney(price * r.qty);
+          // الردّ من حسابه يتجاوز دينه ⇒ يصير دائناً: بتأكيد صريح فقط
+          if (r.refundMode == 'credit' && inv.customerId != null) {
+            final bal = await CustomerMoney.balance(await erpDb(), inv.customerId!);
+            final after = roundMoney(bal - amount);
+            if (after < 0) {
+              if (!mounted) return;
+              final ok = await confirmDialog(
+                context,
+                'سيصبح للعميل رصيد دائن',
+                'دين «${inv.customerName}» الآن ${fmtMoney(bal)}، والمرتجع من حسابه ${fmtMoney(amount)}.\n'
+                    'بعد الحفظ يصبح له عندكم ${fmtMoney(-after)}. إن أعدتم له المبلغ نقداً فاختر «نقداً من الصندوق».',
+                ok: 'حفظ ويصبح دائناً',
+                color: ErpColors.red,
+              );
+              if (!ok || !mounted) return;
+            }
+          }
+          final svc = SalesReturnService();
+          final blocked = await svc.returnBlockReason(inv.id);
+          if (blocked != null) throw ErpException(blocked);
           final wh = await OrgService().defaultWarehouseId(await erpDb());
           if (!mounted) return;
-          int? rid;
-          await Navigator.push(
+          final saved = await svc.create(
             context,
-            MaterialPageRoute(
-              builder: (_) => SalesReturnScreen(
-                invoiceId: inv.id,
-                presetProductId: l.productId,
-                presetUnit: r.unit.name,
-                presetQty: r.qty,
-                presetWarehouseId: wh,
-                presetNotes: 'ضمان — العطل: ${r.problem}${r.notes.isEmpty ? '' : ' — ${r.notes}'}',
-                onSaved: (v) => rid = v,
-              ),
-            ),
+            customerId: inv.customerId,
+            customerName: inv.customerName.trim().isEmpty ? 'زبون' : inv.customerName,
+            originalInvoiceId: inv.id,
+            refundMode: r.refundMode,
+            cashBoxId: r.refundMode == 'cash' ? r.boxId : null,
+            warehouseId: wh,
+            date: DateTime.now(),
+            lines: [ReturnLine(product: p, unit: r.unit, quantity: r.qty, price: price)],
+            notes: 'ضمان — العطل: ${r.problem}${r.notes.isEmpty ? '' : ' — ${r.notes}'}',
           );
-          final saved = rid;
-          if (saved == null) return; // لم يُحفظ المرتجع ⇒ لا طلب
-          final res = await WarrantyDesk.recordRefund(inv, l, saved, r.problem, notes: r.notes, restock: r.restock);
+          if (inv.customerId != null) WaAutoDocs.salesReturnSaved(saved);
+          final refundRes = await WarrantyDesk.recordRefund(inv, l, saved, r.problem, notes: r.notes, restock: r.restock);
           if (!mounted) return;
-          if (res.scrapError != null) {
-            showError(context, 'حُفظ المرتجع وطلب الضمان #${res.claimId}، لكن لم تُشطب القطعة المعيبة: ${res.scrapError}\nاشطبها من المخزون ← سند إخراج.');
+          if (refundRes.scrapError != null) {
+            showError(context, 'حُفظ المرتجع وطلب الضمان #${refundRes.claimId}، لكن لم تُشطب القطعة المعيبة: ${refundRes.scrapError}\nاشطبها من المخزون ← سند إخراج.');
           } else {
-            showOk(context, res.scrapDoc == null
-                ? 'سُجّل الاسترجاع (#${res.claimId}) — القطعة أُعيدت للبيع'
-                : 'سُجّل الاسترجاع (#${res.claimId}) — شُطبت المعيبة بسند إخراج #${res.scrapDoc}');
+            showOk(context, refundRes.scrapDoc == null
+                ? 'سُجّل الاسترجاع (#${refundRes.claimId}) — ${fmtMoney(amount)} ${r.refundMode == 'cash' ? 'نقداً' : 'من دين العميل'} — القطعة أُعيدت للبيع'
+                : 'سُجّل الاسترجاع (#${refundRes.claimId}) — ${fmtMoney(amount)} ${r.refundMode == 'cash' ? 'نقداً' : 'من دين العميل'} — شُطبت المعيبة');
           }
+          // 🖨️ سند المرتجع حسب الإعداد: اسأل / اطبع دائماً / لا تطبع
+          final pm = (await SettingsManager.getAppSettings()).adjustmentVoucherMode;
+          if (!mounted) return;
+          final pr = pm == 'always'
+              ? true
+              : pm == 'never'
+                  ? false
+                  : await confirmDialog(context, 'طباعة', 'طباعة سند المرتجع؟', ok: 'طباعة');
+          if (pr && mounted) await printSalesReturn(context, saved);
       }
     } catch (e) {
       if (mounted) showError(context, e);
@@ -670,8 +735,13 @@ class _WarrantyDeskScreenState extends State<WarrantyDeskScreen> {
 // ───────────────────────────── نافذة العملية ─────────────────────────────
 
 class _DeskInput {
-  _DeskInput(this.unit, this.qty, this.problem, this.serial, this.accessories, this.notes, this.restock);
+  _DeskInput(this.unit, this.qty, this.problem, this.serial, this.accessories, this.notes, this.restock,
+      {this.refundMode = 'cash', this.boxId});
   final UnitOption unit;
+
+  /// الاسترجاع: cash | credit، والصندوق للنقد.
+  final String refundMode;
+  final int? boxId;
   final double qty;
   final String problem, serial, accessories, notes;
 
@@ -680,10 +750,20 @@ class _DeskInput {
 }
 
 class _DeskActionDialog extends StatefulWidget {
-  const _DeskActionDialog({required this.mode, required this.line, required this.product});
+  const _DeskActionDialog({
+    required this.mode,
+    required this.line,
+    required this.product,
+    this.perBase = 0,
+    this.defaultRefund = 'cash',
+    this.hasCustomer = false,
+  });
   final String mode; // repair | replace | refund
   final DeskLine line;
   final ProductLite product;
+  final double perBase; // سعر الوحدة الأساسية في الفاتورة
+  final String defaultRefund;
+  final bool hasCustomer;
   @override
   State<_DeskActionDialog> createState() => _DeskActionDialogState();
 }
@@ -696,6 +776,8 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
   final _acc = TextEditingController();
   final _notes = TextEditingController();
   bool _restock = false;
+  late String _refund = widget.defaultRefund;
+  int? _boxId;
   String? _err;
 
   @override
@@ -725,13 +807,16 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
       e = 'الحد الأعلى ${fmtQty(_maxInUnit)} ${_unit.name}';
     } else if (_problem.text.trim().isEmpty) {
       e = 'اكتب العطل كما وصفه العميل';
+    } else if (widget.mode == 'refund' && _refund == 'cash' && _boxId == null) {
+      e = 'اختر الصندوق الذي يُردّ منه المبلغ';
     }
     if (e != null) {
       setState(() => _err = e);
       return;
     }
     Navigator.pop(context,
-        _DeskInput(_unit, q, _problem.text.trim(), _serial.text.trim(), _acc.text.trim(), _notes.text.trim(), _restock));
+        _DeskInput(_unit, q, _problem.text.trim(), _serial.text.trim(), _acc.text.trim(), _notes.text.trim(), _restock,
+            refundMode: _refund, boxId: _boxId));
   }
 
   @override
@@ -832,6 +917,30 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
                   const SizedBox(height: 10),
                 ],
                 TextField(controller: _notes, maxLines: 2, decoration: _dec('ملاحظة')),
+                if (widget.mode == 'refund') ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: ErpColors.red.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(14)),
+                    child: Row(children: [
+                      const Icon(Icons.payments_rounded, color: ErpColors.red),
+                      const SizedBox(width: 10),
+                      const Expanded(child: Text('المبلغ المردود', style: TextStyle(fontWeight: FontWeight.w700))),
+                      Text(fmtMoney(roundMoney(roundMoney(widget.perBase * _unit.factor) * _q)),
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: ErpColors.red)),
+                    ]),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    Expanded(child: _refundChoice('cash', 'نقداً من الصندوق', Icons.point_of_sale_rounded, true)),
+                    const SizedBox(width: 8),
+                    Expanded(child: _refundChoice('credit', 'من دين العميل', Icons.account_balance_wallet_rounded, widget.hasCustomer)),
+                  ]),
+                  if (_refund == 'cash') ...[
+                    const SizedBox(height: 10),
+                    CashBoxDropdown(value: _boxId, width: double.infinity, onChanged: (b) => setState(() => _boxId = b?.id)),
+                  ],
+                ],
                 if (widget.mode == 'refund')
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
@@ -849,8 +958,8 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
                   switch (widget.mode) {
                     'replace' => 'تخرج القطعة البديلة من المخزن الرئيسي بسند إخراج على «مصروف الضمان والاستبدال»، '
                         'وتبقى المعطوبة طلب ضمان مفتوحاً يمكن إرساله للمورد.',
-                    'refund' => 'يُفتح «مرتجع المبيعات» على هذه المادة: تختار هناك الردّ نقداً من صندوق أو من دين العميل، '
-                        'ويُطبع سنده. بعد الحفظ تُشطب القطعة المعيبة بكلفتها، فلا تُحسب في الرصيد القابل للبيع.',
+                    'refund' => 'يُحفظ «مرتجع مبيعات» على هذه الفاتورة مباشرة (يظهر في تقارير المرتجعات)، ويُطبع سنده حسب الإعداد. '
+                        'وتُشطب القطعة المعيبة بكلفتها، فلا تُحسب في الرصيد القابل للبيع.',
                     _ => 'طلب متابعة فقط — لا يتغير مخزون ولا مال.',
                   },
                 ),
@@ -875,12 +984,40 @@ class _DeskActionDialogState extends State<_DeskActionDialog> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
                 icon: Icon(icon),
-                label: Text(widget.mode == 'refund' ? 'متابعة إلى المرتجع' : title,
+                label: Text(widget.mode == 'refund' ? 'حفظ الاسترجاع' : title,
                     style: const TextStyle(fontWeight: FontWeight.w800)),
               ),
             ]),
           ),
         ]),
+      ),
+    );
+  }
+
+  Widget _refundChoice(String v, String label, IconData icon, bool enabled) {
+    final on = _refund == v;
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: enabled ? () => setState(() => _refund = v) : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          decoration: BoxDecoration(
+            color: on ? ErpColors.red.withValues(alpha: 0.08) : ErpColors.bg,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: on ? ErpColors.red : ErpColors.border, width: on ? 1.6 : 1),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(icon, size: 18, color: on ? ErpColors.red : ErpColors.muted),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(enabled ? label : '$label (لا عميل مسجّل)',
+                  textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, color: on ? ErpColors.red : ErpColors.text)),
+            ),
+          ]),
+        ),
       ),
     );
   }

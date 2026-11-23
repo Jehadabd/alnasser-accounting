@@ -84,9 +84,9 @@ class ReportsScreen extends StatefulWidget {
                 subtitle: 'رصيد النقاط، الترتيب، النقاط شهرياً، مبيعات وعملاء كل مؤسس، وصرف الجوائز',
                 permission: AppPermissions.repFounders),
           ]),
-        HubSection('المرتجعات', subtitle: 'ما رجع من المبيعات', [
-          HubTile('المرتجعات', Icons.assignment_return_rounded, kSetRed, () => go(const ReturnsReportScreen()),
-              subtitle: 'مستندات المرتجع، الراجع على الفواتير، والتخفيض بعد الحفظ',
+        HubSection('مرتجعات الفواتير', subtitle: 'ما رجع من المبيعات — ومنها مرتجعات الضمان', [
+          HubTile('مرتجعات الفواتير', Icons.assignment_return_rounded, kSetRed, () => go(const ReturnsReportScreen()),
+              subtitle: 'كل مستند مرتجع: من أي فاتورة، لمن، نقداً أو من الدين، وسنده — والراجع على الفواتير',
               permission: AppPermissions.repReturns),
         ]),
         HubSection('القوائم المالية', subtitle: 'من دفتر المحاسبة (القيود)', [

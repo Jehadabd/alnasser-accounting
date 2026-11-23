@@ -20,6 +20,7 @@ import '../widgets/currency_impact_card.dart';
 import '../widgets/report_kit.dart';
 import 'period_extras.dart';
 import 'period_vouchers_card.dart'; // 🧾 السندات المسحوبة في الفترة
+import 'period_returns_card.dart'; // ↩️ مرتجعات الفواتير في الفترة
 import 'product_report_details_screen.dart';
 import 'report_channels.dart';
 import 'report_parts.dart';
@@ -370,6 +371,8 @@ class _CustomRangeReportScreenState extends State<CustomRangeReportScreen> {
           title: _label,
           source: _source),
       vouchers,
+      // ↩️ مرتجعات الفواتير (ومنها مرتجعات الضمان) — ظاهرة، وتفتح تقريرها المفصّل
+      PeriodReturnsCard(from: _from, to: _naturalEnd, facts: d.facts),
       SalesChannelsCard(from: _from, to: _to, facts: d.facts, canProfit: canProfit, onReturns: openReturns),
       // 📈 تحليل التوجهات (منحنى التقرير السنوي أو أعمدة)
       ReportTrendCard(
