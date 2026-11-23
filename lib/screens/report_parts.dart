@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../accounting/screens/acc_ui.dart' show accRoute;
 import '../services/reports_service.dart';
 import '../widgets/report_kit.dart';
+import '../services/debt_return_ui.dart'; // 👑 تسديد دين راجع للمالك
 import 'invoice_details_screen.dart';
 import 'person_month_details_screen.dart';
 import 'product_report_details_screen.dart';
@@ -211,8 +212,10 @@ Widget manualCard(BuildContext context, PeriodData d,
         onTap: () => TransactionsListDialog.showDebtPayments(
             context: context, startDate: d.from, endDate: d.to, periodTitle: periodTitle, sourceFilter: source),
       ),
+      // 👑 ميزة حساب المالك؛ لغيره فقط إن وُجد مبلغ (مرتجعات على الحساب) — لا تختفي حركة
+      if (DebtReturnUi.show(_n(s['totalManualPaymentReturn'])))
       KpiTile(
-        label: 'تسديد دين راجع',
+        label: DebtReturnUi.label,
         value: _n(s['totalManualPaymentReturn']),
         icon: Icons.assignment_return_rounded,
         color: const Color(0xFFE91E63),

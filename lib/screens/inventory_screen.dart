@@ -1,4 +1,5 @@
 // screens/inventory_screen.dart
+import '../services/debt_return_ui.dart'; // 👑 تسديد دين راجع للمالك
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../services/database_service.dart';
@@ -412,17 +413,21 @@ class _InventoryScreenState extends State<InventoryScreen>
                           () => _showDebtPayments(monthYear),
                         ),
                       ),
+                      // 👑 «تسديد دين راجع» ميزة حساب المالك؛ لغيره يظهر فقط إن وُجد مبلغ
+                      //    (مرتجعات على الحساب أو قديمة) حتى لا تختفي حركة من الأرصدة
+                      if (DebtReturnUi.show(summary.totalManualPaymentReturn)) ...[
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildSingleRowPillItem(
                           Icons.assignment_return,
-                          'تسديد دين راجع',
+                          DebtReturnUi.label,
                           '${formatCurrency(summary.totalManualPaymentReturn)} د.ع',
                           '${formatCurrency(summary.manualPaymentReturnCount)} معاملة',
                           const Color(0xFFE91E63),
                           () => _showDebtPaymentReturns(monthYear),
                         ),
                       ),
+                      ],
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildSingleRowPillItem(
@@ -491,15 +496,17 @@ class _InventoryScreenState extends State<InventoryScreen>
                         const Color(0xFF009688),
                         () => _showDebtPayments(monthYear),
                       ),
+                      if (DebtReturnUi.show(summary.totalManualPaymentReturn)) ...[
                       const SizedBox(width: 8),
                       _buildSingleRowPillItem(
                         Icons.assignment_return,
-                        'تسديد دين راجع',
+                        DebtReturnUi.label,
                         '${formatCurrency(summary.totalManualPaymentReturn)} د.ع',
                         '${formatCurrency(summary.manualPaymentReturnCount)} معاملة',
                         const Color(0xFFE91E63),
                         () => _showDebtPaymentReturns(monthYear),
                       ),
+                      ],
                       const SizedBox(width: 8),
                       _buildSingleRowPillItem(
                         Icons.assessment,

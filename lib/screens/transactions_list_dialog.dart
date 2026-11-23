@@ -1,4 +1,5 @@
 // screens/transactions_list_dialog.dart
+import '../services/debt_return_ui.dart';
 import 'package:flutter/material.dart';
 import '../services/database_service.dart';
 import 'package:intl/intl.dart';
@@ -84,7 +85,7 @@ class TransactionsListDialog extends StatefulWidget {
     await showDialog(
       context: context,
       builder: (context) => TransactionsListDialog(
-        title: 'معاملات تسديد دين راجع - $periodTitle',
+        title: '${DebtReturnUi.label} - $periodTitle',
         transactionTypes: const ['manual_payment', 'manual_debt'], // + إلغاء مرتجع مبيعات
         startDate: startDate,
         endDate: endDate,

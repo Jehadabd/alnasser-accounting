@@ -17,7 +17,7 @@ import 'package:intl/intl.dart' as intl;
 
 import '../erp/erp_common.dart' show parseMoney;
 import '../models/product.dart';
-import '../providers/pos_provider.dart' show PosProvider;
+import '../providers/pos_provider.dart' show POSProvider;
 import '../services/database_service.dart';
 import '../widgets/formatters.dart' show ThousandSeparatorDecimalInputFormatter;
 
@@ -512,7 +512,7 @@ class _SaleExtrasDialogState extends State<_SaleExtrasDialog> {
       inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
       onChanged: (_) => setState(() {}),
       style: TextStyle(fontWeight: i == 0 ? FontWeight.w800 : FontWeight.w600),
-      decoration: _dec(PosProvider.priceLevels[i], icon: i == 0 ? Icons.star_rounded : null).copyWith(
+      decoration: _dec(POSProvider.priceLevels[i], icon: i == 0 ? Icons.star_rounded : null).copyWith(
         helperText: m == null ? (changed ? 'تغيّر' : null) : '${m >= 0 ? '+' : ''}${m.toStringAsFixed(1)}% على الكلفة${changed ? ' · تغيّر' : ''}',
         helperStyle: TextStyle(color: below ? _bad : (changed ? _teal : _muted), fontWeight: FontWeight.w600),
       ),

@@ -32,6 +32,7 @@ import '../accounting/screens/acc_ui.dart' show accAppBar;
 import 'dart:math' as math;
 import '../erp/debts/customer_money.dart';
 import '../owner/founder_service.dart';
+import '../owner/owner_access.dart'; // 👑 تسديد دين راجع للمالك فقط
 import '../services/debt_return_service.dart';
 import '../services/printed_vouchers.dart'; // 🧾 سجل السندات المطبوعة
 import '../models/app_user.dart' show AppPermissions; // 🔐 دين يدوي / تسديد كلٌّ بصلاحيته
@@ -233,7 +234,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       }
 
       // ↩️ تسديد دين راجع: بلا صندوق، مع خصم نقاط المؤسس
-      if (!_isDebt && _isReturn) {
+      if (!_isDebt && _isReturn && OwnerAccess.enabled) {
         await _saveReturnPayment(amount);
         return;
       }
@@ -987,8 +988,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           ]),
         ),
         if (!_isDebt) ...[
-          const SizedBox(height: 16),
-          _returnSection(entered),
+          // 👑 «تسديد دين راجع» (خصم نقاط المؤسس) — ميزة حساب المالك فقط
+          if (OwnerAccess.enabled) ...[
+            const SizedBox(height: 16),
+            _returnSection(entered),
+          ],
           // 🧾 الحسم والعملة الأخرى والصندوق الآخر: وصل القبض المتقدم (صلاحية «التحصيل»)
           if (!_isReturn && AuthService().hasPermission(AppPermissions.collection))
             Align(
