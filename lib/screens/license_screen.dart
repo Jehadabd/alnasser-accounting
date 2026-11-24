@@ -597,7 +597,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
 
   List<Widget> _codeFields() => [
         Text(
-          'في الجهاز الرئيسي: الإعدادات ← الحساب والموظفون ← الترخيص والأجهزة ← «إضافة جهاز»، '
+          'في الجهاز الرئيسي: الإعدادات ← الترخيص والأجهزة والشبكة ← الترخيص والأجهزة ← «إضافة جهاز»، '
           'ثم اكتب الرمز الذي يظهر هناك (صالح 10 دقائق).',
           style: TextStyle(color: Colors.grey.shade700, height: 1.6),
         ),

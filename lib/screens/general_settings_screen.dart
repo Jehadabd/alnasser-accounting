@@ -92,7 +92,8 @@ class GeneralSettingsScreen extends StatefulWidget {
         HubTile(title, icon, const Color(0xFF64748B), () => openSection(context, title), permission: AppPermissions.settings);
     return [
       HubSection('الأقسام', [
-        t('الحساب والموظفون', Icons.verified_user_outlined),
+        t('الموظفون والدخول', Icons.admin_panel_settings_outlined),
+        t('الترخيص والأجهزة والشبكة', Icons.devices_rounded),
         if (OwnerAccess.enabled) t('ميزات المالك', Icons.workspace_premium_outlined),
         if (WaAccess.any) t('رسائل واتساب للزبائن', Icons.chat_rounded),
         t('الفاتورة والطباعة', Icons.receipt_long_outlined),
@@ -1477,46 +1478,11 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           Expanded(
             child: _buildSectionedSettings(<_SettingsSection>[
         _SettingsSection(
-          'الحساب والموظفون',
-          Icons.verified_user_outlined,
-          'الترخيص ونقل الجهاز، الموظفون والصلاحيات',
-          keywords: 'ترخيص اشتراك ترقية جهاز نقل تصفير موظف موظفين صلاحيات كلمة سر دخول مستخدم مدير',
+          'الموظفون والدخول',
+          Icons.admin_panel_settings_outlined,
+          'الموظفون والصلاحيات، والدخول على هذا الجهاز',
+          keywords: 'موظف موظفين صلاحيات كلمة سر دخول مستخدم مدير حساب',
           [
-          // 🔐 قسم إدارة الترخيص ونقل الجهاز
-          _buildSettingsCard(
-            icon: Icons.vpn_key_rounded,
-            iconColor: Colors.amber.shade800,
-            title: 'إدارة الترخيص وترقية الحساب',
-            child: Column(
-              children: [
-                _buildActionTile(
-                  icon: Icons.devices_rounded,
-                  iconColor: const Color(0xFF0F3460),
-                  title: 'الترخيص والأجهزة',
-                  subtitle: 'معلومات الترخيص، الأجهزة المرتبطة، وإضافة جهاز برمز (من الجهاز الرئيسي)',
-                  onTap: () => Navigator.pushNamed(context, '/license_devices'),
-                ),
-                const Divider(height: 1),
-                if (!_isSyncAllowed) ...[
-                  _buildActionTile(
-                    icon: Icons.published_with_changes_rounded,
-                    iconColor: Colors.teal,
-                    title: 'فحص وترقية الاشتراك أونلاين',
-                    subtitle: 'الاتصال بالسيرفر فوراً لتفعيل ترقية الحساب (من ديون إلى شامل أو مزامنة)',
-                    onTap: _checkLicenseUpgradeOnline,
-                  ),
-                  const Divider(height: 1),
-                ],
-                _buildActionTile(
-                  icon: Icons.phonelink_erase_rounded,
-                  iconColor: Colors.orange.shade800,
-                  title: 'تصفير الترخيص ونقل الحساب إلى جهاز آخر',
-                  subtitle: 'فك ارتباط هذا الجهاز لتمكينك من تسجيل الدخول بنفس الحساب من كمبيوتر/هاتف جديد',
-                  onTap: _showSelfUnbindDialog,
-                ),
-              ],
-            ),
-          ),
           // 👤 قسم إدارة المستخدمين
           _buildSettingsCard(
             icon: Icons.admin_panel_settings,
@@ -1538,6 +1504,81 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             iconColor: const Color(0xFF0F3460),
             title: 'الدخول على هذا الجهاز',
             child: const StayLoggedInTile(),
+          ),
+          ],
+        ),
+        // 🖧 كل ما يخص الأجهزة في مكان واحد: الترخيص، إضافة جهاز، الشبكة المحلية وشبكة المتجر
+        _SettingsSection(
+          'الترخيص والأجهزة والشبكة',
+          Icons.devices_rounded,
+          'الترخيص، إضافة جهاز، الشبكة المحلية (سيرفر وطرفيات)، وشبكة المتجر بلا راوتر',
+          keywords: 'ترخيص اشتراك ترقية جهاز أجهزة إضافة جهاز رمز نقل تصفير شبكة محلية سيرفر طرفية راوتر واي فاي wifi شبكة المتجر بث هوتسبوت hotspot lan ربط',
+          [
+          // 🧭 إضافة جهاز للمتجر: الخطوات بترتيبها وكل خطوة بزرها
+          _buildSettingsCard(
+            icon: Icons.add_to_queue_rounded,
+            iconColor: const Color(0xFF0F766E),
+            title: 'إضافة جهاز جديد للمتجر',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(4, 4, 4, 10),
+                  child: SetSteps([
+                    'على الجهاز الرئيسي: «الترخيص والأجهزة» ← «إضافة جهاز» يعطيك رمزاً.',
+                    'على الجهاز الجديد: أدخل الرمز في شاشة التفعيل.',
+                    'اربطهما: حاسبة السيرفر «سيرفر» والجهاز الجديد «طرفية» من «الشبكة المحلية». '
+                        'لا راوتر؟ شغّل «شبكة المتجر» من حاسبة السيرفر نفسها وامسح رمزها من الطرفية.',
+                  ], color: Color(0xFF0F766E)),
+                ),
+                _buildActionTile(
+                  icon: Icons.devices_rounded,
+                  iconColor: const Color(0xFF0F3460),
+                  title: 'الترخيص والأجهزة',
+                  subtitle: 'معلومات الترخيص، الأجهزة المرتبطة، وإضافة جهاز برمز (من الجهاز الرئيسي)',
+                  onTap: () => Navigator.pushNamed(context, '/license_devices'),
+                ),
+                const Divider(height: 1),
+                _buildActionTile(
+                  icon: Icons.lan,
+                  iconColor: Colors.blue,
+                  title: 'الشبكة المحلية وشبكة المتجر',
+                  subtitle: 'جهاز مستقل، حاسبة السيرفر، أو طرفية — وشبكة Wi-Fi من حاسبة السيرفر بلا راوتر',
+                  onTap: () {
+                    if (requirePermission(context, AppPermissions.networkSettings)) {
+                      Navigator.pushNamed(context, '/network_settings');
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          // 🔐 قسم إدارة الترخيص ونقل الجهاز
+          _buildSettingsCard(
+            icon: Icons.vpn_key_rounded,
+            iconColor: Colors.amber.shade800,
+            title: 'الاشتراك ونقل الحساب',
+            child: Column(
+              children: [
+                if (!_isSyncAllowed) ...[
+                  _buildActionTile(
+                    icon: Icons.published_with_changes_rounded,
+                    iconColor: Colors.teal,
+                    title: 'فحص وترقية الاشتراك أونلاين',
+                    subtitle: 'الاتصال بالسيرفر فوراً لتفعيل ترقية الحساب (من ديون إلى شامل أو مزامنة)',
+                    onTap: _checkLicenseUpgradeOnline,
+                  ),
+                  const Divider(height: 1),
+                ],
+                _buildActionTile(
+                  icon: Icons.phonelink_erase_rounded,
+                  iconColor: Colors.orange.shade800,
+                  title: 'تصفير الترخيص ونقل الحساب إلى جهاز آخر',
+                  subtitle: 'فك ارتباط هذا الجهاز لتمكينك من تسجيل الدخول بنفس الحساب من كمبيوتر/هاتف جديد',
+                  onTap: _showSelfUnbindDialog,
+                ),
+              ],
+            ),
           ),
           ],
         ),
@@ -2403,8 +2444,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _SettingsSection(
           'النظام والأدوات',
           Icons.build_circle_outlined,
-          'تشخيص الأخطاء، نماذج الذكاء الاصطناعي، الشبكة المحلية، سجل الحركات، البحث الذكي، التدقيق المالي',
-          keywords: 'دمج عملاء مكرر تكرار ذكاء اصطناعي نماذج مفتاح api gemini groq openrouter تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv شبكة سيرفر طرفية سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
+          'تشخيص الأخطاء، نماذج الذكاء الاصطناعي، الطباعة، سجل الحركات، البحث الذكي، التدقيق المالي',
+          keywords: 'دمج عملاء مكرر تكرار ذكاء اصطناعي نماذج مفتاح api gemini groq openrouter تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
           [
           // 🩺 تشخيص الأخطاء — أول ما في الشاشة
           _buildSettingsCard(
@@ -2441,20 +2482,9 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           _buildSettingsCard(
             icon: Icons.tune,
             iconColor: Colors.indigo,
-            title: 'الشبكة والطباعة والسجل',
+            title: 'الطباعة والاستيراد والسجل',
             child: Column(
               children: [
-                _buildActionTile(
-                  icon: Icons.lan,
-                  iconColor: Colors.blue,
-                  title: 'الشبكة المحلية',
-                  subtitle: 'جهاز مستقل، حاسبة السيرفر، أو طرفية',
-                  onTap: () {
-                    if (requirePermission(context, AppPermissions.networkSettings)) {
-                      Navigator.pushNamed(context, '/network_settings');
-                    }
-                  },
-                ),
                 _buildActionTile(
                   icon: Icons.local_printshop_outlined,
                   iconColor: Colors.teal,

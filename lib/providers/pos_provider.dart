@@ -8,6 +8,7 @@ import '../models/customer.dart';
 import '../services/database_service.dart';
 import '../services/auth_service.dart';
 import '../erp/pos/scale_barcode.dart';
+import '../erp/stock_reservations.dart'; // 📦 السلة تحجز كمياتها من فواتير مفتوحة أخرى
 import '../services/settings_manager.dart';
 import '../services/thermal_receipt_service.dart';
 import '../services/firebase_sync/invoice_sync_service.dart';
@@ -35,6 +36,20 @@ class CartItem {
 enum PaymentType { cash, credit }
 
 class POSProvider extends ChangeNotifier {
+  /// 📦 السلة مسودّة مفتوحة: تحجز كمياتها (بالوحدة الأساسية) فلا تبيعها فاتورة أخرى مفتوحة
+  static const String _draftId = 'pos';
+
+  @override
+  void notifyListeners() {
+    final m = <int, double>{};
+    for (final i in _cartItems) {
+      final id = i.product.id;
+      if (id != null) m[id] = (m[id] ?? 0) + i.quantity * i.unitsInLargeUnit;
+    }
+    StockReservations.instance.set(_draftId, m, label: 'الكاشير');
+    super.notifyListeners();
+  }
+
   List<Category> _categories = [];
   List<Product> _allProducts = [];
   List<Product> _displayedProducts = [];
@@ -277,9 +292,13 @@ class POSProvider extends ChangeNotifier {
   /// 📦 البيع بالسالب ممنوع ⇒ لا تتجاوز السلة رصيد المادة (لا الإضافة الأولى فقط:
   /// الزيادة بـ«+» وتكرار المسح وتغيير الوحدة إلى كرتون كانت تتجاوزه).
   bool _fits(Product p, double baseQtyAfter) {
-    if (_allowNegativeStock || baseQtyAfter <= p.stockQuantity + 1e-9) return true;
-    _lastErrorMessage =
-        'الكمية تتجاوز الموجود من «${p.name}» (${_fmtQty(p.stockQuantity)}) — البيع بالسالب ممنوع من الإعدادات';
+    // 📦 المتاح = الرصيد − ما تحجزه فواتير مفتوحة أخرى على هذا الجهاز
+    final reserved = StockReservations.instance.reservedByOthers(p.id, _draftId);
+    final avail = p.stockQuantity - reserved;
+    if (_allowNegativeStock || baseQtyAfter <= avail + 1e-9) return true;
+    final held = StockReservations.instance.holdersText(p.id, _draftId);
+    _lastErrorMessage = 'الكمية تتجاوز المتاح من «${p.name}» (${_fmtQty(avail < 0 ? 0 : avail)})'
+        '${held.isEmpty ? '' : ' — $held'} — البيع بالسالب ممنوع من الإعدادات';
     notifyListeners();
     return false;
   }
@@ -583,6 +602,7 @@ class POSProvider extends ChangeNotifier {
         await loadInitialData();
         
         clearCart();
+        StockReservations.committed.value++; // 📦 الفواتير المفتوحة تقرأ الأرصدة الجديدة
         return true;
     } catch(e) {
         _lastErrorMessage = e.toString().replaceAll('Exception: ', '');

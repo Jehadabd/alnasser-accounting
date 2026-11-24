@@ -70,6 +70,7 @@ import '../widgets/camera_scan_button.dart'; // 📷 الكاميرا (أندر�
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import '../erp/warranty/item_warranty.dart'; // 🛡️ عمود الضمان في جدول الإدخال
 import '../services/unit_cost_math.dart'; // 📐 كلفة الوحدة من الأساس × المعامل
+import '../erp/stock_reservations.dart'; // 📦 حجز المسودّات المفتوحة (متاح = الرصيد − المحجوز)
 
 // Helper: format product ID - show raw value without zero-padding
 String formatProductId5(int? id) {
@@ -101,6 +102,112 @@ class CreateInvoiceScreen extends StatefulWidget {
 }
 
 class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceActionsMixin {
+  // ═════════════ 📦 الحجز المؤقت (فاتورتان مفتوحتان معاً) ═════════════
+  // المسودّة لا تنقص الرصيد (يُنقص عند الحفظ فقط)، لكنها تحجز كمياتها فلا تبيعها
+  // فاتورة أخرى مفتوحة. «المتاح» لهذه الفاتورة = الرصيد + المحفوظ منها (عند التعديل) − ما تحجزه غيرها.
+  late final String _draftId = 'inv_${identityHashCode(this)}';
+  Map<int, double>? _savedBase; // المحفوظ من هذه الفاتورة (المطروح من الرصيد أصلاً)
+  int? _savedBaseFor = -1; // رقم الفاتورة الذي حُمّل له المحفوظ
+  bool _resvQueued = false;
+  bool _resvSelf = false;
+  int _viewVersion = -1;
+  List<Product>? _viewSource;
+  List<Product> _viewCache = const [];
+
+  void _onReservationsChanged() {
+    if (_resvSelf || !mounted) return;
+    setState(() {}); // فاتورة أخرى حجزت أو حرّرت: يتحدّث «المتاح» هنا
+  }
+
+  void _queueReservationSync() {
+    if (_resvQueued) return;
+    _resvQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _resvQueued = false;
+      if (mounted) _syncReservation();
+    });
+  }
+
+  void _syncReservation() {
+    final book = StockReservations.instance;
+    if (isViewOnly) {
+      book.release(_draftId);
+      return;
+    }
+    final id = invoiceToManage?.id;
+    if (id != _savedBaseFor) {
+      _savedBaseFor = id;
+      _savedBase = id == null ? const {} : null;
+      if (id != null) {
+        StockReservations.savedBase(id).then((m) {
+          if (!mounted || _savedBaseFor != id) return;
+          _savedBase = m;
+          _syncReservation();
+        }).catchError((_) {});
+      }
+    }
+    final lines = StockReservations.delta(StockReservations.baseByProduct(invoiceItems), _savedBase ?? const {});
+    final name = customerNameController.text.trim();
+    _resvSelf = true;
+    try {
+      book.set(_draftId, lines, label: name.isEmpty ? 'فاتورة مفتوحة' : 'فاتورة $name');
+    } finally {
+      _resvSelf = false;
+    }
+  }
+
+  /// 📦 المتاح لهذه الفاتورة من مادة.
+  double _availableOf(Product p) =>
+      p.stockQuantity + (_savedBase?[p.id] ?? 0) - StockReservations.instance.reservedByOthers(p.id, _draftId);
+
+  /// المادة كما تراها هذه الفاتورة: «المخزون» فيها = المتاح (العرض والفحوص كلها تقرؤه).
+  Product _view(Product p) {
+    final a = _availableOf(p);
+    return (a - p.stockQuantity).abs() < 1e-9 ? p : p.copyWith(stockQuantity: a);
+  }
+
+  /// نتائج البحث: بالمتاح، وما لا متاح منه يُخفى إن كان البيع بالسالب ممنوعاً.
+  List<Product> _viewResults(Iterable<Product> list) => [
+        for (final p in list)
+          if (_allowNegativeStock || _availableOf(p) > 1e-9) _view(p),
+      ];
+
+  /// قائمة المواد لأسطر الجدول (محسوبة مرة لكل تغيّر في الحجز أو القائمة).
+  List<Product> get _viewedProducts {
+    final src = _allProductsForUnits ?? const <Product>[];
+    final v = StockReservations.instance.version;
+    if (!identical(src, _viewSource) || v != _viewVersion || _savedBaseFor != _viewFor) {
+      _viewSource = src;
+      _viewVersion = v;
+      _viewFor = _savedBaseFor;
+      _viewCache = [for (final p in src) _view(p)];
+    }
+    return _viewCache;
+  }
+
+  int? _viewFor;
+
+  /// بعد الحفظ: صار المحفوظ هو الأسطر الحالية ⇒ يُعاد تحميله فيزول الحجز
+  @override
+  void onInvoicePersisted() {
+    _savedBaseFor = -1;
+    _queueReservationSync();
+    _ownCommit = true;
+    StockReservations.committed.value++; // الفواتير المفتوحة الأخرى تقرأ الأرصدة الجديدة
+    _ownCommit = false;
+  }
+
+  bool _ownCommit = false;
+
+  /// فاتورة أخرى حُفظت: الأرصدة تغيّرت فعلاً ⇒ تُقرأ من جديد
+  Future<void> _onStockCommitted() async {
+    if (_ownCommit || !mounted) return;
+    try {
+      final fresh = await db.getAllProducts();
+      if (mounted) setState(() => _allProductsForUnits = fresh);
+    } catch (_) {}
+  }
+
   @override
   final formKey = GlobalKey<FormState>();
   @override
@@ -395,9 +502,11 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       );
 
   Future<({String? name, String? error})> _addScanned(Product p) async {
-    if (!_allowNegativeStock && p.stockQuantity <= 0) {
-      return (name: null, error: '«${p.name}» نافد من المخزون — لم يُضف');
+    if (!_allowNegativeStock && _availableOf(p) <= 1e-9) {
+      final held = StockReservations.instance.holdersText(p.id, _draftId);
+      return (name: null, error: '«${p.name}» ${held.isEmpty ? 'نافد من المخزون' : 'غير متاح — $held'} — لم يُضف');
     }
+    p = _view(p); // 📦 بقية الفحوص بالمتاح
     final base = p.translatedUnit;
     // المادة نفسها بالوحدة نفسها وبلا خصم سطر ⇒ الكمية +1 (لا يُزاد سطر هدية أو مخصوم)
     if (ScanSettings.current.repeatAddsQty) {
@@ -1743,6 +1852,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   @override
   void initState() {
     super.initState();
+    StockReservations.instance.addListener(_onReservationsChanged); // 📦
+    StockReservations.committed.addListener(_onStockCommitted);
     HardwareKeyboard.instance.addHandler(_onOwnerCostPeekKey);
     ScanSettings.ensureLoaded();
     _wedge = ScannerWedge(context: () => context, isActive: _scanActive, onScan: _onWedgeScan)..attach();
@@ -2229,6 +2340,10 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
   @override
   void dispose() {
+    // 📦 أُغلقت الفاتورة: يزول حجزها فوراً
+    StockReservations.instance.removeListener(_onReservationsChanged);
+    StockReservations.committed.removeListener(_onStockCommitted);
+    StockReservations.instance.release(_draftId);
     DebtReminders.pendingForNewInvoice = null; // 📅 موعد لم يُحفظ مع فاتورة: لا يتعلق بفاتورة أخرى
     _disposeStep('مفاتيح', () => HardwareKeyboard.instance.removeHandler(_onOwnerCostPeekKey));
     _disposeStep('قارئ الباركود', _wedge.detach);
@@ -2360,7 +2475,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         currentInvoiceProductNames: currentProductNames,
       );
       setState(() {
-        _searchResults = results;
+        _searchResults = _viewResults(results); // 📦 بالمتاح
       });
     } catch (e) {
       debugPrint('Error searching products: $e');
@@ -3357,7 +3472,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     Product? matchingProduct;
     try {
       // مقارنة الاسم بدون فواصل كما طلب المستخدم
-      matchingProduct = (_allProductsForUnits ?? []).firstWhere(
+      matchingProduct = _viewedProducts.firstWhere( // 📦 بالمتاح
         (p) => p.name.trim().replaceAll(' ', '') == sanitizedInput,
       );
     } catch (_) {}
@@ -4108,17 +4223,18 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                                                 
                                                 bool isNumeric = double.tryParse(query) != null;
                                                 
+                                                // 📦 بالمتاح (الرصيد − المحجوز في فواتير مفتوحة أخرى)
                                                 if (isNumeric) {
-                                                    return await DatabaseService().searchProductsByIdPrefix(query);
+                                                    return _viewResults(await DatabaseService().searchProductsByIdPrefix(query));
                                                 } else {
                                                     final currentNames = invoiceItems
                                                         .where((it) => it.productName.trim().isNotEmpty)
                                                         .map((it) => it.productName.trim())
                                                         .toList();
-                                                    return await SmartSearchService.instance.smartSearch(
+                                                    return _viewResults(await SmartSearchService.instance.smartSearch(
                                                       query,
                                                       currentInvoiceProductNames: currentNames,
-                                                    );
+                                                    ));
                                                 }
                                             },
                                             displayStringForOption: (Product p) => p.name,
@@ -4819,6 +4935,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
   @override
   Widget build(BuildContext context) {
+    _queueReservationSync(); // 📦 حجز أسطر هذه الفاتورة يتبع آخر تغيير فيها
     // تعريف الألوان والثيم العصري
     const Color primaryColor = Color(0xFF3F51B5); // Indigo
     const Color accentColor = Color(0xFF8C9EFF); // Light Indigo Accent
@@ -5445,7 +5562,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
                                 _scheduleLiveDebtSync();
                             },
                             onItemRemovedByUid: _removeInvoiceItemByUid,
-                            allProducts: _allProductsForUnits ?? [],
+                            allProducts: _viewedProducts, // 📦 بالمتاح
+                            viewProducts: _viewResults,
+                            viewProduct: _view,
                             isViewOnly: isViewOnly,
                             isPlaceholder: false, 
                             
@@ -5591,6 +5710,10 @@ class EditableInvoiceItemRow extends StatefulWidget {
   /// الرقم المكتوب في خانة الخصم: نسبة % (true) أو مبلغ من سعر الوحدة (false)
   final bool discountTypedAsPercent;
   final bool allowNegativeStock; // جديد: للسماح بالبيع بالسالب أو منعه
+  /// 📦 نتائج البحث بالمتاح (الرصيد − المحجوز في فواتير مفتوحة أخرى)، وإخفاء غير المتاح
+  final List<Product> Function(Iterable<Product>)? viewProducts;
+  /// 📦 مادة واحدة بالمتاح (المختارة من البحث أو الممسوحة)
+  final Product Function(Product)? viewProduct;
   final List<String> Function()? getCurrentInvoiceProductNames; // المنتجات الحالية لخفض أولويتها في البحث
   /// 🧩 عرض كل عمود بالبكسل (من InvoiceEntryLayout.resolve) — الأعمدة غير الموجودة لا تُرسم
   final Map<String, double>? columnWidths;
@@ -5627,6 +5750,8 @@ class EditableInvoiceItemRow extends StatefulWidget {
     this.enterStops = const ['details', 'qty', 'saleType', 'price'],
     this.discountTypedAsPercent = true,
     this.allowNegativeStock = false, // القيمة الافتراضية
+    this.viewProducts,
+    this.viewProduct,
     this.getCurrentInvoiceProductNames,
     this.columnWidths,
     this.rowHeight = 44,
@@ -6101,6 +6226,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   /// اختيار مادة للسطر من «اسم المادة» أو «رمز المادة» أو «الباركود»: نفس المسار
   /// (فحص الرصيد، تسجيلها في جلسة البحث الذكي، تطبيقها، ثم الخانة التالية).
   bool _onProductChosen(Product selection) {
+    selection = widget.viewProduct?.call(selection) ?? selection; // 📦 الفحص بالمتاح
     // نفس مادة السطر (المرور عليه بـ Enter): لا يُعاد تسعيرها ولا يُمسح خصمها
     if (selection.id != null && selection.id == _currentItem.productId) {
       _pickSeq++; // كي لا ينقل onSubmitted المؤشر مرة ثانية
@@ -6111,7 +6237,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
     if (!widget.allowNegativeStock && selection.stockQuantity <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('⚠️ هذا الصنف نافذ من المخزون! لا يمكن اختياره.'),
+          content: Text('⚠️ هذا الصنف غير متاح (نافد أو محجوز في فاتورة مفتوحة أخرى) — لا يمكن اختياره.'),
           backgroundColor: Colors.red,
         ),
       );
@@ -6130,6 +6256,7 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
   /// البحث الذكي) دون نقل المؤشر. يعيد false إن رُفضت.
   Future<bool> applyScanned(Product p) async {
     if (widget.isViewOnly) return false;
+    p = widget.viewProduct?.call(p) ?? p; // 📦 الفحص بالمتاح
     if (!widget.allowNegativeStock && p.stockQuantity <= 0) return false;
     if (_isRowLocked) setState(() => _isRowLocked = false);
     SmartSearchService.instance.addProductToSession(p.id, p.name);
@@ -6919,10 +7046,11 @@ class _EditableInvoiceItemRowState extends State<EditableInvoiceItemRow> {
                           try {
                             // 🧠 استخدام البحث الذكي مع تمرير قائمة المنتجات الحالية لخفض أولويتها
                             final currentNames = widget.getCurrentInvoiceProductNames?.call();
-                            return await SmartSearchService.instance.smartSearch(
+                            final found = await SmartSearchService.instance.smartSearch(
                               textEditingValue.text,
                               currentInvoiceProductNames: currentNames,
                             );
+                            return widget.viewProducts?.call(found) ?? found; // 📦 بالمتاح
                           } catch (e) {
                             debugPrint('Error in smart search: $e');
                             return widget.allProducts

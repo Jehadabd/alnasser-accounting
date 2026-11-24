@@ -1,5 +1,6 @@
 // main.dart
 import 'services/product_codes.dart' show ItemCodeKeyboard; // ⌨️
+import 'widgets/smooth_page_transitions.dart'; // 🎬 انتقال الصفحات
 import 'widgets/popup_screens.dart'; // 🪟
 import 'services/save_lock.dart'; // 🔒
 import 'services/demo_mode.dart'; // 🧪
@@ -554,6 +555,8 @@ class MyApp extends StatelessWidget {
         theme: ThemeData(
           primarySwatch: Colors.blue,
           fontFamily: 'Cairo',
+          // 🎬 تلاشٍ عابر هادئ بين الصفحات بدل «التكبير» الافتراضي (انظر smooth_page_transitions.dart)
+          pageTransitionsTheme: smoothPageTransitionsTheme,
           textTheme: const TextTheme(
             bodyLarge: TextStyle(fontSize: 16),
             bodyMedium: TextStyle(fontSize: 14),

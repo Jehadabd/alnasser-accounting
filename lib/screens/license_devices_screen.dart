@@ -19,6 +19,8 @@ import '../lan/lan_bootstrap.dart' show LanRuntime;
 import '../erp/erp_kit.dart' show ErpDialog;
 import '../widgets/settings_kit.dart';
 import 'license_screen.dart' show openSupportWhatsApp;
+import '../accounting/screens/acc_ui.dart' show requirePermission;
+import '../models/app_user.dart' show AppPermissions;
 
 class LicenseDevicesScreen extends StatefulWidget {
   const LicenseDevicesScreen({super.key});
@@ -183,6 +185,7 @@ class _LicenseDevicesScreenState extends State<LicenseDevicesScreen> {
               ),
               _infoCard(data),
               if (data.isMainDevice) _devicesCard(data) else _secondaryNote(),
+              _networkCard(),
             ],
     );
   }
@@ -234,6 +237,22 @@ class _LicenseDevicesScreenState extends State<LicenseDevicesScreen> {
       }),
     );
   }
+
+  /// 🖧 بعد إضافة الجهاز: الخطوة التالية هي ربطه بالشبكة (المكانان معاً في الإعدادات)
+  Widget _networkCard() => SetCard(
+        title: 'ربط الأجهزة ببعضها',
+        icon: Icons.lan_rounded,
+        child: SetActionRow(
+          icon: Icons.lan,
+          title: 'الشبكة المحلية وشبكة المتجر',
+          subtitle: 'حاسبة السيرفر والطرفيات، أو شبكة Wi-Fi من حاسبة السيرفر بلا راوتر',
+          onTap: () {
+            if (requirePermission(context, AppPermissions.networkSettings)) {
+              Navigator.pushNamed(context, '/network_settings');
+            }
+          },
+        ),
+      );
 
   Widget _secondaryNote() => const SetCard(
         title: 'الأجهزة المرتبطة',

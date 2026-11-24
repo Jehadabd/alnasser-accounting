@@ -55,6 +55,7 @@ import '../services/firebase_sync/invoice_sync_service.dart'; // ⚡ رفع فو
 import '../services/firebase_sync/firebase_sync_helper.dart';
 import '../owner/owner_access.dart';
 import '../owner/founder_service.dart';
+import '../erp/stock_reservations.dart'; // 📦 فحص الرصيد النهائي عند الحفظ
 
 /// واجهة تحدد المتغيرات المطلوبة للتعامل مع الفواتير
 abstract class InvoiceActionsInterface {
@@ -117,6 +118,9 @@ abstract class InvoiceActionsInterface {
 
 /// Mixin للتعامل مع عمليات الفواتير
 mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceActionsInterface {
+  /// 📦 بعد حفظ ناجح (صارت الأسطر مطروحة من الرصيد): الشاشة تحرّر حجزها المؤقت.
+  void onInvoicePersisted() {}
+
 // الدوال المساعدة التي تم نقلها
   String formatNumber(num value, {bool forceDecimal = false}) {
     final formatter = NumberFormat('#,##0.##', 'en_US');
@@ -407,6 +411,32 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
       }
     }
 
+    // 📦 الفحص النهائي على الرصيد الفعلي لحظة الحفظ (الأول يحفظ يفوز): فاتورة أخرى أو
+    //    جهاز آخر باع المادة بين الكتابة والحفظ ⇒ لا حفظ، ورسالة بالمادة والموجود الآن.
+    //    عند التعديل تُحسب الزيادة على المحفوظ فقط. البيع بالسالب مسموح ⇒ لا فحص.
+    if (widget.settlementForInvoice == null) {
+      final allowNeg = (await SettingsManager.getAppSettings()).allowNegativeStock;
+      final block = await StockReservations.commitBlockReason(
+        inputData.invoiceItems.where(_isInvoiceItemComplete),
+        editInvoiceId: inputData.isNewInvoice ? null : inputData.invoiceToManage?.id,
+        allowNegative: allowNeg,
+      );
+      if (block != null) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              icon: const Icon(Icons.inventory_2_outlined, color: Colors.red, size: 34),
+              title: const Text('الكمية غير متوفرة الآن'),
+              content: Text(block, style: const TextStyle(height: 1.6)),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+            ),
+          );
+        }
+        return null;
+      }
+    }
+
     setState(() {
       isSaving = true;
     });
@@ -465,6 +495,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
 
       savedOrSuspended = true;
       hasUnsavedChanges = false;
+      onInvoicePersisted(); // 📦 يزول الحجز المؤقت: صارت الكميات في الرصيد نفسه
 
       // ⚡ رفع فوري لحزمة الفاتورة (فاتورة + عميل + معاملات) ثم رفع وثيقة العميل.
       //    fire-and-forget: لا نُعلّق تجربة المستخدم على نتيجة الشبكة.
