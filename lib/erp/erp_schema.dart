@@ -619,7 +619,8 @@ class ErpSchema {
     ['product_details', 'markup5', 'REAL'],
     ['product_details', 'markup6', 'REAL'],
     ['product_details', 'price_rounding', 'REAL'],
-    ['product_details', 'fixed_cost', 'REAL'],
+    // «سعر كلفة ثابت» حُذف (p229): كان يُحفظ ولا يقرؤه أي حساب. العمود القديم يبقى
+    // فارغ الأثر في القواعد الموجودة (لا DROP COLUMN على قاعدة حيّة)، والمزامنة تصفّي الأعمدة.
     ['product_details', 'opening_cost', 'REAL'],
     ['product_details', 'default_unit', 'TEXT'],
     ['product_details', 'min_role', 'TEXT'],

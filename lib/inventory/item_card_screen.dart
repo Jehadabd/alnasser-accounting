@@ -748,7 +748,7 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
   ];
   static const _numKeys = [
     'min_qty', 'max_qty', 'reorder_qty', 'tax_percent', 'max_discount_percent', 'bonus_buy', 'bonus_free',
-    'fixed_cost', 'opening_cost', 'price_rounding', 'markup1', 'markup2', 'markup3', 'markup4', 'markup5', 'markup6',
+    'opening_cost', 'price_rounding', 'markup1', 'markup2', 'markup3', 'markup4', 'markup5', 'markup6',
   ];
   final _c = <String, TextEditingController>{
     for (final k in [..._textKeys, ..._numKeys]) k: TextEditingController(),
@@ -1232,7 +1232,6 @@ class _ItemCardScreenState extends State<ItemCardScreen> with SingleTickerProvid
           _tf('max_discount_percent', 'أعلى خصم مسموح %', width: 170, number: true),
           _tf('bonus_buy', 'هدية: كل (كمية)', width: 150, number: true),
           _tf('bonus_free', 'عليها مجاناً', width: 130, number: true),
-          if (showCost) _tf('fixed_cost', 'سعر كلفة ثابت (للأرباح)', width: 200, number: true),
           if (showCost) _tf('opening_cost', 'الكلفة الافتتاحية', width: 170, number: true),
         ]),
       ),

@@ -10,6 +10,7 @@ import '../../../services/firebase_sync/firebase_sync_config.dart';
 import '../../../models/product.dart';
 import '../core/database_helpers.dart';
 import '../../search/fuzzy_match.dart';
+import '../../unit_cost_math.dart';
 
 /// للمعالج المنفصل (دالة عليا).
 List<int> _fuzzyInIsolate((String, List<MapEntry<int, String>>) m) => FuzzyMatch.search(m.$1, m.$2);
@@ -57,13 +58,11 @@ class ProductDao {
                 }
               } catch (_) {}
             }
-          } else if (product.unit == 'meter') {
-            newUnitCosts['متر'] = product.costPrice!;
-            if (product.lengthPerUnit != null && product.lengthPerUnit! > 0) {
-              newUnitCosts['لفة'] = product.costPrice! * product.lengthPerUnit!;
-            }
           } else {
-            newUnitCosts[product.unit] = product.costPrice!;
+            // 📐 المتر وأي أساس آخر (كغم، باكيت…): الأساس وكل مستويات الهرم، لا الأساس وحده
+            newUnitCosts.addAll(UnitCostMath.unitCosts(
+                baseUnit: product.unit, baseCost: product.costPrice!,
+                hierarchy: product.unitHierarchy, lengthPerUnit: product.lengthPerUnit));
           }
           productMap['unit_costs'] = jsonEncode(newUnitCosts);
         }
@@ -251,13 +250,11 @@ class ProductDao {
                 }
               } catch (_) {}
             }
-          } else if (product.unit == 'meter') {
-            newUnitCosts['متر'] = product.costPrice!;
-            if (product.lengthPerUnit != null && product.lengthPerUnit! > 0) {
-              newUnitCosts['لفة'] = product.costPrice! * product.lengthPerUnit!;
-            }
           } else {
-            newUnitCosts[product.unit] = product.costPrice!;
+            // 📐 المتر وأي أساس آخر (كغم، باكيت…): الأساس وكل مستويات الهرم، لا الأساس وحده
+            newUnitCosts.addAll(UnitCostMath.unitCosts(
+                baseUnit: product.unit, baseCost: product.costPrice!,
+                hierarchy: product.unitHierarchy, lengthPerUnit: product.lengthPerUnit));
           }
           productMap['unit_costs'] = jsonEncode(newUnitCosts);
         }
@@ -627,6 +624,11 @@ class ProductDao {
     if (stored != null && stored > 0) {
       return stored;
     }
+    // 📐 أي وحدة أساس: كلفة الأساس × المعامل التراكمي (انظر UnitCostMath)
+    final double? byFactor = UnitCostMath.costOf(
+        baseUnit: product.unit, unit: saleUnit, baseCost: product.costPrice ?? 0.0,
+        hierarchy: product.unitHierarchy, lengthPerUnit: product.lengthPerUnit);
+    if (byFactor != null) return byFactor;
     if (product.unit == 'meter' && saleUnit == 'لفة') {
       final double lengthPerUnit = product.lengthPerUnit ?? 1.0;
       return (product.costPrice ?? 0.0) * lengthPerUnit;

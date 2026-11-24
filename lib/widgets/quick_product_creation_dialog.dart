@@ -9,6 +9,7 @@ import '../widgets/formatters.dart';
 import '../widgets/camera_barcode_scanner_dialog.dart';
 import '../inventory/item_card_editor_screen.dart'; // 🧾 بطاقة المادة الحالية (مختصرة)
 import '../owner/ai_invoice/ai_purchase_prefill.dart' show AiUnitPlan; // 📦 وحدات عُرّفت في مراجعة الفاتورة
+import '../services/unit_cost_math.dart'; // 📐 معامل التحويل التراكمي وكلفة الأساس
 
 // --- VISUAL CONSTANTS (From ProductEntryScreen) ---
 const Color kPrimaryColor = Color(0xFF5D5FEF);
@@ -320,6 +321,8 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         _baseCostController.text = f.format(plan.baseCost);
         _basePriceController.text = f.format(plan.baseCost);
       }
+      // سعر البيع المعبّأ تلقائياً يبقى اقتراحاً يتحدّث مع الكلفة حتى يكتبه المستخدم بيده
+      _autoSell = _basePriceController.text;
     }
   }
   
@@ -489,7 +492,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         // 2. Auto-add the invoice unit as a larger unit (if not already there)
         final alreadyExists = _hierarchyItems.any((h) => h['unit_name'] == _invoiceOriginalUnit);
         if (!alreadyExists) {
-          // Default to 1 (user must edit), but ready for input
+          // افتراضياً 100 (يعدّلها المستخدم) — تظهر في حقل «تحتوي»
           _hierarchyItems.insert(0, {'unit_name': _invoiceOriginalUnit!, 'contains_qty': 100.0}); 
         }
         
@@ -498,43 +501,72 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
         
         // 4. Set buy cost to original invoice cost
         if (_invoiceOriginalCost > 0) {
-           _currentBuyCostController.text = NumberFormat('#,##0', 'en_US').format(_invoiceOriginalCost);
+           _currentBuyCostController.text = _num.format(_invoiceOriginalCost);
         }
 
-        // 5. Trigger calculation immediately
-        _recalcPricesFromHierarchy();
       }
+      // 📐 اسم الأساس جزء من المعامل: أعد اشتقاق الكلفة في كل الأحوال
+      _recalcPricesFromHierarchy();
     });
   }
 
-  /// Recalculate cost and sell prices from invoice cost and hierarchy conversion factor.
-  void _recalcPricesFromHierarchy() {
-    if (_invoiceOriginalUnit == null || _invoiceOriginalCost <= 0) return;
-    if (_hierarchyItems.isEmpty) return;
-    
-    // Find the hierarchy item for the invoice unit (e.g. Roll)
-    final invoiceHierarchy = _hierarchyItems.firstWhere(
-      (h) => h['unit_name'] == _invoiceOriginalUnit,
-      orElse: () => _hierarchyItems.first,
-    );
-    
-    // Factor = How many small units in the large unit (e.g. 100 Meters in 1 Roll)
-    final factor = (invoiceHierarchy['contains_qty'] as num?)?.toDouble() ?? 0;
-    if (factor <= 0) return;
-    
-    // Cost per small unit = Invoice Cost / Factor
-    // e.g. 100,000 / 100 = 1,000
-    final costPerBase = _invoiceOriginalCost / factor;
-    
-    // Sell Price = Cost + 10%
-    // e.g. 1,000 + 10% = 1,100
-    final sellPerBase = costPerBase * 1.10; 
-    
-    setState(() {
-      _baseCostController.text = NumberFormat('#,##0', 'en_US').format(costPerBase);
-      _basePriceController.text = NumberFormat('#,##0', 'en_US').format(sellPerBase);
-    });
+  // ═══════════════ 📐 الكلفة متعددة المستويات (على نهج ERP) ═══════════════
+  //  • للمادة وحدة أساس واحدة (الأصغر)، وكلفتها هي المحفوظة على المادة.
+  //  • كل وحدة أكبر لها معامل تراكمي: كرتون فيه 10 علب، والعلبة 12 قطعة ⇒ 120.
+  //  • سعر الشراء في «هذه الفاتورة» هو الحقيقة (مستند المورد):
+  //      كلفة الأساس = سعر الشراء ÷ معامل الوحدة المشتراة — لا يُدخلان مستقلَّين فيتعارضا.
+
+  final _num = NumberFormat('#,##0.##', 'en_US');
+
+  /// سعر البيع الذي ملأه النظام (لا المستخدم) — يُحدَّث مع الكلفة ما دام لم يُلمس.
+  String _autoSell = '';
+
+  /// الهرم الحالي بصيغة المادة.
+  String _hierJson() => jsonEncode([
+        for (final h in _hierarchyItems)
+          {'unit_name': '${h['unit_name'] ?? ''}'.trim(), 'quantity': (h['contains_qty'] as num?)?.toDouble() ?? 0},
+      ]);
+
+  /// كم وحدة أساس في [unit] تراكمياً، أو null إن لم تُعرف.
+  double? _factor(String unit) =>
+      UnitCostMath.factorOf(baseUnit: _baseUnitNameController.text.trim(), unit: unit, hierarchy: _hierJson());
+
+  /// الوحدة المشتراة الفعلية: إن لم تعد من وحدات المادة (تغيّر اسم الأساس) فهي الأساس.
+  String get _buyUnit {
+    final names = {_baseUnitNameController.text.trim(), for (final h in _hierarchyItems) '${h['unit_name'] ?? ''}'.trim()};
+    return names.contains(_currentBuyUnit) ? _currentBuyUnit : _baseUnitNameController.text.trim();
   }
+
+  /// كلفة الأساس المشتقة من سعر الشراء، أو null إن لم يُكتب سعر أو لم يُعرف المعامل.
+  double? get _derivedBase {
+    final buy = _parse(_currentBuyCostController.text);
+    if (buy <= 0) return null;
+    return UnitCostMath.baseCostFromBuy(
+        baseUnit: _baseUnitNameController.text.trim(), buyUnit: _buyUnit, buyCost: buy, hierarchy: _hierJson());
+  }
+
+  /// يُثبّت كلفة الأساس المشتقة في حقلها، ويحدّث سعر البيع المقترح (+10%) إن لم يكتبه المستخدم.
+  void _baseFromBuy() {
+    final base = _derivedBase;
+    if (base == null) return;
+    _baseCostController.text = _num.format(base);
+    final sell = _basePriceController.text.trim();
+    if (sell.isEmpty || sell == _autoSell) {
+      _autoSell = _num.format(base * 1.10);
+      _basePriceController.text = _autoSell;
+    }
+  }
+
+  /// تغيير الوحدة المشتراة يحوّل سعرها (كما في ERP): كلفة الأساس ثابتة، والسعر = الأساس × معامل الجديدة.
+  void _changeBuyUnit(String unit) {
+    final base = _derivedBase;
+    _currentBuyUnit = unit;
+    final f = _factor(unit);
+    if (base != null && f != null) _currentBuyCostController.text = _num.format(base * f);
+  }
+
+  /// تغيّر الهرم (كمية أو اسم أو حذف): سعر شراء الوحدة ثابت (هو ما دفعته)، فتُشتق كلفة الأساس من جديد.
+  void _recalcPricesFromHierarchy() => _baseFromBuy();
 
   @override
   Widget build(BuildContext context) {
@@ -1023,6 +1055,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                  const SizedBox(height: 12),
                  for (int i=0; i<_hierarchyItems.length; i++)
                     Container(
+                      key: ObjectKey(_hierarchyItems[i]),
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
@@ -1031,16 +1064,18 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                            Expanded(flex: 2, child: Autocomplete<String>(
                              initialValue: TextEditingValue(text: _hierarchyItems[i]['unit_name'] ?? ''),
                              optionsBuilder: (v) => _availableUnits.where((u) => u.contains(v.text)),
-                             onSelected: (s) => setState(() => _hierarchyItems[i]['unit_name'] = s),
+                             onSelected: (s) => setState(() { _hierarchyItems[i]['unit_name'] = s; _recalcPricesFromHierarchy(); }),
                              fieldViewBuilder: (ctx, ctrl, f, s) => TextField(
                                controller: ctrl,
                                focusNode: f,
-                               onChanged: (v) => setState(() => _hierarchyItems[i]['unit_name'] = v),
+                               onChanged: (v) => setState(() { _hierarchyItems[i]['unit_name'] = v; _recalcPricesFromHierarchy(); }),
                                decoration: const InputDecoration(labelText: 'الوحدة الأكبر', border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12))
                              ),
                            )),
                            const SizedBox(width: 8),
-                           Expanded(child: TextField(
+                           Expanded(child: TextFormField(
+                             // تظهر الكمية المعبّأة مسبقاً (من الفاتورة أو الافتراضي) بدل حقل فارغ يخفي 100
+                             initialValue: _num.format((_hierarchyItems[i]['contains_qty'] as num?)?.toDouble() ?? 0),
                              keyboardType: TextInputType.number,
                              decoration: InputDecoration(
                                labelText: 'تحتوي',
@@ -1048,9 +1083,9 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                                border: const OutlineInputBorder(),
                                contentPadding: const EdgeInsets.all(12),
                              ),
-                             onChanged: (v) { setState(() { _hierarchyItems[i]['contains_qty'] = double.tryParse(v) ?? 1; _recalcPricesFromHierarchy(); }); },
+                             onChanged: (v) { setState(() { _hierarchyItems[i]['contains_qty'] = _parse(v); _recalcPricesFromHierarchy(); }); },
                            )),
-                           IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), tooltip: 'حذف المستوى', onPressed: () => setState(() => _hierarchyItems.removeAt(i))),
+                           IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), tooltip: 'حذف المستوى', onPressed: () => setState(() { _hierarchyItems.removeAt(i); _recalcPricesFromHierarchy(); })),
                          ],
                       ),
                     ),
@@ -1062,26 +1097,29 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                      label: const Text('إضافة وحدة أكبر (كرتون، صندوق...)'),
                    ),
                  ),
-                 if (_invoiceOriginalUnit != null && _invoiceOriginalCost > 0 && _hierarchyItems.isNotEmpty)
-                   Builder(builder: (_) {
-                     final factor = (_hierarchyItems.first['contains_qty'] as num?)?.toDouble() ?? 0;
-                     if (factor <= 0) return const SizedBox.shrink();
-                     return Container(
-                       margin: const EdgeInsets.only(top: 6),
-                       padding: const EdgeInsets.all(12),
-                       decoration: BoxDecoration(
-                         color: Colors.blue.withValues(alpha: 0.06),
-                         borderRadius: BorderRadius.circular(10),
-                         border: Border.all(color: Colors.blue.withValues(alpha: 0.25)),
-                       ),
-                       child: Text(
-                         'سعر الـ${_baseUnitNameController.text} = ${NumberFormat('#,##0').format(_invoiceOriginalCost)} ÷ $factor'
-                         ' = ${NumberFormat('#,##0').format(_invoiceOriginalCost / factor)} كلفة  •  '
-                         '${NumberFormat('#,##0').format((_invoiceOriginalCost / factor) * 1.10)} بيعاً (+10%)',
-                         style: const TextStyle(fontSize: 12.5, color: Color(0xFF1D4ED8), fontWeight: FontWeight.w600),
-                       ),
-                     );
-                   }),
+                 Builder(builder: (_) {
+                   // 📐 المعامل التراكمي للوحدة المشتراة: «كرتون = 120 قطعة» لا «10»
+                   final buyUnit = _buyUnit;
+                   final f = _factor(buyUnit);
+                   final base = _derivedBase;
+                   if (buyUnit == _baseUnitNameController.text.trim() || f == null || base == null) {
+                     return const SizedBox.shrink();
+                   }
+                   return Container(
+                     margin: const EdgeInsets.only(top: 6),
+                     padding: const EdgeInsets.all(12),
+                     decoration: BoxDecoration(
+                       color: Colors.blue.withValues(alpha: 0.06),
+                       borderRadius: BorderRadius.circular(10),
+                       border: Border.all(color: Colors.blue.withValues(alpha: 0.25)),
+                     ),
+                     child: Text(
+                       '$buyUnit = ${_num.format(f)} ${_baseUnitNameController.text}  •  '
+                       'كلفة الـ${_baseUnitNameController.text} = ${_currentBuyCostController.text} ÷ ${_num.format(f)} = ${_num.format(base)}',
+                       style: const TextStyle(fontSize: 12.5, color: Color(0xFF1D4ED8), fontWeight: FontWeight.w600),
+                     ),
+                   );
+                 }),
                ]),
              ),
 
@@ -1091,9 +1129,21 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                title: 'السعر',
                hint: 'للوحدة الأساسية',
                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                 Expanded(child: ModernTextField(controller: _baseCostController, label: 'سعر التكلفة', hint: '0', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                 Expanded(child: _derivedBase != null
+                     // 🔒 مشتقة من سعر الشراء: تُعرض ولا تُكتب (مصدر واحد للكلفة)
+                     ? InputDecorator(
+                         decoration: InputDecoration(
+                           labelText: 'سعر التكلفة (من سعر الشراء)',
+                           helperText: 'غيّر «سعر الشراء» أو «تحتوي» لتتغيّر',
+                           filled: true,
+                           fillColor: const Color(0xFFF1F5F9),
+                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                         ),
+                         child: Text(_num.format(_derivedBase!), style: const TextStyle(fontWeight: FontWeight.w700)),
+                       )
+                     : ModernTextField(controller: _baseCostController, label: 'سعر التكلفة', hint: '0', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
                  const SizedBox(width: 12),
-                 Expanded(child: ModernTextField(controller: _basePriceController, label: 'سعر البيع (مفرد) *', hint: '0', isRequired: true, inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                 Expanded(child: ModernTextField(controller: _basePriceController, label: 'سعر البيع (مفرد) *', hint: '0', isRequired: true, inputFormatters: [ThousandSeparatorDecimalInputFormatter()], onChanged: (_) => _autoSell = '')),
                ]),
              ),
 
@@ -1105,9 +1155,10 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                tint: const Color(0xFFF4F4FF),
                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                  Expanded(child: DropdownButtonFormField<String>(
-                    initialValue: units.contains(_currentBuyUnit) ? _currentBuyUnit : _baseUnitNameController.text,
+                    key: ValueKey('buy_${units.join('|')}'),
+                    initialValue: units.contains(_buyUnit) ? _buyUnit : _baseUnitNameController.text,
                     items: units.map((u) => DropdownMenuItem(value: u, child: Text(u.isEmpty ? '?' : u))).toList(),
-                    onChanged: (v) => setState(() => _currentBuyUnit = v!),
+                    onChanged: (v) => setState(() => _changeBuyUnit(v!)),
                     decoration: InputDecoration(
                       labelText: 'الوحدة المشتراة',
                       filled: true,
@@ -1118,7 +1169,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
                  const SizedBox(width: 12),
                  Expanded(child: ModernTextField(controller: _currentBuyQtyController, label: 'الكمية', keyboardType: TextInputType.number, inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
                  const SizedBox(width: 12),
-                 Expanded(child: ModernTextField(controller: _currentBuyCostController, label: 'سعر الشراء', hint: 'للوحدة المختارة', inputFormatters: [ThousandSeparatorDecimalInputFormatter()])),
+                 Expanded(child: ModernTextField(controller: _currentBuyCostController, label: 'سعر الشراء', hint: 'للوحدة المختارة', inputFormatters: [ThousandSeparatorDecimalInputFormatter()], onChanged: (_) => setState(_baseFromBuy))),
                ]),
              ),
 
@@ -1265,29 +1316,27 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
     
     final db = DatabaseService();
     
-    // 1. Calculate Costs logic (Same as original screen)
-    double baseCost = _parse(_baseCostController.text);
-    double buyUnitCost = _parse(_currentBuyCostController.text);
-    
-    // If user entered Buy Unit Cost but not Base Cost, reverse calculate
-    // Need hierarchy factor...
-    // Simplified for dialog: Just trust inputs or basic calculation.
-    // If Base Cost is empty but Buy Cost is set, try to calc.
-    if (baseCost == 0 && buyUnitCost > 0) {
-       // Find conversion factor for current buy unit
-       double output = 1.0;
-       String current = _currentBuyUnit;
-       if (current != _baseUnitNameController.text) {
-          // Check hierarchy
-          for(var h in _hierarchyItems) {
-             if (h['unit_name'] == current) {
-                output = (h['contains_qty'] as num).toDouble();
-                break;
-             }
-          }
-       }
-       baseCost = buyUnitCost / output;
+    // 1. 📐 الكلفة: مستويات التعبئة كاملة، ثم كلفة الأساس من سعر الشراء ÷ المعامل التراكمي
+    for (final h in _hierarchyItems) {
+      if ('${h['unit_name'] ?? ''}'.trim().isEmpty || ((h['contains_qty'] as num?)?.toDouble() ?? 0) <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('أكمل وحدات التعبئة: لكل وحدة أكبر اسم وكمية أكبر من صفر (أو احذفها)'),
+            backgroundColor: Colors.orange));
+        return;
+      }
     }
+    final String buyUnit = _buyUnit;
+    final double? buyFactor = _factor(buyUnit);
+    if (buyFactor == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('«$buyUnit» ليست من وحدات المادة — عرّف كم تحتوي أولاً'), backgroundColor: Colors.orange));
+      return;
+    }
+    final double buyUnitCost = _parse(_currentBuyCostController.text);
+    // سعر الشراء هو الحقيقة إن كُتب؛ وإلا فالكلفة المكتوبة للأساس
+    final double baseCost = buyUnitCost > 0 ? buyUnitCost / buyFactor : _parse(_baseCostController.text);
+    // سعر سطر الفاتورة للوحدة المشتراة (لا كلفة القطعة لسطر بالكرتون)
+    final double linePrice = buyUnitCost > 0 ? buyUnitCost : baseCost * buyFactor;
 
     try {
        // 2. Prepare Hierarchy JSON
@@ -1297,7 +1346,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
          finalHierarchy.add({
            // Checking ProductEntryScreen: It saves: {'unit_name': uName, 'quantity': qty}
            // Let's stick to ProductEntryScreen implementation
-           'unit_name': item['unit_name'],
+           'unit_name': '${item['unit_name']}'.trim(),
            'quantity': (item['contains_qty'] as num).toDouble()
          });
        }
@@ -1320,7 +1369,8 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
          price5: _parse(_price5Controller.text),
          price6: _parse(_price6Controller.text),
          unitHierarchy: jsonEncode(finalHierarchy),
-         alertQuantity: _parse(_invoiceQtyController.text) == 0 ? null : _parse(_invoiceQtyController.text), // Corrected to use available controller
+         // 🔔 حدّ التنبيه من حقله («تنبيه النفاد عند») — كان يُقرأ من كمية شاشة أخرى
+         alertQuantity: _parse(_alertQtyController.text) == 0 ? null : _parse(_alertQtyController.text),
          alertUnit: _baseUnitNameController.text,
          stockQuantity: _parse(_stockController.text),
          createdAt: DateTime.now(),
@@ -1339,7 +1389,7 @@ class _QuickProductCreationDialogState extends State<QuickProductCreationDialog>
        
        // 6. Return to screen
        final savedProduct = product.copyWith(id: id);
-       widget.onProductSelected(savedProduct, _parse(_currentBuyQtyController.text), buyUnitCost > 0 ? buyUnitCost : baseCost, _currentBuyUnit);
+       widget.onProductSelected(savedProduct, _parse(_currentBuyQtyController.text), linePrice, buyUnit);
        if (mounted) Navigator.pop(context);
        
     } catch (e) {

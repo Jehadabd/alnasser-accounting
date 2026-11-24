@@ -28,6 +28,7 @@ import '../accounting/posting_engine.dart' show PostingEngine;
 import '../erp/warranty/item_warranty.dart'; // 🛡️ ضمان السطر يُثبَّت عند الحفظ
 import '../erp/sales/invoice_returns.dart'; // ↩️ حارس الفاتورة التي عليها مرتجع
 import '../services/fifo_cost.dart'; // 📦 كلفة FIFO عند البيع
+import '../services/unit_cost_math.dart'; // 📐 كلفة الوحدة = كلفة الأساس × المعامل التراكمي
 
 
 class InvoiceValidationResult {
@@ -106,6 +107,12 @@ class InvoiceController {
     if (stored != null && stored > 0) {
       return stored;
     }
+    // 📐 أي وحدة أساس (لا القطعة وحدها): كلفة الأساس × المعامل التراكمي.
+    //    كان «كيس» مادة أساسها «كغم» يُكلَّف بكلفة كيلو واحد فيتضخّم ربحه.
+    final double? byFactor = UnitCostMath.costOf(
+        baseUnit: product.unit, unit: saleUnit, baseCost: baseCost,
+        hierarchy: product.unitHierarchy, lengthPerUnit: product.lengthPerUnit);
+    if (byFactor != null) return byFactor;
     if (product.unit == 'meter' && saleUnit == 'لفة') {
       final double lengthPerUnit = product.lengthPerUnit ?? 1.0;
       return baseCost * lengthPerUnit;

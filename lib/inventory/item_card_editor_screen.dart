@@ -198,7 +198,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
   ];
   static const _detailNum = [
     'min_qty', 'max_qty', 'reorder_qty', 'tax_percent', 'max_discount_percent', 'bonus_buy', 'bonus_free',
-    'fixed_cost', 'opening_cost', 'price_rounding',
+    'opening_cost', 'price_rounding',
   ];
   final Map<String, TextEditingController> _dc = {
     for (final k in [..._detailText, ..._detailNum]) k: TextEditingController(),
@@ -2301,7 +2301,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
       case 2:
         return nz(['max_discount_percent', 'bonus_buy', 'bonus_free']) + (_defaultUnit != null ? 1 : 0);
       case 3:
-        return nz(['fixed_cost', 'opening_cost']) + (_costMethod != CostMethodPolicy.itemDefault ? 1 : 0);
+        return nz(['opening_cost']) + (_costMethod != CostMethodPolicy.itemDefault ? 1 : 0);
       case 4:
         return nz(['min_qty', 'reorder_qty', 'max_qty', 'shelf_location']) +
             (_supplierId != null ? 1 : 0) +
@@ -2684,7 +2684,6 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
               ],
               (v) => upd(() => _costMethod = v ?? CostMethodPolicy.itemDefault),
             ),
-            _field('سعر كلفة ثابت (للأرباح)', _dc['fixed_cost']!, number: true, hint: '0', suffixText: 'د.ع'),
             _field('الكلفة الافتتاحية', _dc['opening_cost']!, number: true, hint: '0', suffixText: 'د.ع'),
           ]),
         ]);

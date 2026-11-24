@@ -69,6 +69,7 @@ import '../services/barcode/scan_feedback.dart';
 import '../widgets/camera_scan_button.dart'; // 📷 الكاميرا (أندرويد/آيفون)
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import '../erp/warranty/item_warranty.dart'; // 🛡️ عمود الضمان في جدول الإدخال
+import '../services/unit_cost_math.dart'; // 📐 كلفة الوحدة من الأساس × المعامل
 
 // Helper: format product ID - show raw value without zero-padding
 String formatProductId5(int? id) {
@@ -2430,6 +2431,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     if (stored != null && stored > 0) {
       return stored;
     }
+
+    // 📐 أي وحدة أساس: كلفة الأساس × المعامل التراكمي (انظر UnitCostMath)
+    final double? byFactor = UnitCostMath.costOf(
+        baseUnit: product.unit, unit: saleUnit, baseCost: baseCost,
+        hierarchy: product.unitHierarchy, lengthPerUnit: product.lengthPerUnit);
+    if (byFactor != null) return byFactor;
 
     // للمتر و"لفة": استخدم طول اللفة عند عدم توفر تكلفة مخزنة
     if (product.unit == 'meter' && saleUnit == 'لفة') {
