@@ -6,11 +6,14 @@
 //   • المبلغ يُقرأ من سجل الديون لحظة الإرسال: من صار دينه صفراً لا تصله مطالبة.
 //   • كل نتيجة في سجل الرسائل. فشلان متتاليان (لا بسبب رقم ليس على واتساب) ⇒ يتوقف.
 //   • لا يغيّر أي دين أو معاملة.
+//   • 📊 حد اليوم: ما يزيد يُرحَّل (WaCarryOver) ويُرسل أول اليوم التالي. حد الساعة: ينتظر حتى تفرغ.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../erp/activity/activity_log.dart';
 import '../owner/wa_auto/wa_auto_reminder.dart';
@@ -19,6 +22,7 @@ import '../owner/wa_auto/wa_usage_mark.dart';
 import '../services/customer_balance_guard.dart'; // 🛡️ الرصيد = مجموع المعاملات
 import '../services/database_service.dart';
 import '../services/sync_perks.dart';
+import 'wa_capacity.dart';
 import 'wa_compose.dart';
 import 'wa_message_log.dart';
 import 'wa_rules.dart';
@@ -47,6 +51,89 @@ class WaJob {
   final bool requireDebt;
 
   String get key => '$customerId|${ruleId ?? source}';
+
+  Map<String, dynamic> toJson() => {
+        'c': customerId,
+        'n': name,
+        'p': phone,
+        's': source,
+        'r': ruleId,
+        'rn': ruleName,
+        'o': options.toJson(),
+        'd': requireDebt,
+      };
+
+  static WaJob? fromJson(Map<String, dynamic> j) {
+    final c = j['c'];
+    if (c is! int || '${j['p'] ?? ''}'.isEmpty) return null;
+    return WaJob(
+      customerId: c,
+      name: '${j['n'] ?? ''}',
+      phone: '${j['p']}',
+      source: '${j['s'] ?? 'rule'}',
+      ruleId: j['r'] as String?,
+      ruleName: j['rn'] as String?,
+      options: WaMessageOptions.fromJson((j['o'] as Map?)?.cast<String, dynamic>()),
+      requireDebt: j['d'] != false,
+    );
+  }
+}
+
+/// 📦 رسائل تجاوزت حد اليوم: تُحفظ وتُرسل أول اليوم التالي قبل غيرها.
+/// تُفحص كأي رسالة لحظة الإرسال (الدين الآن، تطابق الكشف)؛ وما مضى عليه 7 أيام يُهمل.
+class WaCarryOver {
+  WaCarryOver._();
+  static const _k = 'wa_carry_over_v1';
+
+  static String _day(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static Future<List<Map<String, dynamic>>> _read(SharedPreferences p) async {
+    try {
+      final raw = p.getString(_k);
+      if (raw == null || raw.isEmpty) return [];
+      return [for (final x in jsonDecode(raw) as List) if (x is Map) x.cast<String, dynamic>()];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// كم رسالة مرحَّلة الآن.
+  static Future<int> count() async => (await _read(await SharedPreferences.getInstance())).length;
+
+  static Future<void> add(List<WaJob> jobs) async {
+    if (jobs.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    final list = await _read(p);
+    final keys = {for (final x in list) '${x['c']}|${x['r'] ?? x['s']}'};
+    final today = _day(DateTime.now());
+    for (final j in jobs) {
+      if (keys.add(j.key)) list.add({...j.toJson(), 'day': today});
+    }
+    await p.setString(_k, jsonEncode(list));
+  }
+
+  /// ما رُحِّل من يوم سابق (يُزال من المخزن). ما رُحِّل اليوم يبقى لغدٍ.
+  static Future<List<WaJob>> takeDue() async {
+    final p = await SharedPreferences.getInstance();
+    final list = await _read(p);
+    if (list.isEmpty) return const [];
+    final now = DateTime.now();
+    final today = _day(now);
+    final oldest = _day(now.subtract(const Duration(days: 7)));
+    final due = <WaJob>[], keep = <Map<String, dynamic>>[];
+    for (final x in list) {
+      final d = '${x['day'] ?? ''}';
+      if (d == today) {
+        keep.add(x);
+      } else if (d.compareTo(oldest) >= 0) {
+        final j = WaJob.fromJson(x);
+        if (j != null) due.add(j);
+      }
+    }
+    await p.setString(_k, jsonEncode(keep));
+    return due;
+  }
 }
 
 class WaOutboxState {
@@ -100,6 +187,8 @@ class WaOutbox {
     _queue.clear();
   }
 
+  static String _hm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
   static Future<void> _pump() async {
     _pumping = true;
     _stop = false;
@@ -143,9 +232,26 @@ class WaOutbox {
       var first = true;
       while (_queue.isNotEmpty && !_stop) {
         if (await WaMessageLog.sentToday() >= s.maxPerDay) {
-          note = 'بلغ الحد اليومي (${s.maxPerDay}) — ما بقي يُرسل غداً (القواعد تعيده وحدها)';
+          // 📦 لا يضيع شيء: ما بقي يُرحَّل ويُرسل أول اليوم التالي (ولو لم يكن يوم القاعدة)
+          final rest = List<WaJob>.of(_queue);
+          await WaCarryOver.add(rest);
+          note = 'بلغ حد اليوم (${s.maxPerDay}) — ${rest.length} رسالة تُرسل غداً أولاً';
           _queue.clear();
           break;
+        }
+        // 🕐 حد الساعة: ينتظر حتى تخرج أقدم رسالة من نافذة الساعة
+        final gate = WaCapacity.hourGate(
+            await WaMessageLog.sentSince(DateTime.now().subtract(const Duration(hours: 1))), s.maxPerHour, DateTime.now());
+        if (gate != null) {
+          note = 'بلغ حد الساعة (${s.maxPerHour}) — يكمل الساعة ${_hm(gate)}';
+          emit(nextAt: gate);
+          while (DateTime.now().isBefore(gate) && !_stop) {
+            await Future<void>.delayed(const Duration(seconds: 1));
+          }
+          if (_stop) break;
+          note = null;
+          first = true; // انتظر ما يكفي — لا فاصل إضافي
+          continue;
         }
         // ⏳ فاصل عشوائي قبل كل رسالة عدا الأولى (يُفحص الإيقاف كل ثانية)
         if (!first) {
@@ -219,6 +325,20 @@ class WaOutbox {
           extra = res.note;
         } catch (e) {
           err = 'تعذّر تجهيز الرسالة: $e';
+        }
+        // 🕐 الخادم رفض لأن ساعته امتلأت (حدّه أقل من حد البرنامج): ليست فشلاً — تعود الرسالة وتنتظر
+        if (err != null && err == WaServerClient.errorText('hour_limit')) {
+          _queue.insert(0, job);
+          final until = DateTime.now().add(const Duration(minutes: 5));
+          note = 'الخادم بلغ حد الساعة — محاولة جديدة ${_hm(until)}';
+          emit(nextAt: until);
+          while (DateTime.now().isBefore(until) && !_stop) {
+            await Future<void>.delayed(const Duration(seconds: 1));
+          }
+          if (_stop) break;
+          note = null;
+          first = true;
+          continue;
         }
         if (err == null) {
           sent++;

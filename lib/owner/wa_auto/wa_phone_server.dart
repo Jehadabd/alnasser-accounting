@@ -175,6 +175,8 @@ class WaPhoneServer {
       'STATE_DIR': data,
       'LOG_FILE': logPath,
       'NODE_ENV': 'production',
+      // 🕐 حد الساعة نفسه الذي في «الأمان والسرعة» (يُقرأ عند تشغيل الخادم)
+      'MAX_PER_HOUR': '${(await SharedPreferences.getInstance()).getInt('wa_auto_max_hour') ?? 60}',
     };
     onStep?.call('تشغيل الخادم…');
     try {

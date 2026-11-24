@@ -551,6 +551,8 @@ class WaLocalServer {
         'LOG_FILE': logPath,
         'PARENT_PID': '$pid',
         'NODE_ENV': 'production',
+        // 🕐 حد الساعة نفسه الذي في «الأمان والسرعة» (يُقرأ عند تشغيل الخادم)
+        'MAX_PER_HOUR': '${(await SharedPreferences.getInstance()).getInt('wa_auto_max_hour') ?? 60}',
       },
       includeParentEnvironment: true,
       mode: ProcessStartMode.detached,

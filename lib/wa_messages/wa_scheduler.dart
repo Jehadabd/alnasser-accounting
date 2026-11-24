@@ -53,6 +53,9 @@ class WaRulesEngine {
     }
   }
 
+  /// من حلّ موعد مطالبته اليوم (لتقدير حمل القواعد).
+  static Future<Set<int>> dueIds() => _dueReminderIds();
+
   /// من تصله رسالة القاعدة الآن (بغض النظر عن يومها وساعتها) — للمعاينة وللتشغيل.
   static Future<List<WaFacts>> targets(WaRule r, {List<WaFacts>? all, Set<int>? due, DateTime? now}) async {
     return WaRuleEval.select(
@@ -100,11 +103,17 @@ class WaRulesEngine {
     try {
       final s = await WaAutoReminder.load();
       if (!s.enabled || !s.riskAccepted) return;
+      final queued = <int>{}; // عميل واحد لا يأخذ رسالتين من قاعدتين في الجولة نفسها
+      // 📦 ما تجاوز حد يوم سابق يُرسل أولاً (قبل قواعد اليوم)
+      final carried = await WaCarryOver.takeDue();
+      if (carried.isNotEmpty) {
+        WaOutbox.enqueue(carried);
+        queued.addAll(carried.map((j) => j.customerId));
+      }
       final due = [for (final r in await WaRules.load()) if (WaRuleEval.isDueNow(r, now)) r];
       if (due.isEmpty) return;
       final all = await facts();
       final dueIds = due.any((r) => r.audience == WaAudience.dueReminders) ? await _dueReminderIds() : <int>{};
-      final queued = <int>{}; // عميل واحد لا يأخذ رسالتين من قاعدتين في الجولة نفسها
       for (final r in due) {
         final list = [
           for (final p in await targets(r, all: all, due: dueIds, now: now))

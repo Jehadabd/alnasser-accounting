@@ -104,6 +104,14 @@ class WaMessageLog {
     return ((r.first['n'] as num?) ?? 0).toInt();
   }
 
+  /// 🕐 أوقات الرسائل المرسلة منذ [t] (لكل الطرق) — لحد الساعة.
+  static Future<List<DateTime>> sentSince(DateTime t) async {
+    final db = await _db();
+    final r = await db.rawQuery(
+        "SELECT at FROM wa_message_log WHERE status = 'sent' AND at >= ? ORDER BY at", [t.toIso8601String()]);
+    return [for (final x in r) if (DateTime.tryParse('${x['at']}') != null) DateTime.parse('${x['at']}')];
+  }
+
   static Future<List<WaLogEntry>> recent({int limit = 300, int? customerId}) async {
     final db = await _db();
     final r = await db.query('wa_message_log',

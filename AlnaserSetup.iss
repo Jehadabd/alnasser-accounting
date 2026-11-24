@@ -49,7 +49,7 @@ Source: "installer\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinsta
 ; ملفات التطبيق
 Source: "build\windows\x64\runner\Release\debt_book.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; استثناء نماذج الذكاء الاصطناعي ومحرك OCR لتقليل حجم التطبيق (~500MB → ~50MB)
-Source: "build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "onnxruntime.dll,tesseract\*,data\flutter_assets\assets\models\*,data\flutter_assets\assets\tessdata\*"
+Source: "build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".env,*.env,onnxruntime.dll,tesseract\*,data\flutter_assets\assets\models\*,data\flutter_assets\assets\tessdata\*"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\debt_book.exe"

@@ -28,6 +28,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
   final _minDelay = TextEditingController();
   final _maxDelay = TextEditingController();
   final _perDay = TextEditingController();
+  final _perHour = TextEditingController();
   final _loadWait = TextEditingController();
   final _testPhone = TextEditingController();
   bool _testing = false;
@@ -43,7 +44,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
 
   @override
   void dispose() {
-    for (final c in [_tpl, _addr, _minDelay, _maxDelay, _perDay, _loadWait, _testPhone]) {
+    for (final c in [_tpl, _addr, _minDelay, _maxDelay, _perDay, _perHour, _loadWait, _testPhone]) {
       c.dispose();
     }
     super.dispose();
@@ -56,6 +57,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
     _minDelay.text = '${s.minDelay}';
     _maxDelay.text = '${s.maxDelay}';
     _perDay.text = '${s.maxPerDay}';
+    _perHour.text = '${s.maxPerHour}';
     _loadWait.text = '${s.loadWait}';
     _shop = await WaAutoReminder.shopName();
     if (mounted) setState(() => _s = s);
@@ -68,6 +70,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
         minDelay: _int(_minDelay, s.minDelay),
         maxDelay: _int(_maxDelay, s.maxDelay),
         maxPerDay: _int(_perDay, s.maxPerDay),
+        maxPerHour: _int(_perHour, s.maxPerHour),
         loadWait: _int(_loadWait, s.loadWait),
       );
 
@@ -82,6 +85,7 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
       _minDelay.text = '${reloaded.minDelay}';
       _maxDelay.text = '${reloaded.maxDelay}';
       _perDay.text = '${reloaded.maxPerDay}';
+      _perHour.text = '${reloaded.maxPerHour}';
       _loadWait.text = '${reloaded.loadWait}';
     });
   }
@@ -255,8 +259,18 @@ class _WaAutoScreenState extends State<WaAutoScreen> {
             Row(children: [
               Expanded(child: _field(_perDay, 'حد الرسائل في اليوم', number: true)),
               const SizedBox(width: 10),
+              Expanded(child: _field(_perHour, 'حد الرسائل في الساعة', number: true)),
+            ]),
+            const SizedBox(height: 10),
+            Row(children: [
               Expanded(child: _field(_loadWait, 'مهلة تحميل المحادثة (Desktop، ثانية)', number: true)),
             ]),
+            const SizedBox(height: 6),
+            const Text(
+              'ما يزيد على حد اليوم يُرسل في اليوم التالي أولاً، وما يزيد على حد الساعة ينتظر حتى تفرغ الساعة. '
+              'الحد الأعلى 1000 في اليوم و200 في الساعة. الأرقام الجديدة على واتساب أكثر عرضة للحظر بالأعداد الكبيرة.',
+              style: TextStyle(fontSize: 12, height: 1.6, color: Color(0xFF64748B)),
+            ),
           ]),
         ),
         const SizedBox(height: 12),

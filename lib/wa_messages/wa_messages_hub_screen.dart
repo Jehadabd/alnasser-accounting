@@ -15,6 +15,7 @@ import '../screens/debt_reminders_screen.dart';
 import '../widgets/settings_kit.dart';
 import 'wa_auto_docs_screen.dart';
 import 'wa_message_log.dart';
+import 'wa_outbox.dart' show WaCarryOver; // 📦 المرحَّل من يوم امتلأ
 import 'wa_phone_book_screen.dart';
 import 'wa_rules.dart';
 import 'wa_rules_screen.dart';
@@ -33,6 +34,7 @@ class _WaMessagesHubScreenState extends State<WaMessagesHubScreen> {
   WaAutoSettings? _s;
   List<WaRule> _rules = const [];
   int _today = 0;
+  int _carried = 0; // 📦 مرحَّل من يوم امتلأ
   String? _server; // حالة الخادم نصاً
 
   @override
@@ -45,11 +47,13 @@ class _WaMessagesHubScreenState extends State<WaMessagesHubScreen> {
     final s = await WaAutoReminder.load();
     final rules = await WaRules.load();
     final today = await WaMessageLog.sentToday();
+    final carried = await WaCarryOver.count();
     if (!mounted) return;
     setState(() {
       _s = s;
       _rules = rules;
       _today = today;
+      _carried = carried;
     });
     if (s.viaServer) {
       String t;
@@ -104,7 +108,8 @@ class _WaMessagesHubScreenState extends State<WaMessagesHubScreen> {
             s.viaServer ? 'الطريقة: الخادم' : 'الطريقة: WhatsApp Desktop',
             if (_server != null) _server!,
             '$active قاعدة مفعّلة',
-            'أُرسل اليوم $_today من ${s.maxPerDay}',
+            'أُرسل اليوم $_today من ${s.maxPerDay} (${s.maxPerHour} في الساعة)',
+            if (_carried > 0) '$_carried مرحَّلة تُرسل أولاً',
           ].join(' • '),
         ),
         const SizedBox(height: 12),

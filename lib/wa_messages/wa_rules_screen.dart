@@ -7,6 +7,8 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../owner/wa_auto/wa_auto_reminder.dart';
 import '../widgets/settings_kit.dart';
+import 'wa_capacity.dart';
+import 'wa_message_log.dart';
 import 'wa_outbox.dart';
 import 'wa_rules.dart';
 import 'wa_scheduler.dart';
@@ -123,13 +125,77 @@ class _WaRuleEditorScreenState extends State<WaRuleEditorScreen> {
 
   bool get _isNew => widget.rule == null;
 
+  // ── 📊 سعة الأيام: حد اليوم، وحمل القواعد الأخرى، ومن تنطبق عليهم هذه القاعدة ──
+  int _cap = 500;
+  List<WaFacts>? _all;
+  Set<int> _due = const {};
+  Map<int, DateTime> _myLast = const {};
+  List<(WaRule, int)> _pairs = const [];
+  Map<int, int>? _othersLoad;
+
   @override
   void initState() {
     super.initState();
     WaAutoReminder.load().then((s) {
       if (mounted) setState(() => _viaServer = s.viaServer);
     });
+    _loadCapacity();
   }
+
+  Future<void> _loadCapacity() async {
+    try {
+      final s = await WaAutoReminder.load();
+      final all = await WaRulesEngine.facts();
+      final due = await WaRulesEngine.dueIds();
+      final now = DateTime.now();
+      final pairs = <(WaRule, int)>[];
+      for (final r in await WaRules.load()) {
+        if (r.id == _r.id) continue;
+        pairs.add((r, (await WaRulesEngine.targets(r, all: all, due: due, now: now)).length));
+      }
+      final mine = await WaMessageLog.lastSent(_r.id);
+      if (!mounted) return;
+      setState(() {
+        _cap = s.maxPerDay;
+        _all = all;
+        _due = due;
+        _myLast = mine;
+        _pairs = pairs;
+        _othersLoad = WaCapacity.monthLoad(pairs, now);
+      });
+    } catch (_) {}
+  }
+
+  /// القاعدة بقيم الحقول الحالية (قبل الحفظ) — لعدّ من تنطبق عليهم.
+  WaRule get _draft => _r.copy()
+    ..enabled = true
+    ..lateValue = _int(_late, 0).clamp(0, 3650)
+    ..minDebt = (double.tryParse(_min.text.replaceAll(',', '').trim()) ?? 1).clamp(1, 1e12).toDouble();
+
+  /// كم رسالة سترسلها هذه القاعدة (من تنطبق عليهم الآن — تقدير).
+  int get _myCount => _all == null
+      ? 0
+      : WaRuleEval.select(_draft, _all!, lastSent: _myLast, dueToday: _due, now: DateTime.now()).length;
+
+  /// الأيام التي يتجاوز فيها المجموع حد اليوم: (اليوم، المجموع).
+  List<(int, int)> _overflow() {
+    if (_othersLoad == null || _r.days.isEmpty) return const [];
+    final total = WaCapacity.monthLoad([..._pairs, (_draft, _myCount)], DateTime.now());
+    final last = WaCapacity.lastDayOf(DateTime.now());
+    final mine = {for (final d in _r.days) WaCapacity.resolveDay(d, last)};
+    return [for (final d in mine.toList()..sort()) if ((total[d] ?? 0) > _cap) (d, total[d]!)];
+  }
+
+  int? _suggest(int day) {
+    final last = WaCapacity.lastDayOf(DateTime.now());
+    return WaCapacity.suggestDay(_othersLoad ?? const {},
+        day: day, need: _myCount, cap: _cap, avoid: {for (final d in _r.days) WaCapacity.resolveDay(d, last)});
+  }
+
+  void _moveDay(int from, int to) => setState(() {
+        final last = WaCapacity.lastDayOf(DateTime.now());
+        _r.days = [for (final d in _r.days) if (WaCapacity.resolveDay(d, last) != from) d, to];
+      });
 
   @override
   void dispose() {
@@ -150,6 +216,30 @@ class _WaRuleEditorScreenState extends State<WaRuleEditorScreen> {
     if ((_r.audience == WaAudience.selected) && _r.ids.isEmpty) {
       _toast('اختر العملاء أولاً');
       return;
+    }
+    // 📊 يوم ممتلئ: نبّه واقترح أقرب يوم فيه متّسع — الزائد لا يضيع (يُرسل في اليوم التالي)
+    final over = _r.enabled ? _overflow() : const <(int, int)>[];
+    if (over.isNotEmpty && mounted) {
+      final (day, total) = over.first;
+      final alt = _suggest(day);
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.event_busy_rounded, color: Color(0xFFB45309), size: 32),
+          title: Text('يوم $day ممتلئ'),
+          content: Text('المتوقع في يوم $day نحو $total رسالة، والحد $_cap في اليوم.\n'
+              'إن بقي كما هو: يُرسل $_cap ويُرحَّل الباقي (${total - _cap}) إلى اليوم التالي.'
+              '${alt == null ? '\nلا يوجد يوم قريب فيه متّسع لهذه القاعدة كاملة.' : '\nاقتراح: يوم $alt فيه متّسع.'}'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('رجوع')),
+            TextButton(onPressed: () => Navigator.pop(ctx, 'keep'), child: const Text('احفظ كما هو')),
+            if (alt != null)
+              FilledButton(onPressed: () => Navigator.pop(ctx, 'move'), child: Text('انقل إلى يوم $alt')),
+          ],
+        ),
+      );
+      if (choice == null) return;
+      if (choice == 'move' && alt != null) _moveDay(day, alt);
     }
     await WaRules.upsert(_r);
     if (mounted) Navigator.pop(context, true);
@@ -306,6 +396,7 @@ class _WaRuleEditorScreenState extends State<WaRuleEditorScreen> {
                 for (var d = 1; d <= 31; d++) _dayChip(d, '$d'),
                 _dayChip(0, 'آخر الشهر'),
               ]),
+            if (_r.days.isNotEmpty) _capacityPanel(),
             const SizedBox(height: 8),
             Row(children: [
               const Text('الساعة:', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -361,8 +452,70 @@ class _WaRuleEditorScreenState extends State<WaRuleEditorScreen> {
     );
   }
 
-  Widget _dayChip(int d, String label) => FilterChip(
+  /// 📊 حمل الأيام المختارة: المتوقع من كل القواعد مقابل حد اليوم، واقتراح يوم بديل للممتلئ.
+  Widget _capacityPanel() {
+    if (_othersLoad == null) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Text('يحسب حمل الأيام…', style: TextStyle(fontSize: 12, color: kWaMuted)),
+      );
+    }
+    final now = DateTime.now();
+    final last = WaCapacity.lastDayOf(now);
+    final total = WaCapacity.monthLoad([..._pairs, (_draft, _myCount)], now);
+    final days = {for (final d in _r.days) WaCapacity.resolveDay(d, last)}.toList()..sort();
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('هذه القاعدة: نحو $_myCount رسالة • حد اليوم $_cap (من «الأمان والسرعة»)',
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        for (final d in days)
+          Builder(builder: (_) {
+            final t = total[d] ?? 0;
+            final full = t > _cap;
+            final alt = full ? _suggest(d) : null;
+            return Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, children: [
+                Icon(full ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded,
+                    size: 18, color: full ? const Color(0xFFB91C1C) : const Color(0xFF047857)),
+                Text(
+                  full
+                      ? 'يوم $d ممتلئ: $t من $_cap — يُرحَّل ${t - _cap} إلى اليوم التالي'
+                      : 'يوم $d: $t من $_cap',
+                  style: TextStyle(fontSize: 12.5, color: full ? const Color(0xFFB91C1C) : const Color(0xFF334155)),
+                ),
+                if (alt != null)
+                  ActionChip(
+                    visualDensity: VisualDensity.compact,
+                    avatar: const Icon(Icons.swap_horiz_rounded, size: 16),
+                    label: Text('انقل إلى يوم $alt (${_othersLoad![alt] ?? 0} من $_cap)'),
+                    onPressed: () => _moveDay(d, alt),
+                  ),
+              ]),
+            );
+          }),
+        const SizedBox(height: 4),
+        const Text('تقدير ممن تنطبق عليهم الشروط اليوم؛ الأيام المظلّلة بالأحمر ممتلئة بقواعد أخرى.',
+            style: TextStyle(fontSize: 11.5, color: kWaMuted)),
+      ]),
+    );
+  }
+
+  Widget _dayChip(int d, String label) {
+    final o = _othersLoad?[WaCapacity.resolveDay(d, WaCapacity.lastDayOf(DateTime.now()))] ?? 0;
+    final full = _othersLoad != null && o >= _cap;
+    return FilterChip(
         label: Text(label),
+        tooltip: _othersLoad == null ? null : '$o رسالة من قواعد أخرى (الحد $_cap)',
+        backgroundColor: full ? const Color(0xFFFEE2E2) : null,
         selected: _r.days.contains(d),
         visualDensity: VisualDensity.compact,
         onSelected: (on) => setState(() {
@@ -373,6 +526,7 @@ class _WaRuleEditorScreenState extends State<WaRuleEditorScreen> {
           }
         }),
       );
+  }
 }
 
 // ═════════════════════ معاينة: من تصله الآن ═════════════════════

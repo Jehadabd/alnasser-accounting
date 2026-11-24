@@ -56,6 +56,7 @@ class WaAutoSettings {
     required this.refocus,
     this.overdueMonths = 0,
     this.via = 'desktop',
+    this.maxPerHour = 60,
   });
 
   final bool enabled;
@@ -69,6 +70,9 @@ class WaAutoSettings {
   final int minDelay; // ثوانٍ
   final int maxDelay;
   final int maxPerDay;
+
+  /// 🕐 حد الرسائل في الساعة (لكل الطرق). ما يزيد ينتظر حتى تفرغ الساعة.
+  final int maxPerHour;
 
   /// عند فتح البرنامج في يوم الإرسال: نافذة عدّ تنازلي تبدأ الإرسال (يمكن إلغاؤها).
   final bool autoStart;
@@ -117,6 +121,7 @@ class WaAutoSettings {
     bool? refocus,
     int? overdueMonths,
     String? via,
+    int? maxPerHour,
   }) =>
       WaAutoSettings(
         enabled: enabled ?? this.enabled,
@@ -135,6 +140,7 @@ class WaAutoSettings {
         refocus: refocus ?? this.refocus,
         overdueMonths: overdueMonths ?? this.overdueMonths,
         via: via ?? this.via,
+        maxPerHour: maxPerHour ?? this.maxPerHour,
       );
 }
 
@@ -175,7 +181,9 @@ class WaAutoReminder {
       template: p.getString('${_k}template') ?? WaAutoSettings.defaultTemplate,
       minDelay: p.getInt('${_k}min_delay') ?? 30,
       maxDelay: p.getInt('${_k}max_delay') ?? 90,
-      maxPerDay: p.getInt('${_k}max_day') ?? 100,
+      // 📊 افتراضياً 500 في اليوم و60 في الساعة — يعدّلهما المستخدم من «الأمان والسرعة»
+      maxPerDay: p.getInt('${_k}max_day') ?? 500,
+      maxPerHour: p.getInt('${_k}max_hour') ?? 60,
       autoStart: p.getBool('${_k}auto') ?? false,
       loadWait: p.getInt('${_k}load_wait') ?? 4,
       onlySelected: p.getBool('${_k}only_selected') ?? true,
@@ -201,6 +209,7 @@ class WaAutoReminder {
     await p.setInt('${_k}min_delay', max(10, s.minDelay));
     await p.setInt('${_k}max_delay', max(max(10, s.minDelay), s.maxDelay));
     await p.setInt('${_k}max_day', s.maxPerDay.clamp(1, 1000));
+    await p.setInt('${_k}max_hour', s.maxPerHour.clamp(1, 200));
     await p.setBool('${_k}auto', s.autoStart);
     await p.setInt('${_k}load_wait', s.loadWait.clamp(2, 20));
     await p.setBool('${_k}only_selected', s.onlySelected);
