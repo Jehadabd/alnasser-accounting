@@ -18,6 +18,7 @@ import '../accounting/vouchers_service.dart' show VouchersService;
 import '../erp/debts/debt_analytics.dart';
 import '../erp/erp_common.dart';
 import '../erp/inventory/usd_cost_service.dart';
+import '../services/settings_manager.dart';
 import 'demand_signals.dart';
 
 // ───────────────────────── نماذج ─────────────────────────
@@ -59,6 +60,8 @@ class RadarKpis {
     required this.cashNow,
     this.costCoverage = 1.0,
     this.periodLabel = 'آخر 30 يوماً',
+    this.estimatedProfit = 0,
+    this.adHocPct = 10,
   });
   final double revenue30;
   final double profit30;
@@ -68,9 +71,14 @@ class RadarKpis {
   final double overdue90;
   final double cashNow;
 
-  /// نصيب المبيعات التي لها كلفة معروفة (الربح والهامش محسوبان منها فقط).
+  /// نصيب المبيعات التي لها كلفة معروفة.
   final double costCoverage;
   final String periodLabel;
+
+  /// الجزء المقدَّر من [profit30]: ربح المبيعات بلا كلفة صحيحة بنسبة الإعدادات
+  /// («نسبة الربح الافتراضية للمواد بلا كلفة»، [adHocPct]%) — يُعرض مميّزاً.
+  final double estimatedProfit;
+  final double adHocPct;
 }
 
 class CashFlows {
@@ -242,9 +250,9 @@ class _Demand {
 // ───────────────────────── المحرك ─────────────────────────
 
 class RadarEngine {
-  /// كلفة سطر الفاتورة المسجّلة — نفس منطق «تفاصيل المبيعات»، بلا افتراض:
-  /// سطر بلا كلفة = NULL (لا يُحسب في الربح والهامش). كان يُفترض له ربح 10%
-  /// (الكلفة = 90% من السعر) دون أن يظهر ذلك للتاجر.
+  /// كلفة سطر الفاتورة المسجّلة — نفس منطق «تفاصيل المبيعات». سطر بلا كلفة = NULL:
+  /// ربحه في بطاقة الربح مقدَّر بنسبة الإعدادات ومعروض مميّزاً (كان 10% ثابتة في
+  /// الكود لا تقرأ الإعداد ولا تظهر للتاجر)، ولا يدخل تنبيهات الهامش.
   static const _rawCost = '''
     CASE WHEN COALESCE(ii.actual_cost_price, 0) > 0
          THEN ii.actual_cost_price * (CASE WHEN COALESCE(ii.quantity_large_unit, 0) > 0
@@ -378,6 +386,11 @@ class RadarEngine {
   /// [from]..[to] (افتراضياً آخر 30 يوماً) تُقارن بالفترة السابقة لها بالطول نفسه.
   /// الديون والنقد «الآن» دائماً.
   Future<RadarKpis> kpis({DateTime? from, DateTime? to, String label = 'آخر 30 يوماً'}) async {
+    var pct = 10.0;
+    try {
+      pct = (await SettingsManager.getAppSettings()).defaultAdHocProfitPercentage;
+    } catch (_) {}
+    _adHoc = pct.clamp(0, 100).toDouble() / 100;
     final now = DateTime.now();
     final t = to ?? now;
     final f = from ?? now.subtract(const Duration(days: 30));
@@ -398,12 +411,18 @@ class RadarEngine {
       cashNow: cash,
       costCoverage: a.coverage,
       periodLabel: label,
+      estimatedProfit: a.estimated,
+      adHocPct: _adHoc * 100,
     );
   }
 
-  /// مبيعات الفترة بعد الخصم، وربحها من الأسطر التي لها كلفة معروفة فقط
-  /// (الخصم يُوزَّع عليها بنسبتها من المبيعات).
-  Future<({double net, double profit, double margin, double coverage})> _period(DateTime from, DateTime to) async {
+  /// نسبة الربح الافتراضية للمبيعات بلا كلفة (من الإعدادات) — تُقرأ في [kpis].
+  double _adHoc = 0.10;
+
+  /// مبيعات الفترة بعد الخصم وربحها: الأسطر ذات الكلفة بربحها الفعلي، والباقي بنسبة
+  /// الإعدادات ([estimated] = هذا الجزء). الخصم يُوزَّع على الجزأين بنسبتهما.
+  Future<({double net, double profit, double margin, double coverage, double estimated})> _period(
+      DateTime from, DateTime to) async {
     final db = await erpDb();
     final r = await db.rawQuery('''
       SELECT COALESCE(SUM(ii.item_total), 0) AS gross,
@@ -417,13 +436,17 @@ class RadarEngine {
       WHERE $_saved AND i.invoice_date >= ? AND i.invoice_date < ?''', [isoDay(from), isoDayAfter(to)]);
     final gross = d0(r.first['gross']), known = d0(r.first['known']), cost = d0(r.first['cost']);
     final d = d0(disc.first['d']);
-    final knownNet = gross > 0 ? known * (1 - d / gross) : 0.0;
-    final profit = knownNet - cost;
+    final share = gross > 0 ? 1 - d / gross : 0.0;
+    final knownNet = known * share;
+    final estimated = (gross - known) * share * _adHoc;
+    final profit = knownNet - cost + estimated;
+    final net = gross - d;
     return (
-      net: gross - d,
+      net: net,
       profit: profit,
-      margin: knownNet > 0 ? profit / knownNet * 100 : 0.0,
+      margin: net > 0 ? profit / net * 100 : 0.0,
       coverage: gross > 0 ? known / gross : 1.0,
+      estimated: estimated,
     );
   }
 
@@ -506,7 +529,7 @@ class RadarEngine {
       id: 'margin_drop',
       level: RadarLevel.high,
       title: salesUp ? 'الربح يتراجع رغم ارتفاع المبيعات' : 'هامش الربح يتراجع',
-      body: 'هامش الربح آخر 30 يوماً ${mc.toStringAsFixed(1)}% مقابل ${mp.toStringAsFixed(1)}% في الثلاثين التي قبلها '
+      body: 'هامش ربح المواد ذات الكلفة آخر 30 يوماً ${mc.toStringAsFixed(1)}% مقابل ${mp.toStringAsFixed(1)}% في الثلاثين التي قبلها '
           '(المبيعات ${_m(revCur)} مقابل ${_m(revPrev)}).',
       action: 'راجع أسعار بيع المواد أدناه: كلفتها ارتفعت أو سعرها نزل.',
       items: [

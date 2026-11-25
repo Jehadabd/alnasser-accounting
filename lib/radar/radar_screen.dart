@@ -216,11 +216,19 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
         }
         final diff = k.margin30 - k.marginPrev30;
         final uncosted = ((1 - k.costCoverage) * 100).round();
+        final pct = k.adHocPct.toStringAsFixed(k.adHocPct % 1 == 0 ? 0 : 1);
         return ListView(scrollDirection: Axis.horizontal, children: [
-          kpi('الربح الحقيقي (${k.periodLabel})', fmtMoneyCompact(k.profit30),
-              sub: 'من مبيعات ${fmtMoneyCompact(k.revenue30)}'
-                  '${uncosted >= 1 ? '\n$uncosted% منها بلا كلفة: لم تُحسب' : ''}',
-              subColor: uncosted >= 5 ? const Color(0xFFFCD34D) : null),
+          // ≈ = الجزء المقدَّر: مبيعات بلا كلفة بنسبة «ربح الأصناف الخارجية» من الإعدادات
+          Tooltip(
+            message: k.estimatedProfit.abs() < 1
+                ? 'كل الربح من كلفة مسجّلة'
+                : 'منه ${fmtMoneyCompact(k.estimatedProfit)} مقدَّر: $uncosted% من المبيعات بلا كلفة صحيحة (غير مسجّلة أو بوحدة أخرى)، '
+                    'حُسب ربحها $pct% (الإعدادات ← الأسعار والأرباح ← ربح الأصناف الخارجية).',
+            child: kpi('الربح الحقيقي (${k.periodLabel})', fmtMoneyCompact(k.profit30),
+                sub: 'من مبيعات ${fmtMoneyCompact(k.revenue30)}'
+                    '${k.estimatedProfit.abs() >= 1 ? '\n≈ ${fmtMoneyCompact(k.estimatedProfit)} مقدَّر بـ$pct% ($uncosted% بلا كلفة)' : ''}',
+                subColor: k.estimatedProfit.abs() >= 1 ? const Color(0xFFFCD34D) : null),
+          ),
           kpi('هامش الربح (${k.periodLabel})', '${k.margin30.toStringAsFixed(1)}%',
               sub: '${diff >= 0 ? '▲' : '▼'} ${diff.abs().toStringAsFixed(1)} عن الفترة السابقة',
               subColor: diff >= 0 ? const Color(0xFF86EFAC) : const Color(0xFFFCA5A5)),
