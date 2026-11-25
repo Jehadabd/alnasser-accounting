@@ -1,6 +1,7 @@
 // lib/screens/firebase_sync_settings_screen.dart
 // شاشة إعدادات المزامنة عبر Firebase مع حماية صارمة
 
+import '../services/admin_unlocks.dart'; // 🔓
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
@@ -224,14 +225,18 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
         maxWidth: 900,
         loading: _isLoading,
         actions: [
-          IconButton(
-            tooltip: 'إعدادات ربط Firebase',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()),
+          if (AdminUnlocks.visible(AdminUnlocks.fb)) // 🔓
+            IconButton(
+              tooltip: 'إعدادات ربط Firebase',
+              onPressed: () async {
+                if (!await AdminUnlocks.confirm(context, AdminUnlocks.fb) || !context.mounted) return;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()),
+                );
+              },
+              icon: const Icon(Icons.settings_rounded),
             ),
-            icon: const Icon(Icons.settings_rounded),
-          ),
         ],
         children: _isLoading
             ? null
@@ -702,10 +707,13 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
             subtitle: 'المشروع المخصّص وسرّ المجموعة',
             isLoading: false,
             color: const Color(0xFF0F766E),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()),
-            ),
+            onPressed: () async {
+              if (!await AdminUnlocks.confirm(context, AdminUnlocks.fb) || !context.mounted) return; // 🔓
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()),
+              );
+            },
           ),
         ]),
       ]),
@@ -1152,10 +1160,13 @@ class _FirebaseSyncSettingsScreenState extends State<FirebaseSyncSettingsScreen>
         const SizedBox(height: 8),
         OutlinedButton.icon(
           style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), foregroundColor: const Color(0xFF0369A1)),
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
-          ),
+          onPressed: () async {
+            if (!await AdminUnlocks.confirm(context, AdminUnlocks.web) || !context.mounted) return; // 🔓
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
+            );
+          },
           icon: const Icon(Icons.language_rounded, size: 20),
           label: const Text('دليل واستضافة نسخة المتصفح (Web App)'),
         ),

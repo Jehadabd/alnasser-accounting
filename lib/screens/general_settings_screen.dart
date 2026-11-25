@@ -1,3 +1,4 @@
+import '../services/admin_unlocks.dart'; // 🔓 أقسام يفتحها صاحب البرنامج
 import '../widgets/popup_screens.dart'; // 🪟
 import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
 import '../widgets/scan_settings_tile.dart'; // 🔫
@@ -183,6 +184,10 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     GeneralSettingsScreen._openCount++;
     GeneralSettingsScreen.requestedSection.addListener(_onSectionRequest);
     _loadSettings();
+    // 🔓 أقسام يفتحها صاحب البرنامج: تظهر/تختفي حسب آخر قرار له على السيرفر
+    AdminUnlocks.refreshQuietly().then((changed) {
+      if (changed && mounted) setState(() {});
+    });
   }
 
   /// الإعدادات مفتوحة وطُلب قسم من اللوحة الجانبية ⇒ أعد البناء ليُطبَّق
@@ -935,6 +940,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   Future<void> _openTargetSettings(String target) async {
     final screen = _targetScreen(target);
     if (screen == null) return;
+    if (!await AdminUnlocks.confirm(context, AdminUnlocks.upload) || !mounted) return; // 🔓
     // لا نعيد تحميل إعدادات هذه الشاشة بعد الرجوع: قد يكون فيها تعديل لم يُحفظ بعد
     // (مثل تفعيل الوجهة نفسها). الحفظ هنا يبدأ من المحفوظ فلا يمسح ما حُفظ هناك.
     await Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
@@ -2272,8 +2278,8 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'استعادة القاعدة، تيليغرام، ديسكورد، دروب بوكس، المزامنة',
           keywords: 'نسخة عند الخروج إغلاق البرنامج حفظ تلقائي رفع البيانات وجهات ترتيب جوجل درايف google drive مسار مكان مجلد ملف قاعدة البيانات نسخ احتياطي نسخة استعادة قاعدة تيليجرام تلغرام telegram discord dropbox فايربيس firebase مزامنة ويب متصفح',
           [
-          // ☁️ زر «رفع البيانات»: إلى أين يرفع وبأي ترتيب
-          _uploadTargetsCard(),
+          // ☁️ زر «رفع البيانات»: إلى أين يرفع وبأي ترتيب — 🔓 بإذن صاحب البرنامج (المالك دائماً)
+          if (AdminUnlocks.visible(AdminUnlocks.upload)) _uploadTargetsCard(),
           // 📂 المسار الوحيد لقاعدة البيانات + فتح المجلد
           const DatabaseLocationCard(),
           // 💾 نسخة احتياطية عند الخروج: اسألني / احفظ دائماً / لا تحفظ + مجلد الحفظ
@@ -2301,51 +2307,66 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
             ),
           ),
           // 🔥 إعدادات مزامنة Firebase (تظهر فقط إذا كانت المزامنة مشمولة في الترخيص)
-          if (_isSyncAllowed)
+          //    🔓 وكل زر منها بإذن صاحب البرنامج (المالك دائماً) — انظر AdminUnlocks
+          if (_isSyncAllowed &&
+              (AdminUnlocks.visible(AdminUnlocks.sync) ||
+                  AdminUnlocks.visible(AdminUnlocks.fb) ||
+                  AdminUnlocks.visible(AdminUnlocks.web)))
             _buildSettingsCard(
               icon: Icons.sync,
               iconColor: Colors.orange,
               title: 'مزامنة Firebase',
               child: Column(
                 children: [
-                  _buildActionTile(
-                    icon: Icons.cloud_sync,
-                    iconColor: Colors.orange,
-                    title: 'إعدادات المزامنة بين الأجهزة',
-                    subtitle: 'إدارة أجهزة نقاط البيع، تتبع حالة المزامنة، ومطابقة البيانات',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const FirebaseSyncSettingsScreen()),
-                      ).then((_) => _loadSettings());
-                    },
-                  ),
-                  const Divider(height: 1),
-                  _buildActionTile(
-                    icon: Icons.admin_panel_settings,
-                    iconColor: Colors.deepOrange,
-                    title: 'إعداد ربط Firebase مخصص',
-                    subtitle: 'تغيير مشروع الفايربيس وربط قاعدة بيانات جديدة (للمسؤولين فقط)',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const FirebaseCustomSetupScreen()),
-                      ).then((_) => _loadSettings());
-                    },
-                  ),
-                  const Divider(height: 1),
-                  _buildActionTile(
-                    icon: Icons.language_rounded,
-                    iconColor: const Color(0xFF0288D1),
-                    title: 'استضافة ورفع نسخة المتصفح (Web App)',
-                    subtitle: 'معالج مصور لرفع متجرك مجاناً وافتتاحه من أي جوال أو جهاز عبر رابط خاص بك',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
-                      );
-                    },
-                  ),
+                  for (final (i, tile) in [
+                    if (AdminUnlocks.visible(AdminUnlocks.sync))
+                      _buildActionTile(
+                        icon: Icons.cloud_sync,
+                        iconColor: Colors.orange,
+                        title: 'إعدادات المزامنة بين الأجهزة',
+                        subtitle: 'إدارة أجهزة نقاط البيع، تتبع حالة المزامنة، ومطابقة البيانات',
+                        onTap: () async {
+                          if (!await AdminUnlocks.confirm(context, AdminUnlocks.sync) || !mounted) return;
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (context) => const FirebaseSyncSettingsScreen()),
+                          );
+                          _loadSettings();
+                        },
+                      ),
+                    if (AdminUnlocks.visible(AdminUnlocks.fb))
+                      _buildActionTile(
+                        icon: Icons.admin_panel_settings,
+                        iconColor: Colors.deepOrange,
+                        title: 'إعداد ربط Firebase مخصص',
+                        subtitle: 'تغيير مشروع الفايربيس وربط قاعدة بيانات جديدة (للمسؤولين فقط)',
+                        onTap: () async {
+                          if (!await AdminUnlocks.confirm(context, AdminUnlocks.fb) || !mounted) return;
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (context) => const FirebaseCustomSetupScreen()),
+                          );
+                          _loadSettings();
+                        },
+                      ),
+                    if (AdminUnlocks.visible(AdminUnlocks.web))
+                      _buildActionTile(
+                        icon: Icons.language_rounded,
+                        iconColor: const Color(0xFF0288D1),
+                        title: 'استضافة ورفع نسخة المتصفح (Web App)',
+                        subtitle: 'معالج مصور لرفع متجرك مجاناً وافتتاحه من أي جوال أو جهاز عبر رابط خاص بك',
+                        onTap: () async {
+                          if (!await AdminUnlocks.confirm(context, AdminUnlocks.web) || !mounted) return;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (context) => const WebHostingGuideScreen()),
+                          );
+                        },
+                      ),
+                  ].indexed) ...[
+                    if (i > 0) const Divider(height: 1),
+                    tile,
+                  ],
                 ],
               ),
             ),
@@ -2445,7 +2466,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
           'النظام والأدوات',
           Icons.build_circle_outlined,
           'تشخيص الأخطاء، نماذج الذكاء الاصطناعي، الطباعة، سجل الحركات، البحث الذكي، التدقيق المالي',
-          keywords: 'دمج عملاء مكرر تكرار ذكاء اصطناعي نماذج مفتاح api gemini groq openrouter تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
+          keywords: 'دمج عملاء مكرر تكرار ذكاء اصطناعي نماذج تشخيص أخطاء خطأ عطل مشكلة حل تقرير استيراد اكسل excel csv سجل حركات بحث ذكي ماركات تدقيق فحص ملخص مالي كشوفات طباعة مخزون باركود ميزان',
           [
           // 🩺 تشخيص الأخطاء — أول ما في الشاشة
           _buildSettingsCard(
@@ -2460,21 +2481,22 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
               },
             ),
           ),
-          // 🤖 نماذج الذكاء الاصطناعي (فاتورة الشراء بالذكاء الاصطناعي) — المالك واشتراك المزامنة
-          if (SyncPerks.enabled)
+          // 🤖 نماذج الذكاء الاصطناعي (فاتورة الشراء بالذكاء الاصطناعي) — المالك واشتراك المزامنة،
+          //    🔓 ولغير المالك بإذن صاحب البرنامج فقط (لا يظهر أصلاً بدونه)
+          if (SyncPerks.enabled && AdminUnlocks.visible(AdminUnlocks.ai))
             _buildSettingsCard(
               icon: Icons.auto_awesome_rounded,
               iconColor: const Color(0xFF4F46E5),
               title: 'نماذج الذكاء الاصطناعي',
               child: _buildActionTile(
-                icon: Icons.key_rounded,
+                icon: Icons.tune_rounded,
                 iconColor: const Color(0xFF4F46E5),
-                title: 'مفاتيح API وترتيب النماذج',
-                subtitle: 'Gemini و Groq و OpenRouter المجانية، الاختبار والترتيب، والتعاون بين نموذجين لقراءة فواتير الموردين',
-                onTap: () {
-                  if (requirePermission(context, AppPermissions.manageUsers)) {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const AiModelsSettingsScreen()));
-                  }
+                title: 'إعدادات نماذج الذكاء الاصطناعي',
+                subtitle: 'اختيار النماذج وترتيبها واختبارها، والتعاون بين نموذجين لقراءة فواتير الموردين',
+                onTap: () async {
+                  if (!requirePermission(context, AppPermissions.manageUsers)) return;
+                  if (!await AdminUnlocks.confirm(context, AdminUnlocks.ai) || !mounted) return;
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const AiModelsSettingsScreen()));
                 },
               ),
             ),

@@ -9,6 +9,7 @@
 // 4) «متابعة» ⇒ تُحفظ تصحيحاتك (ذاكرة الأسماء) وتُفتح فاتورة الشراء العادية معبأة
 //    والحفظ هناك يمرّ بكل حمايات الشاشة الأصلية (المخزون، الدين، الفترات المثبّتة).
 
+import '../../services/admin_unlocks.dart'; // 🔓
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -418,6 +419,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   }
 
   Future<void> _openModelsSettings() async {
+    if (!await AdminUnlocks.confirm(context, AdminUnlocks.ai) || !mounted) return; // 🔓
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const AiModelsSettingsScreen()));
     final hasKeys = await AiModelsStore.hasAnyKey();
     if (mounted) setState(() => _hasKeys = hasKeys);

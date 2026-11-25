@@ -38,6 +38,13 @@ class LicensePayload {
     final n = _int(raw['seats']);
     return n < 1 ? 1 : (n > 8 ? 8 : n);
   }
+  /// 🔓 أقسام الإعدادات التي فتحها الأدمن لهذا الحساب (ai، upload، sync، fb، web).
+  /// موقَّعة من السيرفر فلا يفتحها تعديل محلي. انظر AdminUnlocks.
+  List<String> get unlocks {
+    final u = raw['unl'];
+    return u is List ? [for (final x in u) '$x'] : const [];
+  }
+
   String get supportPhone => '${raw['ph'] ?? LicenseConfig.supportPhone}';
   Map<String, String> get fingerprint {
     final f = raw['fp'];

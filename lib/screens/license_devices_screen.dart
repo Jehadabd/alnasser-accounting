@@ -6,6 +6,7 @@
 //     10 دقائق يُكتب في الجهاز الجديد)، و«فك الربط» لتحرير مكان جهاز.
 //   • عدد الأجهزة يحدده صاحب البرنامج؛ زيادته بالتواصل معه.
 
+import '../services/admin_unlocks.dart'; // 🔓
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -347,6 +348,7 @@ class _LicenseDevicesScreenState extends State<LicenseDevicesScreen> {
     );
     if (choice == 'anyway') return true;
     if (choice != 'setup' || !mounted) return false;
+    if (!await AdminUnlocks.confirm(context, AdminUnlocks.fb) || !mounted) return false; // 🔓
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const FirebaseCustomSetupScreen()));
     try {
       ready = await FirebaseCustomConfig.isCustomConfigured();
