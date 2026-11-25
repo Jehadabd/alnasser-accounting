@@ -18,6 +18,7 @@ import '../services/auth_service.dart';
 import '../services/reports_service.dart';
 import '../widgets/currency_impact_card.dart';
 import '../widgets/report_kit.dart';
+import '../widgets/range_picker_dialog.dart';
 import 'period_extras.dart';
 import 'period_vouchers_card.dart'; // 🧾 السندات المسحوبة في الفترة
 import 'period_returns_card.dart'; // ↩️ مرتجعات الفواتير في الفترة
@@ -214,15 +215,13 @@ class _CustomRangeReportScreenState extends State<CustomRangeReportScreen> {
   bool get _canNext => _naturalEnd.isBefore(_today);
 
   Future<void> _pick() async {
-    final r = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2015),
-      lastDate: _today,
-      initialDateRange: DateTimeRange(start: _from, end: _to),
-      helpText: 'اختر الفترة',
-      saveText: 'عرض التقرير',
-      fieldStartLabelText: 'من',
-      fieldEndLabelText: 'إلى',
+    // 📅 نافذة الفترة الخاصة بالتقارير (تقويم + اختيارات سريعة + كتابة التاريخ)
+    final r = await showReportRangePicker(
+      context,
+      initial: DateTimeRange(start: _from, end: _to),
+      first: DateTime(2015),
+      last: _today,
+      presets: _presets,
     );
     if (r != null) _set(r.start, r.end);
   }
