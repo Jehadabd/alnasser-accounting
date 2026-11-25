@@ -1,3 +1,4 @@
+import 'new_invoice_menu.dart'; // 🪟
 import 'package:flutter/material.dart';
 import '../models/app_settings.dart';
 import '../models/app_user.dart';
@@ -132,6 +133,12 @@ class AppSideNav extends StatelessWidget {
                             Navigator.of(context).pushReplacementNamed(item.route);
                           }
                         },
+                        // 🪟 كليك يمين على «إنشاء فاتورة»: فاتورة جديدة في نافذة منفصلة
+                        onSecondaryTapDown: item.route == '/create_invoice'
+                            ? (d) => NewInvoiceMenu.show(context, d.globalPosition,
+                                nav: Navigator.of(context),
+                                openNormal: () => Navigator.of(context).pushNamed(item.route))
+                            : null,
                         borderRadius: BorderRadius.circular(12),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),

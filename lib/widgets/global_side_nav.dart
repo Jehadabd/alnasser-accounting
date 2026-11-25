@@ -24,6 +24,7 @@ import '../services/auth_service.dart';
 import '../services/license_service.dart';
 import '../services/settings_manager.dart';
 import 'home_destinations.dart';
+import 'new_invoice_menu.dart'; // 🪟 كليك يمين: فاتورة في نافذة منفصلة
 import 'popup_screens.dart'; // 🪟
 
 /// يتتبع مكدس الشاشات: أي شاشة في الأعلى، وآخر قسم مسمّى (للتظليل).
@@ -189,6 +190,13 @@ class _GlobalSideNavState extends State<GlobalSideNav> {
     }
   }
 
+  void _invoiceMenu(_NavEntry e, Offset pos) {
+    final nav = _nav;
+    final ctx = _navCtx;
+    if (nav == null || ctx == null) return;
+    NewInvoiceMenu.show(ctx, pos, nav: nav, openNormal: () => _goSection(e));
+  }
+
   void _goHome() {
     final nav = _nav;
     if (nav == null) return;
@@ -321,6 +329,8 @@ class _GlobalSideNavState extends State<GlobalSideNav> {
       padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
       child: InkWell(
         onTap: onTap,
+        // 🪟 كليك يمين على «إنشاء فاتورة»: فاتورة جديدة في نافذة منفصلة
+        onSecondaryTapDown: d.route == '/create_invoice' ? (t) => _invoiceMenu(e, t.globalPosition) : null,
         borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),

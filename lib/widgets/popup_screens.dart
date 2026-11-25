@@ -19,6 +19,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/save_lock.dart';
 
+/// 🪟 يُمرَّر كـ arguments لفتح الشاشة في نافذة منفصلة جديدة دائماً — حتى لو كانت نافذتها
+/// مفتوحة (لا تُجلب للأمام)، وحتى لو لم تُفعَّل «نافذة» لهذه الشاشة في الإعدادات.
+/// [data] للشاشة نفسها (مثلاً مسودة الفاتورة)، و[label] يُلحق بعنوان النافذة.
+class PopupNewWindow {
+  const PopupNewWindow({this.data, this.label});
+  final Object? data;
+  final String? label;
+}
+
 class PopupScreens {
   PopupScreens._();
 
@@ -165,7 +174,8 @@ class PopupScreens {
 
   /// مسار الشاشة: نافذة إن فعّلها المستخدم، وإلا شاشة كاملة كالمعتاد
   static Route<dynamic> route(RouteSettings settings, WidgetBuilder builder) {
-    if (!isPopup(settings.name)) return MaterialPageRoute(settings: settings, builder: builder);
+    final forced = settings.arguments is PopupNewWindow;
+    if (!forced && !isPopup(settings.name)) return MaterialPageRoute(settings: settings, builder: builder);
     final host = _host;
     if (host == null) {
       // أول نافذة: تُنشأ الطبقة ومعها النافذة
@@ -203,7 +213,26 @@ class PopupScreens {
   static void _bringOrAdd(RouteSettings settings, WidgetBuilder builder) {
     restore();
     final list = [...windows.value];
-    final i = list.indexWhere((w) => w.name == settings.name);
+    if (settings.arguments is PopupNewWindow) {
+      // نافذة منفصلة جديدة: تُزاح قليلاً عن نافذة الشاشة نفسها فلا تغطيها تماماً
+      final w = PopupWindow._(++_ids, settings, builder);
+      Rect? base;
+      for (final x in list.reversed) {
+        if (x.name == settings.name && x.rect != null) {
+          base = x.rect;
+          break;
+        }
+      }
+      if (base != null) {
+        final dx = (base.left + 0.03 + base.width <= 1) ? 0.03 : -base.left;
+        final dy = (base.top + 0.03 + base.height <= 1) ? 0.03 : -base.top;
+        w.rect = base.translate(dx, dy);
+      }
+      list.add(w);
+      windows.value = list;
+      return;
+    }
+    final i = list.indexWhere((w) => w.name == settings.name && w.settings.arguments is! PopupNewWindow);
     if (i >= 0) {
       final w = list.removeAt(i);
       list.add(w);
@@ -286,6 +315,13 @@ class PopupWindow {
   Route<dynamic>? _screenRoute;
 
   String get name => settings.name ?? '';
+
+  /// عنوان شريط النافذة: اسم الشاشة، ومعه تمييز النافذة المنفصلة («فاتورة 2»).
+  String get title {
+    final base = PopupScreens.screens[name] ?? '';
+    final a = settings.arguments;
+    return a is PopupNewWindow && (a.label ?? '').isNotEmpty ? '$base — ${a.label}' : base;
+  }
 
   void _focusLater() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -736,7 +772,7 @@ class _PopupFrameState extends State<_PopupFrame> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  PopupScreens.screens[w.name] ?? '',
+                  w.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w700),

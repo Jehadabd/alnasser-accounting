@@ -96,22 +96,25 @@ class CreateInvoiceScreen extends StatefulWidget {
     this.relatedDebtTransaction,
     this.settlementForInvoice,
     this.draftSlot = '',
-    this.onTabDone,
-    this.onTabSummary,
   });
 
-  /// 🗂️ تبويب الفواتير: لكل تبويب مسودة محفوظة خاصة به ('' = الرئيسية كما كانت).
+  /// 🪟 مسودة هذه الفاتورة المحفوظة: '' = الرئيسية كما كانت، و't2'…'t8' لنوافذ الفواتير المنفصلة.
   final String draftSlot;
 
-  /// يُستدعى بعد حفظ فاتورة جديدة داخل تبويب (بدل الرجوع للرئيسية): يُغلق التبويب.
-  final VoidCallback? onTabDone;
-
-  /// اسم العميل وعدد الأسطر — لعنوان التبويب.
-  final void Function(String customer, int lines)? onTabSummary;
-
-  /// مفتاح المسودة المحفوظة لتبويب.
+  /// مفتاح المسودة المحفوظة لتبويب أو نافذة منفصلة.
   static String draftKeyFor(String slot) =>
       SeatService.key(slot.isEmpty ? 'temp_invoice_data' : 'temp_invoice_data_$slot');
+
+  /// 🪟 المسودّات المستعملة الآن (فاتورة مفتوحة لكل منها) — لا تتقاسم نافذتان مسودة.
+  static final Set<String> liveSlots = {};
+
+  /// يحجز مسودة لنافذة فاتورة منفصلة جديدة: 't2'…'t8'، أو null إن بلغ الحد.
+  static String? claimSlot() {
+    for (var n = 2; n <= 8; n++) {
+      if (liveSlots.add('t$n')) return 't$n';
+    }
+    return null;
+  }
 
   @override
   State<CreateInvoiceScreen> createState() => _CreateInvoiceScreenState();
@@ -164,12 +167,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     }
     final lines = StockReservations.delta(StockReservations.baseByProduct(invoiceItems), _savedBase ?? const {});
     final name = customerNameController.text.trim();
-    final count = invoiceItems.where((i) => i.productName.trim().isNotEmpty).length;
-    if (widget.onTabSummary != null && (name != _tabName || count != _tabLines)) {
-      _tabName = name;
-      _tabLines = count;
-      widget.onTabSummary!(name, count);
-    }
     _resvSelf = true;
     try {
       book.set(_draftId, lines, label: name.isEmpty ? 'فاتورة مفتوحة' : 'فاتورة $name');
@@ -208,8 +205,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   }
 
   int? _viewFor;
-  String? _tabName;
-  int? _tabLines;
 
   /// بعد الحفظ: صار المحفوظ هو الأسطر الحالية ⇒ يُعاد تحميله فيزول الحجز
   @override
@@ -436,7 +431,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         !HardwareKeyboard.instance.isShiftPressed) {
       // شاشة أخرى فوق الفاتورة (مصمم الطباعة يستعمل Ctrl+D) أو ليس مالكاً ⇒ لا نتدخل
       if (!(ModalRoute.of(context)?.isCurrent ?? false) || !OwnerAccess.enabled) return false;
-      if (!TickerMode.valuesOf(context).enabled) return false; // 🗂️ تبويب مخفي
       if (!_ownerCostPeek) {
         setState(() => _ownerCostPeek = true);
         CostStamp.all().then((m) {
@@ -1897,6 +1891,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   void initState() {
     super.initState();
     StockReservations.instance.addListener(_onReservationsChanged); // 📦
+    if (widget.existingInvoice == null) CreateInvoiceScreen.liveSlots.add(widget.draftSlot); // 🪟
     StockReservations.committed.addListener(_onStockCommitted);
     _stockPoll = Timer.periodic(const Duration(seconds: 15), (_) => _refreshIfStockChanged());
     HardwareKeyboard.instance.addHandler(_onOwnerCostPeekKey);
@@ -2388,6 +2383,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   void dispose() {
     // 📦 أُغلقت الفاتورة: يزول حجزها فوراً
     StockReservations.instance.removeListener(_onReservationsChanged);
+    if (widget.existingInvoice == null) CreateInvoiceScreen.liveSlots.remove(widget.draftSlot); // 🪟
     StockReservations.committed.removeListener(_onStockCommitted);
     _stockPoll?.cancel();
     StockReservations.instance.release(_draftId);
@@ -4999,8 +4995,6 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        // 🗂️ تبويب مخفي: لا يتصرف (الظاهر وحده يحفظ ويُغلق؛ المخفية تحفظ مسوداتها عند الإغلاق)
-        if (widget.onTabDone != null && !TickerMode.valuesOf(context).enabled) return;
         final navigator = Navigator.of(context);
         if (await _onWillPop() && mounted) navigator.pop(result);
       },

@@ -1,6 +1,6 @@
 // main.dart
 import 'services/product_codes.dart' show ItemCodeKeyboard; // ⌨️
-import 'screens/invoice_tabs_screen.dart'; // 🗂️ تبويبات إنشاء فاتورة
+import 'screens/create_invoice_screen.dart';
 import 'widgets/smooth_page_transitions.dart'; // 🎬 انتقال الصفحات
 import 'widgets/popup_screens.dart'; // 🪟
 import 'services/save_lock.dart'; // 🔒
@@ -644,8 +644,13 @@ class MyApp extends StatelessWidget {
         onGenerateRoute: (settings) {
           final builders = <String, WidgetBuilder>{
             '/pos': (context) => const _LicenseGuard(child: POSScreen()),
-            // 🗂️ فاتورة جديدة = تبويبات: أكثر من فاتورة مفتوحة معاً (انظر invoice_tabs_screen.dart)
-            '/create_invoice': (context) => const _LicenseGuard(child: InvoiceTabsScreen()),
+            // 🪟 فاتورة في نافذة منفصلة (كليك يمين على «إنشاء فاتورة»): لها مسودتها الخاصة
+            '/create_invoice': (context) => _LicenseGuard(
+                child: CreateInvoiceScreen(
+                    draftSlot: (settings.arguments is PopupNewWindow
+                            ? (settings.arguments as PopupNewWindow).data as String?
+                            : null) ??
+                        '')),
             '/debt_register': (context) => const _LicenseGuard(child: HomeScreen()),
             '/edit_invoices': (context) => const _LicenseGuard(child: EditInvoicesScreen()),
             // 🗂️ «إدخال بضاعة» = بطاقة مادة الحديثة؛ الواجهة السابقة تبقى متاحة

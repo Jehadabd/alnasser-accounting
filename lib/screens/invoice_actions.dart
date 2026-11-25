@@ -615,12 +615,7 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         }
 
         if (inputData.isNewInvoice && mounted) {
-          // 🗂️ داخل تبويب: يُغلق التبويب وحده (تبقى الفواتير المفتوحة الأخرى)
-          if (widget.onTabDone != null) {
-            widget.onTabDone!();
-          } else {
-            Navigator.of(context).popUntil((route) => route.isFirst);
-          }
+          Navigator.of(context).popUntil((route) => route.isFirst);
         }
       }
 

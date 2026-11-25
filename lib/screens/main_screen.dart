@@ -1,4 +1,5 @@
 // screens/main_screen.dart
+import '../widgets/new_invoice_menu.dart'; // 🪟 فاتورة في نافذة منفصلة
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -882,7 +883,17 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
             height: big ? 108 : (vertical ? 132 : 94),
             child: _HomeFadeIn(
               index: startIndex + i,
-              child: _HomeCard(dest: items[i].dest, onTap: items[i].onTap, big: big, vertical: vertical),
+              child: _HomeCard(
+                dest: items[i].dest,
+                onTap: items[i].onTap,
+                big: big,
+                vertical: vertical,
+                // 🪟 كليك يمين / ضغطة مطوّلة على «إنشاء فاتورة»: فاتورة جديدة في نافذة منفصلة
+                onMenuAt: identical(items[i].dest, HomeDests.createInvoice)
+                    ? (pos) => NewInvoiceMenu.show(context, pos,
+                        nav: Navigator.of(context), openNormal: items[i].onTap)
+                    : null,
+              ),
             ),
           ),
       ]);
@@ -1300,9 +1311,12 @@ class _KeyCap extends StatelessWidget {
 
 /// زر قسم في الرئيسية: أيقونة ملوّنة + اسم + شرح قصير + اختصار لوحة المفاتيح.
 class _HomeCard extends StatefulWidget {
-  const _HomeCard({required this.dest, required this.onTap, required this.big, this.vertical = false});
+  const _HomeCard({required this.dest, required this.onTap, required this.big, this.vertical = false, this.onMenuAt});
   final HomeDest dest;
   final VoidCallback onTap;
+
+  /// قائمة الكليك يمين (أو الضغطة المطوّلة) عند موضع على الشاشة.
+  final void Function(Offset globalPos)? onMenuAt;
   final bool big;
 
   /// أيقونة فوق الاسم (للبطاقات الضيقة في صف الأقسام).
@@ -1349,6 +1363,14 @@ class _HomeCardState extends State<_HomeCard> {
             clipBehavior: Clip.antiAlias,
             child: InkWell(
               onTap: widget.onTap,
+              onSecondaryTapDown: widget.onMenuAt == null ? null : (d) => widget.onMenuAt!(d.globalPosition),
+              onLongPress: widget.onMenuAt == null
+                  ? null
+                  : () {
+                      final box = context.findRenderObject() as RenderBox?;
+                      if (box == null) return;
+                      widget.onMenuAt!(box.localToGlobal(box.size.center(Offset.zero)));
+                    },
               child: Stack(children: [
                 // لمسة لون خفيفة في الزاوية
                 PositionedDirectional(
