@@ -1,0 +1,94 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:alnaser/services/smart_price_engine.dart';
+
+PriceSale s(double p, {int? c, double? cost, required DateTime d}) =>
+    PriceSale(price: p, cost: cost, customerId: c, date: d);
+
+void main() {
+  final now = DateTime(2026, 11, 25);
+  DateTime ago(int days) => now.subtract(Duration(days: days));
+
+  group('الوحدات والتقريب', () {
+    test('المرادفات فقط تُدمج: القطعة لا تختلط بالكرتون', () {
+      expect(SmartPriceMath.normalizeUnit('piece'), 'قطعة');
+      expect(SmartPriceMath.normalizeUnit('roll'), 'لفة');
+      expect(SmartPriceMath.unitAliases('قطعة'), containsAll(['قطعة', 'piece']));
+      expect(SmartPriceMath.unitAliases('كرتون'), ['كرتون']);
+    });
+    test('أقرب 250 من 2,000 فأكثر، و50 تحته', () {
+      expect(SmartPriceMath.roundPrice(90660), 90750);
+      expect(SmartPriceMath.roundPrice(1230), 1250);
+      expect(SmartPriceMath.roundPrice(260), 250);
+      expect(SmartPriceMath.roundPrice(10), 50);
+      expect(SmartPriceMath.roundUp(105), 150);
+    });
+  });
+
+  group('معامل الزبون', () {
+    test('بلا تاريخ = 1', () {
+      expect(SmartPriceMath.customerFactor([]).$1, 1.0);
+    });
+    test('مسحوب نحو 1 بتاريخ قصير، ويقترب من وسيطه بتاريخ طويل', () {
+      final short = SmartPriceMath.customerFactor([0.9, 0.9]).$1; // 1 − 0.1×2/7
+      expect(short, closeTo(0.9714, 0.001));
+      final long = SmartPriceMath.customerFactor(List.filled(30, 0.9)).$1; // 1 − 0.1×30/35
+      expect(long, closeTo(0.9143, 0.001));
+    });
+    test('نسب الخلط بين الوحدات (خارج 0.3..3) تُهمل', () {
+      final f = SmartPriceMath.customerFactor([0.01, 50, 1.0, 1.0]);
+      expect(f.$2, 2);
+      expect(f.$1, 1.0);
+    });
+  });
+
+  group('القرار', () {
+    final market = [
+      s(90000, c: 1, cost: 85200, d: ago(1)),
+      s(88000, c: 2, cost: 85200, d: ago(2)),
+      s(92000, c: 3, cost: 85200, d: ago(3)),
+      s(90500, c: 4, cost: 85200, d: ago(5)),
+      s(89000, c: 5, cost: 85200, d: ago(6)),
+    ];
+
+    test('آخر سعر للزبون خلال 120 يوماً يربح', () {
+      final d = SmartPriceMath.decide(history: market, now: now, customerId: 3, currentCost: 85200)!;
+      expect(d.path, 'own');
+      expect(d.price, 92000);
+    });
+
+    test('تغيّرت الكلفة: يبقى مبلغ ربح الزبون (85,200 ← 87,360)', () {
+      final d = SmartPriceMath.decide(history: market, now: now, customerId: 3, currentCost: 87360)!;
+      expect(d.price, 94250); // 92,000 + 2,160 = 94,160 ⇒ أقرب 250
+    });
+
+    test('شراؤه أقدم من 120 يوماً ⇒ سعر السوق', () {
+      final h = [...market, s(70000, c: 9, cost: 60000, d: ago(200))];
+      final d = SmartPriceMath.decide(history: h, now: now, customerId: 9, currentCost: 85200)!;
+      expect(d.path, 'market');
+      expect(d.price, 89500); // وسيط 70,000 88,000 89,000 90,000 90,500 92,000 = 89,500
+    });
+
+    test('زبون كبير (معامل 0.97) ينزل عن سعر السوق', () {
+      final d = SmartPriceMath.decide(history: market, now: now, customerId: 99, currentCost: 85200, factor: 0.97)!;
+      expect(d.price, 87250); // 90,000 × 0.97 = 87,300 ⇒ 87,250
+    });
+
+    test('لا يقترح أقل من الكلفة + 2% — يُرفع إلى الكلفة + 5%', () {
+      final d = SmartPriceMath.decide(history: market, now: now, customerId: 99, currentCost: 89000, factor: 0.9)!;
+      expect(d.price, 93500); // 89,000 × 1.05 = 93,450 ⇒ للأعلى 93,500
+      expect(d.price, greaterThan(89000));
+    });
+
+    test('مادة بلا مبيعات: الكلفة × هامش نطاقها', () {
+      final d = SmartPriceMath.decide(history: const [], now: now, currentCost: 1000)!;
+      expect(d.path, 'cold');
+      expect(d.price, 1400); // 1,000 × 1.39 = 1,390 ⇒ 1,400
+      final big = SmartPriceMath.decide(history: const [], now: now, currentCost: 1000, factor: 0.9)!;
+      expect(big.price, 1250); // هامش الكبار 25%
+    });
+
+    test('بلا تاريخ ولا كلفة ⇒ لا اقتراح (الشاشة تستعمل سعر المادة)', () {
+      expect(SmartPriceMath.decide(history: const [], now: now), isNull);
+    });
+  });
+}

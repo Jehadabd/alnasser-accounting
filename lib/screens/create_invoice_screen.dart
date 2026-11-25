@@ -4898,7 +4898,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
           final smartResult = await SmartPricingService().getSmartPriceEnhanced(
             productId: product.id!,
             customerId: custId,
-            saleType: _selectedListType,
+            // سعر الوحدة الأساسية: يُحوَّل بعده لوحدة السطر بالمضاعف أدناه
+            // (كان يُمرَّر اسم قائمة السعر «مفرد/جملة» مكان وحدة البيع)
+            saleType: product.translatedUnit,
             // 🧠 بقية مواد الفاتورة: يقترح مستوى السعر نفسه (جملة مع جملة)
             invoiceItemsContext: [
               for (final it in invoiceItems)

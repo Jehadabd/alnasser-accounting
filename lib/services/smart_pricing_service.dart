@@ -2,117 +2,44 @@
 
 import '../models/smart_pricing_models.dart';
 import 'database_service.dart';
+import 'smart_price_engine.dart';
 import 'settings_manager.dart';
 import 'smart_search/smart_search_db.dart';
 
 class SmartPricingService {
   static const int recentSalesLimit = 20;
-  static const int pointsLastPrice = 50;
-  static const int pointsInLast5 = 20; // 20 per appearance, max 100
-  static const int pointsFrequencyBonus = 15;
-  static const int pointsCustomerHistory = 75;
-  static const int pointsDominantPrice = 30;
-  static const int pointsTrendMatch = 80;
 
   final DatabaseService _dbService = DatabaseService();
 
   /// 🎯 الحصول على السعر الذكي للمنتج
+  ///
+  /// • 0 «مطفأ»: لا اقتراح — السعر من مستوى السعر المختار في الفاتورة.
+  /// • 1 / 3 / 21: استراتيجيات الإعدادات (آخر سعر، متوسط آخر 3، الأكثر تكراراً) كما هي.
+  /// • غير ذلك (99 الافتراضي): المحرك الذكي في smart_price_engine.dart — وحدة البيع
+  ///   جزء من المفتاح، آخر سعر للزبون، سعر السوق × معامل الزبون، هامش نطاق الكلفة.
+  ///   [invoiceItemsContext] لم يعد يُستعمل (تحليل الفواتير: مستوى بقية المواد لا يحدد السعر).
   Future<SmartPricingResult?> getSmartPriceEnhanced({
     required int productId,
     int? customerId,
     String? saleType,
     List<Map<String, dynamic>>? invoiceItemsContext,
   }) async {
-    // 🎛️ «مطفأ» في الإعدادات: لا اقتراح إطلاقاً — السعر من مستوى السعر المختار
-    // في الفاتورة (مفرد، جملة…) كما أُدخل في بطاقة المادة. (كان هذا الخيار يُحفظ
-    // ويتجاهله هذا المحرك، فيبقى الاقتراح يعمل عند اختيار المادة وتغيير وحدتها.)
-    try {
-      if ((await SettingsManager.getAppSettings()).pricingMode == 0) return null;
-    } catch (_) {}
-    final db = await _dbService.database;
-    String? expectedLevel;
-    double? productMedianPrice;
-
-    // جلب متوسط سعر المنتج الحالي
-    try {
-      final statsMap = await db.query('product_price_stats', where: 'product_id = ?', whereArgs: [productId]);
-      if (statsMap.isNotEmpty) {
-        productMedianPrice = (statsMap.first['median_price'] as num?)?.toDouble();
-      }
-    } catch (e) {
-      // Ignore if view doesn't exist yet
-    }
-
-    // تصنيف العميل التلقائي
-    try {
-      final appSettings = await SettingsManager.getAppSettings();
-      final double wholesaleLimit = appSettings.wholesaleCustomerLimit;
-      if (customerId != null && customerId > 0 && wholesaleLimit > 0) {
-        final totalPurchasesResult = await db.rawQuery('''
-          SELECT SUM(total_amount) as total
-          FROM invoices
-          WHERE customer_id = ? AND status = 'محفوظة'
-        ''', [customerId]);
-        
-        final totalPurchases = (totalPurchasesResult.first['total'] as num?)?.toDouble() ?? 0.0;
-        if (totalPurchases >= wholesaleLimit) {
-          expectedLevel = 'wholesale';
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-
-    // 📋 سياق الفاتورة (من البحث الذكي): بقية مواد الفاتورة بسعر جملة؟ مفرد؟
-    // إن لم يحدد العميل المستوى، نسأل علاقات المستويات المتعلَّمة من الفواتير
-    // السابقة، وإلا نأخذ أغلبية مستويات مواد الفاتورة الحالية.
-    if (expectedLevel == null && invoiceItemsContext != null && invoiceItemsContext.isNotEmpty) {
-      try {
-        final contextProducts = <Map<String, dynamic>>[];
-        for (final item in invoiceItemsContext) {
-          final pid = item['product_id'];
-          final price = (item['applied_price'] as num?)?.toDouble() ?? 0;
-          if (pid is! int || pid == productId || price <= 0) continue;
-          contextProducts.add({'id': pid, 'level': await _levelOf(db, pid, price)});
-        }
-        if (contextProducts.isNotEmpty) {
-          expectedLevel = await SmartSearchDatabase.instance.getExpectedPriceLevel(
-            queryProductId: productId,
-            contextProducts: contextProducts,
-          );
-          if (expectedLevel == null) {
-            final w = contextProducts.where((p) => p['level'] == 'wholesale').length;
-            final r = contextProducts.where((p) => p['level'] == 'retail').length;
-            if (w > r) {
-              expectedLevel = 'wholesale';
-            } else if (r > w) {
-              expectedLevel = 'retail';
-            }
-          }
-        }
-      } catch (_) {}
-    }
-
-    // جلب آخر 20 عملية
-    final recentSales = await db.rawQuery('''
-      SELECT price, invoice_date FROM recent_sales_buffer
-      WHERE product_id = ?
-      ORDER BY invoice_date DESC
-      LIMIT ?
-    ''', [productId, recentSalesLimit]);
-    
-    if (recentSales.isEmpty) return null;
-    
-    final recentPrices = recentSales.map((s) => (s['price'] as num).toDouble()).toList();
-
-    // 🎛️ استراتيجية التسعير المختارة في الإعدادات (الأسعار والأرباح ← محرك التسعير).
-    // كانت تُحفظ ولا يقرأها أي كود — كل الخيارات كانت تعطي «ذكي». الآن تُطبَّق؛
-    // الافتراضي 99 (ذكي) يبقى كما كان تماماً.
     int mode = 99;
     try {
       mode = (await SettingsManager.getAppSettings()).pricingMode;
     } catch (_) {}
+    if (mode == 0) return null;
+    final db = await _dbService.database;
+
     if (mode == 1 || mode == 3 || mode == 21) {
+      final recentSales = await db.rawQuery('''
+        SELECT price, invoice_date FROM recent_sales_buffer
+        WHERE product_id = ?
+        ORDER BY invoice_date DESC
+        LIMIT ?
+      ''', [productId, recentSalesLimit]);
+      if (recentSales.isEmpty) return null;
+      final recentPrices = recentSales.map((s) => (s['price'] as num).toDouble()).toList();
       final picked = await _priceByMode(db, mode, productId, recentPrices);
       if (picked == null || picked.$1 <= 0) return null;
       if (await _isBelowCost(productId, saleType, picked.$1)) return null; // نفس صمام الخسارة
@@ -124,75 +51,19 @@ class SmartPricingService {
         candidateScores: {picked.$1: 100},
       );
     }
-    
-    final candidatePrices = <double, PriceCandidate>{};
-    for (var price in recentPrices) {
-      candidatePrices.putIfAbsent(price, () => PriceCandidate(price: price));
-    }
 
-    // حساب نقاط كل سعر
-    for (var candidate in candidatePrices.values) {
-      _calculatePriceScore(
-        candidate: candidate,
-        recentPrices: recentPrices,
-        customerId: customerId,
-        expectedLevel: expectedLevel,
-        productMedianPrice: productMedianPrice,
-      );
-    }
-
-    // إضافة نقاط تاريخ العميل
-    if (customerId != null && customerId > 0) {
-      final customerStats = await _getCustomerProductStats(customerId, productId);
-      if (customerStats != null && customerStats['count'] >= 2) {
-        final customerPrice = customerStats['price'] as double;
-        if (candidatePrices.containsKey(customerPrice)) {
-          candidatePrices[customerPrice]!.addPoints(
-            pointsCustomerHistory,
-            'سعر الزبون المعتاد (${customerStats['count']} عملية)',
-          );
-        } else {
-          candidatePrices[customerPrice] = PriceCandidate(price: customerPrice);
-          candidatePrices[customerPrice]!.addPoints(
-            pointsCustomerHistory,
-            'سعر الزبون المعتاد (${customerStats['count']} عملية)',
-          );
-        }
-      }
-    }
-
-    // اختيار السعر الأعلى نقاطاً
-    final sortedCandidates = candidatePrices.values.toList()
-      ..sort((a, b) => b.score.compareTo(a.score));
-    final winner = sortedCandidates.first;
-
-    // صمام الأمان (Cost Check)
     try {
       final product = await _dbService.getProductById(productId);
-      if (product != null) {
-        final cost = _dbService.calculateUnitCost(product, saleType ?? product.unit);
-        if (cost > 0 && winner.price < cost) {
-          return null; // رفض المقترح لمنع الخسارة
-        }
-      }
-    } catch (e) {
-      // ignore
+      if (product == null) return null;
+      final unit = (saleType == null || saleType.trim().isEmpty) ? product.translatedUnit : saleType;
+      return await SmartPriceEngine.instance.suggest(
+        product: product,
+        saleType: unit,
+        customerId: customerId,
+      );
+    } catch (_) {
+      return null; // بلا اقتراح ⇒ الشاشة تستعمل سعر المادة
     }
-
-    // نسبة الثقة
-    const double maxPossibleScore = pointsLastPrice + 100.0 + pointsFrequencyBonus + pointsDominantPrice + pointsTrendMatch + pointsCustomerHistory;
-    double confidence = (winner.score / maxPossibleScore) * 100;
-    if (confidence > 100) confidence = 100;
-
-    final scoresMap = <double, int>{ for (var e in candidatePrices.values) e.price : e.score.toInt() };
-
-    return SmartPricingResult(
-      price: winner.price,
-      confidence: confidence,
-      source: 'المحرك الذكي',
-      reason: winner.reasons.join(' | '),
-      candidateScores: scoresMap,
-    );
   }
 
   /// السعر حسب الاستراتيجية: 1 = آخر سعر، 3 = متوسط آخر 3، 21 = الأكثر تكراراً خلال 30 يوماً.
@@ -283,67 +154,5 @@ class SmartPricingService {
       }
     } catch (_) {}
     return false;
-  }
-
-  void _calculatePriceScore({
-    required PriceCandidate candidate,
-    required List<double> recentPrices,
-    int? customerId,
-    String? expectedLevel,
-    double? productMedianPrice,
-  }) {
-    final price = candidate.price;
-    final totalSales = recentPrices.length;
-    
-    // آخر سعر
-    if (recentPrices.first == price) {
-      candidate.addPoints(pointsLastPrice, 'آخر سعر');
-    }
-    
-    // التواجد في آخر 5
-    final last5 = recentPrices.take(5).toList();
-    final countInLast5 = last5.where((p) => p == price).length;
-    if (countInLast5 > 0) {
-      candidate.addPoints(pointsInLast5 * countInLast5, 'في آخر 5 عمليات ($countInLast5 مرات)');
-    }
-    
-    // التكرار الكلي
-    final totalOccurrences = recentPrices.where((p) => p == price).length;
-    final frequencyPercent = totalOccurrences / totalSales;
-    candidate.addPoints((pointsFrequencyBonus * frequencyPercent).round(), 'تكرار ${(frequencyPercent * 100).toStringAsFixed(0)}%');
-    
-    // المهيمن
-    if (frequencyPercent >= 0.60) {
-      candidate.addPoints(pointsDominantPrice, 'سعر مهيمن');
-    }
-    
-    // اتجاه السعر
-    if (recentPrices.length >= 5) {
-      final last5Avg = last5.reduce((a, b) => a + b) / 5;
-      if ((price - last5Avg).abs() < last5Avg * 0.05) {
-        candidate.addPoints(pointsTrendMatch, 'يتوافق مع اتجاه السعر الحالي');
-      }
-    }
-  }
-
-  Future<Map<String, dynamic>?> _getCustomerProductStats(int customerId, int productId) async {
-    final db = await _dbService.database;
-    final result = await db.rawQuery('''
-      SELECT ii.applied_price as price, COUNT(*) as count
-      FROM invoice_items ii
-      JOIN invoices i ON ii.invoice_id = i.id
-      WHERE i.customer_id = ? AND ii.product_id = ?
-      GROUP BY ii.applied_price
-      ORDER BY count DESC
-      LIMIT 1
-    ''', [customerId, productId]);
-    
-    if (result.isNotEmpty) {
-      return {
-        'price': (result.first['price'] as num).toDouble(),
-        'count': result.first['count'] as int,
-      };
-    }
-    return null;
   }
 }
