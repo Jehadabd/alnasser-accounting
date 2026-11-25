@@ -131,6 +131,7 @@ class DatabaseService {
   // 🚀 Cache للمنتجات والزبائن - تسريع العمليات
   static List<Product>? _productsCache;
   static DateTime? _productsCacheTime;
+  static String? _productsCacheSig; // 📦 بصمة الأرصدة والأسعار وقت التخزين
   static List<Customer>? _customersCache;
   static DateTime? _customersCacheTime;
   static const Duration _cacheValidDuration = Duration(minutes: 5);
@@ -151,6 +152,21 @@ class DatabaseService {
   void invalidateProductsCache() {
     _productsCache = null;
     _productsCacheTime = null;
+    _productsCacheSig = null;
+  }
+
+  /// 📦 بصمة رخيصة لجدول المواد: تتغير مع أي تغيّر في رصيد أو سعر أو كلفة أو مادة جديدة —
+  /// مهما كان مصدره (مشتريات، مبيعات، مرتجع، جرد، مزامنة، طرفية على الشبكة، Trigger).
+  /// (الرصيد يتغير بمحفزات قاعدة البيانات، فلا يمرّ كل تغيير بدالة تُبطل الذاكرة.)
+  Future<String> productsSignature() => _productsSignature();
+
+  Future<String> _productsSignature() async {
+    final db = await database;
+    final r = await db.rawQuery('SELECT COUNT(*) AS c, MAX(id) AS m, '
+        'TOTAL(stock_quantity * (id % 9973 + 1)) AS s, TOTAL(COALESCE(unit_price,0) * (id % 7919 + 1)) AS p, '
+        'TOTAL(COALESCE(cost_price,0) * (id % 6007 + 1)) AS k FROM products');
+    final x = r.first;
+    return '${x['c']}|${x['m']}|${x['s']}|${x['p']}|${x['k']}';
   }
 
   /// 🚀 إبطال Cache الزبائن
@@ -1111,18 +1127,32 @@ class DatabaseService {
   /// supports optional orderBy parameter
   Future<List<Product>> getAllProducts({String orderBy = 'name ASC'}) async {
     // 🚀 تحقق من Cache أولاً (فقط للترتيب الافتراضي)
+    // 📦 الذاكرة تُستعمل فقط إن لم تتغير الأرصدة منذ تخزينها — كانت تُرجع رصيداً قديماً
+    //    لخمس دقائق: مادة اشتُريت للتو تظهر «نافدة» في إنشاء فاتورة ثم يُقبل حفظها.
+    String? sig;
     if (orderBy == 'name ASC' && _isProductsCacheValid && _productsCache != null) {
-      return List.from(_productsCache!);  // نسخة آمنة
+      try {
+        sig = await _productsSignature();
+      } catch (_) {}
+      if (sig != null && sig == _productsCacheSig) {
+        return List.from(_productsCache!);  // نسخة آمنة
+      }
     }
 
     // جلب من قاعدة البيانات (الهارد)
     await database;
+    if (orderBy == 'name ASC' && sig == null) {
+      try {
+        sig = await _productsSignature();
+      } catch (_) {}
+    }
     final products = await _productDao.getAllProducts(orderBy: orderBy);
 
     // 🚀 تحديث Cache (فقط للترتيب الافتراضي)
     if (orderBy == 'name ASC') {
       _productsCache = products;
       _productsCacheTime = DateTime.now();
+      _productsCacheSig = sig; // null ⇒ لا تُستعمل الذاكرة في المرة القادمة
     }
 
     return products;

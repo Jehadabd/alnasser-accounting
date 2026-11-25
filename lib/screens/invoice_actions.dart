@@ -468,7 +468,13 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
     final wasSaved = !inputData.isNewInvoice && inputData.invoiceToManage?.status == 'محفوظة';
 
     try {
-      final result = await controller.saveInvoice(inputData);
+      InvoiceController.draftKey = CreateInvoiceScreen.draftKeyFor(widget.draftSlot); // 🗂️ مسودة هذا التبويب
+      final InvoiceSaveResult result;
+      try {
+        result = await controller.saveInvoice(inputData);
+      } finally {
+        InvoiceController.draftKey = null;
+      }
 
       if (!result.success) {
         throw Exception(result.errorMessage ?? 'Unknown error');
@@ -609,7 +615,12 @@ mixin InvoiceActionsMixin on State<CreateInvoiceScreen> implements InvoiceAction
         }
 
         if (inputData.isNewInvoice && mounted) {
-          Navigator.of(context).popUntil((route) => route.isFirst);
+          // 🗂️ داخل تبويب: يُغلق التبويب وحده (تبقى الفواتير المفتوحة الأخرى)
+          if (widget.onTabDone != null) {
+            widget.onTabDone!();
+          } else {
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          }
         }
       }
 

@@ -44,6 +44,8 @@ import 'item_card_screen.dart' show ItemCardService, ItemCardScreen, ErpStockRes
 import '../services/keyboard_layout/english_code_focus.dart'; // ⌨️ رمز المادة بالإنجليزية
 import '../utils/iqd.dart'; // 💵
 import '../erp/warranty/item_warranty.dart'; // 🛡️ مدة ضمان المادة
+import '../widgets/camera_barcode_scanner_dialog.dart'; // 📷 مسح الباركود بالكاميرا (أندرويد)
+import '../widgets/camera_scan_button.dart' show CameraScanButton;
 
 // ─────────────────────────── ألوان الواجهة ───────────────────────────
 class _C {
@@ -1492,7 +1494,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
         ],
         (v) => setState(() => _categoryId = v),
       ),
-      _field('الباركود', _barcode, hint: 'امسح أو اكتب', suffix: const Icon(Icons.qr_code_scanner, size: 18, color: _C.muted)),
+      _field('الباركود', _barcode, hint: 'امسح أو اكتب', suffix: _scanSuffix(_barcode)),
     ];
     final stats = _isNew ? <Widget>[] : _heroStats();
     return Container(
@@ -2774,7 +2776,7 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Expanded(flex: 5, child: _field('باركود جديد', nb.code, onChanged: (_) => upd(() {}))),
+                Expanded(flex: 5, child: _field('باركود جديد', nb.code, onChanged: (_) => upd(() {}), suffix: _scanSuffix(nb.code, after: () => upd(() {})))),
                 const SizedBox(width: 10),
                 Expanded(flex: 4, child: _field('الوصف (اختياري)', nb.label, hint: 'مثال: أحمر')),
                 IconButton(
@@ -2803,6 +2805,24 @@ class _ItemCardEditorScreenState extends State<ItemCardEditorScreen> {
               (v) => upd(() => _hideFromStaff = v)),
         ]);
     }
+  }
+
+  /// 📷 زر الكاميرا داخل حقل الباركود (أندرويد/آيفون). كانت أيقونة للزينة لا تفتح شيئاً.
+  /// على ويندوز يبقى رمزاً فقط: القارئ اليدوي يكتب في الحقل مباشرة.
+  Widget _scanSuffix(TextEditingController c, {VoidCallback? after}) {
+    if (!CameraScanButton.available) return const Icon(Icons.qr_code_scanner, size: 18, color: _C.muted);
+    return IconButton(
+      tooltip: 'مسح بالكاميرا',
+      icon: const Icon(Icons.qr_code_scanner, size: 20, color: _C.navy),
+      onPressed: () async {
+        final code = await CameraBarcodeScannerDialog.scan(context);
+        if (!mounted || code == null || code.trim().isEmpty) return;
+        c.text = code.trim();
+        c.selection = TextSelection.collapsed(offset: c.text.length);
+        after?.call();
+        setState(() {});
+      },
+    );
   }
 
   Widget _barcodeRow(String code, String label, VoidCallback? onDelete) => Container(

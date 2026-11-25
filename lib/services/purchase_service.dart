@@ -21,6 +21,7 @@ import 'name_search.dart'; // 🔤 الأسماء بلا مسافات
 import '../utils/iqd.dart'; // 💵
 import 'invoice_safety/iqd_normalize.dart'; // 💵
 import '../erp/inventory/product_batches.dart'; // 📦 دفعات الشراء (صلاحية وضمان)
+import '../erp/stock_reservations.dart'; // 📦 إشعار الفواتير المفتوحة بتغيّر الأرصدة
 
 /// خدمة المشتريات والموردين (Odoo-Style)
 class PurchaseService with ChangeNotifier {
@@ -483,6 +484,7 @@ class PurchaseService with ChangeNotifier {
         'فاتورة شراء ${invoice.invoiceNumber} — ${invoice.totalAmount}${nowConfirmed ? ' (مؤكدة)' : ' (مسودة)'}');
 
     notifyListeners();
+    StockReservations.committed.value++; // 📦 فواتير البيع المفتوحة تقرأ الأرصدة الجديدة فوراً
   }
 
   /// 💱 [currency] عملة فاتورة الشراء. كلفة المادة تُحفظ بالدينار دائماً، وفاتورة

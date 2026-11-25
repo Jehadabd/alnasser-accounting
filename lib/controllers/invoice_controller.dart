@@ -51,6 +51,9 @@ class InvoiceSaveResult {
 }
 
 class InvoiceController {
+  /// 🗂️ مفتاح مسودة الشاشة التي تحفظ الآن (لكل تبويب فاتورة مسودته). null = المسودة الرئيسية.
+  static String? draftKey;
+
   final DatabaseService _db;
   final FlutterSecureStorage _storage;
 
@@ -968,7 +971,7 @@ class InvoiceController {
         // Ignore
       }
 
-      await _storage.delete(key: SeatService.key('temp_invoice_data'));
+      await _storage.delete(key: draftKey ?? SeatService.key('temp_invoice_data'));
 
       // Smart Search Training
       if (savedInvoice != null && savedInvoice!.id != null) {

@@ -95,7 +95,23 @@ class CreateInvoiceScreen extends StatefulWidget {
     this.isViewOnly = false,
     this.relatedDebtTransaction,
     this.settlementForInvoice,
+    this.draftSlot = '',
+    this.onTabDone,
+    this.onTabSummary,
   });
+
+  /// 🗂️ تبويب الفواتير: لكل تبويب مسودة محفوظة خاصة به ('' = الرئيسية كما كانت).
+  final String draftSlot;
+
+  /// يُستدعى بعد حفظ فاتورة جديدة داخل تبويب (بدل الرجوع للرئيسية): يُغلق التبويب.
+  final VoidCallback? onTabDone;
+
+  /// اسم العميل وعدد الأسطر — لعنوان التبويب.
+  final void Function(String customer, int lines)? onTabSummary;
+
+  /// مفتاح المسودة المحفوظة لتبويب.
+  static String draftKeyFor(String slot) =>
+      SeatService.key(slot.isEmpty ? 'temp_invoice_data' : 'temp_invoice_data_$slot');
 
   @override
   State<CreateInvoiceScreen> createState() => _CreateInvoiceScreenState();
@@ -148,6 +164,12 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     }
     final lines = StockReservations.delta(StockReservations.baseByProduct(invoiceItems), _savedBase ?? const {});
     final name = customerNameController.text.trim();
+    final count = invoiceItems.where((i) => i.productName.trim().isNotEmpty).length;
+    if (widget.onTabSummary != null && (name != _tabName || count != _tabLines)) {
+      _tabName = name;
+      _tabLines = count;
+      widget.onTabSummary!(name, count);
+    }
     _resvSelf = true;
     try {
       book.set(_draftId, lines, label: name.isEmpty ? 'فاتورة مفتوحة' : 'فاتورة $name');
@@ -186,6 +208,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
   }
 
   int? _viewFor;
+  String? _tabName;
+  int? _tabLines;
 
   /// بعد الحفظ: صار المحفوظ هو الأسطر الحالية ⇒ يُعاد تحميله فيزول الحجز
   @override
@@ -199,13 +223,32 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
 
   bool _ownCommit = false;
 
-  /// فاتورة أخرى حُفظت: الأرصدة تغيّرت فعلاً ⇒ تُقرأ من جديد
+  /// فاتورة أخرى أو مشتريات حُفظت: الأرصدة تغيّرت فعلاً ⇒ تُقرأ من جديد
   Future<void> _onStockCommitted() async {
     if (_ownCommit || !mounted) return;
+    _stockSig = null;
+    await _refreshIfStockChanged();
+  }
+
+  // 📦 الأرصدة تتغير من أماكن كثيرة (جهاز آخر، مزامنة، جرد…): فحص بصمة رخيص كل 15 ثانية،
+  //    وإعادة قراءة المواد فقط إن تغيّرت — فلا تُرى مادة «نافدة» وقد اشتُريت.
+  Timer? _stockPoll;
+  String? _stockSig;
+  bool _stockBusy = false;
+
+  Future<void> _refreshIfStockChanged() async {
+    if (!mounted || _stockBusy) return;
+    _stockBusy = true;
     try {
+      final sig = await db.productsSignature();
+      if (sig == _stockSig) return;
       final fresh = await db.getAllProducts();
+      _stockSig = sig;
       if (mounted) setState(() => _allProductsForUnits = fresh);
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _stockBusy = false;
+    }
   }
 
   @override
@@ -393,6 +436,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         !HardwareKeyboard.instance.isShiftPressed) {
       // شاشة أخرى فوق الفاتورة (مصمم الطباعة يستعمل Ctrl+D) أو ليس مالكاً ⇒ لا نتدخل
       if (!(ModalRoute.of(context)?.isCurrent ?? false) || !OwnerAccess.enabled) return false;
+      if (!TickerMode.valuesOf(context).enabled) return false; // 🗂️ تبويب مخفي
       if (!_ownerCostPeek) {
         setState(() => _ownerCostPeek = true);
         CostStamp.all().then((m) {
@@ -1854,6 +1898,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     super.initState();
     StockReservations.instance.addListener(_onReservationsChanged); // 📦
     StockReservations.committed.addListener(_onStockCommitted);
+    _stockPoll = Timer.periodic(const Duration(seconds: 15), (_) => _refreshIfStockChanged());
     HardwareKeyboard.instance.addHandler(_onOwnerCostPeekKey);
     ScanSettings.ensureLoaded();
     _wedge = ScannerWedge(context: () => context, isActive: _scanActive, onScan: _onWedgeScan)..attach();
@@ -1906,6 +1951,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         try {
+          _stockSig = await db.productsSignature().catchError((_) => '');
           _allProductsForUnits = await db.getAllProducts();
           setState(() {});
         } catch (e) {
@@ -2071,7 +2117,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         return;
       }
 
-      final tempData = await storage.read(key: SeatService.key('temp_invoice_data'));
+      final tempData = await storage.read(key: CreateInvoiceScreen.draftKeyFor(widget.draftSlot));
       if (tempData == null) return;
 
       final data = jsonDecode(tempData);
@@ -2158,7 +2204,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
             .toList(),
       };
 
-      await storage.write(key: SeatService.key('temp_invoice_data'), value: jsonEncode(data));
+      await storage.write(key: CreateInvoiceScreen.draftKeyFor(widget.draftSlot), value: jsonEncode(data));
     } catch (e) {
       debugPrint('Error in autoSave: $e');
     }
@@ -2199,7 +2245,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       };
 
       // حفظ فوري بدون await (fire and forget)
-      storage.write(key: SeatService.key('temp_invoice_data'), value: jsonEncode(data));
+      storage.write(key: CreateInvoiceScreen.draftKeyFor(widget.draftSlot), value: jsonEncode(data));
     } catch (e) {
       debugPrint('Error in _saveDataImmediately: $e');
     }
@@ -2343,6 +2389,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     // 📦 أُغلقت الفاتورة: يزول حجزها فوراً
     StockReservations.instance.removeListener(_onReservationsChanged);
     StockReservations.committed.removeListener(_onStockCommitted);
+    _stockPoll?.cancel();
     StockReservations.instance.release(_draftId);
     DebtReminders.pendingForNewInvoice = null; // 📅 موعد لم يُحفظ مع فاتورة: لا يتعلق بفاتورة أخرى
     _disposeStep('مفاتيح', () => HardwareKeyboard.instance.removeHandler(_onOwnerCostPeekKey));
@@ -3421,7 +3468,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
         savedOrSuspended = false;
       });
       
-      await storage.delete(key: SeatService.key('temp_invoice_data'));
+      await storage.delete(key: CreateInvoiceScreen.draftKeyFor(widget.draftSlot));
 
       // بعد ثانية واحدة أضف عنصر فارغ جديد
       Future.delayed(const Duration(seconds: 1), () {
@@ -4952,6 +4999,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
+        // 🗂️ تبويب مخفي: لا يتصرف (الظاهر وحده يحفظ ويُغلق؛ المخفية تحفظ مسوداتها عند الإغلاق)
+        if (widget.onTabDone != null && !TickerMode.valuesOf(context).enabled) return;
         final navigator = Navigator.of(context);
         if (await _onWillPop() && mounted) navigator.pop(result);
       },
