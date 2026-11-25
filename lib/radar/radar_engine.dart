@@ -57,6 +57,8 @@ class RadarKpis {
     required this.receivables,
     required this.overdue90,
     required this.cashNow,
+    this.costCoverage = 1.0,
+    this.periodLabel = 'آخر 30 يوماً',
   });
   final double revenue30;
   final double profit30;
@@ -65,6 +67,10 @@ class RadarKpis {
   final double receivables;
   final double overdue90;
   final double cashNow;
+
+  /// نصيب المبيعات التي لها كلفة معروفة (الربح والهامش محسوبان منها فقط).
+  final double costCoverage;
+  final String periodLabel;
 }
 
 class CashFlows {
@@ -236,15 +242,28 @@ class _Demand {
 // ───────────────────────── المحرك ─────────────────────────
 
 class RadarEngine {
-  /// كلفة سطر الفاتورة — نفس منطق «تفاصيل المبيعات»
-  static const _lineCost = '''
+  /// كلفة سطر الفاتورة المسجّلة — نفس منطق «تفاصيل المبيعات»، بلا افتراض:
+  /// سطر بلا كلفة = NULL (لا يُحسب في الربح والهامش). كان يُفترض له ربح 10%
+  /// (الكلفة = 90% من السعر) دون أن يظهر ذلك للتاجر.
+  static const _rawCost = '''
     CASE WHEN COALESCE(ii.actual_cost_price, 0) > 0
          THEN ii.actual_cost_price * (CASE WHEN COALESCE(ii.quantity_large_unit, 0) > 0
                                            THEN ii.quantity_large_unit ELSE COALESCE(ii.quantity_individual, 0) END)
          WHEN COALESCE(p.cost_price, 0) > 0
          THEN p.cost_price * (COALESCE(ii.quantity_individual, 0) + COALESCE(ii.quantity_large_unit, 0)
               * CASE WHEN COALESCE(ii.units_in_large_unit, 0) > 0 THEN ii.units_in_large_unit ELSE 1 END)
-         ELSE ii.item_total * 0.9 END''';
+         ELSE NULL END''';
+
+  /// الكلفة المعتمدة للسطر: كلفة أكبر من 3 أضعاف السعر أو أقل من جزء من عشرين منه
+  /// مسجّلة بوحدة أخرى غالباً (لفة بكلفة متر، أو العكس) ⇒ تُهمل ولا تُحسب ربحاً أو خسارة.
+  static const _lineCost = '''
+    (CASE WHEN ($_rawCost) IS NULL THEN NULL
+          WHEN ii.item_total > 0 AND (($_rawCost) > ii.item_total * 3 OR ($_rawCost) * 20 < ii.item_total) THEN NULL
+          ELSE ($_rawCost) END)''';
+
+  /// بطاقة واحدة لكل اسم: بطاقتان بالاسم نفسه كانتا تكرران سطر البيع فتضاعفان مبيعاته.
+  static const _prodByName =
+      '(SELECT name, MAX(cost_price) AS cost_price FROM products WHERE COALESCE(is_deleted, 0) = 0 GROUP BY name)';
 
   /// الكمية بالوحدة الأساسية
   static const _baseQty = '''
@@ -356,37 +375,56 @@ class RadarEngine {
 
   // ═════════════ ملخص ═════════════
 
-  Future<RadarKpis> kpis() async {
+  /// [from]..[to] (افتراضياً آخر 30 يوماً) تُقارن بالفترة السابقة لها بالطول نفسه.
+  /// الديون والنقد «الآن» دائماً.
+  Future<RadarKpis> kpis({DateTime? from, DateTime? to, String label = 'آخر 30 يوماً'}) async {
     final now = DateTime.now();
-    final a = await _period(now.subtract(const Duration(days: 30)), now);
-    final b = await _period(now.subtract(const Duration(days: 60)), now.subtract(const Duration(days: 30)));
+    final t = to ?? now;
+    final f = from ?? now.subtract(const Duration(days: 30));
+    final len = DateTime(t.year, t.month, t.day).difference(DateTime(f.year, f.month, f.day)).inDays + 1;
+    final a = await _period(f, t);
+    final b = await _period(f.subtract(Duration(days: len)), f.subtract(const Duration(days: 1)));
     final aging = await DebtAnalytics().customerAging(periodDays: 30, periods: 4);
     final receivables = aging.fold<double>(0, (s, r) => s + (r.balance > 0 ? r.balance : 0.0));
     final overdue = aging.fold<double>(0, (s, r) => s + r.buckets.last);
     final cash = await _cashNow();
     return RadarKpis(
-      revenue30: a.$1,
-      profit30: a.$1 - a.$2,
-      margin30: a.$1 > 0 ? (a.$1 - a.$2) / a.$1 * 100 : 0,
-      marginPrev30: b.$1 > 0 ? (b.$1 - b.$2) / b.$1 * 100 : 0,
+      revenue30: a.net,
+      profit30: a.profit,
+      margin30: a.margin,
+      marginPrev30: b.margin,
       receivables: receivables,
       overdue90: overdue,
       cashNow: cash,
+      costCoverage: a.coverage,
+      periodLabel: label,
     );
   }
 
-  /// (الإيراد بعد الخصم، الكلفة) لفترة
-  Future<(double, double)> _period(DateTime from, DateTime to) async {
+  /// مبيعات الفترة بعد الخصم، وربحها من الأسطر التي لها كلفة معروفة فقط
+  /// (الخصم يُوزَّع عليها بنسبتها من المبيعات).
+  Future<({double net, double profit, double margin, double coverage})> _period(DateTime from, DateTime to) async {
     final db = await erpDb();
     final r = await db.rawQuery('''
-      SELECT COALESCE(SUM(ii.item_total), 0) AS gross, COALESCE(SUM($_lineCost), 0) AS cost
+      SELECT COALESCE(SUM(ii.item_total), 0) AS gross,
+             COALESCE(SUM(CASE WHEN ($_lineCost) IS NOT NULL THEN ii.item_total END), 0) AS known,
+             COALESCE(SUM($_lineCost), 0) AS cost
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-      LEFT JOIN products p ON p.name = ii.product_name
+      LEFT JOIN $_prodByName p ON p.name = ii.product_name
       WHERE $_saved AND i.invoice_date >= ? AND i.invoice_date < ?''', [isoDay(from), isoDayAfter(to)]);
     final disc = await db.rawQuery('''
       SELECT COALESCE(SUM(COALESCE(i.discount, 0)), 0) AS d FROM invoices i
       WHERE $_saved AND i.invoice_date >= ? AND i.invoice_date < ?''', [isoDay(from), isoDayAfter(to)]);
-    return (d0(r.first['gross']) - d0(disc.first['d']), d0(r.first['cost']));
+    final gross = d0(r.first['gross']), known = d0(r.first['known']), cost = d0(r.first['cost']);
+    final d = d0(disc.first['d']);
+    final knownNet = gross > 0 ? known * (1 - d / gross) : 0.0;
+    final profit = knownNet - cost;
+    return (
+      net: gross - d,
+      profit: profit,
+      margin: knownNet > 0 ? profit / knownNet * 100 : 0.0,
+      coverage: gross > 0 ? known / gross : 1.0,
+    );
   }
 
   Future<double> _cashNow() async {
@@ -431,9 +469,10 @@ class RadarEngine {
     final now = DateTime.now();
     Future<Map<String, (double, double)>> byProduct(DateTime from, DateTime to) async {
       final rows = await db.rawQuery('''
-        SELECT ii.product_name AS n, SUM(ii.item_total) AS rev, SUM($_lineCost) AS cost
+        SELECT ii.product_name AS n, SUM(CASE WHEN ($_lineCost) IS NOT NULL THEN ii.item_total END) AS rev,
+               SUM($_lineCost) AS cost
         FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-        LEFT JOIN products p ON p.name = ii.product_name
+        LEFT JOIN $_prodByName p ON p.name = ii.product_name
         WHERE $_saved AND i.invoice_date >= ? AND i.invoice_date < ?
         GROUP BY ii.product_name''', [isoDay(from), isoDayAfter(to)]);
       return {for (final r in rows) '${r['n']}': (d0(r['rev']), d0(r['cost']))};
@@ -483,7 +522,7 @@ class RadarEngine {
       SELECT ii.product_name AS n, i.invoice_number AS num, i.id AS iid, i.customer_name AS c,
              ii.item_total AS total, ($_lineCost) AS cost
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-      LEFT JOIN products p ON p.name = ii.product_name
+      LEFT JOIN $_prodByName p ON p.name = ii.product_name
       WHERE $_saved AND i.invoice_date >= ? AND ii.item_total > 0
         AND (COALESCE(ii.actual_cost_price, 0) > 0 OR COALESCE(p.cost_price, 0) > 0)
         AND ($_lineCost) > ii.item_total + 0.5''', [isoDay(DateTime.now().subtract(const Duration(days: 30)))]);
@@ -630,16 +669,19 @@ class RadarEngine {
   Future<RadarAlert?> _lowMarginBestSellers() async {
     final db = await erpDb();
     final rows = await db.rawQuery('''
-      SELECT ii.product_name AS n, SUM(ii.item_total) AS rev, SUM($_lineCost) AS cost
+      SELECT ii.product_name AS n, SUM(ii.item_total) AS rev,
+             SUM(CASE WHEN ($_lineCost) IS NOT NULL THEN ii.item_total END) AS known, SUM($_lineCost) AS cost
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-      LEFT JOIN products p ON p.name = ii.product_name
+      LEFT JOIN $_prodByName p ON p.name = ii.product_name
       WHERE $_saved AND i.invoice_date >= ?
       GROUP BY ii.product_name ORDER BY rev DESC LIMIT 20''',
         [isoDay(DateTime.now().subtract(const Duration(days: 30)))]);
     final total = rows.fold<double>(0, (s, r) => s + d0(r['rev']));
+    // الهامش من الأسطر التي لها كلفة؛ مادة أغلب مبيعاتها بلا كلفة لا يُحكم على هامشها
+    double km(Map<String, Object?> r) => (d0(r['known']) - d0(r['cost'])) / d0(r['known']) * 100;
     final hits = rows.where((r) {
-      final rev = d0(r['rev']), cost = d0(r['cost']);
-      return rev > 0 && total > 0 && rev / total >= 0.02 && (rev - cost) / rev * 100 < 5;
+      final rev = d0(r['rev']), known = d0(r['known']);
+      return rev > 0 && total > 0 && rev / total >= 0.02 && known >= rev * 0.5 && km(r) < 5;
     }).toList();
     if (hits.isEmpty) return null;
     return RadarAlert(
@@ -650,7 +692,7 @@ class RadarEngine {
       action: 'ارفع سعرها قليلاً أو فاوض المورد على الكلفة — أثرها كبير لأنها تبيع كثيراً.',
       items: [
         for (final r in hits)
-          RadarItem('${r['n']}', 'هامش ${((d0(r['rev']) - d0(r['cost'])) / d0(r['rev']) * 100).toStringAsFixed(1)}%',
+          RadarItem('${r['n']}', 'هامش ${km(r).toStringAsFixed(1)}%',
               sub: 'مبيعات ${_m(d0(r['rev']))}'),
       ],
     );

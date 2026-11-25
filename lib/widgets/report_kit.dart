@@ -447,9 +447,13 @@ class _MiniBarsState extends State<MiniBars> {
     final maxV = vals.fold<double>(0, (m, v) => math.max(m, v.abs()));
     final every = widget.showEveryLabel ?? (vals.length <= 14 ? 1 : (vals.length <= 31 ? 3 : 5));
     final barArea = widget.height - 22;
+    // ⏱️ الزمن من اليسار إلى اليمين كالمنحنى (TrendLineChart): داخل واجهة RTL كان
+    // الصف يضع أول يوم يميناً، فينقلب الرسم عند التحويل من منحنى إلى أعمدة.
     return SizedBox(
       height: widget.height,
-      child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
         for (var i = 0; i < vals.length; i++)
           Expanded(
             child: MouseRegion(
@@ -458,7 +462,10 @@ class _MiniBarsState extends State<MiniBars> {
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: widget.onTap == null ? null : () => widget.onTap!(i),
-                child: Tooltip(
+                // النافذة المنبثقة تبقى عربية (من اليمين) رغم ترتيب الأعمدة من اليسار
+                child: Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: Tooltip(
                   message: widget.tooltips != null ? widget.tooltips![i] : '${widget.labels[i]}\n${repMoney(vals[i])}',
                   waitDuration: const Duration(milliseconds: 150),
                   child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
@@ -482,16 +489,20 @@ class _MiniBarsState extends State<MiniBars> {
                       child: (i % every == 0 || i == vals.length - 1)
                           ? FittedBox(
                               fit: BoxFit.scaleDown,
-                              child: Text(widget.labels[i], style: const TextStyle(fontSize: 10, color: kSetMuted)),
+                              child: Text(widget.labels[i],
+                                  textDirection: TextDirection.rtl,
+                                  style: const TextStyle(fontSize: 10, color: kSetMuted)),
                             )
                           : null,
                     ),
                   ]),
                 ),
+                ),
               ),
             ),
           ),
       ]),
+      ),
     );
   }
 }

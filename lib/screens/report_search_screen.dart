@@ -745,13 +745,17 @@ class ReportSearchField extends StatelessWidget {
           side: BorderSide(color: kRepPurple.withValues(alpha: 0.22)),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         );
-    return Padding(
+    // TextFieldTapRegion: الضغط على اقتراح جزء من حقل البحث. بدونه يفقد الحقل
+    // التركيز عند لمس الاقتراح، فتختفي الاقتراحات قبل أن يكتمل الضغط ولا يحدث شيء.
+    return TextFieldTapRegion(
+      child: Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Wrap(spacing: 8, runSpacing: 8, children: [
         for (final r in c._recent) chip(r, Icons.history_rounded, () => c.set(r), onDelete: () => c._forget(r)),
         for (final i in visible)
           if (!c._recent.contains(i.$1)) chip(i.$1, i.$2, () => c.set(i.$1)),
       ]),
+      ),
     );
   }
 }

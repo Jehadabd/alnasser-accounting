@@ -21,6 +21,30 @@ const _cMid = Color(0xFFC2410C);
 const _cInfo = Color(0xFF2563EB);
 const _cGood = Color(0xFF047857);
 
+/// فترة بطاقات الربح والهامش (الديون والنقد «الآن» دائماً).
+enum _KpiPeriod { last30, thisMonth, lastMonth, thisYear, lastYear }
+
+extension on _KpiPeriod {
+  String get label => switch (this) {
+        _KpiPeriod.last30 => 'آخر 30 يوماً',
+        _KpiPeriod.thisMonth => 'هذا الشهر',
+        _KpiPeriod.lastMonth => 'الشهر الماضي',
+        _KpiPeriod.thisYear => 'هذه السنة',
+        _KpiPeriod.lastYear => 'السنة الماضية',
+      };
+
+  (DateTime, DateTime) get range {
+    final n = DateTime.now();
+    return switch (this) {
+      _KpiPeriod.last30 => (n.subtract(const Duration(days: 30)), n),
+      _KpiPeriod.thisMonth => (DateTime(n.year, n.month, 1), n),
+      _KpiPeriod.lastMonth => (DateTime(n.year, n.month - 1, 1), DateTime(n.year, n.month, 0)),
+      _KpiPeriod.thisYear => (DateTime(n.year, 1, 1), n),
+      _KpiPeriod.lastYear => (DateTime(n.year - 1, 1, 1), DateTime(n.year - 1, 12, 31)),
+    };
+  }
+}
+
 class RadarScreen extends StatefulWidget {
   const RadarScreen({super.key});
   @override
@@ -34,6 +58,7 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
   late final TabController _tabs;
 
   Future<RadarKpis>? _kpis;
+  _KpiPeriod _kpiPeriod = _KpiPeriod.last30;
   Future<List<RadarAlert>>? _alerts;
   Future<CashFlows>? _flows;
   Future<List<CollectionTarget>>? _collect;
@@ -59,11 +84,24 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
 
   void _reload() {
     setState(() {
-      _kpis = _engine.kpis();
+      _kpis = _loadKpis();
       _alerts = _engine.alerts();
       _flows = _engine.cashFlows();
       _collect = _engine.collectionTargets();
       _buy = _engine.buySuggestions();
+    });
+  }
+
+  Future<RadarKpis> _loadKpis() {
+    final r = _kpiPeriod.range;
+    return _engine.kpis(from: r.$1, to: r.$2, label: _kpiPeriod.label);
+  }
+
+  void _setPeriod(_KpiPeriod p) {
+    if (p == _kpiPeriod) return;
+    setState(() {
+      _kpiPeriod = p;
+      _kpis = _loadKpis();
     });
   }
 
@@ -75,11 +113,32 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
         headerSliverBuilder: (context, _) => [
           SliverAppBar(
             pinned: true,
-            expandedHeight: 230,
+            // الرأس = شريط العنوان + البطاقات + شريط التبويبات (أيقونة ونص = 72)؛
+            // كانت المسافة السفلية 54 فتتراكب أيقونات التبويبات على البطاقات.
+            expandedHeight: 256,
             foregroundColor: Colors.white,
             backgroundColor: AccColors.navy,
             title: const Text('رادار التاجر', style: TextStyle(fontWeight: FontWeight.w800)),
-            actions: [IconButton(tooltip: 'تحديث', onPressed: _reload, icon: const Icon(Icons.refresh_rounded))],
+            actions: [
+              PopupMenuButton<_KpiPeriod>(
+                tooltip: 'فترة الربح والهامش',
+                initialValue: _kpiPeriod,
+                onSelected: _setPeriod,
+                itemBuilder: (_) => [
+                  for (final p in _KpiPeriod.values) PopupMenuItem(value: p, child: Text(p.label)),
+                ],
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.date_range_rounded, size: 20),
+                    const SizedBox(width: 6),
+                    Text(_kpiPeriod.label, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const Icon(Icons.arrow_drop_down_rounded),
+                  ]),
+                ),
+              ),
+              IconButton(tooltip: 'تحديث', onPressed: _reload, icon: const Icon(Icons.refresh_rounded)),
+            ],
             flexibleSpace: FlexibleSpaceBar(
               collapseMode: CollapseMode.pin,
               background: Container(
@@ -90,7 +149,7 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
                     end: Alignment.bottomLeft,
                   ),
                 ),
-                padding: const EdgeInsets.fromLTRB(16, 86, 16, 54),
+                padding: const EdgeInsets.fromLTRB(16, 70, 16, 82),
                 child: _kpiStrip(),
               ),
             ),
@@ -129,7 +188,7 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
       builder: (context, s) {
         final k = s.data;
         Widget kpi(String label, String value, {String? sub, Color? subColor}) => Container(
-              width: 175,
+              width: 196,
               margin: const EdgeInsetsDirectional.only(end: 10),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
@@ -146,22 +205,29 @@ class _RadarScreenState extends State<RadarScreen> with SingleTickerProviderStat
                   child: Text(value, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w900)),
                 ),
                 if (sub != null)
-                  Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: subColor ?? Colors.white60, fontSize: 11.5)),
+                  Text(sub,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: subColor ?? Colors.white60, fontSize: 11.5, height: 1.25)),
               ]),
             );
         if (k == null) {
           return const Center(child: SizedBox(width: 26, height: 26, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5)));
         }
         final diff = k.margin30 - k.marginPrev30;
+        final uncosted = ((1 - k.costCoverage) * 100).round();
         return ListView(scrollDirection: Axis.horizontal, children: [
-          kpi('الربح الحقيقي (30 يوماً)', fmtMoneyCompact(k.profit30), sub: 'من مبيعات ${fmtMoneyCompact(k.revenue30)}'),
-          kpi('هامش الربح', '${k.margin30.toStringAsFixed(1)}%',
-              sub: '${diff >= 0 ? '▲' : '▼'} ${diff.abs().toStringAsFixed(1)} عن الشهر السابق',
+          kpi('الربح الحقيقي (${k.periodLabel})', fmtMoneyCompact(k.profit30),
+              sub: 'من مبيعات ${fmtMoneyCompact(k.revenue30)}'
+                  '${uncosted >= 1 ? '\n$uncosted% منها بلا كلفة: لم تُحسب' : ''}',
+              subColor: uncosted >= 5 ? const Color(0xFFFCD34D) : null),
+          kpi('هامش الربح (${k.periodLabel})', '${k.margin30.toStringAsFixed(1)}%',
+              sub: '${diff >= 0 ? '▲' : '▼'} ${diff.abs().toStringAsFixed(1)} عن الفترة السابقة',
               subColor: diff >= 0 ? const Color(0xFF86EFAC) : const Color(0xFFFCA5A5)),
-          kpi('ديون العملاء', fmtMoneyCompact(k.receivables),
-              sub: 'منها أقدم من 90 يوماً ${fmtMoneyCompact(k.overdue90)}',
+          kpi('ديون العملاء (الآن)', fmtMoneyCompact(k.receivables),
+              sub: 'أقدم من 90 يوماً: ${fmtMoneyCompact(k.overdue90)}',
               subColor: k.overdue90 > 0 ? const Color(0xFFFCD34D) : null),
-          kpi('النقد في الصناديق', fmtMoneyCompact(k.cashNow), sub: 'من دفتر المحاسبة'),
+          kpi('النقد في الصناديق (الآن)', fmtMoneyCompact(k.cashNow), sub: 'من دفتر المحاسبة'),
         ]);
       },
     );
