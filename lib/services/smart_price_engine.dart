@@ -5,11 +5,13 @@
 //
 //   1. آخر سعر لهذا الزبون على المادة نفسها بوحدة البيع نفسها خلال 120 يوماً.
 //      إن تغيّرت الكلفة منذه تُضاف الزيادة نفسها (يبقى مبلغ ربحه كما هو).
-//   2. وإلا: سعر السوق (وسيط آخر 7 بيعات للمادة بالوحدة نفسها) × معامل الزبون.
+//   2. وإلا: سعر السوق (وسيط آخر 5 بيعات للمادة بالوحدة نفسها) × معامل الزبون.
 //      معامل الزبون = وسيط (سعره ÷ سعر السوق وقتها) في آخر 30 سطراً له،
-//      مسحوباً نحو 1 ما دام تاريخه قصيراً: 1 + (الوسيط − 1) × ن ÷ (ن + 5).
+//      مسحوباً نحو 1 ما دام تاريخه قصيراً: 1 + (الوسيط − 1) × ن ÷ (ن + 15).
 //   3. وإلا (مادة بلا تاريخ بهذه الوحدة): الكلفة × هامش نطاق الكلفة الفعلي في المتجر.
-//   ثم: تقريب لأقرب 250 (أو 50 تحت 2,000)، وأرضية: لا اقتراح تحت الكلفة + 2%.
+//   ثم: تقريب بخطوة أسعار المتجر الفعلية (25 تحت 500، 50 حتى 10,000، 250 فوقها)،
+//   وأرضية: لا اقتراح تحت الكلفة + 2%. وأخيراً: إن كان سعر بيع حقيقي حديث (آخر سعر
+//   للزبون أو آخر 7 بيعات) ضمن 3% من الاقتراح يُقترح هو — الموظفون يكررون أسعاراً بعينها.
 //
 // قواعد صارمة:
 //   • وحدة البيع جزء من المفتاح: القطعة لا تختلط بالكرتون ولا المتر باللفة
@@ -18,8 +20,9 @@
 //   • الربط باسم المادة كما في سطور الفواتير (قواعد debt_book لا تحفظ product_id).
 //   • لا يكتب المحرك أي بيانات مالية: يقرأ فقط (وفهرس قراءة واحد يُنشأ مرة).
 //
-// الدقة على تاريخ المتجر نفسه (كل سطر اقتُرح له بما قبله فقط): يقترح لـ 95.8%
-// من الأسطر، 55% منها ضمن 5% من السعر الذي باع به الموظف، و74% ضمن 10%.
+// الدقة على أحدث 30% من فواتير المتجر (كل سطر اقتُرح له بما قبله فقط): 33% مطابق
+// تماماً لسعر الموظف، 58% ضمن 5%، 77% ضمن 10%، ومتوسط الخطأ 7.4% (كان 7.8% قبل
+// تحسينات 2026-11-25: التقريب الفعلي، نافذة 5، معامل أبطأ، التقاط السعر الحقيقي).
 
 import 'package:sqflite/sqflite.dart' show Database;
 
@@ -50,9 +53,12 @@ class SmartPriceMath {
   SmartPriceMath._();
 
   static const int ownDays = 120;
-  static const int marketWindow = 7;
+  static const int marketWindow = 5;
+  static const int factorRefWindow = 7; // سعر السوق الذي يُقاس عليه معامل الزبون
+  static const int snapWindow = 7;
+  static const double snapTolerance = 0.03;
   static const int factorLines = 30;
-  static const double factorShrink = 5;
+  static const double factorShrink = 15;
   static const double floorMin = 0.02; // أقل ربح مقبول فوق الكلفة
   static const double floorLift = 0.05; // الاقتراح الخاسر يُرفع إلى الكلفة + 5%
   static const double bigCustomerFactor = 0.97;
@@ -88,9 +94,11 @@ class SmartPriceMath {
     return u;
   }
 
-  static double stepOf(double x) => x >= 2000 ? 250 : 50;
+  /// خطوة السعر كما يبيع المتجر فعلاً: 85% من أسعاره تحت 500 مضاعفات 25،
+  /// و90% بين 500 و10,000 مضاعفات 50، و97.5% فوق 10,000 مضاعفات 250.
+  static double stepOf(double x) => x < 500 ? 25 : (x < 10000 ? 50 : 250);
 
-  /// أقرب مضاعف لـ 250 (أو 50 تحت 2,000) — 71% من أسعار المتجر هكذا.
+  /// أقرب مضاعف لخطوة السعر.
   static double roundPrice(double x) {
     final s = stepOf(x);
     final r = (x / s).round() * s;
@@ -143,9 +151,11 @@ class SmartPriceMath {
     String reason;
 
     PriceSale? own;
+    PriceSale? lastOwn; // آخر شراء له بأي عمر (مرشح للالتقاط فقط)
     if (customerId != null) {
       for (final h in history) {
         if (h.customerId == customerId) {
+          lastOwn = h;
           if (now.difference(h.date).inDays <= ownDays) own = h;
           break; // آخر شراء له فقط
         }
@@ -188,6 +198,28 @@ class SmartPriceMath {
       price = roundUp(cost * (1 + floorLift));
       reason += ' ← رُفع إلى أرضية الربح (الكلفة + ${(floorLift * 100).round()}%)';
     }
+
+    // 🎯 الالتقاط: سعر بيع حقيقي حديث قريب (ضمن 3%) أدق من رقم محسوب —
+    // بشرط ألا ينزل تحت أرضية الربح، ولا يعيد سعراً أقل بِيع حين كانت الكلفة أقل
+    // (وإلا ضاعت زيادة الكلفة التي أضيفت للتو).
+    final candidates = <PriceSale>[
+      if (lastOwn != null) lastOwn,
+      ...history.take(snapWindow),
+    ];
+    double? best;
+    for (final h in candidates) {
+      final c = h.price;
+      if (c <= 0 || (c - price).abs() / price > snapTolerance) continue;
+      if (cost != null && c < cost * (1 + floorMin)) continue;
+      final hc = h.cost;
+      if (c < price && cost != null && hc != null && hc > 0 && hc < cost * 0.995) continue;
+      if (best == null || (c - price).abs() < (best - price).abs()) best = c;
+    }
+    if (best != null && best != price) {
+      reason += ' ← أقرب سعر بيع حقيقي حديث ${_n(best)}';
+      price = best;
+    }
+
     if (price <= 0) return null;
     return SmartPriceDecision(price, path, confidence, reason);
   }
@@ -280,7 +312,8 @@ class SmartPriceEngine {
     );
   }
 
-  /// معامل الزبون: سعره ÷ وسيط آخر 7 بيعات للمادة نفسها قبل سطره، في آخر 40 سطراً له.
+  /// معامل الزبون: سعره ÷ وسيط آخر 7 بيعات للمادة نفسها قبل سطره، في آخر 60 سطراً له
+  /// (تُؤخذ منها آخر 30 نسبة صالحة).
   Future<(double, int)> _customerFactor(Database db, int customerId) async {
     final cached = _factorCache[customerId];
     if (cached != null && DateTime.now().difference(cached.$1) < _factorTtl) {
@@ -292,7 +325,7 @@ class SmartPriceEngine {
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
       WHERE i.customer_id = ? AND i.status = 'محفوظة' AND ii.applied_price > 0
       ORDER BY i.invoice_date DESC, ii.id DESC
-      LIMIT 40
+      LIMIT 60
     ''', [customerId]);
     if (lines.isEmpty) {
       _factorCache[customerId] = (DateTime.now(), 1.0, 0);
@@ -326,7 +359,7 @@ class SmartPriceEngine {
         final c = md.compareTo(d);
         if (c > 0 || (c == 0 && (m['id'] as num).toInt() >= id)) continue;
         before.add((m['price'] as num).toDouble());
-        if (before.length >= SmartPriceMath.marketWindow) break;
+        if (before.length >= SmartPriceMath.factorRefWindow) break;
       }
       final ref = SmartPriceMath.median(before);
       if (ref == null || ref <= 0) continue;
