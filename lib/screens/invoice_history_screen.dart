@@ -13,6 +13,7 @@ import '../services/database_service.dart';
 import '../services/database/business/snapshot_chain.dart'; // 🧬 النسخ المحفوظة فروقاً
 import '../services/database/dao/audit_dao.dart';
 import 'invoice_history/invoice_history_model.dart';
+import 'invoice_history/invoice_ledger_moves.dart'; // 📒 حركات سجل الديون للفاتورة (عرض فقط)
 import '../erp/control/printed_vouchers_screen.dart'; // 🧾 سندات هذه الفاتورة المطبوعة
 
 class InvoiceHistoryScreen extends StatefulWidget {
@@ -45,6 +46,7 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
   bool _isLoading = true;
   String? _errorMessage;
   InvoiceHistoryData? _data;
+  InvoiceLedgerSummary _ledger = InvoiceLedgerSummary.empty;
   final Set<int> _expanded = <int>{};
 
   @override
@@ -115,6 +117,10 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
               orderBy: 'created_at ASC, id ASC'))
           : <Map<String, dynamic>>[];
 
+      // 📒 أثر الفاتورة في سجل الديون كما هو مكتوب (يشمل نقلها بين العملاء وتسويات الحارس)
+      final InvoiceLedgerSummary ledger = await InvoiceLedgerMoves.load(db, id,
+          currentCustomerId: (invoice?['customer_id'] as num?)?.toInt());
+
       final InvoiceHistoryData data = InvoiceHistoryBuilder.build(
         snapshots: snapshots,
         invoice: invoice,
@@ -126,6 +132,7 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
       if (!mounted) return;
       setState(() {
         _data = data;
+        _ledger = ledger;
         _isLoading = false;
         _expanded.clear();
         // افتح أحدث تغيير تلقائياً ليظهر الفرق مباشرة
@@ -242,7 +249,16 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
     }
 
     final InvoiceHistoryData? data = _data;
-    if (data == null || data.events.isEmpty) return _buildEmptyState();
+    if (data == null || data.events.isEmpty) {
+      if (_ledger.isEmpty) return _buildEmptyState();
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        children: [
+          InvoiceLedgerMovesCard(key: ObjectKey(_ledger), summary: _ledger),
+          _buildEmptyState(),
+        ],
+      );
+    }
 
     final List<HistEvent> events = data.events;
     return Align(
@@ -254,6 +270,8 @@ class _InvoiceHistoryScreenState extends State<InvoiceHistoryScreen> {
           children: [
             _buildSummary(data),
             const SizedBox(height: 16),
+            if (!_ledger.isEmpty)
+              InvoiceLedgerMovesCard(key: ObjectKey(_ledger), summary: _ledger),
             if (data.editCount == 0 && data.externalCount == 0 && events.length == 1)
               _buildNoEditsBanner(),
             for (int i = 0; i < events.length; i++)

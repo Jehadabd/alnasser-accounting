@@ -6,6 +6,7 @@ import '../../../models/invoice.dart';
 import '../../../models/invoice_item.dart';
 import '../../../models/invoice_adjustment.dart';
 import '../../invoice_safety/iqd_normalize.dart'; // 💵
+import '../business/invoice_update_guard.dart'; // 🛡️ حارس تحديث الفاتورة المحفوظة
 
 class InvoiceDao {
   // دالة للحصول على قاعدة البيانات
@@ -160,10 +161,14 @@ class InvoiceDao {
     IqdNormalize.invoice(invoice, headerToo: invoice.status == 'معلقة');
     return await db.transaction((txn) async {
       final cur = await txn.query('invoices',
-          columns: ['version'], where: 'id = ?', whereArgs: [invoice.id], limit: 1);
+          columns: ['version', ...InvoiceUpdateGuard.columns],
+          where: 'id = ?', whereArgs: [invoice.id], limit: 1);
       final dbVersion =
           cur.isEmpty ? 0 : ((cur.first['version'] as num?)?.toInt() ?? 1);
       final map = invoice.toMap();
+      // 🛡️ فاتورة محفوظة لا يتغير عميلها ولا مالها ولا حالتها من هنا (حادثة 1202610191)
+      final blocked = InvoiceUpdateGuard.violation(cur.isEmpty ? null : cur.first, map);
+      if (blocked != null) throw StateError(blocked);
       map['version'] =
           (dbVersion > invoice.version ? dbVersion : invoice.version) + 1;
       map['is_synced'] = 0;
