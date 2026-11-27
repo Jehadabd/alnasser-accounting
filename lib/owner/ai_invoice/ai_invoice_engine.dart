@@ -90,8 +90,17 @@ class AiInvoiceEngine {
         send: (e, k) async => _readAll(e, k, prompt, await filesFor(e)),
       );
       final result = AiInvoiceService.parse(AiInvoiceService.decodeJson(r.text));
+      final missing = await _recoverMissing(
+        result: result,
+        chain: ordered(chain, r.entry.id),
+        keys: keys,
+        filesFor: filesFor,
+        supplierName: supplierName,
+        onStatus: onStatus,
+        wait: wait,
+      );
       AiInvoiceService.applyMatching(result.lines, products, aliases, supplierId);
-      return withEngine(result, r.entry.shownName, '');
+      return withEngine(result, r.entry.shownName, '', missingRows: missing);
     }
 
     // ── 1) القارئ
@@ -104,6 +113,16 @@ class AiInvoiceEngine {
       send: (e, k) async => _readAll(e, k, readerPrompt, await filesFor(e)),
     );
     final result = AiInvoiceService.parse(AiInvoiceService.decodeJson(read.text));
+    // 🔢 سطر فاتته القراءة (فجوة في أرقام التسلسل)؟ نطلبه وحده مرة واحدة
+    final missing = await _recoverMissing(
+      result: result,
+      chain: ordered(chain, read.entry.id),
+      keys: keys,
+      filesFor: filesFor,
+      supplierName: supplierName,
+      onStatus: onStatus,
+      wait: wait,
+    );
     for (final l in result.lines) {
       // القارئ لا يعرف موادنا: أي معرّف منه لا قيمة له
       l.productId = null;
@@ -159,7 +178,40 @@ class AiInvoiceEngine {
     final engine = matcherName.isEmpty || matcherName == read.entry.shownName
         ? read.entry.shownName
         : 'قرأها ${read.entry.shownName} • طابقها $matcherName';
-    return withEngine(result, engine, note);
+    return withEngine(result, engine, note, missingRows: missing);
+  }
+
+  /// 🔢 إن وُجدت فجوة في أرقام أسطر الجدول: طلب واحد للأسطر الفائتة وحدها، ثم توضع في
+  /// أماكنها. يعيد الأرقام التي بقيت فائتة (تُعرض للمستخدم). أي فشل هنا لا يُفشل القراءة.
+  static Future<List<int>> _recoverMissing({
+    required AiInvoiceResult result,
+    required List<AiModelEntry> chain,
+    required Map<AiProvider, List<AiKey>> keys,
+    required Future<List<AiBlob>> Function(AiModelEntry e) filesFor,
+    required String supplierName,
+    required void Function(String status)? onStatus,
+    required void Function(String raw) wait,
+  }) async {
+    final missing = AiInvoiceService.missingRows(result.lines, result.rowsCount);
+    if (missing.isEmpty || missing.length > 30) return missing;
+    onStatus?.call(missing.length == 1 ? 'يتحقق من سطر فاتته القراءة…' : 'يتحقق من ${missing.length} أسطر فاتتها القراءة…');
+    try {
+      final prompt = buildMissingRowsPrompt(missing, supplierName: supplierName);
+      final r = await AiRouter.run(
+        chain: chain,
+        keys: keys,
+        onWait: wait,
+        send: (e, k) async => _readAll(e, k, prompt, await filesFor(e)),
+      );
+      final extra = AiInvoiceService.parse(AiInvoiceService.decodeJson(r.text))
+          .lines
+          .where((l) => l.rowNo != null && missing.contains(l.rowNo))
+          .toList();
+      AiInvoiceService.insertByRow(result.lines, extra);
+    } catch (e) {
+      debugPrint('⚠️ قراءة الأسطر الفائتة: $e');
+    }
+    return AiInvoiceService.missingRows(result.lines, result.rowsCount);
   }
 
   /// يقرأ كل الصور: دفعة واحدة، أو دفعات بحد المزوّد (Groq: 3 صور) ثم دمج JSON.
@@ -205,6 +257,7 @@ class AiInvoiceEngine {
       if (t is Map && n(t['grand_total']) > 0) out['totals'] = t;
       if (n(p['amount_paid']) > 0) out['amount_paid'] = p['amount_paid'];
       if ('${p['status'] ?? ''}'.trim().isNotEmpty) out['status'] = p['status'];
+      if (n(p['rows_count']) > n(out['rows_count'])) out['rows_count'] = p['rows_count'];
       // الدفع يُكتب غالباً في آخر صفحة: آخر دفعة فيها دفع مكتوب هي المعتمدة
       final pay = p['payment'];
       if (pay is Map && (n(pay['paid']) > 0 || n(pay['remaining']) > 0 || '${pay['evidence'] ?? ''}'.trim().isNotEmpty || out['payment'] == null)) {
@@ -233,7 +286,8 @@ class AiInvoiceEngine {
   static List<AiModelEntry> preferOther(List<AiModelEntry> chain, AiModelEntry reader) =>
       [...chain.where((e) => e.id != reader.id), ...chain.where((e) => e.id == reader.id)];
 
-  static AiInvoiceResult withEngine(AiInvoiceResult r, String model, String note) => AiInvoiceResult(
+  static AiInvoiceResult withEngine(AiInvoiceResult r, String model, String note, {List<int> missingRows = const []}) =>
+      AiInvoiceResult(
         lines: r.lines,
         invoiceNumber: r.invoiceNumber,
         date: r.date,
@@ -249,6 +303,8 @@ class AiInvoiceEngine {
         paymentEvidence: r.paymentEvidence,
         model: model,
         engineNote: note,
+        rowsCount: r.rowsCount,
+        missingRows: missingRows,
       );
 
   // ───────────────────────── المرشحون ─────────────────────────
@@ -376,6 +432,7 @@ $names
 - unit_type: meter أو piece أو weight
 - is_free: true للبونص/الهدية/«مجاناً» أو كمية إضافية بسعر 0. عمود «هدية» أو «بونص» فيه رقم ⇒ سطر ثانٍ للمادة نفسها بتلك الكمية و is_free: true
 - expiry: تاريخ صلاحية السطر إن وُجد (انظر القواعد أدناه)، وإلا null
+- row_no: رقم السطر في الجدول (انظر القواعد أدناه)
 
 ## قراءة الأرقام (مهم جداً):
 - الأرقام العربية ٠١٢٣٤٥٦٧٨٩ ⇒ 0123456789
@@ -393,8 +450,9 @@ $names
   "invoice_number": "",
   "currency": "IQD أو USD",
   "line_items": [
-    {"original_name": "", "name": "", "qty": 0, "price": 0, "amount": 0, "sale_unit": "", "units_count": 1, "unit_type": "piece", "is_free": false, "expiry": null}
+    {"row_no": 1, "original_name": "", "name": "", "qty": 0, "price": 0, "amount": 0, "sale_unit": "", "units_count": 1, "unit_type": "piece", "is_free": false, "expiry": null}
   ],
+  "rows_count": 0,
   "totals": {"subtotal": 0, "discount": 0, "shipping": 0, "grand_total": 0},
   ${AiInvoiceService.paymentJson}
 }
@@ -403,7 +461,18 @@ ${AiInvoiceService.paymentRules}
 
 ${AiInvoiceService.expiryRules}
 
+${AiInvoiceService.rowsRules}
+
 - التاريخ 18/10/2026 ⇒ 2026-10-18''';
+  }
+
+  /// 🔢 طلب الأسطر التي فاتت القراءة الأولى فقط (بأرقامها في جدول الفاتورة).
+  static String buildMissingRowsPrompt(List<int> rows, {String supplierName = ''}) {
+    return '''${buildReaderPrompt(supplierName: supplierName)}
+
+## ⚠️ مهمة هذه المرة فقط: قراءة سابقة لهذه الفاتورة فاتتها الأسطر ذات الأرقام (عمود التسلسل): ${jsonEncode(rows)}
+استخرج هذه الأسطر وحدها في line_items بالبنية نفسها، مع row_no لكل سطر. لا تُعد الأسطر الأخرى.
+السطر الفائت غالباً يشبه السطر الذي قبله (المادة نفسها بتركيز أو حجم آخر)، أو خاناته فارغة أو أرقامه مزاحة عن خطه — اقرأه بعناية من الصورة.''';
   }
 
   static String buildMatcherPrompt({

@@ -139,6 +139,103 @@ void main() {
     });
   });
 
+  group('🔢 سطر فاتته القراءة', () {
+    AiInvoiceLine line(int? row, String name) => AiInvoiceLine(
+        originalName: name, cleanName: name, qty: 1, price: 1, amount: 1, saleUnit: '', unitType: 'piece', unitsCount: 1, rowNo: row);
+
+    test('الفجوات وما بعد آخر رقم حتى عدد الأسطر؛ بلا ترقيم ⇒ لا حكم', () {
+      final ls = [line(1, 'a'), line(2, 'b'), line(3, 'c'), line(5, 'e')];
+      expect(AiInvoiceService.missingRows(ls, 0), [4]);
+      expect(AiInvoiceService.missingRows(ls, 7), [4, 6, 7]);
+      expect(AiInvoiceService.missingRows([line(1, 'a'), line(1, 'هدية'), line(2, 'b')], 2), isEmpty);
+      expect(AiInvoiceService.missingRows([line(null, 'a'), line(null, 'b')], 9), isEmpty);
+      expect(AiInvoiceService.missingRows([line(3, 'a'), line(null, 'b'), line(null, 'c'), line(null, 'd')], 0), isEmpty);
+    });
+
+    test('السطر المسترجع يوضع في مكانه', () {
+      final ls = [line(1, 'a'), line(2, 'b'), line(3, 'c'), line(5, 'e')];
+      AiInvoiceService.insertByRow(ls, [line(4, 'd')]);
+      expect(ls.map((l) => l.rowNo), [1, 2, 3, 4, 5]);
+      AiInvoiceService.insertByRow(ls, [line(9, 'z'), line(null, 'q')]);
+      expect(ls.map((l) => l.originalName).skip(5), ['z', 'q']);
+    });
+
+    test('التعليمات تطلب رقم كل سطر وعدد الأسطر ولا تدمج المتشابه', () {
+      final reader = AiInvoiceEngine.buildReaderPrompt();
+      expect(reader, contains('"row_no": 1'));
+      expect(reader, contains('"rows_count": 0'));
+      expect(reader, contains('0.025%'));
+      final again = AiInvoiceEngine.buildMissingRowsPrompt([4]);
+      expect(again, contains('فاتتها الأسطر'));
+      expect(again, contains('[4]'));
+    });
+
+    Future<AiInvoiceResult> runWith(List<Map<String, Object?>> Function(int call) answer, List<String> bodies) async {
+      SharedPreferences.setMockInitialValues({});
+      AiModelsStore.memorySecureForTest = {};
+      AiModelsStore.resetForTest();
+      AiRouter.resetForTest();
+      AiRouter.retryDelay = Duration.zero;
+      AiRouter.maxQuotaWait = Duration.zero;
+      await AiModelsStore.saveConfig(AiModelsConfig(models: [AiModelEntry(provider: AiProvider.groq, model: 'q')]));
+      await AiModelsStore.addKey(AiProvider.groq, 'gsk_test_0123456789');
+      AiVisionClient.clientForTest = MockClient((req) async {
+        bodies.add(utf8.decode(req.bodyBytes));
+        return http.Response(
+            jsonEncode({
+              'choices': [
+                {
+                  'message': {
+                    'content': jsonEncode({'line_items': answer(bodies.length), 'rows_count': 5})
+                  }
+                }
+              ]
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'});
+      });
+      return AiInvoiceEngine.run(
+        bytes: Uint8List.fromList([137, 80, 78, 71]),
+        mimeType: 'image/png',
+        products: const [],
+        aliases: const [],
+        supplierId: null,
+      );
+    }
+
+    Map<String, Object?> item(int row, String name, double amount) =>
+        {'row_no': row, 'original_name': name, 'qty': 1, 'price': amount, 'amount': amount};
+
+    test('ACRETIN 0.05% فاتت ⇒ طلب ثانٍ لها وحدها وتوضع في مكانها', () async {
+      final bodies = <String>[];
+      final r = await runWith(
+          (call) => call == 1
+              ? [
+                  item(1, 'ACETAMOL', 5205),
+                  item(2, 'ACHEE SINUS', 8950),
+                  item(3, 'ACRETIN 0.025% * 30G CREAM', 8338),
+                  item(5, 'AMOCLAN 400 MG', 31290),
+                ]
+              : [item(4, 'ACRETIN 0.05% * 30 G CREAM', 6736)],
+          bodies);
+      expect(bodies.length, 2);
+      expect(bodies.last, contains('فاتتها الأسطر'));
+      expect(r.lines.map((l) => l.rowNo), [1, 2, 3, 4, 5]);
+      expect(r.lines[3].originalName, 'ACRETIN 0.05% * 30 G CREAM');
+      expect(r.missingRows, isEmpty);
+    });
+
+    test('بقي فائتاً بعد الطلب الثاني ⇒ يُبلَّغ المستخدم برقمه', () async {
+      final bodies = <String>[];
+      final r = await runWith(
+          (call) => call == 1 ? [item(1, 'a', 1), item(2, 'b', 1), item(3, 'c', 1), item(5, 'e', 1)] : <Map<String, Object?>>[],
+          bodies);
+      expect(bodies.length, 2);
+      expect(r.missingRows, [4]);
+      expect(r.lines.length, 4);
+    });
+  });
+
   group('⏳ تقدير المدة', () {
     test('عدد صفحات PDF من بنيته، والمدة تكبر مع الصفحات ولها حد', () {
       final pdf = Uint8List.fromList(latin1.encode(

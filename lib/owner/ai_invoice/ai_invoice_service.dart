@@ -45,6 +45,7 @@ class AiInvoiceLine {
     this.isFree = false,
     this.note = '',
     this.expiry,
+    this.rowNo,
   });
 
   final String originalName; // كما في فاتورة المورد
@@ -64,6 +65,9 @@ class AiInvoiceLine {
 
   /// 📅 تاريخ انتهاء الصلاحية لهذا السطر «yyyy-MM-dd» إن كان في الفاتورة (null = لا يوجد).
   String? expiry;
+
+  /// 🔢 رقم السطر في جدول الفاتورة (عمود ت/#) — لمعرفة سطر فاتته القراءة. null = غير مرقّم.
+  int? rowNo;
   bool userChanged = false;
   bool include = true;
 }
@@ -85,6 +89,8 @@ class AiInvoiceResult {
     this.paymentEvidence = '',
     this.model = '',
     this.engineNote = '',
+    this.rowsCount = 0,
+    this.missingRows = const [],
   });
   final List<AiInvoiceLine> lines;
   final String invoiceNumber;
@@ -111,6 +117,12 @@ class AiInvoiceResult {
 
   /// ملاحظة للمستخدم (مثلاً: لم تكتمل المطابقة الذكية فطوبقت الأسطر محلياً).
   final String engineNote;
+
+  /// 🔢 عدد أسطر المواد في جدول الفاتورة كما قرأه النموذج (آخر رقم تسلسل). 0 = غير معروف.
+  final int rowsCount;
+
+  /// 🔢 أرقام أسطر في الفاتورة لم تُقرأ حتى بعد إعادة المحاولة (تُعرض للمستخدم ليضيفها).
+  final List<int> missingRows;
 }
 
 class AiInvoiceException implements Exception {
@@ -299,6 +311,7 @@ class AiInvoiceService {
         isFree: isFree,
         note: note,
         expiry: normalizeExpiry(m['expiry'] ?? m['expiry_date'] ?? m['exp_date']),
+        rowNo: _rowNo(m['row_no'] ?? m['row']),
       ));
     }
     final totals = (j['totals'] is Map) ? Map<String, dynamic>.from(j['totals']) : const <String, dynamic>{};
@@ -320,7 +333,39 @@ class AiInvoiceService {
       previousBalance: pay.previous,
       paymentEvidence: pay.evidence,
       model: 'gemini-flash-latest',
+      rowsCount: _rowNo(j['rows_count']) ?? 0,
     );
+  }
+
+  static int? _rowNo(Object? v) {
+    final n = _num(v);
+    return n >= 1 && n < 10000 && n == n.roundToDouble() ? n.toInt() : null;
+  }
+
+  /// 🔢 أرقام أسطر جدول الفاتورة التي لم تُقرأ: الفجوات في أرقام التسلسل (ت/#)، وما بعد
+  /// آخر رقم حتى [rowsCount]. لا حكم إن لم يكن نصف الأسطر على الأقل مرقّماً.
+  static List<int> missingRows(List<AiInvoiceLine> lines, int rowsCount) {
+    final nums = <int>{for (final l in lines) if (l.rowNo != null) l.rowNo!};
+    if (nums.isEmpty) return const [];
+    final numbered = lines.where((l) => l.rowNo != null).length;
+    if (numbered * 2 < lines.length) return const [];
+    var last = nums.reduce((a, b) => a > b ? a : b);
+    if (rowsCount > last && rowsCount <= last + 50) last = rowsCount;
+    if (last > 500) return const [];
+    return [for (var i = 1; i <= last; i++) if (!nums.contains(i)) i];
+  }
+
+  /// يضع أسطراً مقروءة من جديد في أماكنها حسب رقم السطر (ما بلا رقم يبقى مكانه).
+  static void insertByRow(List<AiInvoiceLine> lines, Iterable<AiInvoiceLine> extra) {
+    for (final x in extra) {
+      final n = x.rowNo;
+      final at = n == null ? -1 : lines.indexWhere((l) => l.rowNo != null && l.rowNo! > n);
+      if (at < 0) {
+        lines.add(x);
+      } else {
+        lines.insert(at, x);
+      }
+    }
   }
 
   /// 📅 تاريخ الصلاحية كما يكتبه النموذج أو الفاتورة ⇒ «yyyy-MM-dd» أو null.
@@ -398,6 +443,14 @@ class AiInvoiceService {
 - لم يُكتب شيء عن الدفع ⇒ status "credit" و paid 0.
 - لا تخلط: «الرصيد السابق» و«الرصيد الحالي/الكلي» و«مجموع الحساب» حساب المورد كله — ليست دفعاً ولا باقياً من هذه الفاتورة. ضعها في payment.previous_balance فقط.
 - payment.evidence: النص كما في الفاتورة الذي استدللت منه على الدفع (مثلاً «الواصل: 250,000») أو "".''';
+
+  /// قواعد عدّ الأسطر: لا سطر يُترك ولا يُدمج (مشتركة بين التعليمات).
+  static const rowsRules = '''### كل سطر في الجدول (مهم جداً):
+- row_no: رقم السطر من عمود التسلسل (ت، #، No، م) إن وُجد، وإلا ترتيبه في الجدول بدءاً من 1. سطر الهدية/البونص الإضافي يأخذ رقم سطر مادته
+- rows_count: عدد أسطر المواد في جدول الفاتورة كلها (آخر رقم تسلسل)
+- اقرأ كل سطر مرقّم حتى آخر رقم، ولا تقفز فوق أي رقم
+- لا تدمج سطرين متشابهين: نفس المادة بتركيز أو حجم مختلف (0.025% و 0.05%، 30G و 50G، 5mg و 10mg) سطران ومادتان
+- السطر الذي خاناته فارغة (بلا صلاحية أو رقم دفعة) أو أرقامه مزاحة قليلاً عن خطه يبقى سطراً كاملاً — اقرأه''';
 
   /// قواعد قراءة تاريخ الصلاحية لكل سطر (مشتركة بين التعليمات).
   static const expiryRules = '''### تاريخ الصلاحية expiry (لكل سطر):
@@ -654,16 +707,20 @@ $expiryRules
       "units_count": 1,
       "is_free": false,
       "expiry": null,
+      "row_no": 1,
       "matched_product_id": null,
       "confidence": 0.0,
       "reason": "شرح المطابقة باختصار"
     }
   ],
+  "rows_count": 0,
   "totals": {"subtotal": 0, "discount": 0, "shipping": 0, "grand_total": 0},
   $paymentJson
 }
 
 $paymentRules
+
+$rowsRules
 
 ## قواعد الحقول:
 

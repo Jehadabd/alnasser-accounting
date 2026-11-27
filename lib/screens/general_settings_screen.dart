@@ -1,3 +1,4 @@
+import 'pos/pos_cart_layout_screen.dart'; // 🧩 أعمدة سلة الكاشير
 import '../services/admin_unlocks.dart'; // 🔓 أقسام يفتحها صاحب البرنامج
 import '../widgets/popup_screens.dart'; // 🪟
 import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
@@ -1706,6 +1707,17 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const InvoiceEntryLayoutScreen()),
+                ),
+              ),
+              const Divider(height: 1),
+              _buildActionTile(
+                icon: Icons.point_of_sale_rounded,
+                iconColor: Colors.deepOrange,
+                title: 'أعمدة سلة الكاشير',
+                subtitle: 'الأعمدة الظاهرة في سلة نقطة البيع وعرض كل عمود، ارتفاع السطر، وعرض مساحة السلة',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PosCartLayoutScreen()),
                 ),
               ),
               const Divider(height: 1),

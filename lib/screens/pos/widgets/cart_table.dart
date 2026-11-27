@@ -12,12 +12,16 @@ import 'package:flutter/material.dart';
 import '../../../providers/pos_provider.dart';
 import '../../../widgets/formatters.dart';
 import '../pos_cart_layout.dart';
+import '../pos_cart_layout_screen.dart'; // ⚙️ تصميم أعمدة السلة
 import 'pos_style.dart';
 
 class CartTable extends StatefulWidget {
-  const CartTable({super.key, required this.pos, this.onLayoutChanged});
+  const CartTable({super.key, required this.pos, this.onLayoutChanged, this.empty});
 
   final POSProvider pos;
+
+  /// ما يظهر تحت رأس الأعمدة حين تكون السلة فارغة
+  final Widget? empty;
 
   /// يُستدعى بعد حفظ تغيير في التخطيط (مثل إعادة عرض السلة للافتراضي)
   final VoidCallback? onLayoutChanged;
@@ -81,6 +85,9 @@ class _CartTableState extends State<CartTable> {
     } else if (v == 'resetCart') {
       await l.copyWith(resetCartWidth: true).save();
       widget.onLayoutChanged?.call();
+    } else if (v == 'settings') {
+      await Navigator.push(context, MaterialPageRoute<bool>(builder: (_) => const PosCartLayoutScreen()));
+      widget.onLayoutChanged?.call(); // عرض السلة قد تغيّر
     }
     if (mounted) setState(() {});
   }
@@ -100,7 +107,9 @@ class _CartTableState extends State<CartTable> {
           children: [
             _header(cols),
             Expanded(
-              child: ListView.builder(
+              child: items.isEmpty
+                  ? (widget.empty ?? const SizedBox.shrink())
+                  : ListView.builder(
                 padding: const EdgeInsets.only(bottom: 8),
                 itemCount: items.length,
                 itemBuilder: (context, i) => _CartRow(
@@ -227,6 +236,11 @@ class _CartTableState extends State<CartTable> {
             child: Text(e.value),
           ),
         const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'settings',
+          height: 38,
+          child: Row(children: [Icon(Icons.tune_rounded, size: 18), SizedBox(width: 8), Text('تصميم أعمدة السلة…')]),
+        ),
         const PopupMenuItem<String>(
           value: 'resetCols',
           height: 38,

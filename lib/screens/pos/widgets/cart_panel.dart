@@ -143,7 +143,6 @@ class CartPanelState extends State<CartPanel> {
   Widget build(BuildContext context) {
     return Consumer<POSProvider>(
       builder: (context, pos, _) {
-        final items = pos.cartItems;
         return Container(
           decoration: const BoxDecoration(
             color: PosColors.surface,
@@ -155,18 +154,17 @@ class CartPanelState extends State<CartPanel> {
                 _header(pos),
                 _customerField(pos),
                 Expanded(
-                  child: items.isEmpty
-                      ? const _EmptyCart()
-                      : Container(
-                          margin: const EdgeInsets.fromLTRB(10, 2, 10, 8),
-                          clipBehavior: Clip.antiAlias,
-                          decoration: BoxDecoration(
-                            color: PosColors.surface,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: PosColors.border),
-                          ),
-                          child: CartTable(pos: pos, onLayoutChanged: widget.onLayoutChanged),
-                        ),
+                  // ▦ رأس الأعمدة ظاهر دائماً، حتى والسلة فارغة
+                  child: Container(
+                    margin: const EdgeInsets.fromLTRB(10, 2, 10, 8),
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: PosColors.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: PosColors.border),
+                    ),
+                    child: CartTable(pos: pos, onLayoutChanged: widget.onLayoutChanged, empty: const _EmptyCart()),
+                  ),
                 ),
                 ConstrainedBox(
                   // على الشاشات القصيرة يُمرَّر الملخص بدل أن يفيض

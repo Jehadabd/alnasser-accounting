@@ -1042,6 +1042,13 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         // ملاحظة المحرك بلا أسماء نماذج (اسم النموذج لا يظهر في الواجهة)
         if (r.engineNote.isNotEmpty)
           _banner('لم تكتمل المطابقة الذكية — طابقتُ الأسطر محلياً، راجعها قبل المتابعة.', _cMid, Icons.info_outline_rounded),
+        // 🔢 أسطر مرقّمة في الفاتورة لم تُقرأ حتى بعد إعادة طلبها
+        if (r.missingRows.isNotEmpty)
+          _banner(
+              'لم تُقرأ ${r.missingRows.length == 1 ? 'السطر رقم' : 'الأسطر رقم'} ${r.missingRows.join('، ')} من جدول الفاتورة. '
+              'قارن بالصورة: أعد القراءة (↻)، أو أضفه بعد المتابعة في فاتورة الشراء بزر «إضافة منتج».',
+              _cLow,
+              Icons.playlist_remove_rounded),
         // رأس الفاتورة
         Container(
           padding: const EdgeInsets.all(14),
@@ -1256,7 +1263,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                       height: 26,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(color: c.withValues(alpha: 0.12), shape: BoxShape.circle),
-                      child: Text('${i + 1}', style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 12)),
+                      // رقم السطر كما في جدول الفاتورة (للمقارنة بالورقة)، وإلا ترتيبه هنا
+                      child: Text('${l.rowNo ?? i + 1}', style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 12)),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
