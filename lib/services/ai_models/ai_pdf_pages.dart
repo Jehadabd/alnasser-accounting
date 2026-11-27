@@ -12,8 +12,9 @@ import 'ai_vision_client.dart';
 class AiPdfPages {
   AiPdfPages._();
 
-  /// أقصى عدد صفحات تُرسل (فاتورة أطول نادرة، وتستهلك الحصة).
-  static const maxPages = 8;
+  /// أقصى عدد صفحات تُرسل. الفاتورة الضخمة (عشرات المواد على عدة صفحات) تُقرأ كاملة:
+  /// المحرك يرسلها دفعات بحد كل مزوّد ثم يدمج أسطرها (AiInvoiceEngine._readAll).
+  static const maxPages = 30;
 
   /// صور الصفحات بدقة تكفي للأرقام الصغيرة دون تضخيم الطلب.
   static Future<List<AiBlob>> toImages(Uint8List pdf, {double dpi = 150, int max = maxPages}) async {

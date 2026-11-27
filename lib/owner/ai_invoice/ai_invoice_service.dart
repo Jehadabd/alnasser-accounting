@@ -20,6 +20,7 @@ import 'dart:typed_data';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../../models/product.dart';
+import '../../services/ai_models/ai_vision_client.dart' show AiBlob;
 import '../../services/sync_perks.dart';
 import 'ai_alias_store.dart';
 import 'ai_invoice_engine.dart';
@@ -43,6 +44,7 @@ class AiInvoiceLine {
     this.source = AiMatchSource.none,
     this.isFree = false,
     this.note = '',
+    this.expiry,
   });
 
   final String originalName; // كما في فاتورة المورد
@@ -59,6 +61,9 @@ class AiInvoiceLine {
   AiMatchSource source;
   final bool isFree; // بونص/هدية: يدخل المخزون بلا كلفة
   String note; // ملاحظة فحص (تصحيح سعر، اختلاف تعبئة...)
+
+  /// 📅 تاريخ انتهاء الصلاحية لهذا السطر «yyyy-MM-dd» إن كان في الفاتورة (null = لا يوجد).
+  String? expiry;
   bool userChanged = false;
   bool include = true;
 }
@@ -185,12 +190,15 @@ class AiInvoiceService {
     required int? supplierId,
     String supplierName = '',
     void Function(String status)? onStatus,
+    /// 🖼️ صور إضافية لفاتورة من عدة صفحات (مع الصورة الأولى [bytes]) — تُقرأ فاتورةً واحدة
+    List<AiBlob> moreImages = const [],
   }) async {
     if (!SyncPerks.enabled) {
       throw AiInvoiceException('هذه الميزة متاحة لحساب المالك واشتراك المزامنة');
     }
-    if (bytes.length > 18 * 1024 * 1024) {
-      throw AiInvoiceException('الملف أكبر من 18 ميغابايت — صغّر الصورة أو قسّم الـ PDF');
+    final size = bytes.length + moreImages.fold<int>(0, (s, b) => s + b.bytes.length);
+    if (size > 18 * 1024 * 1024) {
+      throw AiInvoiceException('الملفات أكبر من 18 ميغابايت — صغّر الصور أو قسّم الـ PDF');
     }
     final live = products.where((p) => p.id != null && !p.isDeleted).toList();
     final aliases = await AiAliasStore.forSupplier(supplierId);
@@ -203,6 +211,7 @@ class AiInvoiceService {
         supplierId: supplierId,
         supplierName: supplierName,
         onStatus: onStatus,
+        moreImages: moreImages,
       );
     } on AiInvoiceException {
       rethrow;
@@ -289,6 +298,7 @@ class AiInvoiceService {
         source: mid == null ? AiMatchSource.none : AiMatchSource.ai,
         isFree: isFree,
         note: note,
+        expiry: normalizeExpiry(m['expiry'] ?? m['expiry_date'] ?? m['exp_date']),
       ));
     }
     final totals = (j['totals'] is Map) ? Map<String, dynamic>.from(j['totals']) : const <String, dynamic>{};
@@ -311,6 +321,43 @@ class AiInvoiceService {
       paymentEvidence: pay.evidence,
       model: 'gemini-flash-latest',
     );
+  }
+
+  /// 📅 تاريخ الصلاحية كما يكتبه النموذج أو الفاتورة ⇒ «yyyy-MM-dd» أو null.
+  ///   2028-09-01 • 2028/9/1 • 01/09/2028 • 1-9-2028 • 09/2028 • 2028-09 • 09/28 ⇒ أول الشهر.
+  ///   الشهر بلا يوم يُعدّ من أوله (الأحوط: لا نطيل صلاحية لم تُكتب). غير ذلك ⇒ null.
+  static String? normalizeExpiry(Object? v) {
+    if (v == null) return null;
+    var s = v.toString().trim();
+    const ar = '٠١٢٣٤٥٦٧٨٩';
+    for (var i = 0; i < 10; i++) {
+      s = s.replaceAll(ar[i], '$i');
+    }
+    if (s.isEmpty || s.toLowerCase() == 'null' || s == '-' || s == '—') return null;
+    s = s.split(RegExp(r'[T ]')).first; // «2028-09-01T00:00:00»
+    final parts = s.split(RegExp(r'[-/.]')).where((x) => x.isNotEmpty).toList();
+    if (parts.any((x) => int.tryParse(x) == null)) return null;
+    final n = parts.map(int.parse).toList();
+    final int y0, mo, d;
+    if (n.length == 3) {
+      final yearFirst = parts[0].length == 4; // سنة-شهر-يوم، وإلا يوم/شهر/سنة (كما في الفواتير العراقية)
+      y0 = yearFirst ? n[0] : n[2];
+      mo = n[1];
+      d = yearFirst ? n[2] : n[0];
+    } else if (n.length == 2) {
+      final yearFirst = parts[0].length == 4;
+      y0 = yearFirst ? n[0] : n[1];
+      mo = yearFirst ? n[1] : n[0];
+      d = 1;
+    } else {
+      return null;
+    }
+    final y = y0 < 100 ? y0 + 2000 : y0;
+    if (y < 2000 || y > 2100 || mo < 1 || mo > 12 || d < 1) return null;
+    final last = DateTime(y, mo + 1, 0).day;
+    if (d > last) return null;
+    String two(int x) => x.toString().padLeft(2, '0');
+    return '$y-${two(mo)}-${two(d)}';
   }
 
   /// الدفع من رد النموذج: «payment» الجديد، أو amount_paid/status القديمان.
@@ -351,6 +398,13 @@ class AiInvoiceService {
 - لم يُكتب شيء عن الدفع ⇒ status "credit" و paid 0.
 - لا تخلط: «الرصيد السابق» و«الرصيد الحالي/الكلي» و«مجموع الحساب» حساب المورد كله — ليست دفعاً ولا باقياً من هذه الفاتورة. ضعها في payment.previous_balance فقط.
 - payment.evidence: النص كما في الفاتورة الذي استدللت منه على الدفع (مثلاً «الواصل: 250,000») أو "".''';
+
+  /// قواعد قراءة تاريخ الصلاحية لكل سطر (مشتركة بين التعليمات).
+  static const expiryRules = '''### تاريخ الصلاحية expiry (لكل سطر):
+- إن كان في الجدول عمود صلاحية (Exp، Exp Date، Expiry، EXP، الصلاحية، تاريخ الانتهاء، ينتهي) فاكتب تاريخ ذلك السطر بصيغة YYYY-MM-DD
+- اقرأ التاريخ كما في الفاتورة: 01/09/2028 = يوم/شهر/سنة ⇒ 2028-09-01؛ 09/2028 أو 9/28 ⇒ 2028-09-01
+- لا عمود صلاحية، أو الخانة فارغة لهذا السطر ⇒ null. لا تخترع تاريخاً
+- لا تضع هنا تاريخ الفاتورة، ولا رقم الدفعة (B.No، Batch، Lot)، ولا تاريخ الإنتاج (MFG)''';
 
   /// حقل الدفع في بنية JSON المطلوبة.
   static const paymentJson =
@@ -574,6 +628,9 @@ $learnedJson
 ### 7. البونص والهدايا:
 - سطر "بونص" أو "هدية" أو "مجاناً" أو كمية إضافية بسعر 0 → أدرجه بـ price: 0 و amount: 0 و is_free: true (يدخل المخزون بلا كلفة)
 - "10+1" في عمود الكمية → سطر بكمية 10 بسعرها، وسطر ثانٍ للمادة نفسها بكمية 1 و is_free: true
+- عمود «هدية» أو «بونص» بجانب الكمية وفيه رقم أكبر من صفر → سطر ثانٍ للمادة نفسها بتلك الكمية و is_free: true
+
+$expiryRules
 
 ### 8. ما لا يُدرج كمنتجات:
 - أسطر المجموع، الخصم، الأجور، النقل، الرصيد السابق، الملاحظات، العناوين
@@ -596,6 +653,7 @@ $learnedJson
       "sale_unit": "وحدة الشراء",
       "units_count": 1,
       "is_free": false,
+      "expiry": null,
       "matched_product_id": null,
       "confidence": 0.0,
       "reason": "شرح المطابقة باختصار"

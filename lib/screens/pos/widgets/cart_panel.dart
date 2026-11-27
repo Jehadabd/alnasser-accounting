@@ -1,6 +1,7 @@
 // lib/screens/pos/widgets/cart_panel.dart
 //
-// 🧺 سلة الكاشير: العميل، أسطر المواد (الوحدة، السعر، الكمية)، والدفع.
+// 🧺 سلة الكاشير: العميل، أسطر المواد جدولاً بأعمدة يختارها المستخدم ويغيّر عرضها
+//  (cart_table.dart)، والدفع.
 //  • سعر السطر يُكتب بحرية ويُعتمد عند الخروج من الحقل أو Enter (لا يقفز المؤشر)
 //  • زر الدفع يُقفل أثناء الحفظ (منع الحفظ المكرر) — والاختصار F9
 //  • «مسح» السلة يطلب تأكيداً
@@ -14,13 +15,17 @@ import 'package:provider/provider.dart';
 import '../../../providers/pos_provider.dart';
 import '../../../widgets/formatters.dart';
 import '../pos_receipts_screen.dart';
+import 'cart_table.dart'; // ▦ أسطر السلة جدولاً
 import 'pos_style.dart';
 
 class CartPanel extends StatefulWidget {
-  const CartPanel({super.key, this.onCheckedOut});
+  const CartPanel({super.key, this.onCheckedOut, this.onLayoutChanged});
 
   /// يُستدعى بعد حفظ الفاتورة بنجاح (مثلاً لإغلاق السلة المنبثقة على الشاشات الصغيرة)
   final VoidCallback? onCheckedOut;
+
+  /// تغيّر تخطيط السلة من قائمة أعمدتها (مثل إعادة عرض السلة للافتراضي)
+  final VoidCallback? onLayoutChanged;
 
   @override
   State<CartPanel> createState() => CartPanelState();
@@ -152,17 +157,15 @@ class CartPanelState extends State<CartPanel> {
                 Expanded(
                   child: items.isEmpty
                       ? const _EmptyCart()
-                      : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
-                          itemCount: items.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 8),
-                          itemBuilder: (context, i) => _CartLine(
-                            key: ValueKey(items[i].id),
-                            index: i,
-                            item: items[i],
-                            units: pos.getProductUnits(items[i].product),
-                            pos: pos,
+                      : Container(
+                          margin: const EdgeInsets.fromLTRB(10, 2, 10, 8),
+                          clipBehavior: Clip.antiAlias,
+                          decoration: BoxDecoration(
+                            color: PosColors.surface,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: PosColors.border),
                           ),
+                          child: CartTable(pos: pos, onLayoutChanged: widget.onLayoutChanged),
                         ),
                 ),
                 ConstrainedBox(
@@ -560,284 +563,6 @@ class _SumLine extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// سطر مادة في السلة: الاسم والمجموع، ثم الوحدة والسعر والكمية
-class _CartLine extends StatefulWidget {
-  const _CartLine({
-    super.key,
-    required this.index,
-    required this.item,
-    required this.units,
-    required this.pos,
-  });
-
-  final int index;
-  final CartItem item;
-  final List<Map<String, dynamic>> units;
-  final POSProvider pos;
-
-  @override
-  State<_CartLine> createState() => _CartLineState();
-}
-
-class _CartLineState extends State<_CartLine> {
-  late final TextEditingController _price = TextEditingController(text: posMoney(widget.item.price));
-  final FocusNode _priceFocus = FocusNode();
-
-  @override
-  void initState() {
-    super.initState();
-    _priceFocus.addListener(() {
-      if (!_priceFocus.hasFocus) _commitPrice();
-    });
-  }
-
-  @override
-  void didUpdateWidget(covariant _CartLine old) {
-    super.didUpdateWidget(old);
-    // لا نلمس الحقل أثناء الكتابة فيه (كان المؤشر يقفز مع كل حرف)
-    if (!_priceFocus.hasFocus) {
-      final t = posMoney(widget.item.price);
-      if (_price.text != t) _price.text = t;
-    }
-  }
-
-  @override
-  void dispose() {
-    _price.dispose();
-    _priceFocus.dispose();
-    super.dispose();
-  }
-
-  /// رفض الزيادة (البيع بالسالب ممنوع) ⇒ رسالة واضحة بدل تجاهل صامت
-  void _guard(bool ok) {
-    if (ok || !mounted) return;
-    final m = ScaffoldMessenger.of(context);
-    m.hideCurrentSnackBar();
-    m.showSnackBar(SnackBar(
-      content: Text(widget.pos.lastErrorMessage ?? 'تعذّر التعديل'),
-      backgroundColor: PosColors.danger,
-      behavior: SnackBarBehavior.floating,
-    ));
-  }
-
-  void _commitPrice() {
-    final it = widget.item;
-    final v = double.tryParse(_price.text.replaceAll(',', ''));
-    if (v != null && v >= 0 && (v - it.price).abs() > 1e-9) {
-      _guard(widget.pos.updateCartItemUnit(it.id, it.selectedUnit, v, it.unitsInLargeUnit));
-    } else {
-      _price.text = posMoney(it.price);
-    }
-  }
-
-  Future<void> _editQty() async {
-    final it = widget.item;
-    final c = TextEditingController(text: '${it.quantity}');
-    final q = await showDialog<int>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(it.product.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16)),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-          decoration: InputDecoration(labelText: 'الكمية (${it.selectedUnit})', border: const OutlineInputBorder()),
-          onSubmitted: (v) => Navigator.pop(ctx, int.tryParse(v.trim())),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, int.tryParse(c.text.trim())), child: const Text('تم')),
-        ],
-      ),
-    );
-    c.dispose();
-    if (q == null || !mounted) return;
-    _guard(widget.pos.updateQuantity(it.id, q - it.quantity)); // صفر ⇒ يُحذف السطر
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final it = widget.item;
-    final units = widget.units;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
-      decoration: BoxDecoration(
-        color: PosColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: PosColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 22,
-                height: 22,
-                alignment: Alignment.center,
-                decoration: const BoxDecoration(color: PosColors.surfaceAlt, shape: BoxShape.circle),
-                child: Text('${widget.index + 1}', style: const TextStyle(fontSize: 11, color: PosColors.muted, fontWeight: FontWeight.w700)),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  it.product.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13.5, height: 1.25, fontWeight: FontWeight.w600, color: PosColors.text),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                posMoney(it.total),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: PosColors.primary),
-              ),
-              IconButton(
-                tooltip: 'حذف',
-                visualDensity: VisualDensity.compact,
-                onPressed: () => widget.pos.removeFromCart(it.id),
-                icon: const Icon(Icons.close_rounded, size: 18, color: PosColors.faint),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: units.length > 1
-                    ? Container(
-                        height: 36,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        decoration: BoxDecoration(
-                          color: PosColors.surfaceAlt,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: PosColors.border),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: units.any((u) => u['name'] == it.selectedUnit) ? it.selectedUnit : null,
-                            isExpanded: true,
-                            isDense: true,
-                            icon: const Icon(Icons.expand_more_rounded, size: 18, color: PosColors.muted),
-                            style: const TextStyle(fontSize: 12.5, color: PosColors.text),
-                            items: [
-                              for (final u in units)
-                                DropdownMenuItem(
-                                  value: u['name'] as String,
-                                  child: Text(u['name'] as String, overflow: TextOverflow.ellipsis),
-                                ),
-                            ],
-                            onChanged: (name) {
-                              if (name == null) return;
-                              final u = units.firstWhere((x) => x['name'] == name);
-                              _guard(widget.pos.updateCartItemUnit(
-                                it.id,
-                                name,
-                                (u['price'] as num).toDouble(),
-                                (u['quantity'] as num).toInt(),
-                              ));
-                            },
-                          ),
-                        ),
-                      )
-                    : Text(it.selectedUnit, style: const TextStyle(fontSize: 12.5, color: PosColors.muted)),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 96,
-                height: 36,
-                child: TextField(
-                  controller: _price,
-                  focusNode: _priceFocus,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-                  textAlign: TextAlign.center,
-                  onSubmitted: (_) => _commitPrice(),
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: it.price > 0 ? PosColors.text : PosColors.danger,
-                  ),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    filled: true,
-                    fillColor: it.price > 0 ? PosColors.surface : const Color(0xFFFEF2F2),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 9),
-                    hintText: 'السعر',
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: it.price > 0 ? PosColors.border : PosColors.danger),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: PosColors.accent, width: 1.5),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              _QtyStepper(
-                qty: it.quantity,
-                onMinus: () => widget.pos.updateQuantity(it.id, -1),
-                onPlus: () => _guard(widget.pos.updateQuantity(it.id, 1)),
-                onEdit: _editQty,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _QtyStepper extends StatelessWidget {
-  const _QtyStepper({required this.qty, required this.onMinus, required this.onPlus, required this.onEdit});
-
-  final int qty;
-  final VoidCallback onMinus;
-  final VoidCallback onPlus;
-  final VoidCallback onEdit;
-
-  @override
-  Widget build(BuildContext context) {
-    Widget btn(IconData icon, VoidCallback onTap, Color color) => InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: SizedBox(width: 30, height: 34, child: Icon(icon, size: 18, color: color)),
-        );
-    return Container(
-      height: 36,
-      decoration: BoxDecoration(
-        color: PosColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: PosColors.border),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            btn(Icons.remove_rounded, onMinus, PosColors.muted),
-            InkWell(
-              onTap: onEdit,
-              borderRadius: BorderRadius.circular(6),
-              child: Container(
-                constraints: const BoxConstraints(minWidth: 30),
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                alignment: Alignment.center,
-                child: Text('$qty', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: PosColors.text)),
-              ),
-            ),
-            btn(Icons.add_rounded, onPlus, PosColors.accent),
-          ],
-        ),
       ),
     );
   }

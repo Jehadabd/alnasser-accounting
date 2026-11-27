@@ -5,6 +5,8 @@
 //  • متوسطة (≥ 760): المواد مع شريط أقسام أفقي | السلة
 //  • صغيرة (تابلت عمودي/هاتف): المواد، وشريط سفلي يفتح السلة
 // اختصارات: F2 البحث، F9 الدفع. قارئ الباركود يكتب في حقل البحث، و Enter يضيف المادة.
+// ↔️ الفاصل بين المواد والسلة يُسحب لتكبير السلة أو تصغيرها (نقرتان: العرض الافتراضي)؛
+//    شبكة المواد تعيد ترتيب أعمدتها حسب المساحة الباقية. يُحفظ على هذا الجهاز.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -20,6 +22,7 @@ import '../../services/settings_manager.dart';
 import '../../widgets/app_side_nav.dart';
 import '../../widgets/camera_barcode_scanner_dialog.dart';
 import '../../widgets/camera_scan_button.dart';
+import 'pos_cart_layout.dart'; // 🧩 أعمدة السلة وعرضها
 import 'pos_receipts_screen.dart';
 import 'widgets/cart_panel.dart';
 import 'widgets/categories_sidebar.dart';
@@ -48,6 +51,9 @@ class _POSScreenState extends State<POSScreen> {
 
   AppSettings? _appSettings;
 
+  /// عرض السلة أثناء سحب الفاصل (يُحفظ عند رفع الإصبع)
+  double? _liveCartW;
+
   /// 🔫 قارئ الباركود من أي مكان في الشاشة (حتى والمؤشر في خانة العميل أو الخصم)
   late final ScannerWedge _wedge = ScannerWedge(
     context: () => context,
@@ -61,12 +67,45 @@ class _POSScreenState extends State<POSScreen> {
     ScanSettings.ensureLoaded();
     _wedge.attach();
     _loadSettings();
+    PosCartLayout.load().then((_) {
+      if (mounted) setState(() {});
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<POSProvider>().loadInitialData();
       _searchFocus.requestFocus(); // قارئ الباركود يكتب في حقل البحث مباشرة
     });
   }
+
+  /// عرض السلة الفعلي: المسحوب الآن، أو المحفوظ، أو الافتراضي — ضمن حدود الشاشة.
+  double _cartWidth(double total, {required double fallback, double reserved = 0}) {
+    final l = PosCartLayout.current;
+    final live = _liveCartW;
+    return (live == null ? l : l.copyWith(cartWidth: live)).resolveCartWidth(total, fallback: fallback, reserved: reserved);
+  }
+
+  void _dragCart(double dx, double current, double total, double reserved) {
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    // السلة على يسار الفاصل في العربية: السحب يميناً يكبّرها
+    final next = current + (rtl ? dx : -dx);
+    setState(() => _liveCartW = PosCartLayout.current
+        .copyWith(cartWidth: next)
+        .resolveCartWidth(total, fallback: current, reserved: reserved));
+  }
+
+  Future<void> _saveCartWidth() async {
+    final live = _liveCartW;
+    if (live == null) return;
+    await PosCartLayout.current.copyWith(cartWidth: live).save();
+    if (mounted) setState(() => _liveCartW = null);
+  }
+
+  Future<void> _resetCartWidth() async {
+    await PosCartLayout.current.copyWith(resetCartWidth: true).save();
+    if (mounted) setState(() => _liveCartW = null);
+  }
+
+  Widget _cart() => CartPanel(key: _cartKey, onLayoutChanged: () => setState(() {}));
 
   Future<void> _loadSettings() async {
     final settings = await SettingsManager.getAppSettings();
@@ -328,21 +367,32 @@ class _POSScreenState extends State<POSScreen> {
                 builder: (context, box) {
                   final w = box.maxWidth;
                   if (w >= PosBreakpoints.wide) {
-                    final cartW = (w * 0.33).clamp(380.0, 470.0);
+                    const side = 176.0;
+                    final cartW = _cartWidth(w, fallback: (w * 0.33).clamp(380.0, 470.0).toDouble(), reserved: side);
                     return Row(
                       children: [
-                        const SizedBox(width: 176, child: CategoriesSidebar()),
+                        const SizedBox(width: side, child: CategoriesSidebar()),
                         Expanded(child: _products(showChips: false)),
-                        SizedBox(width: cartW, child: CartPanel(key: _cartKey)),
+                        _CartSplitter(
+                          onDrag: (dx) => _dragCart(dx, cartW, w, side),
+                          onEnd: _saveCartWidth,
+                          onReset: _resetCartWidth,
+                        ),
+                        SizedBox(width: cartW, child: _cart()),
                       ],
                     );
                   }
                   if (w >= PosBreakpoints.medium) {
-                    final cartW = (w * 0.42).clamp(330.0, 400.0);
+                    final cartW = _cartWidth(w, fallback: (w * 0.42).clamp(330.0, 400.0).toDouble());
                     return Row(
                       children: [
                         Expanded(child: _products(showChips: true)),
-                        SizedBox(width: cartW, child: CartPanel(key: _cartKey)),
+                        _CartSplitter(
+                          onDrag: (dx) => _dragCart(dx, cartW, w, 0),
+                          onEnd: _saveCartWidth,
+                          onReset: _resetCartWidth,
+                        ),
+                        SizedBox(width: cartW, child: _cart()),
                       ],
                     );
                   }
@@ -545,6 +595,65 @@ class _LevelRow extends StatelessWidget {
         ),
         if (selected) Icon(Icons.check_circle_rounded, color: color, size: 20),
       ]),
+    );
+  }
+}
+
+/// ↔️ الفاصل بين المواد والسلة: يُسحب بالماوس أو بالإصبع، ونقرتان تعيدان العرض الافتراضي.
+class _CartSplitter extends StatefulWidget {
+  const _CartSplitter({required this.onDrag, required this.onEnd, required this.onReset});
+
+  final ValueChanged<double> onDrag;
+  final VoidCallback onEnd;
+  final VoidCallback onReset;
+
+  @override
+  State<_CartSplitter> createState() => _CartSplitterState();
+}
+
+class _CartSplitterState extends State<_CartSplitter> {
+  bool _hover = false;
+  bool _drag = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _hover || _drag;
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (_) => setState(() => _drag = true),
+        onHorizontalDragUpdate: (d) => widget.onDrag(d.delta.dx),
+        onHorizontalDragEnd: (_) {
+          setState(() => _drag = false);
+          widget.onEnd();
+        },
+        onHorizontalDragCancel: () {
+          setState(() => _drag = false);
+          widget.onEnd();
+        },
+        onDoubleTap: widget.onReset,
+        child: Tooltip(
+          message: 'اسحب لتكبير السلة أو تصغيرها • نقرتان: العرض الافتراضي',
+          waitDuration: const Duration(milliseconds: 700),
+          child: Container(
+            width: 14,
+            color: active ? PosColors.accentSoft : PosColors.bg,
+            alignment: Alignment.center,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              width: active ? 5 : 4,
+              height: active ? 64 : 44,
+              decoration: BoxDecoration(
+                color: active ? PosColors.accent : const Color(0xFFCBD5E1),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

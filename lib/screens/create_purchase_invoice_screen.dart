@@ -34,6 +34,7 @@ import '../inventory/item_card_screen.dart' show ItemCardService; // باركو�
 import '../models/app_user.dart' show AppPermissions;
 import '../services/auth_service.dart';
 import 'purchase_sale_extras.dart'; // 🏷️ سعر بيع المفرد + ✱ الأسعار والباركودات
+import 'purchase_new_item_spec.dart'; // 🆕 تعريف المادة الجديدة من سطرها عند الحفظ
 import 'cost_method_dialog.dart'; // 💰 اسألني عن طريقة الكلفة
 import '../services/cost_method_policy.dart';
 import '../services/settings_manager.dart';
@@ -1131,6 +1132,12 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
                         overflow: TextOverflow.ellipsis,
                       ),
                       // 📦 صلاحية الدفعة وضمانها
+                      if (isNew)
+                        const Text(
+                          'تُعرَّف تلقائياً عند الحفظ بهذه الوحدة والكلفة — أو «عرّفها» للتفاصيل',
+                          style: TextStyle(fontSize: 11, color: Color(0xFF1D4ED8)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       if (item.hasBatchDetails)
                         Text(
                           BatchDetailsDialog.summary(item),
@@ -1420,7 +1427,8 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
               }
               if (!wasKnown && newId != null && newId > 0) _createdHere.add(newId);
               if (index < _items.length) {
-                _replaceItem(index, PurchaseInvoiceItem(
+                // copyWith: تبقى صلاحية الدفعة وضمانها المقروءة من فاتورة المورد
+                _replaceItem(index, _items[index].copyWith(
                   productId: product.id ?? -1,
                   productName: product.name,
                   quantity: quantity,
@@ -1440,6 +1448,93 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
         },
       ),
     );
+  }
+
+  /// 🆕 تعريف المواد الجديدة (productId = -1) من أسطرها مباشرة. مادة بالاسم نفسه موجودة
+  /// ⇒ يُربط السطر بها بدل تكرارها. يعيد سبب التوقف أو null إن عُرّفت كلها.
+  Future<String?> _autoDefineNewRows() async {
+    final db = DatabaseService();
+    final created = <String>[];
+    for (var i = 0; i < _items.length; i++) {
+      final it = _items[i];
+      if (it.productId != -1) continue;
+      final name = (it.productName ?? '').trim();
+      if (name.isEmpty) return 'يوجد سطر مادة جديدة بلا اسم — اضغط «عرّفها» أو احذفه';
+      final norm = AiAliasStore.normalize(name);
+      Product? found;
+      for (final p in _products) {
+        if (!p.isDeleted && (p.id ?? 0) > 0 && AiAliasStore.normalize(p.name) == norm) {
+          found = p;
+          break;
+        }
+      }
+      double factor = it.conversionFactor > 0 ? it.conversionFactor : 1.0;
+      final Product product;
+      if (found != null) {
+        // موجودة بالاسم نفسه: تعبئة الوحدة من المادة إن كانت من وحداتها، وإلا تعبئة السطر
+        product = found;
+        final known = _knownFactor(found, it.unitName);
+        if (known != null) factor = known;
+      } else {
+        final draft = PurchaseNewItemSpec.build(
+          name: name,
+          unitName: it.unitName,
+          factor: factor,
+          baseCostIqd: _baseCostIqd(it),
+          expiryDate: it.expiryDate,
+          plan: widget.aiPrefill?.unitPlans[name],
+        );
+        if (draft == null) {
+          return '«$name»: الوحدة «${it.unitName}» بتعبئة ${fmtQty(factor)} لا تكفي لتعريفها تلقائياً — اضغط «عرّفها»';
+        }
+        int? newId;
+        try {
+          newId = await db.insertProduct(draft);
+        } catch (e) {
+          return 'تعذّر تعريف «$name»: $e';
+        }
+        product = draft.copyWith(id: newId);
+        _products.add(product);
+        _createdHere.add(product.id!);
+        created.add(name);
+        factor = _conversionFactorFor(product, it.unitName);
+      }
+      // 🧠 مادة من فاتورة مقروءة بالذكاء الاصطناعي: نتعلّم اسمها الأصلي لهذا المورد
+      final aiOriginal = widget.aiPrefill?.originalNames[name];
+      if (aiOriginal != null) {
+        AiAliasStore.learn(
+          supplierId: _selectedSupplier?.id,
+          alias: aiOriginal,
+          productId: product.id!,
+          productName: product.name,
+        ).catchError((_) {});
+      }
+      _replaceItem(i, it.copyWith(productId: product.id, productName: product.name, conversionFactor: factor));
+    }
+    if (!mounted) return null;
+    setState(() {});
+    if (created.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('🆕 عُرّفت ${created.length} مادة جديدة من أسطرها: ${created.take(4).join('، ')}'
+            '${created.length > 4 ? '…' : ''}'),
+        backgroundColor: const Color(0xFF1D4ED8),
+      ));
+    }
+    return null;
+  }
+
+  /// تعبئة [unit] من وحدات المادة (null إن لم تكن من وحداتها).
+  double? _knownFactor(Product product, String unit) {
+    final base = _baseUnitOf(product);
+    if (unit == base || unit == product.unit) return 1.0;
+    double f = 1.0;
+    for (final level in product.getUnitHierarchyList()) {
+      final name = level['unit_name']?.toString() ?? '';
+      if (name.isEmpty) continue;
+      f *= (level['quantity'] as num?)?.toDouble() ?? 1.0;
+      if (name == unit) return f > 0 ? f : null;
+    }
+    return null;
   }
 
   void _showAddProductDialog() {
@@ -1565,16 +1660,17 @@ class _CreatePurchaseInvoiceScreenState extends State<CreatePurchaseInvoiceScree
     }
     if (!mounted) return;
 
-    // 🔍 Validation: Check for undefined items (New Products)
+    // 🆕 مواد جديدة (الأسطر الزرقاء): تُعرَّف تلقائياً من سطرها — الاسم والوحدة الأصغر
+    //    والكلفة والصلاحية — ثم يكمل الحفظ. ما لا يمكن تعريفه تلقائياً يوقف الحفظ مع السبب.
     if (_items.any((item) => item.productId == -1)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('⚠️ يوجد منتجات غير معرفة (باللون الأزرق). يرجى تعريفها أو حذفها قبل الحفظ.'),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 4),
-        ),
-      );
-      return;
+      final problem = await _autoDefineNewRows();
+      if (!mounted) return;
+      if (problem != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(problem), backgroundColor: Colors.orange, duration: const Duration(seconds: 5)),
+        );
+        return;
+      }
     }
 
     setState(() => _isSaving = true);

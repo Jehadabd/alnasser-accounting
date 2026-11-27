@@ -2,7 +2,7 @@
 //
 // 👑🤖 «فاتورة شراء بالذكاء الاصطناعي» — لحساب المالك واشتراك المزامنة (SyncPerks).
 //
-// 1) اختر صورة/PDF فاتورة المورد
+// 1) اختر صورة/PDF فاتورة المورد — أو عدة صور لفاتورة من عدة صفحات (تُقرأ فاتورةً واحدة)
 // 2) تقرأها نماذج الإعدادات (نموذج يقرأ وآخر يطابق — ai_invoice_engine.dart) وتطابق
 //    موادها مع موادنا (مع ما تعلّمه من تصحيحاتك السابقة)
 // 3) تراجع كل سطر: تغيّر المادة، الوحدة، التعبئة، الكمية، السعر
@@ -10,10 +10,14 @@
 //    والحفظ هناك يمرّ بكل حمايات الشاشة الأصلية (المخزون، الدين، الفترات المثبّتة).
 
 import '../../services/admin_unlocks.dart'; // 🔓
+import 'dart:async';
+import 'dart:convert' show latin1;
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:pdf/pdf.dart' show PdfPageFormat;
+import 'package:pdf/widgets.dart' as pw;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
 import 'package:path/path.dart' as p;
@@ -28,6 +32,7 @@ import '../../screens/create_purchase_invoice_screen.dart';
 import '../../services/database_service.dart';
 import '../../services/pdf_raster.dart';
 import '../../services/ai_models/ai_models_config.dart';
+import '../../services/ai_models/ai_vision_client.dart' show AiBlob;
 import '../../services/purchase_service.dart';
 import '../../services/sync_perks.dart';
 import '../../screens/ai_models_settings_screen.dart';
@@ -52,6 +57,33 @@ const _cManual = Color(0xFF7C3AED);
 
 enum _Phase { pick, reading, review }
 
+/// ملف مختار: صورة صفحة، أو ملف PDF واحد.
+class _Doc {
+  const _Doc(this.bytes, this.name);
+  final Uint8List bytes;
+  final String name;
+  bool get isPdf => name.toLowerCase().endsWith('.pdf');
+  String get mime => AiInvoiceService.mimeFor(name);
+}
+
+/// ⏳ تقدير مدة القراءة (للعرض فقط): عدد الصفحات من الصور، أو من بنية الـ PDF.
+class AiReadEstimate {
+  AiReadEstimate._();
+
+  /// عدد صفحات PDF تقريبياً («/Type /Page» دون «/Pages»). 1 على الأقل.
+  static int pdfPages(Uint8List pdf) {
+    try {
+      final n = RegExp(r'/Type\s*/Page(?![s])').allMatches(latin1.decode(pdf, allowInvalid: true)).length;
+      return n < 1 ? 1 : n;
+    } catch (_) {
+      return 1;
+    }
+  }
+
+  /// ثوانٍ تقريبية: 20 للبدء والمطابقة + 12 لكل صفحة، بحد 4 دقائق.
+  static int seconds(int pages) => (20 + 12 * (pages < 1 ? 1 : pages)).clamp(25, 240).toInt();
+}
+
 class _Row {
   _Row(this.line);
   final AiInvoiceLine line;
@@ -60,6 +92,9 @@ class _Row {
   final factor = TextEditingController();
   String unit = '';
   List<String> units = const [];
+
+  /// 📅 صلاحية السطر «yyyy-MM-dd» (من الفاتورة أو تُكتب هنا). null = بلا صلاحية.
+  String? expiry;
 
   /// 📦 وحدات المادة الجديدة كما عرّفها المستخدم (null = لم تُعرَّف بعد).
   AiUnitPlan? plan;
@@ -103,9 +138,22 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   bool _hasKeys = true;
   String _status = '';
 
-  Uint8List? _bytes;
-  String _fileName = '';
+  /// الملفات المختارة: PDF واحد، أو صورة، أو عدة صور لفاتورة واحدة.
+  List<_Doc> _docs = const [];
+  static const _maxImages = 20;
   String? _savedPath;
+  String? _errorDetail; // تفاصيل تقنية للخطأ (تُفتح بزر — لا تظهر أسماء النماذج في الواجهة)
+
+  // ⏳ عدّاد القراءة: المدة المقدّرة والمنقضية
+  final _readWatch = Stopwatch();
+  Timer? _ticker;
+  int _etaSeconds = 30;
+
+  Uint8List? get _bytes => _docs.isEmpty ? null : _docs.first.bytes;
+  String get _fileName => _docs.isEmpty
+      ? ''
+      : (_docs.length == 1 ? _docs.first.name : '${_docs.length} صور — ${_docs.first.name}…');
+  bool get _isPdf => _docs.length == 1 && _docs.first.isPdf;
   Future<List<Uint8List>>? _pdfView; // صور صفحات الـ PDF للعرض (لا pdfrx — انظر pdf_raster.dart)
   double _pdfZoom = 1;
 
@@ -139,6 +187,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     _numberCtl.dispose();
     _paidCtl.dispose();
     _pdfScroll.dispose();
+    _ticker?.cancel();
     super.dispose();
   }
 
@@ -176,28 +225,29 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     final res = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+      allowMultiple: true, // 🖼️ فاتورة ضخمة مصوّرة على عدة صور
       withData: true,
     );
     if (res == null || res.files.isEmpty) return;
-    final f = res.files.single;
-    Uint8List? bytes = f.bytes;
-    if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
-    if (bytes == null) return;
-    String? saved;
-    try {
-      final dir = Directory(p.join((await getApplicationDocumentsDirectory()).path, 'attachments'));
-      if (!await dir.exists()) await dir.create(recursive: true);
-      final ext = p.extension(f.name).isEmpty ? '.jpg' : p.extension(f.name);
-      final file = File(p.join(dir.path, 'ai_${p.basenameWithoutExtension(f.name)}_${DateTime.now().millisecondsSinceEpoch}$ext'));
-      await file.writeAsBytes(bytes, flush: true);
-      saved = file.path;
-    } catch (_) {
-      saved = f.path; // نعرض ونرفق من مكانه الأصلي
+    final docs = <_Doc>[];
+    for (final f in res.files) {
+      Uint8List? bytes = f.bytes;
+      if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
+      if (bytes != null && bytes.isNotEmpty) docs.add(_Doc(bytes, f.name));
     }
+    if (docs.isEmpty || !mounted) return;
+    if (docs.length > 1 && docs.any((d) => d.isPdf)) {
+      _snack('اختر ملف PDF واحداً، أو عدة صور لفاتورة واحدة — لا تجمع بينهما', _cLow);
+      return;
+    }
+    if (docs.length > _maxImages) {
+      _snack('حتى $_maxImages صورة للفاتورة الواحدة', _cLow);
+      return;
+    }
+    final saved = await _saveAttachment(docs);
     if (!mounted) return;
     setState(() {
-      _bytes = bytes;
-      _fileName = f.name;
+      _docs = docs;
       _savedPath = saved;
       _pdfView = null;
       _pdfZoom = 1;
@@ -205,18 +255,74 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     await _read();
   }
 
+  /// 📎 مرفق فاتورة الشراء: الملف نفسه، أو الصور مجمّعة في PDF واحد بترتيب اختيارها.
+  Future<String?> _saveAttachment(List<_Doc> docs) async {
+    try {
+      final dir = Directory(p.join((await getApplicationDocumentsDirectory()).path, 'attachments'));
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final first = docs.first;
+      if (docs.length > 1) {
+        try {
+          final pdf = pw.Document();
+          for (final d in docs) {
+            final img = pw.MemoryImage(d.bytes);
+            pdf.addPage(pw.Page(
+              pageFormat: PdfPageFormat.a4,
+              margin: const pw.EdgeInsets.all(12),
+              build: (_) => pw.Center(child: pw.Image(img, fit: pw.BoxFit.contain)),
+            ));
+          }
+          final file = File(p.join(dir.path, 'ai_${p.basenameWithoutExtension(first.name)}_${stamp}_${docs.length}p.pdf'));
+          await file.writeAsBytes(await pdf.save(), flush: true);
+          return file.path;
+        } catch (_) {
+          // صيغة صورة لا يقبلها مولّد الـ PDF ⇒ نرفق الصورة الأولى على الأقل
+        }
+      }
+      final ext = p.extension(first.name).isEmpty ? '.jpg' : p.extension(first.name);
+      final file = File(p.join(dir.path, 'ai_${p.basenameWithoutExtension(first.name)}_$stamp$ext'));
+      await file.writeAsBytes(first.bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _startClock() {
+    final pages = _isPdf ? AiReadEstimate.pdfPages(_docs.first.bytes) : _docs.length;
+    _etaSeconds = AiReadEstimate.seconds(pages);
+    _readWatch
+      ..reset()
+      ..start();
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _phase == _Phase.reading) setState(() {});
+    });
+  }
+
+  void _stopClock() {
+    _ticker?.cancel();
+    _ticker = null;
+    _readWatch.stop();
+  }
+
   Future<void> _read() async {
-    final bytes = _bytes;
-    if (bytes == null) return;
+    final docs = _docs;
+    if (docs.isEmpty) return;
     setState(() {
       _phase = _Phase.reading;
       _error = null;
+      _errorDetail = null;
       _status = '';
     });
+    _startClock();
     try {
+      final first = docs.first;
       final r = await AiInvoiceService.extract(
-        bytes: bytes,
-        mimeType: AiInvoiceService.mimeFor(_fileName),
+        bytes: first.bytes,
+        mimeType: first.mime,
+        moreImages: [for (final d in docs.skip(1)) AiBlob(d.bytes, d.mime)],
         products: _products,
         supplierId: _supplier?.id,
         supplierName: _supplier?.name ?? '',
@@ -239,12 +345,19 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         }
       }
       if (!mounted) return;
+      _stopClock();
       _apply(r);
     } catch (e) {
+      _stopClock();
       if (!mounted) return;
+      // رسالة مفهومة بلا أسماء نماذج؛ التفاصيل التقنية خلف زر
+      final friendly = e is AiInvoiceException && !e.message.startsWith('فشلت قراءة')
+          ? e.message
+          : 'تعذّرت قراءة الفاتورة — تأكد من الاتصال بالإنترنت ومن مفاتيح النماذج، ثم أعد المحاولة.';
       setState(() {
         _phase = _Phase.pick;
-        _error = e.toString();
+        _error = friendly;
+        _errorDetail = e.toString();
       });
     }
   }
@@ -258,6 +371,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       final row = _Row(l);
       row.qty.text = _plain(l.qty);
       row.price.text = _plain(l.price);
+      row.expiry = l.expiry;
       _setupUnits(row, keepFactor: false);
       _rows.add(row);
     }
@@ -382,6 +496,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         unitPrice: r.pr,
         conversionFactor: r.f,
         totalPrice: r.total,
+        expiryDate: r.expiry, // 📅 تنتقل إلى دفعة المخزون عند «تأكيد واستلام»
       ));
       if (prod == null) {
         originals[name] = l.originalName;
@@ -539,6 +654,22 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           constraints: const BoxConstraints(maxWidth: 620),
           child: Column(children: [
             if (_error != null) _banner(_error!, _cLow, Icons.error_outline_rounded),
+            if (_error != null && _errorDetail != null)
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('التفاصيل التقنية'),
+                      content: SingleChildScrollView(child: SelectableText(_errorDetail!, style: const TextStyle(fontSize: 12.5))),
+                      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق'))],
+                    ),
+                  ),
+                  icon: const Icon(Icons.info_outline_rounded, size: 18),
+                  label: const Text('التفاصيل التقنية'),
+                ),
+              ),
             if (noKeys) ...[
               _banner(
                   'لا يوجد مفتاح نموذج ذكاء اصطناعي على هذا الجهاز. أضف مفتاحاً مجانياً (Gemini أو Groq أو '
@@ -580,8 +711,11 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                   const Text('اختر صورة أو PDF فاتورة المورد',
                       style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: _ink)),
                   const SizedBox(height: 6),
-                  const Text('يقرأ المواد والكميات والأسعار ويطابقها مع موادك',
+                  const Text('يقرأ المواد والكميات والأسعار والصلاحية ويطابقها مع موادك',
                       textAlign: TextAlign.center, style: TextStyle(color: _muted)),
+                  const SizedBox(height: 4),
+                  const Text('فاتورة طويلة؟ اختر صورها كلها معاً (حتى 20 صورة)، أو ملف PDF واحد بكل صفحاته',
+                      textAlign: TextAlign.center, style: TextStyle(fontSize: 12.5, color: _aiB, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 18),
                   FilledButton.icon(
                     onPressed: noKeys ? null : _pick,
@@ -589,10 +723,10 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                         backgroundColor: _aiA, padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
                     icon: const Icon(Icons.upload_file_rounded),
-                    label: const Text('اختيار الملف', style: TextStyle(fontWeight: FontWeight.w700)),
+                    label: const Text('اختيار الصور أو الملف', style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
                   const SizedBox(height: 10),
-                  const Text('JPG • PNG • WEBP • PDF', style: TextStyle(fontSize: 12, color: _muted)),
+                  const Text('JPG • PNG • WEBP (عدة صور) • PDF (ملف واحد)', style: TextStyle(fontSize: 12, color: _muted)),
                 ]),
               ),
             ),
@@ -641,43 +775,77 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         ]),
       );
 
-  // ── 2) القراءة
+  // ── 2) القراءة — بلا اسم نموذج: ما يحدث الآن والمدة المتبقية فقط
   Widget _readingView() {
+    final elapsed = _readWatch.elapsed.inSeconds;
+    final left = _etaSeconds - elapsed;
+    final progress = (elapsed / _etaSeconds).clamp(0.02, 0.96).toDouble();
+    final step = _status.isEmpty ? 'يقرأ الفاتورة…' : _status;
     return Center(
       key: const ValueKey('reading'),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        SizedBox(
-          width: 110,
-          height: 110,
-          child: Stack(alignment: Alignment.center, children: [
-            const SizedBox(width: 110, height: 110, child: CircularProgressIndicator(strokeWidth: 5, color: _aiA)),
-            Container(
-              width: 74,
-              height: 74,
-              decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [_aiA, _aiB])),
-              child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 36),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(
+              width: 110,
+              height: 110,
+              child: Stack(alignment: Alignment.center, children: [
+                const SizedBox(width: 110, height: 110, child: CircularProgressIndicator(strokeWidth: 5, color: _aiA)),
+                Container(
+                  width: 74,
+                  height: 74,
+                  decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [_aiA, _aiB])),
+                  child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 36),
+                ),
+              ]),
             ),
+            const SizedBox(height: 22),
+            Text(
+              left > 0 ? 'انتظر نحو ${_secondsText(left)}' : 'لحظات قليلة ويكتمل…',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: _ink),
+            ),
+            const SizedBox(height: 6),
+            Text(step, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: _aiA)),
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 8,
+                backgroundColor: _aiA.withValues(alpha: 0.12),
+                color: _aiA,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text('مرّ ${_secondsText(elapsed)} • $_fileName',
+                textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, color: _muted)),
+            const SizedBox(height: 18),
+            for (final s in const [
+              'استخراج المواد والكميات والأسعار والصلاحية',
+              'مطابقة الأسماء مع موادك',
+              'تطبيق ما تعلّمه من تصحيحاتك السابقة',
+            ])
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.check_circle_outline_rounded, size: 17, color: _aiB),
+                  const SizedBox(width: 6),
+                  Flexible(child: Text(s, style: const TextStyle(color: _muted))),
+                ]),
+              ),
           ]),
         ),
-        const SizedBox(height: 22),
-        Text(_status.isEmpty ? 'يقرأ الفاتورة…' : _status,
-            textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _ink)),
-        const SizedBox(height: 8),
-        Text(_fileName, style: const TextStyle(color: _muted)),
-        const SizedBox(height: 18),
-        for (final s in const ['استخراج المواد والكميات والأسعار', 'مطابقة الأسماء مع موادك', 'تطبيق ما تعلّمه من تصحيحاتك السابقة'])
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.check_circle_outline_rounded, size: 17, color: _aiB),
-              const SizedBox(width: 6),
-              Text(s, style: const TextStyle(color: _muted)),
-            ]),
-          ),
-        const SizedBox(height: 10),
-        const Text('قد يستغرق 10–60 ثانية حسب حجم الفاتورة', style: TextStyle(fontSize: 12, color: _muted)),
-      ]),
+      ),
     );
+  }
+
+  static String _secondsText(int s) {
+    if (s < 60) return '$s ثانية';
+    final m = s ~/ 60, r = s % 60;
+    return r == 0 ? '$m دقيقة' : '$m دقيقة و$r ثانية';
   }
 
   // ── 3) المراجعة
@@ -699,15 +867,63 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   Widget _docPane() {
     final bytes = _bytes;
     if (bytes == null) return const SizedBox();
-    final isPdf = _fileName.toLowerCase().endsWith('.pdf');
     return Container(
       color: const Color(0xFF1E1B4B),
-      child: isPdf
+      child: _isPdf
           ? _pdfPages(bytes)
-          : InteractiveViewer(
-              maxScale: 6,
-              child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
+          : (_docs.length > 1
+              ? _imagePages()
+              : InteractiveViewer(
+                  maxScale: 6,
+                  child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
+                )),
+    );
+  }
+
+  /// 🖼️ صور الفاتورة صفحةً تحت صفحة؛ الضغط على صفحة يفتحها للتكبير.
+  Widget _imagePages() {
+    return Scrollbar(
+      controller: _pdfScroll,
+      child: ListView.separated(
+        controller: _pdfScroll,
+        padding: const EdgeInsets.all(12),
+        itemCount: _docs.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        itemBuilder: (_, i) => GestureDetector(
+          onTap: () => showDialog<void>(
+            context: context,
+            builder: (ctx) => Dialog.fullscreen(
+              backgroundColor: Colors.black,
+              child: Stack(children: [
+                InteractiveViewer(maxScale: 8, child: Center(child: Image.memory(_docs[i].bytes, fit: BoxFit.contain))),
+                PositionedDirectional(
+                  top: 12,
+                  end: 12,
+                  child: IconButton.filled(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ),
+              ]),
             ),
+          ),
+          child: Stack(children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.memory(_docs[i].bytes, fit: BoxFit.fitWidth, gaplessPlayback: true),
+            ),
+            PositionedDirectional(
+              top: 8,
+              start: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(20)),
+                child: Text('صفحة ${i + 1} من ${_docs.length}', style: const TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+            ),
+          ]),
+        ),
+      ),
     );
   }
 
@@ -715,7 +931,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   Widget _pdfPages(Uint8List bytes) {
     const msg = TextStyle(color: Colors.white70);
     return FutureBuilder<List<Uint8List>>(
-      future: _pdfView ??= PdfRaster2Png.pages(bytes, dpi: 144, max: 12),
+      future: _pdfView ??= PdfRaster2Png.pages(bytes, dpi: 144, max: 40),
       builder: (context, s) {
         if (s.hasError) return const Center(child: Text('تعذّر عرض الـ PDF', style: msg));
         final pages = s.data;
@@ -816,22 +1032,16 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     final nNew = included.where((x) => x.line.productId == null).length;
     final nCheck = included.where((x) => x.line.productId != null && _colorOf(x.line) != _cGood && _colorOf(x.line) != _cLearned && _colorOf(x.line) != _cManual).length;
     final nOk = included.length - nNew - nCheck;
+    final nExp = included.where((x) => x.expiry != null).length;
     final expected = r.grandTotal > 0 ? r.grandTotal + r.discount - r.shipping : 0.0;
     final diff = expected > 0 ? (sum - expected).abs() : 0.0;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
-        if (r.engineNote.isNotEmpty) _banner(r.engineNote, _cMid, Icons.info_outline_rounded),
-        if (r.model.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(children: [
-              const Icon(Icons.auto_awesome_rounded, size: 16, color: _aiB),
-              const SizedBox(width: 6),
-              Expanded(child: Text(r.model, style: const TextStyle(fontSize: 12.5, color: _muted))),
-            ]),
-          ),
+        // ملاحظة المحرك بلا أسماء نماذج (اسم النموذج لا يظهر في الواجهة)
+        if (r.engineNote.isNotEmpty)
+          _banner('لم تكتمل المطابقة الذكية — طابقتُ الأسطر محلياً، راجعها قبل المتابعة.', _cMid, Icons.info_outline_rounded),
         // رأس الفاتورة
         Container(
           padding: const EdgeInsets.all(14),
@@ -889,6 +1099,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           if (nLearned > 0) _pill(Icons.psychology_rounded, 'منها من التعلّم $nLearned', _cLearned),
           _pill(Icons.help_rounded, 'راجِع $nCheck', nCheck > 0 ? _cMid : _muted),
           _pill(Icons.fiber_new_rounded, 'جديدة $nNew', nNew > 0 ? _cNew : _muted),
+          if (nExp > 0) _pill(Icons.event_available_rounded, 'بصلاحية $nExp', _cLearned),
         ]),
         if (diff > 1 && diff > expected * 0.005)
           Padding(
@@ -1076,7 +1287,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                                 style: const TextStyle(fontWeight: FontWeight.w800, color: _ink, fontSize: 14.5)),
                             Text(
                               prod == null
-                                  ? 'غير موجودة عندك — تُعرَّف في شاشة الشراء أو اضغط لاختيار مادة'
+                                  ? 'مادة جديدة — تُعرَّف تلقائياً عند حفظ فاتورة الشراء بالوحدة والتعبئة والسعر هنا، أو اضغط لاختيار مادة'
                                   : [
                                       if ((prod.costPrice ?? 0) > 0) 'الكلفة الحالية ${_fmt.format(prod.costPrice!)}',
                                       if (l.reason.isNotEmpty) l.reason,
@@ -1121,6 +1332,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                       child: _numField('التعبئة', row.factor, 90),
                     ),
                     _numField('السعر', row.price, 120),
+                    _expiryField(row),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(12)),
@@ -1137,6 +1349,50 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
               ),
             ),
           ]),
+        ),
+      ),
+    );
+  }
+
+  /// 📅 الصلاحية: من الفاتورة إن وُجدت، وإلا فارغة — تُكتب أو تُمسح هنا.
+  Widget _expiryField(_Row row) {
+    final d = DateTime.tryParse(row.expiry ?? '');
+    final now = DateTime.now();
+    final expired = d != null && d.isBefore(DateTime(now.year, now.month, now.day));
+    final soon = d != null && !expired && d.difference(now).inDays < 180;
+    final color = d == null ? _muted : (expired ? _cLow : (soon ? _cMid : _ink));
+    String two(int x) => x.toString().padLeft(2, '0');
+    return SizedBox(
+      width: 160,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () async {
+          final picked = await showDatePicker(
+            context: context,
+            initialDate: d ?? DateTime(now.year + 1, now.month, 1),
+            firstDate: DateTime(2000),
+            lastDate: DateTime(2100),
+            helpText: 'تاريخ انتهاء الصلاحية',
+          );
+          if (picked != null && mounted) {
+            setState(() => row.expiry = '${picked.year}-${two(picked.month)}-${two(picked.day)}');
+          }
+        },
+        child: InputDecorator(
+          decoration: _dec('الصلاحية', null, dense: true).copyWith(
+            suffixIcon: d == null
+                ? const Icon(Icons.event_rounded, size: 18, color: _muted)
+                : IconButton(
+                    tooltip: 'بلا صلاحية',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close_rounded, size: 17),
+                    onPressed: () => setState(() => row.expiry = null),
+                  ),
+          ),
+          child: Text(
+            d == null ? '—' : '${expired ? 'منتهية ' : ''}${d.year}/${two(d.month)}/${two(d.day)}',
+            style: TextStyle(color: color, fontWeight: FontWeight.w700),
+          ),
         ),
       ),
     );

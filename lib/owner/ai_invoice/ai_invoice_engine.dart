@@ -55,17 +55,23 @@ class AiInvoiceEngine {
     required int? supplierId,
     String supplierName = '',
     void Function(String status)? onStatus,
+    /// 🖼️ صور إضافية (فاتورة من عدة صفحات مصوّرة). تُهمل إن كان الملف الأول PDF.
+    List<AiBlob> moreImages = const [],
   }) async {
     final cfg = await AiModelsStore.config();
     final keys = await AiModelsStore.keysByProvider();
     final chain = await AiModelsStore.usableChain();
     final file = AiBlob(bytes, mimeType);
+    final images = file.isPdf ? const <AiBlob>[] : [file, ...moreImages.where((b) => !b.isPdf)];
     final pageCache = <AiBlob>[];
+    // ⏳ رسائل الانتظار بلا اسم نموذج أو مزوّد — المستخدم يرى ما يحدث والمدة فقط
+    void wait(String raw) => onStatus?.call(waitStatus(raw));
 
     Future<List<AiBlob>> filesFor(AiModelEntry e) async {
-      if (!file.isPdf || e.provider.nativePdf) return [file];
+      if (!file.isPdf) return images;
+      if (e.provider.nativePdf) return [file];
       if (pageCache.isNotEmpty) return pageCache;
-      onStatus?.call('تحويل صفحات الـ PDF إلى صور…');
+      onStatus?.call('يجهّز صفحات الملف…');
       final conv = pdfToImagesForTest;
       final pages = conv != null ? await conv(bytes) : await AiPdfPages.forProvider(file, nativePdf: false);
       if (pages.isEmpty) throw AiCallException(AiErrorKind.badRequest, 'تعذّر تحويل الـ PDF إلى صور');
@@ -79,8 +85,8 @@ class AiInvoiceEngine {
       final r = await AiRouter.run(
         chain: ordered(chain, cfg.readerId),
         keys: keys,
-        onTry: (e) => onStatus?.call('يقرأ الفاتورة ويطابقها: ${e.shownName}…'),
-        onWait: onStatus,
+        onTry: (e) => onStatus?.call('يقرأ الفاتورة ويطابقها…'),
+        onWait: wait,
         send: (e, k) async => _readAll(e, k, prompt, await filesFor(e)),
       );
       final result = AiInvoiceService.parse(AiInvoiceService.decodeJson(r.text));
@@ -93,8 +99,8 @@ class AiInvoiceEngine {
     final read = await AiRouter.run(
       chain: ordered(chain, cfg.readerId),
       keys: keys,
-      onTry: (e) => onStatus?.call('يقرأ الفاتورة: ${e.shownName}…'),
-      onWait: onStatus,
+      onTry: (e) => onStatus?.call('يقرأ الفاتورة…'),
+      onWait: wait,
       send: (e, k) async => _readAll(e, k, readerPrompt, await filesFor(e)),
     );
     final result = AiInvoiceService.parse(AiInvoiceService.decodeJson(read.text));
@@ -123,8 +129,8 @@ class AiInvoiceEngine {
         final m = await AiRouter.run(
           chain: mChain,
           keys: keys,
-          onTry: (e) => onStatus?.call('يطابق المواد: ${e.shownName}…'),
-          onWait: onStatus,
+          onTry: (e) => onStatus?.call('يطابق المواد مع موادك…'),
+          onWait: wait,
           send: (e, k) async {
             final files = await filesFor(e);
             final text = await AiVisionClient.complete(
@@ -206,6 +212,13 @@ class AiInvoiceEngine {
       }
     }
     return out;
+  }
+
+  /// رسالة انتظار حد المزوّد بلا اسمه: «ينتظر قليلاً (12 ثانية)…».
+  @visibleForTesting
+  static String waitStatus(String raw) {
+    final m = RegExp(r'(\d+)\s*ثانية').firstMatch(raw);
+    return m == null ? 'ينتظر قليلاً…' : 'ينتظر قليلاً (${m.group(1)} ثانية)…';
   }
 
   /// [chain] مع جعل [firstId] أولاً إن وُجد.
@@ -361,7 +374,8 @@ $names
 - sale_unit: وحدة الشراء من عمود الوحدة (لفة، كرتون، باكيت، قطعة، كيس، شدة، درزن، متر، كغم، طن، لتر...). صحّح الإملاء: «كارتون»→«كرتون»، «باكت»→«باكيت»، «كيلو»→«كغم»
 - units_count: كم وحدة صغرى في وحدة الشراء إن ظهر: «80M» أو «90 متر» في الاسم ⇒ 80/90 و sale_unit «لفة»؛ «كرتون 24» أو «×20» ⇒ 24/20؛ «درزن» = 12؛ وإلا 1
 - unit_type: meter أو piece أو weight
-- is_free: true للبونص/الهدية/«مجاناً» أو كمية إضافية بسعر 0
+- is_free: true للبونص/الهدية/«مجاناً» أو كمية إضافية بسعر 0. عمود «هدية» أو «بونص» فيه رقم ⇒ سطر ثانٍ للمادة نفسها بتلك الكمية و is_free: true
+- expiry: تاريخ صلاحية السطر إن وُجد (انظر القواعد أدناه)، وإلا null
 
 ## قراءة الأرقام (مهم جداً):
 - الأرقام العربية ٠١٢٣٤٥٦٧٨٩ ⇒ 0123456789
@@ -379,13 +393,15 @@ $names
   "invoice_number": "",
   "currency": "IQD أو USD",
   "line_items": [
-    {"original_name": "", "name": "", "qty": 0, "price": 0, "amount": 0, "sale_unit": "", "units_count": 1, "unit_type": "piece", "is_free": false}
+    {"original_name": "", "name": "", "qty": 0, "price": 0, "amount": 0, "sale_unit": "", "units_count": 1, "unit_type": "piece", "is_free": false, "expiry": null}
   ],
   "totals": {"subtotal": 0, "discount": 0, "shipping": 0, "grand_total": 0},
   ${AiInvoiceService.paymentJson}
 }
 
 ${AiInvoiceService.paymentRules}
+
+${AiInvoiceService.expiryRules}
 
 - التاريخ 18/10/2026 ⇒ 2026-10-18''';
   }
