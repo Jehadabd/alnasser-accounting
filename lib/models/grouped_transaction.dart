@@ -1,5 +1,6 @@
 // lib/models/grouped_transaction.dart
 import 'transaction.dart';
+import '../erp/sales/return_tx_ref.dart'; // ↩️ مرتجع مبيعات في سجل الديون
 
 /// نوع العنصر المجمع
 enum GroupedTransactionType {
@@ -51,6 +52,9 @@ class GroupedTransactionItem {
   
   /// الرصيد بعد (للمعاملة اليدوية: الرصيد بعد، للفاتورة: الرصيد بعد آخر معاملة)
   final double? balanceAfter;
+
+  /// ↩️ معاملة مرتجع مبيعات (أو إلغاؤه): رقم السند والفاتورة الأصلية — للعرض فقط
+  final ReturnTxRef? returnRef;
   
 
   GroupedTransactionItem({
@@ -67,6 +71,7 @@ class GroupedTransactionItem {
     required this.transactions,
     this.balanceBefore,
     this.balanceAfter,
+    this.returnRef,
   });
 
   /// هل هذا العنصر فاتورة؟

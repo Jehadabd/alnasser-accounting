@@ -7,6 +7,8 @@
 //   • سعر السطر يُعتمد عند الخروج من الحقل أو Enter (لا يقفز المؤشر أثناء الكتابة)
 // العمليات نفسها كما كانت (POSProvider) — التغيير في الشكل فقط.
 
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
 
 import '../../../providers/pos_provider.dart';
@@ -203,62 +205,182 @@ class _CartTableState extends State<CartTable> {
     );
   }
 
-  Widget _columnsMenu() {
-    final l = PosCartLayout.current;
-    return PopupMenuButton<String>(
-      tooltip: 'أعمدة السلة',
-      padding: EdgeInsets.zero,
-      iconSize: 18,
-      icon: const Icon(Icons.view_column_outlined, color: Color(0xFF475569)),
-      position: PopupMenuPosition.under,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      onSelected: _onMenu,
-      itemBuilder: (_) => [
-        const PopupMenuItem<String>(
-          enabled: false,
-          height: 30,
-          child: Text('الأعمدة الظاهرة', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-        ),
-        for (final k in PosCartLayout.keys)
-          if (!PosCartLayout.required.contains(k))
-            CheckedPopupMenuItem<String>(
-              value: 'col:$k',
-              checked: l.show(k),
-              height: 36,
-              child: Text(PosCartLayout.labels[k]!),
+  Widget _columnsMenu() => IconButton(
+        tooltip: 'أعمدة السلة',
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
+        icon: const Icon(Icons.view_column_outlined, color: Color(0xFF475569)),
+        onPressed: _openColumnsPanel,
+      );
+
+  /// ⚙️ لوحة أعمدة السلة: التبديل يُحفظ ويظهر فوراً؛ الإعادة والتصميم المفصّل بعد الإغلاق
+  Future<void> _openColumnsPanel() async {
+    final action = await showDialog<String>(
+      context: context,
+      barrierColor: Colors.black26,
+      builder: (_) => _ColumnsPanel(onChanged: () {
+        if (mounted) setState(() {});
+      }),
+    );
+    if (action != null) await _onMenu(action);
+  }
+}
+
+class _ColumnsPanel extends StatefulWidget {
+  const _ColumnsPanel({required this.onChanged});
+  final VoidCallback onChanged;
+
+  @override
+  State<_ColumnsPanel> createState() => _ColumnsPanelState();
+}
+
+class _ColumnsPanelState extends State<_ColumnsPanel> {
+  PosCartLayout get _l => PosCartLayout.current;
+
+  Future<void> _apply(PosCartLayout next) async {
+    await next.save();
+    if (!mounted) return;
+    setState(() {});
+    widget.onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = _l;
+    return Dialog(
+      insetPadding: const EdgeInsets.all(20),
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 400),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(color: PosColors.accentSoft, borderRadius: BorderRadius.circular(11)),
+                child: const Icon(Icons.view_column_rounded, color: PosColors.accent, size: 21),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('أعمدة السلة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: PosColors.text)),
+                  Text('يظهر التغيير فوراً في السلة', style: TextStyle(fontSize: 12, color: PosColors.muted)),
+                ]),
+              ),
+              IconButton(
+                tooltip: 'إغلاق',
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded, color: PosColors.muted),
+              ),
+            ]),
+            const SizedBox(height: 14),
+            _sectionTitle('الأعمدة الظاهرة'),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final k in PosCartLayout.keys) _columnChip(l, k),
+            ]),
+            const SizedBox(height: 16),
+            _sectionTitle('ارتفاع السطر'),
+            const SizedBox(height: 8),
+            SegmentedButton<double>(
+              showSelectedIcon: false,
+              style: SegmentedButton.styleFrom(
+                selectedBackgroundColor: PosColors.accentSoft,
+                selectedForegroundColor: PosColors.accent,
+                textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+              ),
+              segments: [
+                for (final e in PosCartLayout.rowHeights.entries)
+                  ButtonSegment<double>(
+                    value: e.key,
+                    label: Text(e.value.replaceAll('سطر ', '')),
+                    icon: Icon(
+                      e.key < 44
+                          ? Icons.density_small_rounded
+                          : (e.key > 44 ? Icons.density_large_rounded : Icons.density_medium_rounded),
+                      size: 18,
+                    ),
+                  ),
+              ],
+              selected: {l.rowHeight},
+              onSelectionChanged: (v) => _apply(l.copyWith(rowHeight: v.first)),
             ),
-        const PopupMenuDivider(),
-        for (final e in PosCartLayout.rowHeights.entries)
-          CheckedPopupMenuItem<String>(
-            value: 'h:${e.key}',
-            checked: l.rowHeight == e.key,
-            height: 36,
-            child: Text(e.value),
-          ),
-        const PopupMenuDivider(),
-        const PopupMenuItem<String>(
-          value: 'settings',
-          height: 38,
-          child: Row(children: [Icon(Icons.tune_rounded, size: 18), SizedBox(width: 8), Text('تصميم أعمدة السلة…')]),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: PosColors.surfaceAlt, borderRadius: BorderRadius.circular(12)),
+              child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.touch_app_rounded, size: 18, color: PosColors.muted),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('لتغيير عرض عمود: اسحب حافته في رأس السلة. ولتكبير السلة: اسحب الفاصل بين المواد والسلة.',
+                      style: TextStyle(fontSize: 12, color: PosColors.muted, height: 1.45)),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 14),
+            Wrap(spacing: 6, runSpacing: 6, alignment: WrapAlignment.spaceBetween, children: [
+              TextButton.icon(
+                onPressed: () => Navigator.pop(context, 'resetCols'),
+                icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                label: const Text('الأعمدة الافتراضية'),
+              ),
+              if (l.cartWidth != null)
+                TextButton.icon(
+                  onPressed: () => Navigator.pop(context, 'resetCart'),
+                  icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                  label: const Text('عرض السلة الافتراضي'),
+                ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: PosColors.primary,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.pop(context, 'settings'),
+                icon: const Icon(Icons.tune_rounded, size: 18),
+                label: const Text('تصميم مفصّل…'),
+              ),
+            ]),
+          ]),
         ),
-        const PopupMenuItem<String>(
-          value: 'resetCols',
-          height: 38,
-          child: Row(children: [Icon(Icons.restart_alt_rounded, size: 18), SizedBox(width: 8), Text('أعمدة وعروض افتراضية')]),
-        ),
-        if (l.cartWidth != null)
-          const PopupMenuItem<String>(
-            value: 'resetCart',
-            height: 38,
-            child: Row(children: [Icon(Icons.swap_horiz_rounded, size: 18), SizedBox(width: 8), Text('عرض السلة الافتراضي')]),
-          ),
-        const PopupMenuItem<String>(
-          enabled: false,
-          height: 34,
-          child: Text('اسحب حافة أي عمود لتغيير عرضه، والفاصل بجانب السلة لتكبيرها',
-              style: TextStyle(fontSize: 11, color: PosColors.muted)),
-        ),
-      ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String t) =>
+      Text(t, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: PosColors.text));
+
+  Widget _columnChip(PosCartLayout l, String k) {
+    final locked = PosCartLayout.required.contains(k);
+    final on = l.show(k);
+    return FilterChip(
+      selected: on,
+      showCheckmark: !locked,
+      avatar: locked ? const Icon(Icons.lock_rounded, size: 14, color: PosColors.muted) : null,
+      label: Text(PosCartLayout.headers[k]!),
+      labelStyle: TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w700,
+        color: on ? (locked ? PosColors.muted : PosColors.accent) : PosColors.text,
+      ),
+      selectedColor: locked ? PosColors.surfaceAlt : PosColors.accentSoft,
+      checkmarkColor: PosColors.accent,
+      backgroundColor: Colors.white,
+      side: BorderSide(color: on && !locked ? PosColors.accent.withValues(alpha: 0.35) : PosColors.border),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      tooltip: locked ? 'عمود ضروري للبيع' : PosCartLayout.labels[k],
+      onSelected: locked
+          ? null
+          : (_) {
+              final hidden = {...l.hidden};
+              if (!hidden.remove(k)) hidden.add(k);
+              _apply(l.copyWith(hidden: hidden));
+            },
     );
   }
 }
@@ -449,7 +571,12 @@ class _CartRowState extends State<_CartRow> {
           child: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(posMoney(it.total),
-                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: PosColors.primary)),
+                textDirection: TextDirection.ltr,
+                style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: PosColors.primary,
+                    fontFeatures: [FontFeature.tabularFigures()])),
           ),
         );
       case 'stock':
@@ -482,40 +609,68 @@ class _CartRowState extends State<_CartRow> {
             maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, color: PosColors.muted)),
       );
     }
+    final baseName = units.first['name'] as String;
     return Center(
-      child: Container(
-        height: fieldH,
-        padding: const EdgeInsets.symmetric(horizontal: 6),
-        decoration: BoxDecoration(
-          color: PosColors.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: PosColors.border),
+      child: PopupMenuButton<String>(
+        tooltip: 'الوحدة',
+        position: PopupMenuPosition.under,
+        offset: const Offset(0, 4),
+        color: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 10,
+        shadowColor: const Color(0x330F172A),
+        constraints: const BoxConstraints(minWidth: 230, maxWidth: 300),
+        menuPadding: const EdgeInsets.symmetric(vertical: 6),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: PosColors.border),
         ),
-        child: DropdownButtonHideUnderline(
-          child: DropdownButton<String>(
-            value: units.any((u) => u['name'] == it.selectedUnit) ? it.selectedUnit : null,
-            isExpanded: true,
-            isDense: true,
-            icon: const Icon(Icons.expand_more_rounded, size: 16, color: PosColors.muted),
-            style: const TextStyle(fontSize: 12.5, color: PosColors.text),
-            items: [
-              for (final u in units)
-                DropdownMenuItem(
-                  value: u['name'] as String,
-                  child: Text(u['name'] as String, overflow: TextOverflow.ellipsis),
-                ),
-            ],
-            onChanged: (name) {
-              if (name == null) return;
-              final u = units.firstWhere((x) => x['name'] == name);
-              _guard(widget.pos.updateCartItemUnit(
-                it.id,
-                name,
-                (u['price'] as num).toDouble(),
-                (u['quantity'] as num).toInt(),
-              ));
-            },
+        onSelected: (name) {
+          final u = units.firstWhere((x) => x['name'] == name);
+          _guard(widget.pos.updateCartItemUnit(
+            it.id,
+            name,
+            (u['price'] as num).toDouble(),
+            (u['quantity'] as num).toInt(),
+          ));
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem<String>(
+            enabled: false,
+            height: 28,
+            child: Text('اختر الوحدة', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: PosColors.muted)),
           ),
+          for (final u in units)
+            PopupMenuItem<String>(
+              value: u['name'] as String,
+              height: 46,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: _UnitOption(
+                name: u['name'] as String,
+                factor: (u['quantity'] as num).toInt(),
+                baseName: baseName,
+                price: (u['price'] as num).toDouble(),
+                selected: u['name'] == it.selectedUnit,
+              ),
+            ),
+        ],
+        child: Container(
+          height: fieldH,
+          padding: const EdgeInsetsDirectional.fromSTEB(8, 0, 4, 0),
+          decoration: BoxDecoration(
+            color: PosColors.accentSoft,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: PosColors.accent.withValues(alpha: 0.25)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Flexible(
+              child: Text(it.selectedUnit,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: PosColors.accent)),
+            ),
+            const Icon(Icons.expand_more_rounded, size: 16, color: PosColors.accent),
+          ]),
         ),
       ),
     );
@@ -532,17 +687,78 @@ class _CartRowState extends State<_CartRow> {
       inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
       textAlign: TextAlign.center,
       textAlignVertical: TextAlignVertical.center,
+      textDirection: TextDirection.ltr,
       onSubmitted: (_) => _commitPrice(),
-      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: ok ? PosColors.text : PosColors.danger),
+      style: TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.2,
+        color: ok ? PosColors.text : PosColors.danger,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
       decoration: InputDecoration(
         isDense: true,
         filled: true,
-        fillColor: ok ? PosColors.surface : const Color(0xFFFEF2F2),
+        fillColor: ok ? PosColors.surfaceAlt : const Color(0xFFFEF2F2),
         contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
         hintText: 'السعر',
-        enabledBorder: b(ok ? PosColors.border : PosColors.danger),
+        hintStyle: const TextStyle(fontSize: 12, color: PosColors.faint),
+        // حدود هادئة: تظهر بوضوح عند الكتابة فقط (أو بالأحمر إن كان بلا سعر)
+        enabledBorder: b(ok ? Colors.transparent : PosColors.danger),
         focusedBorder: b(PosColors.accent, 1.5),
       ),
+    );
+  }
+}
+
+/// سطر وحدة في قائمة الوحدات: الاسم، وكم فيها من الوحدة الأصغر، وسعرها
+class _UnitOption extends StatelessWidget {
+  const _UnitOption({
+    required this.name,
+    required this.factor,
+    required this.baseName,
+    required this.price,
+    required this.selected,
+  });
+
+  final String name;
+  final int factor;
+  final String baseName;
+  final double price;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = selected ? PosColors.accent : PosColors.text;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: selected ? PosColors.accentSoft : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        Icon(selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+            size: 18, color: selected ? PosColors.accent : PosColors.faint),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: c)),
+            if (factor > 1)
+              Text('= $factor $baseName', style: const TextStyle(fontSize: 11, color: PosColors.muted)),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          posMoney(price),
+          textDirection: TextDirection.ltr,
+          style: TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w800,
+            color: selected ? PosColors.accent : PosColors.primary,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ]),
     );
   }
 }

@@ -5,6 +5,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../erp/sales/invoice_returns.dart' show InvoiceReturns; // ↩️ حارس حذف الفاتورة التي عليها مرتجع
+import '../erp/sales/return_tx_ref.dart' show ReturnTxRef; // ↩️ مرتجع مبيعات في سجل الديون
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint; // 🌐 حراسة الويب
 import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -902,16 +903,23 @@ class DatabaseService {
       ));
     }
 
+    // ↩️ مرتجع مبيعات على الحساب: يُعرض «مرتجع مبيعات — من فاتورة رقم … • سند مرتجع رقم …»
+    //    بدل «تسديد دين يدوي» (قراءة فقط من وصفه المحاسبي؛ لا يغيّر شيئاً).
+    final returnRefs = await ReturnTxRef.forUuids(await database, [
+      for (final tx in remainingManual) tx.transactionUuid ?? '',
+    ]);
     for (var tx in remainingManual) {
+      final ref = returnRefs[tx.transactionUuid ?? ''] ?? ReturnTxRef.fromNote(tx.transactionNote);
       result.add(GroupedTransactionItem(
         type: GroupedTransactionType.manual,
         date: tx.transactionDate,
         amount: tx.amountChanged,
-        description: tx.description ?? (tx.amountChanged >= 0 ? 'إضافة دين يدوية' : 'تسديد دين يدوي'),
+        description: ref?.details ?? tx.description ?? (tx.amountChanged >= 0 ? 'إضافة دين يدوية' : 'تسديد دين يدوي'),
         transactionType: tx.transactionType,
         transactions: [tx],
         balanceBefore: tx.balanceBeforeTransaction,
         balanceAfter: tx.newBalanceAfterTransaction,
+        returnRef: ref,
       ));
     }
     

@@ -46,6 +46,7 @@ class AiInvoiceLine {
     this.note = '',
     this.expiry,
     this.rowNo,
+    this.repGift = false,
   });
 
   final String originalName; // كما في فاتورة المورد
@@ -68,6 +69,9 @@ class AiInvoiceLine {
 
   /// 🔢 رقم السطر في جدول الفاتورة (عمود ت/#) — لمعرفة سطر فاتته القراءة. null = غير مرقّم.
   int? rowNo;
+
+  /// 🎁 هدية المندوب (عمود «هدية مندوب»): سطر مجاني يدخل المخزون بلا كلفة، يُميَّز عن بونص الشركة.
+  final bool repGift;
   bool userChanged = false;
   bool include = true;
 }
@@ -312,6 +316,7 @@ class AiInvoiceService {
         note: note,
         expiry: normalizeExpiry(m['expiry'] ?? m['expiry_date'] ?? m['exp_date']),
         rowNo: _rowNo(m['row_no'] ?? m['row']),
+        repGift: isFree && (m['rep_gift'] == true || m['rep_gift']?.toString() == 'true'),
       ));
     }
     final totals = (j['totals'] is Map) ? Map<String, dynamic>.from(j['totals']) : const <String, dynamic>{};
@@ -682,6 +687,8 @@ $learnedJson
 - سطر "بونص" أو "هدية" أو "مجاناً" أو كمية إضافية بسعر 0 → أدرجه بـ price: 0 و amount: 0 و is_free: true (يدخل المخزون بلا كلفة)
 - "10+1" في عمود الكمية → سطر بكمية 10 بسعرها، وسطر ثانٍ للمادة نفسها بكمية 1 و is_free: true
 - عمود «هدية» أو «بونص» بجانب الكمية وفيه رقم أكبر من صفر → سطر ثانٍ للمادة نفسها بتلك الكمية و is_free: true
+- عمود «هدية مندوب» أو «هدية المندوب» وفيه رقم أكبر من صفر → سطر آخر للمادة نفسها بتلك الكمية و is_free: true و rep_gift: true
+- الصفر في عمودي الهدية لا يُنشئ سطراً
 
 $expiryRules
 
@@ -706,6 +713,7 @@ $expiryRules
       "sale_unit": "وحدة الشراء",
       "units_count": 1,
       "is_free": false,
+      "rep_gift": false,
       "expiry": null,
       "row_no": 1,
       "matched_product_id": null,

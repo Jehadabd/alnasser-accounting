@@ -12,6 +12,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:alnaser/erp/sales/return_tx_ref.dart';
 import 'package:alnaser/owner/ai_invoice/ai_invoice_engine.dart';
 import 'package:alnaser/owner/ai_invoice/ai_invoice_service.dart';
 import 'package:alnaser/owner/ai_invoice/ai_purchase_invoice_screen.dart' show AiReadEstimate;
@@ -25,6 +26,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   group('📅 الصلاحية', () {
@@ -233,6 +235,70 @@ void main() {
       expect(bodies.length, 2);
       expect(r.missingRows, [4]);
       expect(r.lines.length, 4);
+    });
+  });
+
+  group('🎁 هدية المندوب', () {
+    test('سطر مجاني مميّز عن بونص الشركة، و rep_gift على سطر مدفوع لا يُعتدّ به', () {
+      final r = AiInvoiceService.parse({
+        'line_items': [
+          {'row_no': 9, 'name': 'GLOCLAV', 'qty': 5, 'price': 5157, 'amount': 25785, 'rep_gift': true},
+          {'row_no': 9, 'name': 'GLOCLAV', 'qty': 1, 'price': 0, 'amount': 0, 'is_free': true},
+          {'row_no': 9, 'name': 'GLOCLAV', 'qty': 1, 'price': 0, 'amount': 0, 'is_free': true, 'rep_gift': true},
+        ],
+      });
+      expect(r.lines.map((l) => l.isFree), [false, true, true]);
+      expect(r.lines.map((l) => l.repGift), [false, false, true]);
+      expect(AiInvoiceService.missingRows(r.lines, 9).length, 8); // سطور الهدية تشارك رقم مادتها
+    });
+
+    test('التعليمات تعرف عمود «هدية مندوب»', () {
+      expect(AiInvoiceEngine.buildReaderPrompt(), contains('"rep_gift": false'));
+      expect(AiInvoiceService.buildPrompt(products: const [], aliases: const [], supplierId: null), contains('هدية مندوب'));
+    });
+  });
+
+  group('↩️ مرتجع في سجل الديون', () {
+    test('من الملاحظة: المرتجع وفاتورته، والإلغاء', () {
+      final a = ReturnTxRef.fromNote('مرتجع مبيعات رقم 3 من فاتورة 1202611042')!;
+      expect(a.returnNo, '3');
+      expect(a.invoiceNumber, '1202611042');
+      expect(a.isVoid, isFalse);
+      expect(a.title, 'مرتجع مبيعات');
+      expect(a.details, 'من فاتورة رقم 1202611042 • سند مرتجع رقم 3');
+      final b = ReturnTxRef.fromNote('إلغاء مرتجع مبيعات رقم 12 — خطأ في الكمية')!;
+      expect(b.returnNo, '12');
+      expect(b.isVoid, isTrue);
+      expect(b.invoiceNumber, isNull);
+      expect(ReturnTxRef.fromNote('مرتجع مبيعات رقم 7')!.details, 'سند مرتجع رقم 7');
+      expect(ReturnTxRef.fromNote('تسديد نقدي'), isNull);
+      expect(ReturnTxRef.fromNote(null), isNull);
+    });
+
+    test('من الوصف المحاسبي ومستند المرتجع (قراءة فقط)', () async {
+      sqfliteFfiInit();
+      final db = await databaseFactoryFfiNoIsolate.openDatabase(inMemoryDatabasePath,
+          options: OpenDatabaseOptions(singleInstance: false));
+      await db.execute('CREATE TABLE invoices (id INTEGER PRIMARY KEY, invoice_number TEXT)');
+      await db.execute('CREATE TABLE sales_returns (id INTEGER PRIMARY KEY, return_no TEXT, original_invoice_id INTEGER)');
+      await db.execute('CREATE TABLE customer_tx_ext (transaction_uuid TEXT PRIMARY KEY, kind TEXT, ref_type TEXT, ref_id INTEGER)');
+      await db.insert('invoices', {'id': 40, 'invoice_number': '1202611042'});
+      await db.insert('invoices', {'id': 41, 'invoice_number': null});
+      await db.insert('sales_returns', {'id': 1, 'return_no': '3', 'original_invoice_id': 40});
+      await db.insert('sales_returns', {'id': 2, 'return_no': '4', 'original_invoice_id': 41});
+      await db.insert('customer_tx_ext', {'transaction_uuid': 'u1', 'kind': 'sales_return', 'ref_type': 'sales_return', 'ref_id': 1});
+      await db.insert('customer_tx_ext', {'transaction_uuid': 'u2', 'kind': 'sales_return', 'ref_type': 'sales_return_void', 'ref_id': 1});
+      await db.insert('customer_tx_ext', {'transaction_uuid': 'u3', 'kind': 'sales_return', 'ref_type': 'sales_return', 'ref_id': 2});
+      await db.insert('customer_tx_ext', {'transaction_uuid': 'u4', 'kind': 'cash', 'ref_type': null, 'ref_id': null});
+      final m = await ReturnTxRef.forUuids(db, ['u1', 'u2', 'u3', 'u4', '']);
+      expect(m.keys.toSet(), {'u1', 'u2', 'u3'});
+      expect(m['u1']!.details, 'من فاتورة رقم 1202611042 • سند مرتجع رقم 3');
+      expect(m['u1']!.invoiceId, 40);
+      expect(m['u2']!.isVoid, isTrue);
+      expect(m['u3']!.invoiceNumber, '#41'); // فاتورة قديمة بلا رقم تجاري
+      await db.execute('DROP TABLE customer_tx_ext');
+      expect(await ReturnTxRef.forUuids(db, ['u1']), isEmpty); // قاعدة قديمة ⇒ لا خطأ
+      await db.close();
     });
   });
 

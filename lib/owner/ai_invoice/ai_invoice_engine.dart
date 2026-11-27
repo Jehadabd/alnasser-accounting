@@ -431,6 +431,7 @@ $names
 - units_count: كم وحدة صغرى في وحدة الشراء إن ظهر: «80M» أو «90 متر» في الاسم ⇒ 80/90 و sale_unit «لفة»؛ «كرتون 24» أو «×20» ⇒ 24/20؛ «درزن» = 12؛ وإلا 1
 - unit_type: meter أو piece أو weight
 - is_free: true للبونص/الهدية/«مجاناً» أو كمية إضافية بسعر 0. عمود «هدية» أو «بونص» فيه رقم ⇒ سطر ثانٍ للمادة نفسها بتلك الكمية و is_free: true
+- rep_gift: true لهدية المندوب: عمود «هدية مندوب» فيه رقم ⇒ سطر آخر للمادة نفسها بتلك الكمية و is_free: true و rep_gift: true (الصفر لا يُنشئ سطراً)
 - expiry: تاريخ صلاحية السطر إن وُجد (انظر القواعد أدناه)، وإلا null
 - row_no: رقم السطر في الجدول (انظر القواعد أدناه)
 
@@ -450,7 +451,7 @@ $names
   "invoice_number": "",
   "currency": "IQD أو USD",
   "line_items": [
-    {"row_no": 1, "original_name": "", "name": "", "qty": 0, "price": 0, "amount": 0, "sale_unit": "", "units_count": 1, "unit_type": "piece", "is_free": false, "expiry": null}
+    {"row_no": 1, "original_name": "", "name": "", "qty": 0, "price": 0, "amount": 0, "sale_unit": "", "units_count": 1, "unit_type": "piece", "is_free": false, "rep_gift": false, "expiry": null}
   ],
   "rows_count": 0,
   "totals": {"subtotal": 0, "discount": 0, "shipping": 0, "grand_total": 0},

@@ -1,5 +1,6 @@
 // screens/customer_details_screen.dart
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
+import '../erp/sales/return_tx_ref.dart' show ReturnTxRef; // ↩️ مرتجع مبيعات في سجل الديون
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
@@ -2281,6 +2282,9 @@ class TransactionListTile extends StatelessWidget {
         : Theme.of(context).colorScheme.tertiary; // Use themed colors
     final icon = isDebt ? Icons.add : Icons.remove;
     final isInvoiceRelated = transaction.invoiceId != null;
+    // ↩️ معاملة مستند مرتجع: تُعرَّف بسندها وفاتورتها، ولا تُعدَّل من هنا (تُلغى من المرتجع نفسه
+    //    فيبقى المستند والمخزون والدين متطابقين)
+    final returnRef = ReturnTxRef.fromNote(transaction.transactionNote);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12.0), // Spacing between cards
@@ -2316,7 +2320,15 @@ class TransactionListTile extends StatelessWidget {
               style:
                   Theme.of(context).textTheme.bodyMedium, // Themed text style
             ),
-            if (transaction.transactionNote != null &&
+            if (returnRef != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('↩️ ${returnRef.title} • ${returnRef.details}',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700, color: const Color(0xFF0E7490))),
+              ),
+            if (returnRef == null &&
+                transaction.transactionNote != null &&
                 transaction.transactionNote!.isNotEmpty)
               Text(transaction.transactionNote!,
                   style: Theme.of(context)
@@ -2340,7 +2352,7 @@ class TransactionListTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               // 🔒 المعاملات المرتبطة بالفواتير لا يتم تعديلها من سجل المعاملات لمنع تضارب الحسابات
-              if (transaction.isCreatedByMe && !isInvoiceRelated && onEdit != null)
+              if (transaction.isCreatedByMe && !isInvoiceRelated && returnRef == null && onEdit != null)
                 IconButton(
                   icon: const Icon(Icons.edit, size: 18),
                   visualDensity: VisualDensity.compact,
@@ -2468,6 +2480,8 @@ class GroupedTransactionListTile extends StatelessWidget {
       return _buildManualGroupTile(context, isDebt: true, isSync: true);
     } else if (item.isSyncPaymentGroup) {
       return _buildManualGroupTile(context, isDebt: false, isSync: true);
+    } else if (item.returnRef != null) {
+      return _buildReturnTile(context);
     } else {
       return _buildManualTransactionTile(context);
     }
@@ -2600,6 +2614,38 @@ class GroupedTransactionListTile extends StatelessWidget {
         tooltip: 'فتح الفاتورة',
         onPressed: () => _navigateToInvoice(context),
       ),
+    );
+  }
+
+  /// ↩️ مرتجع مبيعات نزل من دين العميل (أو إلغاؤه): من أي فاتورة وبأي سند
+  Widget _buildReturnTile(BuildContext context) {
+    final r = item.returnRef!;
+    final up = item.amount > 0; // إلغاء المرتجع يعيد المبلغ ديناً
+    const teal = Color(0xFF0E7490);
+    final c = r.isVoid ? _lDebt : teal;
+    return _ledger(
+      context,
+      edge: c,
+      icon: r.isVoid ? Icons.undo_rounded : Icons.assignment_return_rounded,
+      title: r.title,
+      badges: [
+        _badge('سند ${r.returnNo}', c),
+        if ((r.invoiceNumber ?? '').isNotEmpty) _badge('فاتورة ${r.invoiceNumber}', _lInv),
+      ],
+      subtitle: [_formatDate(item.date), r.details].join('  •  '),
+      amount: '${up ? '+' : '−'}${_formatCurrency(item.amount.abs())}',
+      amountColor: up ? _lDebt : _lPay,
+      amountCaption: r.isVoid ? 'عاد ديناً' : 'نزل من الدين',
+      balanceAfter: item.balanceAfter,
+      background: r.isVoid ? null : const Color(0xFFF5FBFC),
+      onTap: r.invoiceId == null ? null : () => _openInvoiceById(context, r.invoiceId!),
+      action: r.invoiceId == null
+          ? null
+          : IconButton(
+              icon: const Icon(Icons.receipt_long_rounded, size: 20, color: _lInv),
+              tooltip: 'فتح الفاتورة الأصلية',
+              onPressed: () => _openInvoiceById(context, r.invoiceId!),
+            ),
     );
   }
 
@@ -3046,16 +3092,19 @@ class GroupedTransactionListTile extends StatelessWidget {
   }
 
   /// الذهاب مباشرة لشاشة الفاتورة
-  void _navigateToInvoice(BuildContext context) async {
+  void _navigateToInvoice(BuildContext context) {
     if (item.invoiceId == null) return;
-    
+    _openInvoiceById(context, item.invoiceId!);
+  }
+
+  void _openInvoiceById(BuildContext context, int invoiceId) async {
     try {
       final db = DatabaseService();
-      final invoice = await db.getInvoiceById(item.invoiceId!);
+      final invoice = await db.getInvoiceById(invoiceId);
       DebtTransaction? relatedDebtTransaction;
       final transactions = await db.getCustomerTransactions(customerId);
       for (var transaction in transactions) {
-        if (transaction.invoiceId == item.invoiceId &&
+        if (transaction.invoiceId == invoiceId &&
             transaction.amountChanged > 0) {
           relatedDebtTransaction = transaction;
           break;

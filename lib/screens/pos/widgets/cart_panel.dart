@@ -9,6 +9,8 @@
 import '../../../services/save_lock.dart'; // 🔒 قفل الحفظ
 import '../../../services/credit_limit_guard.dart'; // 🚫 سقف الدين
 import '../../../services/database_service.dart';
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -182,10 +184,10 @@ class CartPanelState extends State<CartPanel> {
   Widget _header(POSProvider pos) {
     final n = pos.cartItems.length;
     return Padding(
-      padding: const EdgeInsetsDirectional.fromSTEB(16, 10, 8, 6),
+      padding: const EdgeInsetsDirectional.fromSTEB(14, 4, 6, 2),
       child: Row(
         children: [
-          const Icon(Icons.shopping_basket_outlined, color: PosColors.primary, size: 22),
+          const Icon(Icons.shopping_basket_outlined, color: PosColors.primary, size: 21),
           const SizedBox(width: 8),
           const Text('السلة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: PosColors.text)),
           const SizedBox(width: 8),
@@ -225,21 +227,42 @@ class CartPanelState extends State<CartPanel> {
   Widget _customerField(POSProvider pos) {
     final suggestions = pos.filteredCustomers;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
       child: Column(
         children: [
-          TextField(
-            controller: _customerController,
-            onChanged: (v) {
-              pos.setCustomerName(v);
-              setState(() => _showSuggestions = v.trim().isNotEmpty);
-            },
-            style: const TextStyle(fontSize: 13.5),
-            decoration: _inputDecoration(
-              hint: pos.paymentType == PaymentType.credit ? 'اسم العميل (مطلوب للدين)' : 'اسم العميل (اختياري)',
-              icon: Icons.person_outline_rounded,
+          // 👤 العميل ونوع الدفع في سطر واحد (الدين يحتاج العميل — مكانهما معاً)
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _customerController,
+                onChanged: (v) {
+                  pos.setCustomerName(v);
+                  setState(() => _showSuggestions = v.trim().isNotEmpty);
+                },
+                style: const TextStyle(fontSize: 13.5),
+                decoration: _inputDecoration(
+                  hint: pos.paymentType == PaymentType.credit ? 'اسم العميل (مطلوب للدين)' : 'اسم العميل (اختياري)',
+                  icon: Icons.person_outline_rounded,
+                  dense: true,
+                ),
+              ),
             ),
-          ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 132,
+              child: _PaySwitch(
+                cash: pos.paymentType == PaymentType.cash,
+                onChanged: (isCash) {
+                  pos.setPaymentType(isCash ? PaymentType.cash : PaymentType.credit);
+                  setState(() {
+                    _paidController.clear();
+                    _tenderedController.clear();
+                    _tendered = 0;
+                  });
+                },
+              ),
+            ),
+          ]),
           if (_showSuggestions && suggestions.isNotEmpty)
             Container(
               margin: const EdgeInsets.only(top: 4),
@@ -289,8 +312,9 @@ class CartPanelState extends State<CartPanel> {
     final cash = pos.paymentType == PaymentType.cash;
     final payColor = cash ? PosColors.cash : PosColors.credit;
     final total = pos.total;
+    final change = _tendered - total;
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
       decoration: const BoxDecoration(
         color: PosColors.surfaceAlt,
         border: Border(top: BorderSide(color: PosColors.border)),
@@ -298,23 +322,13 @@ class CartPanelState extends State<CartPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _PaySwitch(
-            cash: cash,
-            onChanged: (isCash) {
-              pos.setPaymentType(isCash ? PaymentType.cash : PaymentType.credit);
-              setState(() {
-                _paidController.clear();
-                _tenderedController.clear();
-                _tendered = 0;
-              });
-            },
-          ),
-          const SizedBox(height: 10),
+          // الخصم + المستلم (نقد) أو المسدد (دين) — سطر واحد مضغوط
           Row(
             children: [
               Expanded(
                 child: _moneyField(
                   label: 'الخصم',
+                  icon: Icons.local_offer_outlined,
                   controller: _discountController,
                   onChanged: (v) => pos.setDiscount(v),
                 ),
@@ -324,67 +338,51 @@ class CartPanelState extends State<CartPanel> {
                 child: cash
                     ? _moneyField(
                         label: 'المستلم من الزبون',
+                        icon: Icons.payments_outlined,
                         controller: _tenderedController,
                         onChanged: (v) => setState(() => _tendered = v),
                       )
                     : _moneyField(
                         label: 'المبلغ المسدد',
+                        icon: Icons.price_check_rounded,
                         controller: _paidController,
                         onChanged: (v) => pos.setPaidAmount(v),
                       ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          _SumLine(label: 'المجموع', value: posMoney(pos.subtotal)),
-          if (pos.discount > 0) _SumLine(label: 'الخصم', value: '− ${posMoney(pos.discount)}', color: PosColors.danger),
-          if (cash && _tendered > 0)
-            _SumLine(
-              label: _tendered >= total ? 'الباقي للزبون' : 'ناقص',
-              value: posMoney((_tendered - total).abs()),
-              color: _tendered >= total ? PosColors.cash : PosColors.danger,
-              bold: true,
-            ),
-          if (!cash)
-            _SumLine(
-              label: 'المتبقي ديناً',
-              value: posMoney(pos.remainingAmount),
-              color: PosColors.credit,
-              bold: true,
-            ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Divider(height: 1, color: PosColors.border),
-          ),
-          Row(
+          const SizedBox(height: 8),
+          // شريط معلومات صغير: المجموع، الخصم، الباقي للزبون أو المتبقي ديناً
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
             children: [
-              const Text('الإجمالي', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: PosColors.text)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: AlignmentDirectional.centerEnd,
-                  child: AnimatedDefaultTextStyle(
-                    duration: const Duration(milliseconds: 180),
-                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: payColor, fontFamily: DefaultTextStyle.of(context).style.fontFamily),
-                    child: Text(posMoney(total)),
-                  ),
+              _InfoChip(label: 'المجموع', value: posMoney(pos.subtotal)),
+              if (pos.discount > 0) _InfoChip(label: 'خصم', value: '− ${posMoney(pos.discount)}', color: PosColors.danger),
+              if (cash && _tendered > 0)
+                _InfoChip(
+                  label: change >= 0 ? 'الباقي للزبون' : 'ناقص',
+                  value: posMoney(change.abs()),
+                  color: change >= 0 ? PosColors.cash : PosColors.danger,
+                  strong: true,
                 ),
-              ),
+              if (!cash)
+                _InfoChip(label: 'المتبقي ديناً', value: posMoney(pos.remainingAmount), color: PosColors.credit, strong: true),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          // زر الدفع وفيه الإجمالي كبيراً (سطر واحد بدل سطرين)
           SizedBox(
-            height: 52,
+            height: 54,
             child: FilledButton(
               onPressed: pos.cartItems.isEmpty || _busy ? null : checkout,
               style: FilledButton.styleFrom(
                 backgroundColor: payColor,
                 disabledBackgroundColor: PosColors.border,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   if (_busy)
                     const SizedBox(
@@ -397,9 +395,26 @@ class CartPanelState extends State<CartPanel> {
                   const SizedBox(width: 8),
                   Text(
                     _busy ? 'جارٍ الحفظ…' : (cash ? 'دفع نقدي' : 'حفظ كدين'),
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                    style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: Text(
+                        posMoney(total),
+                        textDirection: TextDirection.ltr,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.3,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                     decoration: BoxDecoration(
@@ -421,20 +436,21 @@ class CartPanelState extends State<CartPanel> {
     required String label,
     required TextEditingController controller,
     required ValueChanged<double> onChanged,
+    IconData? icon,
   }) {
     return TextField(
       controller: controller,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
       textAlign: TextAlign.center,
-      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, fontFeatures: [FontFeature.tabularFigures()]),
       onChanged: (v) => onChanged(double.tryParse(v.replaceAll(',', '')) ?? 0),
-      decoration: _inputDecoration(label: label, hint: '0'),
+      decoration: _inputDecoration(label: label, hint: '0', icon: icon, dense: true),
     );
   }
 }
 
-InputDecoration _inputDecoration({String? label, String? hint, IconData? icon}) {
+InputDecoration _inputDecoration({String? label, String? hint, IconData? icon, bool dense = false}) {
   OutlineInputBorder border(Color c, [double w = 1]) => OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
         borderSide: BorderSide(color: c, width: w),
@@ -444,11 +460,12 @@ InputDecoration _inputDecoration({String? label, String? hint, IconData? icon}) 
     hintText: hint,
     labelStyle: const TextStyle(fontSize: 12.5, color: PosColors.muted),
     hintStyle: const TextStyle(fontSize: 13, color: PosColors.faint),
-    prefixIcon: icon == null ? null : Icon(icon, size: 19, color: PosColors.muted),
+    prefixIcon: icon == null ? null : Icon(icon, size: dense ? 17 : 19, color: PosColors.muted),
+    prefixIconConstraints: dense ? const BoxConstraints(minWidth: 34, minHeight: 34) : null,
     isDense: true,
     filled: true,
     fillColor: PosColors.surface,
-    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+    contentPadding: EdgeInsets.symmetric(horizontal: dense ? 8 : 12, vertical: dense ? 9 : 11),
     border: border(PosColors.border),
     enabledBorder: border(PosColors.border),
     focusedBorder: border(PosColors.accent, 1.5),
@@ -492,7 +509,7 @@ class _PaySwitch extends StatelessWidget {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
-            height: 40,
+            height: 34,
             decoration: BoxDecoration(
               color: sel ? c : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
@@ -501,12 +518,12 @@ class _PaySwitch extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, size: 18, color: sel ? Colors.white : PosColors.muted),
-                const SizedBox(width: 6),
+                Icon(icon, size: 16, color: sel ? Colors.white : PosColors.muted),
+                const SizedBox(width: 4),
                 Text(
                   label,
                   style: TextStyle(
-                    fontSize: 13.5,
+                    fontSize: 13,
                     fontWeight: FontWeight.w700,
                     color: sel ? Colors.white : PosColors.muted,
                   ),
@@ -536,31 +553,38 @@ class _PaySwitch extends StatelessWidget {
   }
 }
 
-class _SumLine extends StatelessWidget {
-  const _SumLine({required this.label, required this.value, this.color, this.bold = false});
+/// معلومة صغيرة في شريط الملخص: «المجموع 15,000»
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({required this.label, required this.value, this.color, this.strong = false});
 
   final String label;
   final String value;
   final Color? color;
-  final bool bold;
+  final bool strong;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Text(label, style: TextStyle(fontSize: 13, color: color ?? PosColors.muted, fontWeight: bold ? FontWeight.w700 : FontWeight.w500)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.end,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 13.5, color: color ?? PosColors.text, fontWeight: bold ? FontWeight.w800 : FontWeight.w600),
+    final c = color ?? PosColors.text;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color == null ? PosColors.surface : c.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color == null ? PosColors.border : c.withValues(alpha: 0.25)),
+      ),
+      child: Text.rich(
+        TextSpan(children: [
+          TextSpan(text: '$label  ', style: const TextStyle(color: PosColors.muted, fontWeight: FontWeight.w500)),
+          TextSpan(
+            text: value,
+            style: TextStyle(
+              color: c,
+              fontWeight: strong ? FontWeight.w900 : FontWeight.w700,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
-        ],
+        ]),
+        style: const TextStyle(fontSize: 12.5),
       ),
     );
   }

@@ -1271,7 +1271,10 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                       child: Text('«${l.originalName}»',
                           maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12.5)),
                     ),
-                    if (l.isFree) ...[_pill(Icons.card_giftcard_rounded, 'بونص', _cLearned), const SizedBox(width: 6)],
+                    if (l.isFree) ...[
+                      _pill(Icons.card_giftcard_rounded, l.repGift ? 'هدية مندوب' : 'بونص', l.repGift ? _cManual : _cLearned),
+                      const SizedBox(width: 6),
+                    ],
                     _pill(l.source == AiMatchSource.learned ? Icons.psychology_rounded : Icons.auto_awesome_rounded, _badgeOf(l), c),
                     Checkbox(
                       value: l.include,
