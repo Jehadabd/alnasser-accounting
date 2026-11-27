@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart' show debugPrint;
+import '../services/customer_name_clean.dart'; // 🧹
 import '../erp/erp_common.dart' show PeriodLock;
 import '../erp/device_defaults.dart'; // 🖥️ صندوق الحاسبة ومخزنها على فاتورتها
 import 'dart:convert';
@@ -584,7 +585,7 @@ class InvoiceController {
           } else {
             customer = Customer(
               id: null,
-              name: data.customerName.trim(),
+              name: CustomerNameClean.clean(data.customerName), // 🧹 بلا مسافات زائدة
               phone: normalizedPhone,
               address: data.customerAddress.trim(),
               createdAt: DateTime.now(),
@@ -641,7 +642,7 @@ class InvoiceController {
 
         Invoice invoice = Invoice(
           id: data.invoiceToManage?.id,
-          customerName: resolvedName ?? data.customerName,
+          customerName: resolvedName ?? CustomerNameClean.clean(data.customerName),
           customerPhone: phoneFromCustomer
               ? ((resolvedPhone ?? '').trim().isEmpty ? null : _normalizePhoneNumber(resolvedPhone!.trim()))
               : normalizedPhoneForInvoice,

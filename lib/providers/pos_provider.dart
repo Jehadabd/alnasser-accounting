@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/name_search.dart'; // 🔤
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/product.dart';
@@ -201,20 +202,16 @@ class POSProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Normalize name by removing extra spaces
-  String _normalizeName(String name) {
-    return name.trim().replaceAll(RegExp(r'\s+'), ' ');
-  }
-
   void setCustomerName(String name) {
     _customerName = name;
     if (name.isEmpty) {
       _filteredCustomers = [];
     } else {
       // Normalize input name for comparison
-      final normalizedInput = _normalizeName(name).toLowerCase();
+      // 🔤 نفس بحث الأسماء في كل البرنامج (NameSearch): المسافات وعددها والهمزات لا تفرّق
+      //    «جهاد    عبد الناصر» = «جهاد عبد الناصر» = «جهادعبدالناصر»
       _filteredCustomers = _allCustomers
-          .where((c) => _normalizeName(c.name).toLowerCase().contains(normalizedInput))
+          .where((c) => NameSearch.matches(c.name, name))
           .take(5)
           .toList();
     }

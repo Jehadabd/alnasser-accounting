@@ -1,6 +1,7 @@
 // lib/services/database/dao/customer_dao.dart
 // عمليات CRUD للعملاء
 
+import '../../customer_name_clean.dart'; // 🧹
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart';
 import '../../../models/customer.dart';
@@ -39,6 +40,9 @@ class CustomerDao {
   /// و[openingUuid] معرّفها الثابت (يمنع تكرار استيراد الملف نفسه).
   static Future<int> insertCustomerIn(Transaction txn, Customer customer,
       {DateTime? openingDate, String? openingNote, String? openingUuid}) async {
+    // 🧹 «جهاد     عبد الناصر» يُحفظ «جهاد عبد الناصر»
+    final cleanName = CustomerNameClean.clean(customer.name);
+    if (cleanName.isNotEmpty && cleanName != customer.name) customer = customer.copyWith(name: cleanName);
     {
       // 🛡️ سجل الديون: لا حسابان بالاسم نفسه (بتجاهل المسافات)
       await CustomerNameRule.ensureAvailable(txn, customer.name);
@@ -362,6 +366,11 @@ class CustomerDao {
       final current = await db.query('customers',
           columns: ['name', 'is_created_by_me'], where: 'id = ?', whereArgs: [customer.id], limit: 1);
       final oldName = current.isEmpty ? null : current.first['name'] as String?;
+      // 🧹 اسم عدّله المستخدم يُحفظ بلا مسافات زائدة (الاسم غير المعدَّل يبقى كما هو)
+      if (oldName != customer.name) {
+        final cleanName = CustomerNameClean.clean(customer.name);
+        if (cleanName.isNotEmpty && cleanName != customer.name) customer = customer.copyWith(name: cleanName);
+      }
       if (oldName == null || CustomerNameRule.key(oldName) != CustomerNameRule.key(customer.name)) {
         // 🔐 الاسم يغيّره الجهاز الذي أنشأ العميل فقط (customer_owner_rule.dart)
         if (oldName != null && !CustomerOwnerRule.isMine(current.first['is_created_by_me'])) {
@@ -451,6 +460,7 @@ class CustomerDao {
   /// البحث عن عميل نشط بالاسم المطبع
   Future<Customer?> findCustomerByNormalizedName(String name, {String? phone}) async {
     final db = await getDatabase();
+    name = CustomerNameClean.clean(name); // 🧹 Tab/مسافة لصق/علامات خفية ⇐ مسافة واحدة
     final normalizedQuery = DatabaseHelpers.normalizeArabic(name.trim());
     
     try {

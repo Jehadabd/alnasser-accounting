@@ -555,7 +555,8 @@ class _CartRowState extends State<_CartRow> {
       case 'unit':
         return _unitCell(it, fieldH);
       case 'price':
-        return Center(child: _priceField(it, fieldH));
+        // السعر يملأ ارتفاع الخلية كله (هامش 3 بكسل فوق وتحت ليظهر الإطار)، والرقم في وسطها
+        return Center(child: _priceField(it, (widget.height - 6).clamp(26.0, 80.0).toDouble()));
       case 'qty':
         return Center(
           child: _QtyStepper(

@@ -2,6 +2,7 @@
 //
 // ↩️ شاشة مرتجع المبيعات + سجل المرتجعات.
 
+import 'return_prefill.dart';
 import 'dart:typed_data';
 
 import '../../services/save_lock.dart'; // 🔒 قفل الحفظ
@@ -119,22 +120,40 @@ class _SalesReturnScreenState extends State<SalesReturnScreen> {
     final allowed = await _svc.returnableFromInvoice(id);
     final db = await erpDb();
     final items = await db.rawQuery('''
-      SELECT ii.product_name, ii.sale_type, ii.applied_price, ii.units_in_large_unit, p.id AS pid
+      SELECT ii.product_name, ii.sale_type, ii.applied_price, ii.units_in_large_unit, p.id AS pid,
+             ii.quantity_large_unit AS ql, ii.quantity_individual AS qi
       FROM invoice_items ii
       JOIN products p ON (p.sync_uuid = ii.product_sync_uuid OR (ii.product_sync_uuid IS NULL AND p.name = ii.product_name))
       WHERE ii.invoice_id = ? ORDER BY ii.id
     ''', [id]);
     final lines = <DocLine>[];
-    final seen = <String>{};
+    final seen = <String, int>{}; // مفتاح السطر ⇐ موضعه في lines
+    final soldBase = <double>[]; // ما بيع في كل سطر بالوحدة الأساسية (كما في returnableFromInvoice)
     for (final it in items) {
       final pid = it['pid'] as int;
+      final ql = d0(it['ql']);
+      final f = d0(it['units_in_large_unit']);
+      final base = ql > 0 ? ql * (f > 0 ? f : 1) : d0(it['qi']);
       final key = '$pid|${it['sale_type']}';
-      if (seen.contains(key)) continue;
-      seen.add(key);
+      final at = seen[key];
+      if (at != null) {
+        soldBase[at] += base;
+        continue;
+      }
       final p = await ErpStock.byId(db, pid);
       if (p == null) continue;
       final u = p.unitNamed(it['sale_type'] as String?);
+      seen[key] = lines.length;
+      soldBase.add(base);
       lines.add(DocLine(product: p, unit: u, quantity: 0, price: d0(it['applied_price'])));
+    }
+    // ↩️ يبدأ المرتجع كلياً: كل سطر بالمتبقي منه؛ للجزئي أنقِص الكمية أو احذف السطر
+    final full = fullReturnQuantities([
+      for (var i = 0; i < lines.length; i++)
+        ReturnPrefillLine(productId: lines[i].product.id, soldBase: soldBase[i], factor: lines[i].unit.factor),
+    ], allowed);
+    for (var i = 0; i < lines.length; i++) {
+      lines[i].quantity = full[i];
     }
     // 🛠️ من مكتب الضمان: المادة المختارة وحدها، بالوحدة والكمية المختارتين
     final pp = widget.presetProductId;

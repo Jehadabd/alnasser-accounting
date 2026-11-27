@@ -2,6 +2,7 @@
 //
 // 🖨️ طباعة وصل القبض بالمبلغ كتابةً (التفقيط).
 
+import '../../services/pdf_rtl.dart'; // ↔️
 import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
@@ -109,15 +110,16 @@ class ReceiptPdf {
           ]),
           pw.SizedBox(height: 10),
           pw.TableHelper.fromTextArray(
-            headers: [
+            // ↔️ «العميل» أقصى اليمين
+            headers: PdfRtl.row([
               'العميل',
               if (!isBase) 'المبلغ ($currency)',
               'المبلغ (دينار)',
               'الخصم',
               'الرصيد قبل',
               'الرصيد بعد',
-            ],
-            data: [
+            ]),
+            data: PdfRtl.rows([
               for (final l in lines)
                 [
                   '${l['customer_name'] ?? ''}',
@@ -127,7 +129,7 @@ class ReceiptPdf {
                   l['balance_before'] == null ? '' : fmtMoney(d0(l['balance_before'])),
                   l['balance_after'] == null ? '' : fmtMoney(d0(l['balance_after'])),
                 ],
-            ],
+            ], isBase ? 5 : 6),
             headerStyle: st(10, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: navy),
             cellStyle: st(10),

@@ -2,6 +2,7 @@
 //
 // 🖨️ طباعة المستندات التجارية (عرض سعر، طلب، مرتجع، مستند مخزني) بتصميم موحّد.
 
+import '../../services/pdf_rtl.dart'; // ↔️ أعمدة الجدول من اليمين
 import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
@@ -89,8 +90,9 @@ class DocPdf {
         ),
         pw.SizedBox(height: 10),
         pw.TableHelper.fromTextArray(
-          headers: headers,
-          data: rows,
+          // ↔️ الأول (#) أقصى اليمين
+          headers: PdfRtl.row(headers),
+          data: PdfRtl.rows(rows, headers.length),
           headerStyle: st(10, c: PdfColors.white),
           headerDecoration: const pw.BoxDecoration(color: navy),
           cellStyle: st(10),

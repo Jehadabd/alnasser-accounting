@@ -2,6 +2,7 @@
 // 🎯 الخدمة الرئيسية لقاعدة البيانات - Facade صغير ونظيف
 // يجمع ويفوض العمليات إلى الـ DAOs المتخصصة
 
+import 'customer_name_clean.dart'; // 🧹 تنظيف مسافات اسم العميل
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../erp/sales/invoice_returns.dart' show InvoiceReturns; // ↩️ حارس حذف الفاتورة التي عليها مرتجع
@@ -2313,9 +2314,9 @@ class DatabaseService {
     final db = await database;
     await PeriodLock.assertOpen(DateTime.now(), db); // 🔒 تثبيت الإدخالات
 
-    final String finalCustomerName = (customerName != null && customerName.trim().isNotEmpty)
-        ? customerName.trim()
-        : 'عميل نقدي';
+    // 🧹 «جهاد     عبد الناصر» ⇐ «جهاد عبد الناصر» (تعدد المسافات لا يصنع اسماً آخر)
+    final cleanedName = CustomerNameClean.clean(customerName ?? '');
+    String finalCustomerName = cleanedName.isNotEmpty ? cleanedName : 'عميل نقدي';
 
     if (paymentType == 'دين' && finalCustomerName == 'عميل نقدي') {
       throw Exception('الرجاء إدخال اسم العميل أولاً لحفظ فاتورة الدين');
@@ -2337,6 +2338,9 @@ class DatabaseService {
 
       if (matches.isNotEmpty) {
         resolvedCustomerId = matches.first['id'] as int;
+        // الفاتورة تحمل اسم الحساب كما هو محفوظ (لا ما كُتب بمسافات مختلفة)
+        final stored = ((matches.first['name'] as String?) ?? '').trim();
+        if (stored.isNotEmpty) finalCustomerName = stored;
       } else {
         // إنشاء حساب عميل جديد تلقائياً عند إدخال اسم غير موجود في السجل
         final newCustomer = Customer(

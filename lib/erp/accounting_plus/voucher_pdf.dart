@@ -3,6 +3,7 @@
 // 🖨️ طباعة أي سند (بسيط أو مركّب) مع أسطر قيده والمبلغ كتابةً (التفقيط).
 // قراءة فقط.
 
+import '../../services/pdf_rtl.dart'; // ↔️
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -110,8 +111,9 @@ class VoucherPdf {
           pw.SizedBox(height: 6),
           if (lines.isNotEmpty)
             pw.TableHelper.fromTextArray(
-              headers: ['الرمز', 'الحساب', 'مدين', 'دائن', 'البيان'],
-              data: [
+              // ↔️ «الرمز» أقصى اليمين
+              headers: PdfRtl.row(['الرمز', 'الحساب', 'مدين', 'دائن', 'البيان']),
+              data: PdfRtl.rows([
                 for (final l in lines)
                   [
                     '${l['code']}',
@@ -120,7 +122,7 @@ class VoucherPdf {
                     d0(l['credit']) > 0 ? fmtMoney(d0(l['credit'])) : '',
                     '${l['memo'] ?? ''}${l['currency'] != null && l['currency'] != 'IQD' && d0(l['fc_amount']) > 0 ? ' (${fmtMoney(d0(l['fc_amount']))} ${l['currency']})' : ''}',
                   ],
-              ],
+              ], 5),
               headerStyle: st(10, color: PdfColors.white),
               headerDecoration: const pw.BoxDecoration(color: navy),
               cellStyle: st(10),

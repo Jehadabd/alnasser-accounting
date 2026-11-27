@@ -2,6 +2,7 @@
 //
 // 📤 تصدير أي تقرير إلى Excel (CSV بترميز UTF-8 يفتحه Excel بالعربي) أو PDF.
 
+import '../services/pdf_rtl.dart'; // ↔️
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -135,8 +136,9 @@ class ReportExport {
       ),
       build: (ctx) => [
         pw.TableHelper.fromTextArray(
-          headers: headers,
-          data: [...rows, if (footer != null) footer],
+          // ↔️ العمود الأول أقصى اليمين (كان يُرسم على اليسار)
+          headers: PdfRtl.row(headers),
+          data: PdfRtl.rows([...rows, if (footer != null) footer], headers.length),
           headerStyle: head,
           cellStyle: style,
           headerDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFF0F3460)),
