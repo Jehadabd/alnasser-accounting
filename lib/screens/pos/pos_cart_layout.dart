@@ -80,8 +80,8 @@ class PosCartLayout {
   /// أعمدة ضرورية للبيع (لا تُخفى)
   static const Set<String> required = {'name', 'price', 'qty', 'total'};
 
-  /// ارتفاعات السطر المتاحة
-  static const Map<double, String> rowHeights = {38: 'سطر مضغوط', 44: 'سطر عادي', 52: 'سطر واسع'};
+  /// ارتفاعات السطر المتاحة (final لا const: مفاتيح double لا تصلح في خريطة ثابتة)
+  static final Map<double, String> rowHeights = {38: 'سطر مضغوط', 44: 'سطر عادي', 52: 'سطر واسع'};
 
   /// عرض مساحة السلة: الحدود
   static const double minCartWidth = 320;
