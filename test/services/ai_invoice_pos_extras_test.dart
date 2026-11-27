@@ -383,11 +383,16 @@ void main() {
       expect(l.w('total'), PosCartLayout.maxWidth);
     });
 
-    test('أعمدة أعرض من السلة ⇒ لا تنكمش (تمرير أفقي)', () {
+    test('أعمدة أعرض من السلة ⇒ ينكمش الاسم أولاً (يبقى الإجمالي ظاهراً)، ثم تمرير أفقي', () {
       final l = PosCartLayout(hidden: {}, widths: {'name': 200});
+      // المجموع 802: سلة 700 ⇒ الاسم 98 والمجموع يساوي السلة تماماً
+      final fit = l.resolve(700);
+      expect(fit['name'], 98);
+      expect(fit.values.fold<double>(0, (a, b) => a + b), 700);
+      // سلة 300 ⇒ الاسم عند أقل عرض له (90) والباقي تمرير أفقي
       final cols = l.resolve(300);
       expect(cols.length, 8);
-      expect(cols['name'], 200);
+      expect(cols['name'], PosCartLayout.minWidths['name']);
     });
 
     test('عرض السلة: المحفوظ ضمن حدود الشاشة، والإعادة للافتراضي', () {

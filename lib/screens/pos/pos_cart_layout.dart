@@ -102,12 +102,19 @@ class PosCartLayout {
   List<String> get visibleKeys => [for (final k in keys) if (show(k)) k];
 
   /// عرض كل عمود بعد التوزيع: إن كان المجموع أقل من [available] يتّسع «اسم المادة»
-  /// ليملأ الباقي؛ وإن زاد يبقى كما هو (تمرير أفقي).
+  /// ليملأ الباقي؛ وإن زاد ينكمش «اسم المادة» أولاً حتى أقل عرض له (فيبقى الإجمالي
+  /// ظاهراً)، وبعدها فقط يظهر التمرير الأفقي.
   Map<String, double> resolve(double available) {
     final out = {for (final k in visibleKeys) k: w(k)};
     final sum = out.values.fold<double>(0, (a, b) => a + b);
-    if (sum < available && out.containsKey('name')) {
-      out['name'] = out['name']! + (available - sum);
+    final name = out['name'];
+    if (name == null) return out;
+    if (sum < available) {
+      out['name'] = name + (available - sum);
+    } else if (sum > available) {
+      final minName = minWidths['name'] ?? 90;
+      final shrunk = name - (sum - available);
+      out['name'] = shrunk < minName ? (name < minName ? name : minName) : shrunk;
     }
     return out;
   }

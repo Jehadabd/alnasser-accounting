@@ -420,6 +420,7 @@ class _CartRowState extends State<_CartRow> {
     super.initState();
     _priceFocus.addListener(() {
       if (!_priceFocus.hasFocus) _commitPrice();
+      if (mounted) setState(() {}); // إطار خانة السعر يظهر وقت الكتابة فقط
     });
   }
 
@@ -554,7 +555,7 @@ class _CartRowState extends State<_CartRow> {
       case 'unit':
         return _unitCell(it, fieldH);
       case 'price':
-        return Center(child: SizedBox(height: fieldH, child: _priceField(it)));
+        return Center(child: _priceField(it, fieldH));
       case 'qty':
         return Center(
           child: _QtyStepper(
@@ -568,15 +569,27 @@ class _CartRowState extends State<_CartRow> {
       case 'total':
         return Align(
           alignment: AlignmentDirectional.centerEnd,
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(posMoney(it.total),
-                textDirection: TextDirection.ltr,
-                style: const TextStyle(
-                    fontSize: 13.5,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.only(end: 4),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                transitionBuilder: (c, a) => FadeTransition(opacity: a, child: c),
+                child: Text(
+                  posMoney(it.total),
+                  key: ValueKey(it.total),
+                  textDirection: TextDirection.ltr,
+                  style: const TextStyle(
+                    fontSize: 14,
                     fontWeight: FontWeight.w800,
+                    letterSpacing: 0.2,
                     color: PosColors.primary,
-                    fontFeatures: [FontFeature.tabularFigures()])),
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
           ),
         );
       case 'stock':
@@ -676,36 +689,55 @@ class _CartRowState extends State<_CartRow> {
     );
   }
 
-  Widget _priceField(CartItem it) {
+  /// 💲 خانة السعر: «حبة» هادئة بارتفاع خانات السطر، الرقم في وسطها تماماً؛ إطار أزرق وقت
+  /// الكتابة، وحمراء إن كان بلا سعر. (الحقل نفسه بلا إطار داخل الحاوية — كان الحقل الكثيف
+  /// يرسم صندوقه أقصر من السطر وأعلى منه)
+  Widget _priceField(CartItem it, double height) {
     final ok = it.price > 0;
-    OutlineInputBorder b(Color c, [double w = 1]) =>
-        OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: c, width: w));
-    return TextField(
-      controller: _price,
-      focusNode: _priceFocus,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
-      textAlign: TextAlign.center,
-      textAlignVertical: TextAlignVertical.center,
-      textDirection: TextDirection.ltr,
-      onSubmitted: (_) => _commitPrice(),
-      style: TextStyle(
-        fontSize: 13,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 0.2,
-        color: ok ? PosColors.text : PosColors.danger,
-        fontFeatures: const [FontFeature.tabularFigures()],
+    final editing = _priceFocus.hasFocus;
+    final Color fill = !ok ? const Color(0xFFFEF2F2) : (editing ? Colors.white : PosColors.surfaceAlt);
+    final Color edge = !ok ? PosColors.danger.withValues(alpha: 0.55) : (editing ? PosColors.accent : PosColors.border);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
+      height: height,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: edge, width: editing ? 1.5 : 1),
+        boxShadow: editing
+            ? [BoxShadow(color: PosColors.accent.withValues(alpha: 0.14), blurRadius: 8, offset: const Offset(0, 2))]
+            : null,
       ),
-      decoration: InputDecoration(
-        isDense: true,
-        filled: true,
-        fillColor: ok ? PosColors.surfaceAlt : const Color(0xFFFEF2F2),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-        hintText: 'السعر',
-        hintStyle: const TextStyle(fontSize: 12, color: PosColors.faint),
-        // حدود هادئة: تظهر بوضوح عند الكتابة فقط (أو بالأحمر إن كان بلا سعر)
-        enabledBorder: b(ok ? Colors.transparent : PosColors.danger),
-        focusedBorder: b(PosColors.accent, 1.5),
+      child: TextField(
+        controller: _price,
+        focusNode: _priceFocus,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [ThousandSeparatorDecimalInputFormatter()],
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        onSubmitted: (_) => _commitPrice(),
+        onTap: () {
+          // نقرة على السعر تحدّده كاملاً: يُكتب الجديد مباشرة فوقه
+          if (!editing) _price.selection = TextSelection(baseOffset: 0, extentOffset: _price.text.length);
+        },
+        cursorColor: PosColors.accent,
+        cursorHeight: 16,
+        style: TextStyle(
+          fontSize: 13.5,
+          height: 1.2,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.3,
+          color: ok ? PosColors.text : PosColors.danger,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+        decoration: const InputDecoration.collapsed(
+          hintText: 'السعر',
+          hintStyle: TextStyle(fontSize: 12, color: PosColors.faint, fontWeight: FontWeight.w500),
+        ),
       ),
     );
   }
