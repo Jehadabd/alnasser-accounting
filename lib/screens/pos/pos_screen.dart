@@ -72,6 +72,7 @@ class _POSScreenState extends State<POSScreen> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _posRef = context.read<POSProvider>()..resumeCustomerClaim(); // 🔒 عميل السلة يُحجز من جديد
       context.read<POSProvider>().loadInitialData();
       _searchFocus.requestFocus(); // قارئ الباركود يكتب في حقل البحث مباشرة
     });
@@ -112,8 +113,11 @@ class _POSScreenState extends State<POSScreen> {
     if (mounted) setState(() => _appSettings = settings);
   }
 
+  POSProvider? _posRef;
+
   @override
   void dispose() {
+    _posRef?.pauseCustomerClaim(); // 🔒 الكاشير أُغلقت: عميل السلة يُحرَّر للأجهزة الأخرى
     _wedge.detach();
     _focusNode.dispose();
     _searchFocus.dispose();

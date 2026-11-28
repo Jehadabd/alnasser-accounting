@@ -226,6 +226,18 @@ class POSProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// شاشة الكاشير أُغلقت: السلة تبقى محفوظة، لكن عميلها لم يعد «في فاتورة مفتوحة» —
+  /// يُحرَّر حجزه فلا يبقى محجوزاً عن الأجهزة الأخرى ما دام البرنامج مفتوحاً.
+  void pauseCustomerClaim() {
+    _claimDebounce?.cancel();
+    _custClaim.release();
+  }
+
+  /// فُتحت الكاشير من جديد: يُعاد حجز اسم السلة (أو يُمسح إن أخذه جهاز آخر في الأثناء)
+  void resumeCustomerClaim() {
+    if (_customerName.trim().isNotEmpty) _scheduleClaim();
+  }
+
   void setCustomerName(String name) {
     _customerName = name;
     _scheduleClaim();

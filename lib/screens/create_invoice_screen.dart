@@ -2286,7 +2286,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> with InvoiceA
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('⛔ العميل مستخدم على جهاز آخر'),
+        title: const Text('⛔ العميل مستخدم في فاتورة أخرى'),
         content: Text(msg, style: const TextStyle(height: 1.6)),
         actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
       ),

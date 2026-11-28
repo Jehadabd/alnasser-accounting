@@ -25,13 +25,21 @@ class InvoiceCustomerClaim {
   final LockService locks;
   static const String resourceType = 'customer_name';
 
-  int? _held;
+  int? _held; // مفتاح الحساب (الجديد)
+  int? _heldLegacy; // مفتاح النسخ السابقة (لأجهزة لم تُحدَّث بعد)
   Timer? _beat;
 
-  /// مفتاح الحجز = هوية الحساب نفسها (CustomerNameRule: الاسم بلا مسافات) — فـ«جهاد عبد الناصر»
-  /// و«جهاد عبدالناصر» و«جهاد    عبد الناصر» حساب واحد ⇒ حجز واحد. (كان يدمج المسافات فقط،
-  /// فاسمان لنفس الحساب يُحجزان بمفتاحين ويكتب الجهازان فاتورتين له في اللحظة نفسها)
+  /// 🖥️ الشاشات المفتوحة على هذا الجهاز نفسه: كاشير + فاتورة (أو فاتورتان) لنفس العميل
+  /// كانتا مسموحتين لأن قفل القاعدة يعرف «الجهاز» لا «الشاشة».
+  static final Map<int, InvoiceCustomerClaim> _inProcess = {};
+
+  /// مفتاح الحساب: هوية الحساب نفسها (CustomerNameRule: الاسم بلا مسافات) — فـ«جهاد عبد الناصر»
+  /// و«جهاد عبدالناصر» و«جهاد    عبد الناصر» حساب واحد ⇒ حجز واحد.
   static String normalize(String s) => CustomerNameRule.key(CustomerNameClean.clean(s)).toLowerCase();
+
+  /// مفتاح النسخ السابقة (يدمج المسافات فقط). يُحجز معه ما دامت في الشبكة أجهزة لم تُحدَّث،
+  /// فتمنعها ونمنعها: جهاز قديم لا يعرف المفتاح الجديد.
+  static String legacyNormalize(String s) => s.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
 
   /// رقم ثابت للاسم (FNV-1a، 31 بت) — مفتاح القفل في جدول الأقفال
   static int keyOf(String normalized) {
@@ -43,7 +51,12 @@ class InvoiceCustomerClaim {
     return h == 0 ? 1 : h;
   }
 
-  /// يحجز الاسم لهذا الجهاز. يُرجع null إن نجح (أو لا حاجة للحجز)، وإلا رسالة المنع.
+  static String _blockedMsg(String name, String? by) =>
+      'اسم العميل «${name.trim()}» مستخدم الآن في فاتورة قيد الإنشاء أو التعديل على جهاز آخر'
+      '${by != null && by.isNotEmpty ? ' ($by)' : ''}.\n'
+      'انتظر حتى تُحفظ تلك الفاتورة أو تُغلق، ثم أعد المحاولة.';
+
+  /// يحجز الاسم لهذا الجهاز وهذه الشاشة. يُرجع null إن نجح (أو لا حاجة للحجز)، وإلا رسالة المنع.
   Future<String?> claim(String name) async {
     final n = normalize(name);
     if (n.length < 2) {
@@ -51,20 +64,56 @@ class InvoiceCustomerClaim {
       return null;
     }
     final key = keyOf(n);
+
+    // 1) شاشة أخرى على هذا الجهاز تحجز الحساب نفسه
+    final other = _inProcess[key];
+    if (other != null && !identical(other, this)) {
+      return 'اسم العميل «${name.trim()}» مفتوح الآن في فاتورة أخرى على هذا الجهاز '
+          '(الكاشير أو شاشة فاتورة).\nاحفظ تلك الفاتورة أو امسح الاسم منها أولاً.';
+    }
+
+    // 2) جهاز آخر (قفل القاعدة المشتركة). الحجز داخل الجهاز يُسجَّل قبل الانتظار كي لا تمر
+    //    شاشتان كتبتا الاسم في اللحظة نفسها.
+    final hadKey = _held == key;
+    _inProcess[key] = this;
+    void undoLocal() {
+      if (!hadKey && identical(_inProcess[key], this)) _inProcess.remove(key);
+    }
+
     final r = await locks.acquireLock(resourceType: resourceType, resourceId: key);
     if (!r.success) {
-      return 'اسم العميل «${name.trim()}» مستخدم الآن في فاتورة قيد الإنشاء أو التعديل على جهاز آخر'
-          '${r.lockedBy != null && r.lockedBy!.isNotEmpty ? ' (${r.lockedBy})' : ''}.\n'
-          'انتظر حتى تُحفظ تلك الفاتورة أو تُغلق، ثم أعد المحاولة.';
+      undoLocal();
+      return _blockedMsg(name, r.lockedBy);
     }
-    final old = _held;
+
+    final legacy = keyOf(legacyNormalize(CustomerNameClean.clean(name)));
+    if (legacy != key) {
+      final r2 = await locks.acquireLock(resourceType: resourceType, resourceId: legacy);
+      if (!r2.success) {
+        undoLocal();
+        if (!hadKey) await locks.releaseLock(resourceType: resourceType, resourceId: key);
+        return _blockedMsg(name, r2.lockedBy);
+      }
+    }
+    // تبديل الحجز القديم (اسم آخر كان مكتوباً) بالجديد
+    final oldKey = _held;
+    final oldLegacy = _heldLegacy;
     _held = key;
-    if (old != null && old != key) {
-      await locks.releaseLock(resourceType: resourceType, resourceId: old);
+    _heldLegacy = legacy != key ? legacy : null;
+    if (oldKey != null && oldKey != key) {
+      if (identical(_inProcess[oldKey], this)) _inProcess.remove(oldKey);
+      await locks.releaseLock(resourceType: resourceType, resourceId: oldKey);
     }
+    if (oldLegacy != null && oldLegacy != _heldLegacy && oldLegacy != key) {
+      await locks.releaseLock(resourceType: resourceType, resourceId: oldLegacy);
+    }
+    _inProcess[key] = this;
+
     _beat ??= Timer.periodic(const Duration(minutes: 2), (_) {
       final k = _held;
       if (k != null) locks.keepAlive(resourceType: resourceType, resourceId: k);
+      final l = _heldLegacy;
+      if (l != null) locks.keepAlive(resourceType: resourceType, resourceId: l);
     });
     return null;
   }
@@ -77,9 +126,15 @@ class InvoiceCustomerClaim {
     _beat?.cancel();
     _beat = null;
     final k = _held;
+    final l = _heldLegacy;
     _held = null;
+    _heldLegacy = null;
     if (k != null) {
+      if (identical(_inProcess[k], this)) _inProcess.remove(k);
       await locks.releaseLock(resourceType: resourceType, resourceId: k);
+    }
+    if (l != null) {
+      await locks.releaseLock(resourceType: resourceType, resourceId: l);
     }
   }
 }

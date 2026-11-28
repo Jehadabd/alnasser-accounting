@@ -54,6 +54,10 @@ class CartPanelState extends State<CartPanel> {
     if (pos.paidAmount > 0) _paidController.text = posMoney(pos.paidAmount);
     _pos = pos;
     pos.customerBlocked.addListener(_onCustomerBlocked);
+    // منع وصل والسلة مغلقة (الورقة المنبثقة على الشاشات الضيقة): يُعرض عند فتحها
+    if (pos.customerBlocked.value != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onCustomerBlocked());
+    }
   }
 
   POSProvider? _pos;
@@ -74,7 +78,7 @@ class CartPanelState extends State<CartPanel> {
         title: const Row(children: [
           Icon(Icons.lock_person_rounded, color: PosColors.danger),
           SizedBox(width: 10),
-          Expanded(child: Text('العميل مستخدم على جهاز آخر', style: TextStyle(fontWeight: FontWeight.w800))),
+          Expanded(child: Text('العميل مستخدم في فاتورة أخرى', style: TextStyle(fontWeight: FontWeight.w800))),
         ]),
         content: Text(msg, style: const TextStyle(height: 1.7)),
         actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
