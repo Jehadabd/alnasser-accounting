@@ -8,7 +8,7 @@
 //      يُعطى أسماء هذا المورد السابقة ليقرأ خطه واختصاراته.
 //   2) المرشحون محلياً (بلا إنترنت): لكل سطر أقرب 8 مواد من موادنا — ما تعلّمناه، الاسم
 //      نفسه، الكلمات، تشابه الحروف (أخطاء الإملاء)، واتفاق أرقام المقاس.
-//   3) المطابِق: يرى الفاتورة + ما استخرجه القارئ + مرشحي كل سطر + «رسائل التعلّم»
+//   3) المطابِق (نص فقط — بلا صور: لا رفع ثانٍ للصور، فيرد في ثوانٍ): ما استخرجه القارئ + مرشحي كل سطر + «رسائل التعلّم»
 //      (مرة ظهر هذا الاسم عند هذا المورد فغيّره المستخدم إلى هذه المادة). يختار من
 //      المرشحين فقط — لا يخترع مادة — ويضبط الوحدة والتعبئة من وحدات المادة عندنا.
 //   4) فرض ما تعلّمناه والاسم المطابق حرفياً (AiInvoiceService.applyMatching) — أقوى من النموذج.
@@ -23,6 +23,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 
 import '../../models/product.dart';
+import '../../services/ai_models/ai_image_prep.dart';
 import '../../services/ai_models/ai_models_config.dart';
 import '../../services/ai_models/ai_pdf_pages.dart';
 import '../../services/ai_models/ai_router.dart';
@@ -62,7 +63,10 @@ class AiInvoiceEngine {
     final keys = await AiModelsStore.keysByProvider();
     final chain = await AiModelsStore.usableChain();
     final file = AiBlob(bytes, mimeType);
-    final images = file.isPdf ? const <AiBlob>[] : [file, ...moreImages.where((b) => !b.isPdf)];
+    // 🗜️ صور الهاتف الكبيرة تُصغَّر قبل الرفع (أكبر سبب للبطء على إنترنت متوسط)
+    final rawImages = file.isPdf ? const <AiBlob>[] : [file, ...moreImages.where((b) => !b.isPdf)];
+    if (rawImages.any((b) => b.bytes.length >= AiImagePrep.minBytesToShrink)) onStatus?.call('يجهّز الصور…');
+    final images = rawImages.isEmpty ? rawImages : await AiImagePrep.shrinkAll(rawImages);
     final pageCache = <AiBlob>[];
     // ⏳ رسائل الانتظار بلا اسم نموذج أو مزوّد — المستخدم يرى ما يحدث والمدة فقط
     void wait(String raw) => onStatus?.call(waitStatus(raw));
@@ -150,14 +154,15 @@ class AiInvoiceEngine {
           keys: keys,
           onTry: (e) => onStatus?.call('يطابق المواد مع موادك…'),
           onWait: wait,
+          // ⚡ نص فقط: المطابقة اختيار من مرشحين — لا تحتاج الصورة، وإعادة رفعها كانت تضاعف الزمن
+          budget: const Duration(seconds: 75),
           send: (e, k) async {
-            final files = await filesFor(e);
             final text = await AiVisionClient.complete(
               provider: e.provider,
               model: e.model,
               apiKey: k.key,
               prompt: prompt,
-              files: files.take(e.provider.maxImages).toList(),
+              timeout: const Duration(seconds: 45),
             );
             _mustBeJson(text);
             return text;
@@ -165,11 +170,10 @@ class AiInvoiceEngine {
         );
         matcherName = m.entry.shownName;
         applyMatcher(result.lines, AiInvoiceService.decodeJson(m.text), cands);
-      } on AiRouterException catch (e) {
-        final why = e.attempts.isEmpty ? e.message : e.attempts.last.result;
-        note = 'لم يردّ النموذج المطابِق ($why) — طابقتُ الأسطر محلياً، راجعها.';
       } catch (e) {
-        note = 'تعذّرت المطابقة الذكية ($e) — طابقتُ الأسطر محلياً، راجعها.';
+        // التفاصيل للتشخيص فقط — المستخدم يرى رسالة عامة بلا أسماء نماذج أو أرصدة
+        debugPrint('⚠️ المطابقة الذكية: $e');
+        note = 'تعذّرت المطابقة الذكية الآن — طابقتُ الأسطر محلياً، راجعها.';
       }
     }
 
@@ -218,7 +222,8 @@ class AiInvoiceEngine {
   static Future<String> _readAll(AiModelEntry e, AiKey k, String prompt, List<AiBlob> files) async {
     final max = e.provider.maxImages;
     if (files.length <= max) {
-      final text = await AiVisionClient.complete(provider: e.provider, model: e.model, apiKey: k.key, prompt: prompt, files: files);
+      final text = await AiVisionClient.complete(
+          provider: e.provider, model: e.model, apiKey: k.key, prompt: prompt, files: files, timeout: readTimeout(files));
       _mustBeJson(text);
       return text;
     }
@@ -227,10 +232,31 @@ class AiInvoiceEngine {
       final chunk = files.sublist(i, min(i + max, files.length));
       final p = '$prompt\n\n## ملاحظة: هذه الصفحات ${i + 1}–${i + chunk.length} من ${files.length}. '
           'استخرج أسطر هذه الصفحات فقط، والمجاميع إن ظهرت فيها.';
-      final text = await AiVisionClient.complete(provider: e.provider, model: e.model, apiKey: k.key, prompt: p, files: chunk);
+      final text = await AiVisionClient.complete(
+          provider: e.provider, model: e.model, apiKey: k.key, prompt: p, files: chunk, timeout: readTimeout(chunk));
       parts.add(_mustBeJson(text));
     }
     return jsonEncode(mergeChunks(parts));
+  }
+
+  /// ⏱️ مهلة القراءة حسب حجم العمل: 60 ثانية + 20 لكل صفحة، بين 60 و170 ثانية.
+  /// (مهلة ثابتة طويلة كانت تجعل نموذجاً عالقاً يأكل دقيقتين ونصفاً قبل تجربة غيره)
+  @visibleForTesting
+  static Duration readTimeout(List<AiBlob> files) {
+    var pages = 0;
+    for (final f in files) {
+      if (!f.isPdf) {
+        pages++;
+        continue;
+      }
+      try {
+        final n = RegExp(r'/Type\s*/Page(?![s])').allMatches(latin1.decode(f.bytes, allowInvalid: true)).length;
+        pages += n < 1 ? 1 : n;
+      } catch (_) {
+        pages++;
+      }
+    }
+    return Duration(seconds: (60 + 20 * (pages < 1 ? 1 : pages)).clamp(60, 170).toInt());
   }
 
   static Map<String, dynamic> _mustBeJson(String text) {
@@ -391,7 +417,7 @@ class AiInvoiceEngine {
   /// «مرة ظهر هذا الاسم فغيّره المستخدم إلى هذه المادة» — ما يخص مرشحي هذه الفاتورة أولاً.
   @visibleForTesting
   static List<String> learningMessages(List<AiAlias> aliases, int? supplierId, String supplierName, List<Product> products,
-      List<List<AiCandidate>> cands, {int limit = 250}) {
+      List<List<AiCandidate>> cands, {int limit = 80}) {
     final byId = {for (final p in products) if (p.id != null) p.id!: p};
     final inPlay = {for (final c in cands) for (final x in c) x.product.id};
     final sorted = aliases.where((a) => byId.containsKey(a.productId)).toList()
@@ -508,7 +534,7 @@ ${AiInvoiceService.rowsRules}
         }
     ];
     final learn = learning.isEmpty ? '(لا شيء بعد)' : learning.map((m) => '- $m').join('\n');
-    return '''أنت محاسب خبير بمواد المحلات العراقية$who. قرأ نموذج آخر هذه الفاتورة (أمامك صورتها أيضاً)، ومهمتك ربط كل سطر بمادة من موادنا.
+    return '''أنت محاسب خبير بمواد المحلات العراقية$who. قرأ نموذج آخر هذه الفاتورة، ومهمتك ربط كل سطر بمادة من موادنا.
 
 ## 🧠 رسائل التعلّم (تصحيحات المستخدم السابقة — الأولوية القصوى):
 $learn
@@ -522,7 +548,7 @@ ${jsonEncode(items)}
 2. نفس العناصر = نفس المادة: الماركة + النوع + المقاس/الحجم/الوزن/اللون. اختلاف المقاس (2×1.5 مقابل 2×2.5، 500مل مقابل 1لتر) = مادة مختلفة.
 3. ترتيب المقاس قد ينعكس (1.5*2 = 2×1.5). الإنجليزي ≈ العربي صوتياً (Berly ≈ بيرلي، Flex ≈ فلكس، Siemens/سيمس ≈ سيمنس).
 4. الوحدة: إن كان للمادة المختارة وحدة بنفس المعنى فاكتب sale_unit باسمها عندنا حرفياً، و units_count = رقمها عندنا — إلا إن كتبت الفاتورة تعبئة مختلفة صراحة (اذكر ذلك في reason).
-5. انظر إلى الصورة إن شككت في قراءة سطر. إن كانت الكمية أو السعر أو المبلغ مقروءة خطأً بوضوح فصحّحها في fix واذكر السبب.
+5. إن كانت الكمية × السعر لا تساوي المبلغ بوضوح (خطأ قراءة) فصحّحها في fix بما يجعلها متسقة واذكر السبب.
 6. confidence: 0.9–1 مؤكد، 0.7–0.89 جيد، 0.5–0.69 محتمل، أقل من 0.5 ⇒ matched_product_id = null.
 
 ## أرجع JSON object فقط:

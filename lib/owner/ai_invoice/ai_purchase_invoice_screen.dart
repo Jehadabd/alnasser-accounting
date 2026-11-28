@@ -26,6 +26,8 @@ import 'package:intl/intl.dart' as intl;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ⏱️ تقدير الزمن المتعلَّم
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../accounting/screens/acc_ui.dart' show accRoute;
 import '../../models/product.dart';
@@ -83,8 +85,46 @@ class AiReadEstimate {
     }
   }
 
-  /// ثوانٍ تقريبية: 20 للبدء والمطابقة + 12 لكل صفحة، بحد 4 دقائق.
+  /// ثوانٍ تقريبية قبل أي قراءة على هذا الجهاز: 20 + 12 لكل صفحة، بحد 4 دقائق.
   static int seconds(int pages) => (20 + 12 * (pages < 1 ? 1 : pages)).clamp(25, 240).toInt();
+
+  // ⏱️ التقدير يتعلّم من الزمن الفعلي على هذا الجهاز (إنترنته ونماذجه): متوسط متحرك
+  // لـ «زمن الصفحة الأولى المكافئ»، وكل صفحة إضافية ≈ 60% منها. الرقم الثابت كان يَعِد
+  // بنصف دقيقة والقراءة تأخذ دقيقة ونصفاً.
+  static const _prefsKey = 'ai_read_unit_secs_v1';
+
+  static double _units(int pages) => 1 + 0.6 * ((pages < 1 ? 1 : pages) - 1);
+
+  /// المتوسط المتحرك [prev] بعد قراءة استغرقت [secs] لـ [pages] صفحة.
+  @visibleForTesting
+  static double nextEma(double? prev, int secs, int pages) {
+    final obs = secs / _units(pages);
+    return prev == null || prev <= 0 ? obs : prev * 0.65 + obs * 0.35;
+  }
+
+  /// التقدير المعروض: المتعلَّم + 15% هامشاً (أفضل أن ينتهي قبل الوعد لا بعده).
+  @visibleForTesting
+  static int estimateFrom(double? ema, int pages) {
+    if (ema == null || ema <= 0) return seconds(pages);
+    return (ema * _units(pages) * 1.15).round().clamp(10, 300).toInt();
+  }
+
+  static Future<int> learnedSeconds(int pages) async {
+    try {
+      final v = (await SharedPreferences.getInstance()).getDouble(_prefsKey);
+      return estimateFrom(v, pages);
+    } catch (_) {
+      return seconds(pages);
+    }
+  }
+
+  static Future<void> record(int secs, int pages) async {
+    if (secs <= 0) return;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setDouble(_prefsKey, nextEma(sp.getDouble(_prefsKey), secs, pages));
+    } catch (_) {}
+  }
 }
 
 class _Row {
@@ -293,9 +333,15 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     }
   }
 
+  int _readPages = 1;
+
   void _startClock() {
     final pages = _isPdf ? AiReadEstimate.pdfPages(_docs.first.bytes) : _docs.length;
+    _readPages = pages;
     _etaSeconds = AiReadEstimate.seconds(pages);
+    AiReadEstimate.learnedSeconds(pages).then((s) {
+      if (mounted && _phase == _Phase.reading) setState(() => _etaSeconds = s);
+    });
     _readWatch
       ..reset()
       ..start();
@@ -350,6 +396,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       }
       if (!mounted) return;
       _stopClock();
+      AiReadEstimate.record(_readWatch.elapsed.inSeconds, _readPages); // ⏱️ يتعلّم الزمن الفعلي
       _apply(r);
     } catch (e) {
       _stopClock();
@@ -364,10 +411,10 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
         });
         return;
       }
-      // رسالة مفهومة بلا أسماء نماذج ولا مفاتيح؛ التفاصيل التقنية خلف زر
+      // رسالة عامة: بلا أسماء نماذج ولا مزوّدين ولا مفاتيح ولا أرصدة. التفاصيل تُنسخ للدعم فقط.
       final friendly = e is AiInvoiceException && !e.message.startsWith('فشلت قراءة')
           ? e.message
-          : 'تعذّرت قراءة الفاتورة — تأكد من الاتصال بالإنترنت ثم أعد المحاولة. إن تكرر تواصل معنا: ${LicenseConfig.supportPhone}';
+          : 'النموذج لا يعمل حالياً — أعد المحاولة بعد قليل. إن تكرر تواصل معنا: ${LicenseConfig.supportPhone}';
       setState(() {
         _phase = _Phase.pick;
         _error = friendly;
@@ -672,17 +719,18 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
             if (_error != null && _errorDetail != null)
               Align(
                 alignment: AlignmentDirectional.centerStart,
+                // لا تُعرض التفاصيل: تُنسخ فقط لترسلها لنا عند التواصل
                 child: TextButton.icon(
-                  onPressed: () => showDialog<void>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('التفاصيل التقنية'),
-                      content: SingleChildScrollView(child: SelectableText(_errorDetail!, style: const TextStyle(fontSize: 12.5))),
-                      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق'))],
-                    ),
-                  ),
-                  icon: const Icon(Icons.info_outline_rounded, size: 18),
-                  label: const Text('التفاصيل التقنية'),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: _errorDetail!));
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('نُسخت تفاصيل الخطأ — أرسلها لنا عند التواصل'), duration: Duration(seconds: 2)),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.copy_rounded, size: 18),
+                  label: const Text('نسخ التفاصيل للدعم'),
                 ),
               ),
             if (noKeys) ...[
@@ -852,7 +900,9 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   Widget _readingView() {
     final elapsed = _readWatch.elapsed.inSeconds;
     final left = _etaSeconds - elapsed;
-    final progress = (elapsed / _etaSeconds).clamp(0.02, 0.96).toDouble();
+    // تجاوز التقدير: شريط متحرك بلا نسبة، ورسالة صادقة بدل «لحظات قليلة» لدقيقة كاملة
+    final over = left < -8;
+    final double? progress = over ? null : (elapsed / _etaSeconds).clamp(0.02, 0.96).toDouble();
     final step = _status.isEmpty ? 'يقرأ الفاتورة…' : _status;
     return Center(
       key: const ValueKey('reading'),
@@ -876,7 +926,11 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
             ),
             const SizedBox(height: 22),
             Text(
-              left > 0 ? 'انتظر نحو ${_secondsText(left)}' : 'لحظات قليلة ويكتمل…',
+              left > 0
+                  ? 'انتظر نحو ${_secondsText(left)}'
+                  : over
+                      ? 'يستغرق أطول من المعتاد — ما زال يعمل'
+                      : 'لحظات قليلة ويكتمل…',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: _ink),
             ),

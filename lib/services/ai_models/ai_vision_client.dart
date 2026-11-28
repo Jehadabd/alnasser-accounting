@@ -41,9 +41,14 @@ enum AiErrorKind {
 }
 
 class AiCallException implements Exception {
-  AiCallException(this.kind, this.message, {this.daily = false, this.retryAfter});
+  AiCallException(this.kind, this.message, {this.daily = false, this.retryAfter, this.raw = ''});
   final AiErrorKind kind;
   final String message;
+
+  /// نص الخطأ من المزوّد (للتشخيص فقط — لا يُعرض للمستخدم).
+  final String raw;
+
+  bool get mentionsThinking => raw.toLowerCase().contains('thinking');
 
   /// حصة اليوم انتهت (لا حصة الدقيقة).
   final bool daily;
@@ -97,19 +102,44 @@ class AiVisionClient {
     required String prompt,
     List<AiBlob> files = const [],
     bool jsonOutput = true,
-    Duration timeout = const Duration(seconds: 150),
+    Duration timeout = const Duration(seconds: 90),
   }) async {
     if (!provider.nativePdf && files.any((f) => f.isPdf)) {
       // حماية: لا PDF لغير Gemini (OpenRouter يحوّله بـ OCR مدفوع)
       throw AiCallException(AiErrorKind.badRequest, 'هذا المزوّد لا يستقبل PDF — يجب تحويل الصفحات إلى صور');
     }
+    try {
+      return await _complete(provider, model, apiKey, prompt, files, jsonOutput, timeout, quickThinking: true);
+    } on AiCallException catch (e) {
+      // ⚡ نموذج لا يقبل «تفكيراً قليلاً»: نعيد الطلب نفسه مرة بلا هذا الإعداد
+      if (e.kind == AiErrorKind.badRequest && e.mentionsThinking && usesThinkingLevel(provider, model)) {
+        return _complete(provider, model, apiKey, prompt, files, jsonOutput, timeout, quickThinking: false);
+      }
+      rethrow;
+    }
+  }
+
+  /// ⚡ عائلة Gemini 3 فما بعد تفكّر بمستوى «متوسط» افتراضياً — قراءة جدول فاتورة لا تحتاجه،
+  /// و«قليل» يختصر زمن الرد كثيراً. (2.5 وما قبلها لا تعرف هذا الإعداد.)
+  @visibleForTesting
+  static bool usesThinkingLevel(AiProvider provider, String model) {
+    if (provider != AiProvider.gemini) return false;
+    final m = RegExp(r'gemini-(\d+)').firstMatch(model.toLowerCase());
+    final major = int.tryParse(m?.group(1) ?? '') ?? 0;
+    return major >= 3;
+  }
+
+  static Future<String> _complete(AiProvider provider, String model, String apiKey, String prompt, List<AiBlob> files,
+      bool jsonOutput, Duration timeout,
+      {required bool quickThinking}) async {
     final http.Response res;
     try {
       final Future<http.Response> req = switch (provider) {
         AiProvider.gemini => _post(
             Uri.parse('$geminiBase/models/$model:generateContent'),
             headers: {'Content-Type': 'application/json', 'X-goog-api-key': apiKey},
-            body: jsonEncode(geminiBody(prompt, files, jsonOutput: jsonOutput)),
+            body: jsonEncode(geminiBody(prompt, files,
+                jsonOutput: jsonOutput, thinkingLevel: quickThinking && usesThinkingLevel(provider, model) ? 'low' : null)),
           ),
         AiProvider.groq => _post(
             Uri.parse('$groqBase/chat/completions'),
@@ -147,7 +177,7 @@ class AiVisionClient {
   }
 
   @visibleForTesting
-  static Map<String, Object?> geminiBody(String prompt, List<AiBlob> files, {bool jsonOutput = true}) => {
+  static Map<String, Object?> geminiBody(String prompt, List<AiBlob> files, {bool jsonOutput = true, String? thinkingLevel}) => {
         'contents': [
           {
             'parts': [
@@ -162,6 +192,7 @@ class AiVisionClient {
         'generationConfig': {
           if (jsonOutput) 'response_mime_type': 'application/json',
           'temperature': 0.1,
+          if (thinkingLevel != null) 'thinkingConfig': {'thinkingLevel': thinkingLevel},
         },
       };
 
@@ -169,6 +200,9 @@ class AiVisionClient {
   static Map<String, Object?> openAiBody(String model, String prompt, List<AiBlob> files) => {
         'model': model,
         'temperature': 0.1,
+        // حد صريح للرد: بلا حد يحجز OpenRouter رصيداً لأقصى رد ممكن فيرجع «402 رصيد غير كافٍ»
+        // حتى لمفتاح يكفيه، ويطيل الرد بلا داعٍ. فاتورة من 100 سطر ≈ 6–7 آلاف توكن.
+        'max_tokens': 8192,
         'messages': [
           {
             'role': 'user',
@@ -273,7 +307,7 @@ class AiVisionClient {
       if (lower.contains('api key') || lower.contains('api_key')) {
         return AiCallException(AiErrorKind.auth, 'المفتاح غير صالح ($code)');
       }
-      return AiCallException(AiErrorKind.badRequest, 'رفض النموذج الطلب ($code)${msg.isEmpty ? '' : ' — $msg'}');
+      return AiCallException(AiErrorKind.badRequest, 'رفض النموذج الطلب ($code)${msg.isEmpty ? '' : ' — $msg'}', raw: lower);
     }
     if (code >= 500) return AiCallException(AiErrorKind.server, 'خادم المزوّد مشغول ($code) — أعد المحاولة');
     return AiCallException(AiErrorKind.badRequest, 'HTTP $code ${msg.isEmpty ? '' : msg}');

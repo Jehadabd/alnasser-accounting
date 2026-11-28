@@ -16,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../owner/ai_invoice/ai_alias_store.dart';
 import '../services/ai_models/ai_model_probe.dart';
 import '../services/ai_models/ai_models_config.dart';
+import '../services/ai_models/ai_router.dart'; // ♻️ مسح استراحات المفاتيح/النماذج
 import '../services/sync_perks.dart';
 import '../widgets/settings_kit.dart';
 
@@ -84,6 +85,8 @@ class _AiModelsSettingsScreenState extends State<AiModelsSettingsScreen> {
 
   Future<void> _saveCfg() async {
     await AiModelsStore.saveConfig(_cfg);
+    // تغيّر الإعداد (مفتاح جديد، رصيد شُحن، نموذج فُحص): كل شيء يُجرَّب من جديد
+    await AiRouter.clearRests();
     if (mounted) setState(() {});
   }
 
