@@ -9,6 +9,9 @@
 // 4) «متابعة» ⇒ تُحفظ تصحيحاتك (ذاكرة الأسماء) وتُفتح فاتورة الشراء العادية معبأة
 //    والحفظ هناك يمرّ بكل حمايات الشاشة الأصلية (المخزون، الدين، الفترات المثبّتة).
 
+import 'package:flutter/services.dart' show Clipboard, ClipboardData; // 📋 نسخ رقمنا
+import '../../screens/license_screen.dart' show openSupportWhatsApp; // 💬 واتساب الدعم
+import '../../services/license_v4/license_config.dart'; // ☎️ رقمنا
 import '../../services/admin_unlocks.dart'; // 🔓
 import 'dart:async';
 import 'dart:convert' show latin1;
@@ -196,7 +199,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
       final suppliers = await context.read<PurchaseService>().getSuppliers();
       final products = (await DatabaseService().getAllProducts()).where((p) => p.id != null && !p.isDeleted).toList();
       final learned = await AiAliasStore.count();
-      final hasKeys = await AiModelsStore.hasAnyKey();
+      // «مُعدّ» = نموذج مفعّل له مفتاح (مفتاح بلا نموذج مفعّل لا يقرأ شيئاً)
+      final hasKeys = (await AiModelsStore.usableChain()).isNotEmpty;
       if (!mounted) return;
       setState(() {
         _hasKeys = hasKeys;
@@ -350,10 +354,20 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
     } catch (e) {
       _stopClock();
       if (!mounted) return;
-      // رسالة مفهومة بلا أسماء نماذج؛ التفاصيل التقنية خلف زر
+      // لا نموذج مفعّل له مفتاح (حُذف أثناء العمل): نفس بطاقة «غير مُعدّة»
+      if ('$e'.contains('لا يوجد نموذج مفعّل له مفتاح')) {
+        setState(() {
+          _phase = _Phase.pick;
+          _hasKeys = false;
+          _error = null;
+          _errorDetail = null;
+        });
+        return;
+      }
+      // رسالة مفهومة بلا أسماء نماذج ولا مفاتيح؛ التفاصيل التقنية خلف زر
       final friendly = e is AiInvoiceException && !e.message.startsWith('فشلت قراءة')
           ? e.message
-          : 'تعذّرت قراءة الفاتورة — تأكد من الاتصال بالإنترنت ومن مفاتيح النماذج، ثم أعد المحاولة.';
+          : 'تعذّرت قراءة الفاتورة — تأكد من الاتصال بالإنترنت ثم أعد المحاولة. إن تكرر تواصل معنا: ${LicenseConfig.supportPhone}';
       setState(() {
         _phase = _Phase.pick;
         _error = friendly;
@@ -536,7 +550,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
   Future<void> _openModelsSettings() async {
     if (!await AdminUnlocks.confirm(context, AdminUnlocks.ai) || !mounted) return; // 🔓
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const AiModelsSettingsScreen()));
-    final hasKeys = await AiModelsStore.hasAnyKey();
+    final hasKeys = (await AiModelsStore.usableChain()).isNotEmpty;
     if (mounted) setState(() => _hasKeys = hasKeys);
   }
 
@@ -614,7 +628,8 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
             IconButton(tooltip: 'إعادة القراءة', icon: const Icon(Icons.refresh_rounded), onPressed: _read),
           if (_phase != _Phase.reading)
             IconButton(tooltip: 'ملف آخر', icon: const Icon(Icons.upload_file_rounded), onPressed: _pick),
-          if (_phase != _Phase.reading)
+          // غير مُعدّ: لا زر للإعدادات هنا — الإعداد عن طريقنا (انظر _notSetUpCard)
+          if (_phase != _Phase.reading && _hasKeys)
             IconButton(tooltip: 'النماذج والمفاتيح', icon: const Icon(Icons.tune_rounded), onPressed: _openModelsSettings),
         ],
       );
@@ -671,20 +686,7 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
                 ),
               ),
             if (noKeys) ...[
-              _banner(
-                  'لا يوجد مفتاح نموذج ذكاء اصطناعي على هذا الجهاز. أضف مفتاحاً مجانياً (Gemini أو Groq أو '
-                  'OpenRouter) من الإعدادات ← النظام والأدوات ← نماذج الذكاء الاصطناعي — فيها خطوات إنشائه.',
-                  _cLow,
-                  Icons.key_off_rounded),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: FilledButton.icon(
-                  onPressed: _openModelsSettings,
-                  style: FilledButton.styleFrom(backgroundColor: _aiA),
-                  icon: const Icon(Icons.key_rounded),
-                  label: const Text('إعداد النماذج والمفاتيح'),
-                ),
-              ),
+              _notSetUpCard(),
               const SizedBox(height: 8),
             ],
             const SizedBox(height: 8),
@@ -762,6 +764,77 @@ class _AiPurchaseInvoiceScreenState extends State<AiPurchaseInvoiceScreen> {
           ),
         ]),
       );
+
+  /// 🤖 الذكاء الاصطناعي غير مُعدّ على هذا الجهاز: رسالة واحدة واضحة + التواصل معنا.
+  /// (بلا ذكر للمفاتيح أو المزوّدين، وبلا زر للإعدادات — الإعداد يتم عن طريقنا)
+  Widget _notSetUpCard() {
+    const phone = LicenseConfig.supportPhone;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _aiA.withValues(alpha: 0.22)),
+        boxShadow: [BoxShadow(color: _aiA.withValues(alpha: 0.08), blurRadius: 18, offset: const Offset(0, 6))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: _aiA.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(Icons.auto_awesome_rounded, color: _aiA, size: 24),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('إعدادات الذكاء الاصطناعي غير مُعدّة على هذا الجهاز',
+                  style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800, color: Color(0xFF1E293B), height: 1.4)),
+              SizedBox(height: 4),
+              Text('يجب إعدادها أولاً. للإعداد تواصل معنا.',
+                  style: TextStyle(fontSize: 13.5, color: _muted, height: 1.5)),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 16),
+        Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          FilledButton.icon(
+            onPressed: openSupportWhatsApp,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.chat_rounded, size: 19),
+            label: const Text('واتساب', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(const ClipboardData(text: phone));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('نُسخ الرقم $phone'), duration: Duration(seconds: 2)),
+              );
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF1E293B),
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.call_rounded, size: 19),
+            label: const Text(phone,
+                textDirection: TextDirection.ltr,
+                style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.6, fontFeatures: [FontFeature.tabularFigures()])),
+          ),
+        ]),
+      ]),
+    );
+  }
 
   Widget _banner(String text, Color c, IconData icon) => Container(
         width: double.infinity,
