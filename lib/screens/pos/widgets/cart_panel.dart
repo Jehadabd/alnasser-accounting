@@ -52,10 +52,40 @@ class CartPanelState extends State<CartPanel> {
     _customerController.text = pos.customerName;
     if (pos.discount > 0) _discountController.text = posMoney(pos.discount);
     if (pos.paidAmount > 0) _paidController.text = posMoney(pos.paidAmount);
+    _pos = pos;
+    pos.customerBlocked.addListener(_onCustomerBlocked);
+  }
+
+  POSProvider? _pos;
+  bool _blockDialogOpen = false;
+
+  /// 🔒 العميل في فاتورة مفتوحة على جهاز آخر: يُمسح الاسم ويظهر سبب المنع ومن يحجزه
+  Future<void> _onCustomerBlocked() async {
+    final msg = _pos?.customerBlocked.value;
+    if (msg == null || !mounted || _blockDialogOpen) return;
+    _pos!.customerBlocked.value = null;
+    _customerController.clear();
+    setState(() => _showSuggestions = false);
+    _blockDialogOpen = true;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(children: [
+          Icon(Icons.lock_person_rounded, color: PosColors.danger),
+          SizedBox(width: 10),
+          Expanded(child: Text('العميل مستخدم على جهاز آخر', style: TextStyle(fontWeight: FontWeight.w800))),
+        ]),
+        content: Text(msg, style: const TextStyle(height: 1.7)),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+      ),
+    );
+    _blockDialogOpen = false;
   }
 
   @override
   void dispose() {
+    _pos?.customerBlocked.removeListener(_onCustomerBlocked);
     _customerController.dispose();
     _discountController.dispose();
     _paidController.dispose();

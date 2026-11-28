@@ -15,7 +15,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../../customer_name_clean.dart';
 import 'customer_locking.dart';
+import 'customer_name_rule.dart';
 
 class InvoiceCustomerClaim {
   InvoiceCustomerClaim(this.locks);
@@ -26,8 +28,10 @@ class InvoiceCustomerClaim {
   int? _held;
   Timer? _beat;
 
-  /// تطبيع الاسم: بلا فراغات زائدة، وبلا فرق بين الأحرف الكبيرة والصغيرة
-  static String normalize(String s) => s.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+  /// مفتاح الحجز = هوية الحساب نفسها (CustomerNameRule: الاسم بلا مسافات) — فـ«جهاد عبد الناصر»
+  /// و«جهاد عبدالناصر» و«جهاد    عبد الناصر» حساب واحد ⇒ حجز واحد. (كان يدمج المسافات فقط،
+  /// فاسمان لنفس الحساب يُحجزان بمفتاحين ويكتب الجهازان فاتورتين له في اللحظة نفسها)
+  static String normalize(String s) => CustomerNameRule.key(CustomerNameClean.clean(s)).toLowerCase();
 
   /// رقم ثابت للاسم (FNV-1a، 31 بت) — مفتاح القفل في جدول الأقفال
   static int keyOf(String normalized) {

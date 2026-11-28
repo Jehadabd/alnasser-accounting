@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import '../services/database/business/invoice_customer_claim.dart'; // 🔒 حجز اسم العميل
 import '../services/name_search.dart'; // 🔤
 import '../services/save_lock.dart'; // 🔒 قفل الحفظ
 import 'package:shared_preferences/shared_preferences.dart';
@@ -202,8 +204,31 @@ class POSProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ───────── 🔒 حجز اسم العميل (نفس حجز شاشة الفاتورة: جهازان لا يبيعان للعميل نفسه معاً) ─────────
+  late final InvoiceCustomerClaim _custClaim = InvoiceCustomerClaim(DatabaseService().lockingService);
+  Timer? _claimDebounce;
+
+  /// رسالة منع: العميل في فاتورة مفتوحة على جهاز آخر. السلة تعرضها ثم تمسحها.
+  final ValueNotifier<String?> customerBlocked = ValueNotifier<String?>(null);
+
+  void _scheduleClaim() {
+    _claimDebounce?.cancel();
+    _claimDebounce = Timer(const Duration(milliseconds: 900), _claimNow);
+  }
+
+  Future<void> _claimNow() async {
+    final name = _customerName;
+    final msg = await _custClaim.claim(name); // اسم فارغ ⇒ يحرر الحجز السابق
+    if (msg == null || _customerName != name) return;
+    _customerName = '';
+    _filteredCustomers = [];
+    customerBlocked.value = msg;
+    notifyListeners();
+  }
+
   void setCustomerName(String name) {
     _customerName = name;
+    _scheduleClaim();
     if (name.isEmpty) {
       _filteredCustomers = [];
     } else {
@@ -221,6 +246,7 @@ class POSProvider extends ChangeNotifier {
   void selectCustomer(Customer customer) {
     _customerName = customer.name;
     _filteredCustomers = [];
+    _scheduleClaim();
     notifyListeners();
   }
 
@@ -472,6 +498,8 @@ class POSProvider extends ChangeNotifier {
   void clearCart() {
     _cartItems.clear();
     _customerName = '';
+    _claimDebounce?.cancel();
+    _custClaim.release(); // 🔒 العميل لم يعد في فاتورة مفتوحة هنا
     _paymentType = PaymentType.cash;
     _discount = 0.0;
     _paidAmount = 0.0;
@@ -494,6 +522,16 @@ class POSProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+        // 🔒 فحص أخير قبل الحفظ: الاسم ما زال محجوزاً لهذا الجهاز (أو يُحجز الآن)
+        if (_customerName.trim().isNotEmpty) {
+          _claimDebounce?.cancel();
+          final blocked = await _custClaim.verify(_customerName);
+          if (blocked != null) {
+            _lastErrorMessage = blocked;
+            return false;
+          }
+        }
+
         // 📦 البيع بالسالب ممنوع ⇒ فحص أخير بالرصيد الحالي من القاعدة (قد يكون بيع من جهاز/نافذة أخرى)
         if (!_allowNegativeStock) {
           final need = <int, double>{};
