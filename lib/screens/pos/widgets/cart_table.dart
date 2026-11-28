@@ -100,8 +100,16 @@ class _CartTableState extends State<CartTable> {
     return LayoutBuilder(builder: (context, box) {
       final layout = _layout;
       final avail = box.maxWidth - _trail;
-      final cols = layout.resolve(avail);
-      final tableW = cols.values.fold<double>(0, (a, b) => a + b) + _trail;
+      var cols = layout.resolve(avail);
+      var tableW = cols.values.fold<double>(0, (a, b) => a + b) + _trail;
+      // زيادة أقل من بكسلين (اسم المادة عند أقل عرض + كسور الشاشة): تُطرح من «المادة»
+      // بدل تمرير أفقي لأجل جزء من بكسل. (كان الجدول يُرسم أعرض من مكانه بـ 0.2 ⇒ خطأ تجاوز)
+      final over = tableW - box.maxWidth;
+      final nameW = cols['name'];
+      if (over > 0 && over < 2 && nameW != null) {
+        cols = {...cols, 'name': nameW - over - 0.01};
+        tableW = box.maxWidth - 0.01;
+      }
       final table = SizedBox(
         width: tableW < box.maxWidth ? box.maxWidth : tableW,
         child: Column(
@@ -129,7 +137,7 @@ class _CartTableState extends State<CartTable> {
           ],
         ),
       );
-      if (tableW <= box.maxWidth + 0.5) return table;
+      if (tableW <= box.maxWidth) return table;
       return Scrollbar(
         controller: _hScroll,
         thumbVisibility: true,
