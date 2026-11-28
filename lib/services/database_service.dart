@@ -2,6 +2,7 @@
 // 🎯 الخدمة الرئيسية لقاعدة البيانات - Facade صغير ونظيف
 // يجمع ويفوض العمليات إلى الـ DAOs المتخصصة
 
+import 'database/core/pricing_stats_views.dart'; // 📊
 import 'customer_name_clean.dart'; // 🧹 تنظيف مسافات اسم العميل
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -467,6 +468,13 @@ class DatabaseService {
       await IqdGuard.ensure(db);
     } catch (e) {
       debugPrint('⚠️ Error running IqdGuard.ensure: $e');
+    }
+
+    // 📊 إحصاءات التسعير: View حية بدل جداول debt_book القديمة (تُحفظ باسم _legacy_)
+    try {
+      await PricingStatsViews.ensure(db);
+    } catch (e) {
+      debugPrint('⚠️ Error running PricingStatsViews.ensure: $e');
     }
 
     // 🛡️ سجل الديون: لا حسابان بالاسم نفسه. عمود الدمج + قيد فريد في القاعدة

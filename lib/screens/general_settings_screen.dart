@@ -1,4 +1,5 @@
 import 'pos/pos_cart_layout_screen.dart'; // 🧩 أعمدة سلة الكاشير
+import '../services/database/core/pricing_stats_views.dart'; // 📊
 import '../services/admin_unlocks.dart'; // 🔓 أقسام يفتحها صاحب البرنامج
 import '../widgets/popup_screens.dart'; // 🪟
 import '../widgets/item_code_keyboard_tile.dart'; // ⌨️
@@ -150,7 +151,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   bool _allowNegativeStock = false;
   String _costingMethod = 'last_purchase'; // طريقة حساب التكلفة
   int _pricingMode = 99; // وضع التسعير الافتراضي
-  final TextEditingController _wholesaleCustomerLimitController = TextEditingController();
   
   // 📱 رقم الجهاز للفواتير
   int _invoiceDeviceId = 1;
@@ -237,7 +237,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     _allowNegativeStock = _appSettings.allowNegativeStock;
     _costingMethod = _appSettings.costingMethod;
     _pricingMode = _appSettings.pricingMode;
-    _wholesaleCustomerLimitController.text = _appSettings.wholesaleCustomerLimit.toString();
     _showSideNav = _appSettings.showSideNav;
     _enableSmartSearchRamCache = _appSettings.enableSmartSearchRamCache;
     _uploadOrder = UploadTargets.ordered(_appSettings.uploadOrder);
@@ -302,7 +301,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _manualDebtProfitController.text,
         _discountProfitPctController.text,
         _voucherMode,
-        _wholesaleCustomerLimitController.text,
         _invoiceDeviceController.text,
         _companyDescriptionController.text,
         _storeSection,
@@ -319,7 +317,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         _adHocProfitController,
         _manualDebtProfitController,
         _discountProfitPctController,
-        _wholesaleCustomerLimitController,
         _invoiceDeviceController,
         _companyDescriptionController,
       ]);
@@ -637,7 +634,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       allowNegativeStock: _allowNegativeStock,
       costingMethod: _costingMethod,
       pricingMode: _pricingMode,
-      wholesaleCustomerLimit: double.tryParse(_wholesaleCustomerLimitController.text) ?? 5000000.0,
 
       storeSection: _storeSection,
       branchName: _branchName,
@@ -685,7 +681,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
     _adHocProfitController.dispose();
     _manualDebtProfitController.dispose();
     _discountProfitPctController.dispose();
-    _wholesaleCustomerLimitController.dispose();
     GeneralSettingsScreen._openCount--;
     GeneralSettingsScreen.requestedSection.removeListener(_onSectionRequest);
     super.dispose();
@@ -2219,40 +2214,6 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
                 _buildPricingModeSelector(),
                 const SizedBox(height: 18),
                 const Divider(height: 1, color: Color(0xFFEEF2F7)),
-                const SizedBox(height: 16),
-                LayoutBuilder(builder: (context, c) {
-                  final wide = c.maxWidth >= 620;
-                  final field = TextField(
-                    controller: _wholesaleCustomerLimitController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'الحد الأدنى لمشتريات عميل الجملة',
-                      prefixIcon: Icon(Icons.storefront_rounded),
-                      suffixText: 'د.ع',
-                      helperText: '0 = تعطيل التصنيف التلقائي',
-                    ),
-                  );
-                  const info = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('تصنيف عملاء الجملة تلقائياً',
-                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Color(0xFF1E293B))),
-                    SizedBox(height: 2),
-                    Text('إذا بلغ مجموع مشتريات العميل (الفواتير المحفوظة) هذا المبلغ يُعامَل كعميل جملة في اقتراح السعر.',
-                        style: TextStyle(fontSize: 12, color: Color(0xFF64748B), height: 1.5)),
-                  ]);
-                  return wide
-                      ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const Expanded(child: info),
-                          const SizedBox(width: 16),
-                          SizedBox(width: 300, child: field),
-                        ])
-                      : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                          info,
-                          const SizedBox(height: 10),
-                          field,
-                        ]);
-                }),
-                const SizedBox(height: 16),
-                const Divider(height: 1, color: Color(0xFFEEF2F7)),
                 const SizedBox(height: 6),
                 _buildActionTile(
                   icon: Icons.build_circle_outlined,
@@ -3401,6 +3362,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
         width: 460,
         content: const SetBanner(
           'يعيد إنشاء جداول الإحصاء (Views) التي يقترح منها المحرك الأسعار. لا يغيّر أي فاتورة أو سعر. '
+          'جداول التسعير القديمة من «دفتر الديون» إن وُجدت تُحفظ جانباً ولا تُحذف. '
           'الإحصاءات نفسها تتحدّث تلقائياً مع كل فاتورة — هذا الإجراء للإصلاح فقط.',
         ),
         actions: [
@@ -3444,28 +3406,9 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
       final dbService = DatabaseService();
       final db = await dbService.database;
       
-      // إسقاط ثم إنشاء من جديد (Refreshing Views)
-      await db.execute('DROP VIEW IF EXISTS product_price_stats');
-      await db.execute('''
-        CREATE VIEW product_price_stats AS
-        SELECT 
-          product_id,
-          AVG(applied_price) as median_price,
-          COUNT(*) as sales_count
-        FROM invoice_items
-        GROUP BY product_id
-      ''');
-
-      await db.execute('DROP VIEW IF EXISTS recent_sales_buffer');
-      await db.execute('''
-        CREATE VIEW recent_sales_buffer AS
-        SELECT 
-          ii.product_id,
-          ii.applied_price as price,
-          i.invoice_date
-        FROM invoice_items ii
-        JOIN invoices i ON ii.invoice_id = i.id
-      ''');
+      // إسقاط ثم إنشاء من جديد — وجداول debt_book القديمة بالاسم نفسه تُحفظ باسم _legacy_
+      // (كان DROP VIEW على جدول يرمي خطأ «use DROP TABLE»)
+      await PricingStatsViews.repair(db);
 
       LoadingDialog.hide(); // إغلاق مربع الحوار
       if (!mounted) return;
